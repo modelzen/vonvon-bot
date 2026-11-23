@@ -23,12 +23,20 @@ it('places community second and keeps Bot and group navigation, including before
 });
 it('keeps public details as a reading surface and exposes the full configuration navigation for direct versions', () => {
   const html = renderToStaticMarkup(<RecipeDetails recipe={recipe}/>);
-  for (const label of ['概览', '模型与权限', '能力', '沟通方式', '任务', '第 1 次发布']) expect(html).toContain(label);
+  for (const label of ['概览', '模型与权限', '能力', '沟通方式', '任务']) expect(html).toContain(label);
+  expect(html).not.toContain('次发布');
   expect(html).not.toContain('使用前准备');
   expect(html).not.toContain('记忆');
   expect(html.match(/<nav aria-label="配方详细信息">([\s\S]*?)<\/nav>/)?.[1].match(/<button /g)).toHaveLength(5);
   for (const label of ['管理发布', '准备新版', '分享码管理', '编辑草稿']) expect(html).not.toContain(label);
   expect(html).toContain('<h2>使用方法</h2>');
+});
+it.each(['direct', 'coded'] as const)('displays the same public skill metadata for %s access', access => {
+  const preview = {settings: [], skills: [{itemId: recipe.versionId, name: '整理记录', description: '按日期整理'}], ruleCount: 2, taskCount: 0};
+  const html = renderToStaticMarkup(<RecipeDetails recipe={{...recipe, public: {...recipe.public, access}, config: undefined, preview}} section="能力"/>);
+  expect(html).toContain('整理记录');
+  expect(html).toContain('按日期整理');
+  expect(html).not.toContain('规则');
 });
 it('shows only the introduction for an unacquired gated version and the server contract rejects an accidental private config', () => {
   const gated = {...recipe, public: {...recipe.public, access: 'coded' as const}, config: undefined};
@@ -67,7 +75,8 @@ it('does not ask an acquired-library visitor for another code', () => {
 });
 it('shows missing config honestly and keeps imported setup as readable text without executing HTML', () => {
   const model = renderToStaticMarkup(<RecipeConfiguration config={recipe.config!} section="模型与权限"/>);
-  expect(model.match(/未指定/g)).toHaveLength(2);
+  expect(model).toContain('未指定');
+  expect(model).toContain('沿用目标群设置');
   const legacy = {...recipe,config:{...recipe.config!,setup:{steps:[{...recipe.config!.setup!.steps[0]!,check:'确认设置已保存'}]}}};
   const setup = renderToStaticMarkup(<RecipeDetails recipe={legacy}/>);
   expect(setup).toContain('<summary>补充说明</summary>');

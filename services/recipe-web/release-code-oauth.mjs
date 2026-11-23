@@ -183,14 +183,12 @@ export function createReleaseCodeAuth({ env, publicOrigin, apiOrigin, login }, o
         if (!active || active.webSession !== status.displaySession) throw new WebError(401, 'login_required');
         content = `<p>当前 VonVon 账号 <code>${escape(active.accountId)}</code> 将允许本人 Bot 搜索和读取最新正式版代码。请仅批准你刚刚发起的请求。</p><form method="post"><input type="hidden" name="session" value="${escape(status.displaySession)}"><button name="action" value="accept">允许查阅</button><button name="action" value="cancel">取消</button></form>`;
       } else {
-        content =
-          '<p>先登录你的 VonVon 账号。</p>' +
-          status.providers
-            .map(
-              (p) =>
-                `<form action="/auth/start" method="post"><input type="hidden" name="provider" value="${escape(p)}"><input type="hidden" name="returnTo" value="${escape(url.pathname)}"><button>用 ${escape(p)} 登录</button></form>`
-            )
-            .join('');
+        res.writeHead(303, {
+          Location: '/login?' + new URLSearchParams({ returnTo: url.pathname }),
+          'cache-control': 'no-store'
+        });
+        res.end();
+        return;
       }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       res.end(page('VonVon 发布版代码查阅', content));

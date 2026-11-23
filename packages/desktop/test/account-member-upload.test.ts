@@ -44,6 +44,7 @@ async function backend(handle: (req: IncomingMessage, res: ServerResponse, signa
       if (target.origin === issuer) return target.pathname === '/auth/v1/user' ? Response.json(user) : Response.json({
         user, token_type: 'bearer', access_token: 'fixture-access', refresh_token: 'fixture-refresh', expires_in: 3600,
       });
+      if (target.pathname === '/v2/me/account-profile') return Response.json({authorId:accountId,displayName:'Fixture',revision:1});
       if (target.pathname === '/v1/me') return Response.json({accountId});
       return fetch(url, init);
     }});

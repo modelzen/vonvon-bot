@@ -20,7 +20,7 @@ export interface FeedbackSource {
 export const FEEDBACK_PREPARE = 'feedback_prepare';
 export const feedbackTool: AgentTool = {
   name: FEEDBACK_PREPARE, class: 'feedback', places: ['group'], input: schema,
-  description: '按当前用户的要求整理反馈并发送完整核对卡片。按需填写排查记录、源码依据、待验证问题、使用场景及验收标准，各项不超过 6000 字；源码依据用正式版版本、相对路径:行号和结论。附件只能使用本条消息给出的附件引用，公开提交需要本人点击卡片。',
+  description: '按当前用户的要求整理反馈并发送完整核对卡片。按需填写排查记录、源码依据、待验证问题、使用场景及验收标准，各项不超过 6000 字；只有已核实与现场版本对应的官方公开源码才填源码依据，可留空。附件只能使用本条消息给出的附件引用，公开提交需要本人点击卡片。',
   async run(args, ctx) {
     if (!ctx.feedback) throw new ToolRefusal({ok: false, code: 'refused', message: '请在已配置反馈接收目标的群聊中重新发起请求。'});
     try {return await ctx.feedback(schema.parse(args));}

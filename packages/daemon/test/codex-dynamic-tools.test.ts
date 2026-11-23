@@ -130,28 +130,12 @@ describe('connector tools that schedule on ChatGPT\'s side', () => {
 });
 
 describe('item/tool/call', () => {
-  it('routes release code calls only under the opted-in namespace and original member turn', async () => {
-    const namespace = 'vonvon-release-code';
-    const f = codexToolsFixture(undefined, chat => chat === 'oc_group');
+  it('offers feedback review and rejects removed source tools even from an old Codex rollout', async () => {
+    const f = codexToolsFixture(() => true);
     const session = await f.open();
-    expect(f.starts()[0]?.dynamicTools).toEqual([
-      expect.objectContaining({name: 'vonvon_bot'}),
-      expect.objectContaining({name: namespace, tools: ['rg', 'read'].map(name => expect.objectContaining({name}))}),
-    ]);
-    const call = vi.fn(async () => 'current source');
-    const source = {chatId:'oc_group', openId:'ou_member', messageId:'om_ou_member', call};
-    const args = {argv:['--files']};
-    await session.turn(person(source.openId, {releaseCode:source}), [
-      {namespace, tool:'rg', args}, {namespace:'vonvon_bot', tool:'rg', args},
-    ]);
-    expect(f.answers()).toEqual([
-      {success:true, text:'current source'}, {success:false, text:'没有这个工具。'},
-    ]);
-    await session.turn(person('ou_other', {releaseCode:source}), [{namespace, tool:'rg',args}]);
-    expect(f.answers().at(-1)?.success).toBe(false);
-    expect(call).toHaveBeenCalledOnce();
-    await f.open('start', true, {kind:'group',chatId:'oc_other'});
-    expect(f.starts()[1]?.dynamicTools).toEqual([expect.objectContaining({name:'vonvon_bot'})]);
+    expect(f.starts()[0]?.dynamicTools).toEqual([expect.objectContaining({name:'vonvon_bot',tools:expect.arrayContaining([expect.objectContaining({name:'feedback_prepare'})])})]);
+    await session.turn(person('ou_member'), [{namespace:'vonvon-release-code',tool:'rg',args:{argv:['--files']}},{namespace:'vonvon-release-code',tool:'read',args:{path:'README.md'}}]);
+    expect(f.answers()).toEqual([{success:false,text:'没有这个工具。'},{success:false,text:'没有这个工具。'}]);
   });
   it('answers through the entry as a tool result: a call, a tool it was not offered, bad arguments and another thread', async () => {
     const f = codexToolsFixture();

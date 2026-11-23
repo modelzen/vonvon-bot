@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN" data-desktop-channel="__DESKTOP_CHANNEL__" data-recipe-create-url="__RECIPE_CREATE_URL__"><head>
+<html lang="zh-CN" data-create-ready="__CREATE_READY__" data-desktop-channel="__DESKTOP_CHANNEL__" data-recipe-create-url="__RECIPE_CREATE_URL__" data-recipe-drafts-url="__RECIPE_DRAFTS_URL__" data-community-url="__COMMUNITY_URL__" data-library-url="__LIBRARY_URL__" data-account-url="__ACCOUNT_URL__"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="same-origin"><meta name="color-scheme" content="light">
 <title>创作配方 · Vonvon Bot</title><link rel="icon" href="/mark.png"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/studio.css">
@@ -7,24 +7,24 @@
 <script type="module" src="/create.mjs"></script>
 </head><body>
 <a class="skip" href="#main">跳到主要内容</a>
-<header class="mast"><div class="bar shell">
-<a href="/" class="brand"><img src="/mark.png" width="28" height="28" alt="">Vonvon Bot</a>
-<nav class="actions" aria-label="社区导航"><a href="https://vonvon.cc/">官网</a><a href="/" data-community-link>社区</a><a href="https://vonvon.cc/docs/">文档</a><a href="https://vonvon.cc/get/">下载</a><button class="secondary" id="account" type="button" hidden>登录</button></nav>
+<header class="mast community-mast"><div class="site-header-inner">
+<a href="__COMMUNITY_URL__" class="brand" aria-label="Vonvon 灵感社区首页"><img src="/community-logo.webp" width="30" height="30" alt=""><span>Vonvon 灵感社区</span></a>
+<nav class="actions" aria-label="社区导航"><div class="publish-entry"><a class="button" href="__GUARDED_CREATE_URL__" data-create-site title="在 App 中创作，确认后发布；可分享或自行售卖分享码">创作配方</a></div><button class="secondary" id="account" type="button" hidden>登录</button></nav>
 </div></header>
 <main class="shell studio" id="main" data-page="app-guide">
 <div class="page-top"><div class="intro"><p class="eyebrow">创作配方</p><h1>在 Bot 私聊中创作</h1><p class="muted">把本地 Bot 和群聊中已有的配置整理成配方，再分享给社区。</p></div></div>
-<div class="studio-create"><a class="button" href="__RECIPE_CREATE_URL__" data-create-recipe>打开 App，创作配方</a><p class="fine">选择已有 Bot 和群聊，把自己的好配置分享给社区。</p></div>
+<div class="studio-create"><a class="button" href="__STUDIO_CREATE_URL__" __STUDIO_ACTION__>打开 App，创作配方</a><p class="fine">选择已有 Bot 和群聊，把自己的好配置分享给社区。</p></div>
 <section aria-labelledby="prepare-title"><h2 id="prepare-title">从已有配置开始创作</h2>
 <ol class="setup-list">
-<li><strong>选择已有配置</strong><p>在 App 中进入「社区」→「我的配方」→「创作配方」，选择已有 Bot 和群聊，点击「前往私聊创作」。Bot 会主动发送引导卡并打开本人私聊；首次使用需完成一次本人验证。也可直接在已关联的 Bot 私聊中发送「创建配方」，按卡片选择已有群聊。</p></li>
-<li><strong>在飞书私聊中创作</strong><p>与所选 Bot 整理、修改配方的内容和介绍。未发布内容会保存在 App「我的配方」的「创作中」。</p></li>
-<li><strong>预览或直接发布</strong><p>从飞书卡片打开 App 查看完整预览，再在 App 确认发布。也可以在飞书卡片上直接确认发布。</p></li>
+<li><strong>告诉 Bot 用哪个群</strong><p>可以直接在已关联的 Bot 私聊里说「把周报群的配置做成配方」。也可以在 App 点「创作配方」，选好 Bot 和群聊，再点「前往私聊创作」。首次使用时，按 App 提示关联本人私聊。</p></li>
+<li><strong>在私聊里整理草稿</strong><p>Bot 会先列出来源群的模型、Provider、技能、工具、MCP、沟通方式和任务，并建议哪些值得分享。你可以增减，确认后才把选定的内容和技能文件保存为本地配方目录。草稿在本地 App 的「我的配方 → 创作中」。</p></li>
+<li><strong>预览并发布</strong><p>在私聊里可以继续修改和确认发布。也可以打开 App 预览草稿，点「发布到社区」，可以发布为新配方，也可以给自己已有的配方发布新版本。</p></li>
 </ol></section>
 <section class="panel intro" aria-labelledby="manage-title"><h2 id="manage-title">在 App 中查看和管理配方</h2><p>已获取、创作中和已发布的配方，都在 App 的「社区」→「我的配方」中查看；已发布版本与分享码也在这里管理。</p><p class="muted">如果你从旧草稿链接来到这里，请在 App 的「我的配方」中查看原有内容。</p></section>
 <p class="muted studio-note">社区网站用于浏览和领取配方。领取后，在 App 登录同一账号即可使用。</p>
 <p class="muted">还没有 App？<a href="https://vonvon.cc/get/">前往官网下载</a>。</p>
-<div class="actions"><a class="button" href="/">浏览社区</a><a class="secondary" href="/library">查看已获取</a></div>
+<div class="actions"><a class="button" href="/">浏览社区</a></div>
 </main>
-<footer class="site-footer"><div class="shell"><p>Vonvon Bot · 把好用的配方带回自己的 Bot</p><nav aria-label="相关页面"><a href="https://vonvon.cc/">官网</a><a href="https://vonvon.cc/docs/">使用文档</a><a href="/">配方社区</a><a href="__RECIPE_CREATE_URL__" data-create-recipe>分享我的配方</a><a href="/studio">创作指引</a></nav></div></footer>
+<footer class="site-footer"><div class="shell"><p>Vonvon 灵感社区 · 好的配置，值得分享</p><a href="/studio">发布指南</a></div></footer>
 <dialog id="modal"></dialog><div id="feedback" role="status" aria-live="polite"></div>
 </body></html>

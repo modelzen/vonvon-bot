@@ -2,7 +2,7 @@
 import {act} from 'react';
 import {createRoot, type Root} from 'react-dom/client';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
-import {communityRequestSchema, type AuthoringPublished, type AccountShell, type CommunityRequest, type RecipeBrowseDetail, type RecipeRoleDraft} from '@vonvon/protocol';
+import {communityRequestSchema, type AuthoringPublished, type AccountShell, type AccountStatus, type CommunityRequest, type RecipeBrowseDetail, type RecipeRoleDraft} from '@vonvon/protocol';
 import {createDesktopFacades} from '../../desktop/src/facade';
 import {desktopChannels} from '../../desktop/src/ipc-contract';
 import {DesktopRootView} from '../src/devices/DesktopRoot';
@@ -402,16 +402,49 @@ it('browses compact configuration and acquisition rights without fetching skill 
   await click('能力');
   expect(document.querySelector('.community-detail-content')?.textContent).toContain('setup');
   expect(document.querySelector('.community-detail-content')?.textContent).toContain('核对运行环境并准备项目。');
-  expect(document.querySelector('.community-detail-content')?.textContent).toContain('2 条规则');
-  expect(document.querySelector('.community-detail-content details')).toBeNull();
-  await click('沟通方式');
-  expect(document.querySelector('.community-detail-content')?.textContent).toContain('语音回复');
+  expect(document.querySelector('.community-detail-content')?.textContent).not.toMatch(/规则|2 条规则/);
+  expect(document.querySelector('[aria-label="配方技能"] button .setup-skill-badge')?.textContent).toBe('Setup');
+  expect(document.querySelector('.community-detail-content input[type=search], .community-detail-content [role=switch]')).toBeNull();
+  await act(async () => document.querySelector<HTMLElement>('[aria-label="配方技能"] .recipe-skills-description')!.click());
+  expect(document.querySelector('[role=dialog]')?.textContent).toContain('核对运行环境并准备项目。');
+  await click('完成');
+  expect(document.querySelector('.community-detail-content')?.textContent).toContain('语音转文字');
   expect(document.querySelector('.community-detail-content')?.textContent).toContain('开启');
   await click('任务');
   expect(document.querySelector('.community-detail-content')?.textContent).toContain('1 项任务');
   expect(calls.filter(request => request.type === 'detail')).toEqual([]);
   expect(calls.filter(request => request.type === 'browse')).toHaveLength(2);
   expect(document.querySelector('.community-additional-notes')).toBeNull();
+});
+
+it.each(['owned', 'acquired', 'catalog'] as const)('shows %s task schedules through the appropriate read-only entry', async entry => {
+  const normal = handle;
+  handle = async request => {
+    if (request.type === 'browse') return {...recipe, owned: entry === 'owned', acquired: entry === 'acquired',
+      preview: {...recipe.preview, taskCount: 1}};
+    if (request.type === 'recipeTaskSummaries') return {recipeId: A, versionId: B, tasks: [
+      {itemId: draftId, name: '晨间检查', spec: {kind: 'weekly', days: [1,2,3,4,5], time: '09:00'},
+        timeZone: {kind: 'recommended', iana: 'Asia/Shanghai'}, placement: 'newTopic'},
+    ]};
+    return normal(request);
+  };
+  await draw();
+  await act(async () => document.querySelector<HTMLButtonElement>('.community-card')!.click());
+  await click('任务');
+  const list = document.querySelector('.community-detail-content')!;
+  if (entry === 'catalog') {
+    expect(list.textContent).toContain('包含 1 项任务');
+    expect(calls.some(req => req.type === 'recipeTaskSummaries')).toBe(false);
+  } else {
+    expect(list.textContent).toContain('每个工作日 09:00');
+    await act(async () => list.querySelector<HTMLButtonElement>('[data-search-title="晨间检查"]')!.click());
+    const dialog = document.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain('Asia/Shanghai');
+    expect(dialog.textContent).toContain('每次开新话题');
+    expect(dialog.querySelector('input, textarea')).toBeNull();
+    expect(calls.filter(req => req.type === 'recipeTaskSummaries')).toEqual([{type:'recipeTaskSummaries', accountId, recipeId:A, versionId:B}]);
+  }
+  expect(calls.some(req => req.type === 'detail')).toBe(false);
 });
 
 it('opens coded acquisition in a focused dialog and keeps an uncertain retry bound to the same request', async () => {
@@ -448,12 +481,12 @@ it('keeps rental content distinct and explicitly returns other routes to recipes
   await draw();
   const rental = [...document.querySelectorAll('button')].find(button => button.textContent?.startsWith('Bot 租赁'))!;
   await act(async () => rental.click());
-  expect(document.querySelector('.community-section-heading')).toBeNull();
-  expect(document.querySelector('.community-empty h2')?.textContent).toBe('Bot 租赁');
+  expect(rental.disabled).toBe(true);
+  expect(document.querySelector('.community-section-heading h1')?.textContent).toBe('发现配方');
   expect(document.body.textContent?.match(/敬请期待/g)).toHaveLength(1);
   await click('打开已发布版本');
   await click('返回 Bot 配方');
-  expect(document.querySelector('.community-tabs button[aria-current="page"]')?.textContent).toBe('Bot 配方');
+  expect(document.querySelector('[aria-label="配方导航"] button[aria-current="page"]')?.textContent).toBe('Bot 配方');
   expect(document.querySelector('.community-card')).not.toBeNull();
   expect(document.querySelector('.community-empty')).toBeNull();
 });
@@ -505,4 +538,96 @@ it('opens public author publications from a separate card action, paginates and 
   expect(document.querySelector('.community-detail h1')?.textContent).toBe(recipe.public.name);
   await click('返回作者主页');
   expect(document.querySelector('.community-author-page h1')?.textContent).toBe('Fixture');
+});
+
+function signedOutLoginFixture() {
+  const listeners=new Set<Parameters<AccountShell['onStatus']>[0]>();
+  let current:AccountStatus={kind:'signedOut'};
+  const emit=(next:AccountStatus)=>{current=next;listeners.forEach(listener=>listener(next));};
+  const login=vi.fn(async()=>{emit({kind:'signingIn'});return current;});
+  shell.account={...account,status:async()=>current,onStatus:listener=>{listeners.add(listener);listener(current);return()=>{listeners.delete(listener);};},login,cancelLogin:async()=>{emit({kind:'signedOut',reason:'cancelled'});return current;}};
+  return {login,emit};
+}
+it('launches shared native login once from a signed-out acquisition and resumes the exact coded version without redeeming',async()=>{
+  const auth=signedOutLoginFixture(),normal=handle;
+  handle=async request=>{if(request.type==='browse'){const {preview:_preview,...intro}=recipe;return {...intro,public:{...recipe.public,access:'coded'}};}return normal(request);};
+  await draw();await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());
+  const get=[...document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='获取配方')!;
+  await act(async()=>{get.click();get.click();});
+  expect(auth.login).toHaveBeenCalledOnce();expect(document.body.textContent).toContain('请在系统浏览器完成登录');
+  expect([...document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='获取配方')?.disabled).toBe(true);
+  await act(async()=>auth.emit(status));
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain(recipe.public.name+' · 版本 '+recipe.public.version);
+  expect(document.querySelector('[aria-label="分享码"]')).not.toBeNull();
+  expect(calls.filter(request=>request.type==='browse').map(request=>({recipeId:request.recipeId,versionId:request.versionId}))).toEqual([{recipeId:A,versionId:B},{recipeId:A,versionId:B}]);
+  expect(calls.some(request=>request.type==='acquire')).toBe(false);
+});
+it('shows cancellation and allows retrying native login from the same recipe without stale disabled state',async()=>{
+  const auth=signedOutLoginFixture();await draw();await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());
+  await click('获取配方');await click('取消登录');
+  expect(document.body.textContent).toContain('已取消登录');
+  expect([...document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='获取配方')?.disabled).toBe(false);
+  await click('获取配方');expect(auth.login).toHaveBeenCalledTimes(2);
+  expect(calls.some(request=>request.type==='acquire')).toBe(false);
+});
+it('exposes a browser-launch failure and permits a fresh login retry',async()=>{
+  const auth=signedOutLoginFixture();auth.login.mockRejectedValueOnce(Error('browser unavailable'));
+  await draw();await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());await click('获取配方');
+  expect(document.body.textContent).toMatch(/登录未完成|未能开始登录/);
+  expect([...document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='获取配方')?.disabled).toBe(false);
+  await click('获取配方');expect(auth.login).toHaveBeenCalledTimes(2);
+});
+it('requires explicit confirmation to acquire a direct version after native login succeeds',async()=>{
+  const auth=signedOutLoginFixture(),normal=handle;let acquired=false;
+  handle=async request=>request.type==='acquire'?(acquired=true,{recipeId:A,versionId:B,owned:false,acquired:true}):request.type==='browse'?{...recipe,acquired}:normal(request);
+  await draw();await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());await click('获取配方');
+  await act(async()=>auth.emit(status));
+  expect(document.body.textContent).toContain('请再次点击「获取配方」');expect(calls.some(request=>request.type==='acquire')).toBe(false);
+  await click('获取配方');expect(calls.filter(request=>request.type==='acquire')).toMatchObject([{accountId,versionId:B}]);
+});
+it('does not resume an abandoned acquisition when native login finishes after leaving the recipe',async()=>{
+  const auth=signedOutLoginFixture();await draw();await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());await click('获取配方');
+  await click('返回 Bot 配方');await act(async()=>auth.emit(status));
+  expect(document.querySelector('.community-detail')).toBeNull();expect(document.querySelector('[aria-label="分享码"]')).toBeNull();
+  expect(calls.some(request=>request.type==='acquire')).toBe(false);
+});
+
+it('reports a failed login cancellation while keeping the cancel action retryable',async()=>{
+  signedOutLoginFixture();let failed=true;
+  const original=shell.account!.cancelLogin;
+  shell.account={...shell.account!,cancelLogin:async()=>{if(failed)throw Error('cancel unavailable');return original();}};
+  await draw();await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());await click('获取配方');await click('取消登录');
+  expect(document.body.textContent).toContain('未能取消登录，请重试');
+  failed=false;await click('取消登录');expect(document.body.textContent).toContain('已取消登录');
+  expect([...document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='获取配方')?.disabled).toBe(false);
+});
+
+function codedAcquisitionFixture() {
+  const auth=signedOutLoginFixture(),normal=handle;
+  handle=async request=>{if(request.type==='browse'){const {preview:_preview,...intro}=recipe;return {...intro,public:{...recipe.public,access:'coded'}};}return normal(request);};
+  return auth;
+}
+it('does not revive a cancelled coded-acquisition intent during a later independent account login',async()=>{
+  const auth=codedAcquisitionFixture();await draw();await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());
+  await click('获取配方');await click('取消登录');
+  await act(async()=>{await auth.login();});await act(async()=>auth.emit({...status,accountId:draftId}));
+  expect(document.body.textContent).toContain('已取消登录');
+  expect(document.querySelector('[aria-label="分享码"]')).toBeNull();expect(calls.some(request=>request.type==='acquire')).toBe(false);
+});
+it('expires a waiting coded-acquisition intent and never restores it on a later independent login',async()=>{
+  const auth=codedAcquisitionFixture();await draw();await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());
+  vi.useFakeTimers({toFake:['Date','setTimeout','clearTimeout']});await click('获取配方');
+  await act(async()=>{await vi.advanceTimersByTimeAsync(300_001);});
+  expect(document.body.textContent).toContain('获取登录已过期');
+  vi.useRealTimers();await act(async()=>{await auth.login();});await act(async()=>auth.emit({...status,accountId:draftId}));
+  expect(document.body.textContent).toContain('获取登录已过期');expect(document.querySelector('[aria-label="分享码"]')).toBeNull();
+  expect(calls.some(request=>request.type==='acquire')).toBe(false);
+});
+it('creates a fresh nonce for an explicit acquisition retry and resumes only that exact coded version',async()=>{
+  const auth=codedAcquisitionFixture();await draw();await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());
+  const nonce=vi.spyOn(crypto,'randomUUID').mockReturnValueOnce(A).mockReturnValueOnce(B);
+  await click('获取配方');await click('取消登录');await click('获取配方');
+  expect(nonce.mock.results.map(result=>result.value)).toEqual([A,B]);nonce.mockRestore();expect(auth.login).toHaveBeenCalledTimes(2);
+  await act(async()=>auth.emit(status));expect(document.querySelector('[role="dialog"]')?.textContent).toContain(recipe.public.name+' · 版本 '+recipe.public.version);
+  expect(document.querySelector('[aria-label="分享码"]')).not.toBeNull();expect(calls.some(request=>request.type==='acquire')).toBe(false);
 });

@@ -1,4 +1,4 @@
-import {parseScheduleCron as parseCron, resolveScheduleTimeZone, type ScheduleSpec} from '@vonvon/protocol';
+import {describeRecurringSchedule, parseScheduleCron as parseCron, resolveScheduleTimeZone, type ScheduleSpec} from '@vonvon/protocol';
 
 export {parseCron};
 
@@ -222,11 +222,7 @@ export function describeSpec(spec: ScheduleSpec, zone: string, host: string, now
       text = `${year}${p.m} 月 ${p.d} 日 ${formatHHMM(spec.at, zone)} 一次`;
       break;
     }
-    case 'every': text = spec.minutes % 60 === 0 ? `每 ${spec.minutes / 60} 小时` : `每 ${spec.minutes} 分钟`; break;
-    case 'daily': text = `每天 ${spec.time}`; break;
-    case 'weekly': { const days = [...new Set(spec.days)].sort((a, b) => a - b); text = `${days.join(',') === '1,2,3,4,5' ? '每个工作日' : `每周${days.map(day => '日一二三四五六'[day]).join('、')}`} ${spec.time}`; break; }
-    case 'cron': text = `cron「${spec.expr}」`; break;
-    default: { const exhaustive: never = spec; return exhaustive; }
+    default: text = describeRecurringSchedule(spec);
   }
   return text + suffix(zone, host);
 }

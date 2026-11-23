@@ -108,9 +108,7 @@
   .gd-skill-group > summary > .gd-skill-count { margin-left: 22px; }
   .gd-skill-group-copy { flex-basis: calc(100% - 22px); }
   .gd-skill-list { margin-left: 22px; margin-right: 8px; }
-  .gd-skill-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; padding: 12px; }
-  .gd-skill-row > .setup-skill-badge { grid-column: 1; }
-  .gd-skill-row > .settings-row-switch { grid-column: 2; grid-row: 1 / span 2; }
+  .gd-skill-row { gap: 8px; padding: 12px; }
 }
 @media (max-width: 460px) {
   .gd-skill-search { flex-basis: 100%; max-width: none; }

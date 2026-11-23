@@ -1,23 +1,35 @@
 <!doctype html>
-<html lang="zh-CN"><head>
+<html lang="zh-CN" data-desktop-channel="__DESKTOP_CHANNEL__" data-recipe-create-url="__RECIPE_CREATE_URL__" data-recipe-drafts-url="__RECIPE_DRAFTS_URL__" data-community-url="__COMMUNITY_URL__" data-library-url="__LIBRARY_URL__" data-account-url="__ACCOUNT_URL__"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="referrer" content="no-referrer"><meta name="color-scheme" content="light dark">
-<title>注册或登录 · Vonvon Bot</title><link rel="icon" href="/mark.png">
+<meta name="referrer" content="no-referrer"><meta name="color-scheme" content="light">
+<title>登录 Vonvon Bot App · Vonvon 账号</title><link rel="icon" href="/mark.png">
 <link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/native.css">
 <script type="module" src="/native.mjs"></script>
-</head><body>
-<header class="mast"><div class="bar shell"><a href="/" class="brand"><img src="/mark.png" width="28" height="28" alt="">Vonvon Bot</a></div></header>
-<main class="native-shell"><section class="panel" aria-labelledby="title">
-<p class="eyebrow">Vonvon Bot</p><h1 id="title">注册或登录</h1>
-<p id="status" class="notice" role="status" aria-live="polite">正在准备登录…</p>
+<script type="module" src="/create.mjs"></script><script type="module" src="/header.mjs"></script></head><body class="native-page">
+<header class="mast community-mast"><div class="site-header-inner">
+<a href="__COMMUNITY_URL__" class="brand" aria-label="Vonvon 灵感社区首页"><img src="/community-logo.webp" width="30" height="30" alt=""><span>Vonvon 灵感社区</span></a>
+<nav class="actions" aria-label="社区导航"><div class="publish-entry"><a class="button" href="__GUARDED_CREATE_URL__" data-create-site title="在 App 中创作，确认后发布；可分享或自行售卖分享码">创作配方</a></div><div id="site-account" aria-live="polite"></div></nav>
+</div></header>
+<main class="native-shell"><section class="native-card" aria-labelledby="title">
+<div class="native-app-mark" aria-hidden="true"><img src="/mark.png" width="44" height="44" alt=""></div>
+<p class="native-eyebrow">Vonvon Bot App</p><h1 id="title">登录 Vonvon Bot App</h1>
+<p class="native-purpose">选择登录方式，完成后回到 App 使用这个账号的配方。</p>
+<p id="status" class="native-status" role="status" aria-live="polite">正在准备登录…</p>
 <div id="providers" class="provider-list" aria-label="选择登录方式" hidden></div>
+<section id="native-identity" aria-labelledby="native-identity-title" hidden>
+<h2 id="native-identity-title">确认连接到 App</h2>
+<div class="native-identity-card"><span class="native-identity-avatar"><img id="native-avatar" alt="" hidden><span id="native-initials"></span></span><div><strong id="native-name"></strong><p>用户 ID</p><code id="native-account-id"></code></div></div>
+<p class="native-identity-help">确认后，App 和当前浏览器中的灵感社区都会使用这个账号。</p>
+<div id="native-decisions" class="native-decisions"><button id="native-confirm" type="button" class="button">继续连接</button><button id="native-switch" type="button" class="secondary">切换账号</button></div>
+</section>
 <div id="login-help">
-<p class="fine">首次使用会自动创建 Vonvon 账号，已有账号会直接登录。</p>
-<details class="login-help"><summary>切换账号与授权</summary>
-<p>下一步可选择其他 GitHub 或 Google 账号。已授权的账号可能无需再次确认权限。</p>
-<p>退出 Vonvon 后，浏览器仍会保留 GitHub 等网站的登录状态。你无需退出这些网站即可选择另一个账号。</p>
+<p class="native-account-note">首次使用会创建 Vonvon 账号。已有账号会直接登录。</p>
+<div class="native-scope"><strong>这个账号用于</strong><p>维护公开昵称与头像，以及创作、发布和获取配方。</p></div>
+<details class="login-help"><summary>想换一个账号登录？</summary>
+<p>下一步可选择其他 GitHub 或 Google 账号。</p>
+<p>退出 Vonvon 不会退出 GitHub、Google 或 Apple。第三方可能仍保留自己的登录状态，也可能跳过曾确认的授权步骤。</p>
 </details>
 </div>
-<button id="cancel" type="button" class="secondary" hidden>取消登录</button>
-</section><noscript>请开启 JavaScript 后从 App 重新登录。</noscript></main>
+<button id="cancel" type="button" class="native-cancel" hidden>取消登录</button>
+</section><p class="native-return-note">请保留 App 中的登录窗口，完成后回到 App。</p><noscript>请开启 JavaScript 后从 App 重新登录。</noscript></main>
 </body></html>

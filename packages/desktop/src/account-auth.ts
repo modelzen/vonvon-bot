@@ -75,8 +75,10 @@ export function checkAuth(error: AuthError | null): void {
 }
 
 export async function verifyAccount(deployment: AccountDeployment, auth: ReturnType<typeof accountAuth>, token: string, subject: string,
-  provider: AccountProvider, signal: AbortSignal, transport: typeof fetch) {
+  provider: AccountProvider, signal: AbortSignal, transport: typeof fetch, options: {initializeProfile?: boolean; expectedAccountId?: string; checkActive?: () => void} = {}) {
+  options.checkActive?.();
   const result = await auth.getUser(token);
+  options.checkActive?.();
   checkAuth(result.error);
   const user = result.data.user;
   if (!user || user.is_anonymous || !z.string().uuid().safeParse(user.id).success || user.id !== subject ||
@@ -86,6 +88,8 @@ export async function verifyAccount(deployment: AccountDeployment, auth: ReturnT
   }).catch(() => { throw new AccountFault('offline'); });
   checkResponse(proof);
   const { accountId } = z.object({ accountId: z.string().uuid() }).parse(await accountJson(proof));
+  options.checkActive?.();
+  if (options.expectedAccountId !== undefined && accountId !== options.expectedAccountId) throw new AccountFault('invalid');
   const metadata = user.user_metadata ?? {};
   const displayName = [metadata.full_name, metadata.name, metadata.user_name]
     .filter((name): name is string => typeof name === 'string')
@@ -100,6 +104,7 @@ export async function verifyAccount(deployment: AccountDeployment, auth: ReturnT
   const fallback = {accountId, displayName, ...(avatarUrl ? {avatarUrl} : {})};
   async function requestProfile(body?: {displayName: string}) {
     signal.throwIfAborted();
+    options.checkActive?.();
     return transport(deployment.apiOrigin + '/v2/me/account-profile' + (body ? '/initialize' : ''), {
       method: body ? 'POST' : 'GET',
       headers: {Authorization: 'Bearer ' + token, ...(body && {'Content-Type': 'application/json'})},
@@ -117,7 +122,8 @@ export async function verifyAccount(deployment: AccountDeployment, auth: ReturnT
   const profileResponse = await requestProfile();
   if (unavailable(profileResponse)) return fallback;
   let profile = await readProfile(profileResponse);
-  if (profile.revision === 0) {
+  options.checkActive?.();
+  if (profile.revision === 0 && options.initializeProfile !== false) {
     const name = publicDisplayNameSchema.safeParse(Array.from(displayName).slice(0, 60).join(''));
     const initialized = await requestProfile({displayName: name.success ? name.data : 'Vonvon 用户'});
     if (unavailable(initialized)) throw new AccountFault('offline');
@@ -125,6 +131,7 @@ export async function verifyAccount(deployment: AccountDeployment, auth: ReturnT
     if (profile.revision === 0) throw new AccountFault('offline');
   }
   signal.throwIfAborted();
+  options.checkActive?.();
   return {accountId, displayName: profile.displayName, ...(avatarUrl ? {avatarUrl} : {}),
     ...(profile.avatarDataUrl && {avatarDataUrl: profile.avatarDataUrl}),
     ...(profile.revision !== undefined && {profileRevision: profile.revision})};

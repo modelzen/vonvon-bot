@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
+import {z} from 'zod';
 import {act} from 'react';
 import {createRoot, type Root} from 'react-dom/client';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import {
-  accountStatusSchema, communityRequestSchema, desktopAuthoringReplySchema, desktopAuthoringRequestSchema,
+  accountStatusSchema, recipeSummarySchema, recipeLibraryGroupsSchema, recipeLibraryVersionsSchema, communityRequestSchema, desktopAuthoringReplySchema, desktopAuthoringRequestSchema,
   desktopSnapshotSchema, type AccountStatus, type CommunityRequest, type DesktopAuthoringOperation,
   type DesktopAuthoringReply, type DesktopAuthoringRequest, type RecipeBrowseDetail, type RecipeDraft,
 } from '@vonvon/protocol';
@@ -43,6 +44,8 @@ let calls: DesktopAuthoringRequest[];
 let cloudCalls: CommunityRequest[];
 let sessions: Map<string,Session>;
 let nextHandle: number;
+let nativeLoginCalls: number;
+let acknowledgedNavigations: string[];
 let linked: boolean;
 let externalCalls: string[];
 let externalFailure: boolean;
@@ -55,6 +58,14 @@ let sourceRecord: unknown;
 let currentHandoff:AuthoringHandoff|undefined;
 let deviceSnapshot= snapshot;
 let facade: ReturnType<typeof createDesktopFacades>;
+const pageCursor='aa.'+'a'.repeat(64);
+function groupedReply(value: unknown, scope: string) {
+  const page=z.object({items:z.array(recipeSummarySchema.extend({owned:z.boolean().optional(),acquired:z.boolean().optional(),versionCount:z.number().optional(),state:z.enum(['listed','withdrawn']).optional()})),nextCursor:z.string().nullable().optional()}).parse(value);
+  return recipeLibraryGroupsSchema.parse({items:page.items.map(item=>{
+    const {overview:_overview,...info}=item.public;
+    return {...item,public:info,format:item.format??'role-v1',creator:item.creator??{authorId:accountA,displayName:'测试作者'},hasDisplayLogo:item.hasDisplayLogo??false,state:item.state??'listed',owned:item.owned??scope==='published',acquired:item.acquired??scope!=='published',versionCount:item.versionCount??1};
+  }),nextCursor:page.nextCursor?pageCursor:null});
+}
 const success = (value: unknown) => ({ok:true,value});
 const text = () => document.querySelector('main')?.textContent ?? '';
 const dialog = (title: string) => [...document.querySelectorAll('[role="dialog"]')].find(element=>element.querySelector('header h2')?.textContent===title);
@@ -108,12 +119,12 @@ beforeEach(() => {
   HTMLElement.prototype.scrollIntoView=vi.fn();
   Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:vi.fn(async()=>{})}});
   document.body.innerHTML='<div id="root"></div>';root=createRoot(document.getElementById('root')!);
-  localStorage.clear();deviceSnapshot=snapshot;currentHandoff=undefined;status=signedIn();sourceRecord=null;calls=[];cloudCalls=[];sessions=new Map();nextHandle=0;linked=false;recipient=false;operations=[];externalCalls=[];externalFailure=false;
+  localStorage.clear();nativeLoginCalls=0;acknowledgedNavigations=[];deviceSnapshot=snapshot;currentHandoff=undefined;status=signedIn();sourceRecord=null;calls=[];cloudCalls=[];sessions=new Map();nextHandle=0;linked=false;recipient=false;operations=[];externalCalls=[];externalFailure=false;
   draft={draftId,recipeId:null,revision:1,public:{name:'同一份私人草稿',summary:'本人填写的公开简介',overview:'',version:'1',access:'direct'},config:{role:'只整理公开资料'}};
   authoring=defaultAuthoring;
   cloud=async request=>{
     if(request.type==='catalog')return {hero:null,items:[],nextCursor:null};
-    if(request.type==='library')return {items:[],nextCursor:null};
+    if(request.type==='recipeGroups')return {items:[],nextCursor:null};
     if(request.type==='drafts')return {items:[draft]};
     if(request.type==='publications')return {items:[]};
     if(request.type==='draft')return draft;
@@ -126,13 +137,17 @@ beforeEach(() => {
     try {
       if(channel===desktopChannels.subscribe)return success(undefined);
       if(channel===desktopChannels.accountStatus)return success(status);
+      if(channel===desktopChannels.accountLogin){nativeLoginCalls++;status={kind:'signingIn'};emit({type:'account',value:status});return success(status);}
+      if(channel===desktopChannels.accountCancel){status={kind:'signedOut',reason:'cancelled'};emit({type:'account',value:status});return success(status);}
+      if(channel===desktopChannels.recipePreviewPending)return success([]);
+      if(channel===desktopChannels.recipePreviewAcknowledge){acknowledgedNavigations.push(String(args[0]));return success(undefined);}
       if(channel===desktopChannels.snapshot)return success(deviceSnapshot(args.at(-1)));
       if(channel===desktopChannels.memory)return success({kind:'newCounts',projects:{},bots:{},dm:{}});
       if(channel===desktopChannels.run)return success({kind:'pendingGroups',groups:[]});
       if(channel===desktopChannels.admin)return success({kind:'judgeUsage',days:[],unreadBots:0});
       if(channel===desktopChannels.environment)return success({kind:'backends',entries:[]});
       if(channel===desktopChannels.recipeAuthoring){const request=desktopAuthoringRequestSchema.parse(args[0]);calls.push(request);return success(desktopAuthoringReplySchema.parse(await authoring(request)));}
-      if(channel===desktopChannels.community){const request=communityRequestSchema.parse(args[0]);cloudCalls.push(request);return success(await cloud(request));}
+      if(channel===desktopChannels.community){const request=communityRequestSchema.parse(args[0]);cloudCalls.push(request);const value=await cloud(request);if(request.type==='recipeGroups')return success(groupedReply(value,request.scope));if(request.type==='recipeGroupVersions'){const page=groupedReply(value,request.scope);return success(recipeLibraryVersionsSchema.parse({...page,items:page.items.map(({versionCount:_count,...version})=>version)}));}return success(value);}
       if(channel===desktopChannels.recipeSource)return success({source:sourceRecord});
       if(channel===desktopChannels.collaboration)return success({kind:'project',project:{name:'群聊 A',chatId:groupA,cwd:'/tmp/synthetic-authoring',kind:'multi',backend:'codex-appserver',enabled:true,revision:'1'}});
       if(channel===desktopChannels.external) {externalCalls.push(String(args[0])); if (externalFailure) throw new Error('Synthetic browser failure'); return success(undefined);}
@@ -148,7 +163,7 @@ async function draw(view=A) {
 
 async function openResource() {
   const normal = cloud;
-  cloud = async request => request.type === 'library' ? {items: [{recipeId: accountB, versionId: draftId, revision: 1, public: draft.public}], nextCursor: null}
+  cloud = async request => request.type === 'recipeGroups' ? {items: [{recipeId: accountB, versionId: draftId, revision: 1, public: draft.public}], nextCursor: null}
     : request.type === 'latestVersion' ? {status: 'unknown'}
       : request.type === 'browse' ? browseFixture(request.recipeId,request.versionId,{acquired:true}) : normal(request);
   await draw(); await click('社区'); await click('我的配方');
@@ -256,35 +271,26 @@ it('discards a late resource handoff after switching accounts', async () => {
   expect(document.querySelector('[role="dialog"]')).toBeNull();
 });
 
-it('offers a newer recipe from the account library without changing a group or claiming access', async () => {
+it('keeps the granted library version instead of looking up and opening an ungranted public update', async () => {
   const normal = cloud;
-  cloud = async request => request.type === 'library' ? {items: [{recipeId: accountB, versionId: draftId, revision: 1, public: draft.public}], nextCursor: null}
-    : request.type === 'latestVersion' ? {status: 'newer', target: {recipeId: accountB, versionId: operationId}, revision: 2, version: '2.0', format: 'rich-v2', access: 'coded'}
-      : request.type === 'browse' ? browseFixture(request.recipeId,request.versionId,{revision:2,format:'rich-v2',public:{...draft.public,version:'2.0',access:'coded'},preview:undefined})
-      : normal(request);
+  cloud = async request => request.type === 'recipeGroups' ? {items: [{recipeId: accountB, versionId: draftId, revision: 1, public: draft.public}], nextCursor: null} : normal(request);
   await draw(); await click('社区'); await click('我的配方');
-  expect(document.querySelector('.community-library-update')?.textContent).toContain('有新版本 · 2.0');
-  expect(calls).toEqual([]);
-  expect(cloudCalls.some(request => request.type === 'acquire')).toBe(false);
-  await act(async () => document.querySelector<HTMLButtonElement>('.community-library-update')!.click());
-  expect(cloudCalls.filter(request => request.type === 'browse')).toEqual([{type: 'browse', accountId: accountA, recipeId: accountB, versionId: operationId}]);
-  expect(document.body.textContent).toContain('获取配方');
-  expect(document.body.textContent).not.toContain('交给 Bot');
-  expect(cloudCalls.some(request => ['detail','richDetail','acquire'].includes(request.type))).toBe(false);
-  expect(calls).toEqual([]);
+  expect(document.querySelector('.community-library-update')).toBeNull();
+  expect(cloudCalls.some(request=>request.type==='latestVersion')).toBe(false);
+  await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());
+  expect(cloudCalls.filter(request=>request.type==='browse')).toEqual([{type:'browse',accountId:accountA,recipeId:accountB,versionId:draftId}]);
+  expect(cloudCalls.some(request=>request.type==='acquire')).toBe(false);expect(calls).toEqual([]);
 });
 
 it('shows one account resource with its newest acquired version', async () => {
   const normal = cloud;
-  cloud = async request => request.type === 'library' ? {items: [
-    {recipeId: accountB, versionId: draftId, revision: 1, public: draft.public},
-    {recipeId: accountB, versionId: operationId, revision: 2, public: {...draft.public, version: '2.0'}},
-  ], nextCursor: null} : request.type === 'latestVersion' ? {status: 'unknown'}
+  cloud = async request => request.type === 'recipeGroups' ? {items: [{recipeId: accountB, versionId: operationId, revision: 2, versionCount:2, public: {...draft.public, version: '2.0'}}], nextCursor: null} : request.type === 'latestVersion' ? {status: 'unknown'}
     : request.type === 'browse' ? browseFixture(request.recipeId,request.versionId,{revision:2,public:{...draft.public,version:'2.0'},acquired:true}) : normal(request);
   await draw(); await click('社区'); await click('我的配方');
   expect(document.querySelectorAll('.community-card')).toHaveLength(1);
   expect(document.querySelector('.community-card-footer')?.textContent).toContain('2.0');
-  expect(cloudCalls.filter(request => request.type === 'latestVersion')).toMatchObject([{versionId: operationId, revision: 2}]);
+  expect(cloudCalls.filter(request => request.type === 'latestVersion')).toEqual([]);
+  expect([...document.querySelectorAll('button')].some(button=>button.textContent==='选择版本 · 2 个')).toBe(true);
   await act(async () => document.querySelector<HTMLButtonElement>('.community-card')!.click());
   expect(cloudCalls.filter(request => request.type === 'browse')).toEqual([{type: 'browse', accountId: accountA, recipeId: accountB, versionId: operationId}]);
   expect(document.body.textContent).toContain('交给 Bot');
@@ -301,9 +307,9 @@ it('keeps My Recipes readonly and starts known draft continuation directly witho
   await click('继续创作');
   expect(calls).toEqual([{type: 'creatorContinue', retryId: expect.any(String), accountId: accountA, entry: {kind: 'draft', draftId, revision: 1}}]);
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Bot 已接收继续创作请求');
-  expect(document.body.textContent).not.toContain('Bot 已发送');
+  expect(document.body.textContent).not.toContain('已连接创作私聊');
   expect(localStorage.getItem('recipe-private-handoff:old')).toBe('keep-existing-user-data');
-  expect(cloudCalls.map(request => request.type)).toEqual(['catalog', 'library', 'drafts', 'draft']);
+  expect(cloudCalls.map(request => request.type)).toEqual(['catalog', 'recipeGroups', 'drafts', 'draft']);
 });
 
 it('chooses actual source once and associates the private recipient before exact source continuation', async () => {
@@ -371,15 +377,16 @@ it('routes only the current account and draft publication to the exact owned imm
   expect(cloudCalls.filter(request => request.type === 'browse')).toEqual([{type: 'browse', accountId: accountA, recipeId: A, versionId: B}]);
   expect(document.querySelector('.recipe-draft-page')).toBeNull();
   expect(document.querySelector('h1')?.textContent).toBe(draft.public.name);
-  await click('创作新版本');
-  expect(calls).toEqual([{type: 'creatorContinue', retryId: expect.any(String), accountId: accountA, entry: {kind: 'version', recipeId: A, versionId: B}}]);
+  expect(document.body.textContent).not.toContain('创作新版本');
+  expect(document.body.textContent).toContain('删除此版本');
+  expect(calls).toEqual([]);
 });
 
 it('does not let a mismatched creator receipt claim that another account or source is ready', async () => {
   authoring = async () => ({kind: 'creatorContinuing', retryId: challengeId, delivery: 'delivered', accountId: accountB, viewId: B, botId: 'cli_author_b', tenant: 'lark', botName: 'Bot B'});
   await openDraft(); await click('继续创作');
   expect(document.querySelector('[role="alert"]')?.textContent).toContain('来源已变化');
-  expect(document.body.textContent).not.toContain('Bot 已发送');
+  expect(document.body.textContent).not.toContain('已连接创作私聊');
 });
 
 it('expires a challenge before either recipient inspection or confirmation and keeps the work private', async () => {
@@ -416,7 +423,7 @@ it('opens the verified original private chat after sending the guide and retries
   linked = true;
   externalFailure = true;
   await draw(); await chooseSource();
-  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Bot 已发送创作引导卡');
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('已连接创作私聊');
   expect(document.querySelector('[role="alert"]')?.textContent).toContain('Synthetic browser failure');
   expect(externalCalls).toEqual(['https://applink.feishu.cn/client/bot/open?appId=cli_author_a']);
   const sent = calls.filter(request => request.type === 'creatorContinue');
@@ -472,16 +479,48 @@ it('retains the original continuation across a transient stale membership read',
   expect(calls.filter(r=>r.type==='creatorContinue')).toHaveLength(1);
   const first = snapshot(A);
   await act(async () => emit({type:'snapshot', view:A, value:{...first,revision:2, memberships:first.memberships.map(item=>({...item,stale:true}))}}));
-  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Bot 已发送');
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('已连接创作私聊');
   await act(async () => emit({type:'snapshot', view:A, value:{...first,revision:3}}));
   expect(calls.filter(r=>r.type==='creatorContinue')).toHaveLength(1);
   expect(externalCalls).toHaveLength(1);
 });
 
+it('shows a background private-chat save in the open drafts list and ignores other accounts',async()=>{
+  const prior=cloud;
+  let ready=false;
+  cloud=async request=>request.type==='drafts'?{items:ready?[draft]:[]}:prior(request);
+  await draw();await click('社区');await click('我的配方');await click('创作中');
+  expect(text()).toContain('还没有创作中的配方');
+  const reads=()=>cloudCalls.filter(row=>row.type==='drafts').length;
+  const before=reads();
+  ready=true;
+  await act(async()=>emit({type:'authoringSaved',value:{accountId:accountB,draftId,revision:1}}));
+  expect(reads()).toBe(before);
+  await act(async()=>emit({type:'authoringSaved',value:{accountId:accountA,draftId,revision:1}}));
+  expect(reads()).toBe(before+1);
+  expect(text()).toContain(draft.public.name);
+  expect(document.querySelector('[aria-label="我的配方内容"] [aria-current="page"]')?.textContent).toBe('创作中');
+});
+
+it('reconciles a missed save when returning from Feishu to the open drafts list',async()=>{
+  const prior=cloud;
+  let ready=false;
+  cloud=async request=>request.type==='drafts'?{items:ready?[draft]:[]}:prior(request);
+  await draw();await click('社区');await click('我的配方');await click('创作中');
+  expect(text()).toContain('还没有创作中的配方');
+  ready=true;
+  await act(async()=>window.dispatchEvent(new Event('focus')));
+  expect(text()).toContain(draft.public.name);
+  await click('已获取');
+  const before=cloudCalls.filter(row=>row.type==='drafts').length;
+  await act(async()=>window.dispatchEvent(new Event('focus')));
+  expect(cloudCalls.filter(row=>row.type==='drafts')).toHaveLength(before);
+});
+
 it('preserves acquired pagination on a separate draft save', async () => {
  const prior=cloud;
  cloud=async request=>{
-   if(request.type==='library'){
+   if(request.type==='recipeGroups'){
      const id=request.cursor?B:A;
      return {items:[{recipeId:id,versionId:id,revision:1,public:{...draft.public,name:request.cursor?'第二页':'第一页'}}],nextCursor:request.cursor?null:B};
    }
@@ -498,7 +537,7 @@ it('preserves acquired pagination on a separate draft save', async () => {
  await click('已获取');
  expect(main.scrollTop).toBe(320);
  expect(document.querySelectorAll('.community-card')).toHaveLength(2);
- expect(cloudCalls.filter(row=>row.type==='library').map(row=>row.cursor)).toEqual([undefined,B]);
+ expect(cloudCalls.filter(row=>row.type==='recipeGroups').map(row=>row.cursor)).toEqual([undefined,pageCursor]);
 });
 
 it.each(['deliveryUnknown','lostReply'] as const)('preserves the request key and separates chat-open from send recovery after %s',async fault=>{
@@ -510,17 +549,17 @@ it.each(['deliveryUnknown','lostReply'] as const)('preserves the request key and
     return {...reply,delivery:'deliveryUnknown'};
   };
   await draw();await chooseSource();
-  expect(document.body.textContent).not.toContain('Bot 已发送');
+  expect(document.body.textContent).not.toContain('已连接创作私聊');
   expect(externalCalls).toEqual([]);
   if(fault==='deliveryUnknown'){
     await click('打开 Bot 私聊');
     expect(calls.filter(row=>row.type==='creatorContinue')).toHaveLength(1);
-    await click('核对并重试发卡');
+    await click('核对并重试');
   }else await click('核对上次请求');
   const [original,recovery]=calls.filter(row=>row.type==='creatorContinue');
   expect(original?.retryId).toEqual(expect.any(String));
   expect(recovery).toEqual({...original,recover:fault==='deliveryUnknown'?'handoff':'request'});
-  expect(document.body.textContent).toContain('Bot 已发送');
+  expect(document.body.textContent).toContain('已连接创作私聊');
   expect(externalCalls).toHaveLength(fault==='deliveryUnknown'?2:1);
 });
 it('invalidates an in-flight continuation when the real group binding changes and never restarts it on another snapshot',async()=>{
@@ -546,8 +585,8 @@ it.each(['queued','restored'] as const)('distinguishes a %s draft continuation f
     return reply.kind==='creatorContinuing'?{...reply,delivery}:reply;
   };
   await openDraft();await click('继续创作');
-  expect(document.querySelector('[role="dialog"]')?.textContent).toContain(delivery==='queued'?'正在准备草稿':'已恢复原私聊中的创作卡片');
-  expect(document.body.textContent).not.toContain('Bot 已发送');
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain(delivery==='queued'?'正在准备草稿':'可以回到原私聊继续创作');
+  expect(document.body.textContent).not.toContain('已连接创作私聊');
   expect(externalCalls).toHaveLength(delivery==='queued'?0:1);
   await click('打开 Bot 私聊');
   expect(calls.filter(row=>row.type==='creatorContinue')).toHaveLength(1);
@@ -579,7 +618,7 @@ it('does not send or open again while snapshots refresh an unconfirmed handoff',
   for(const [i,stale] of [true,false,false].entries())await act(async()=>emit({type:'snapshot',view:A,value:{...first,revision:2+i,memberships:first.memberships.map(row=>({...row,stale}))}}));
   expect(calls.filter(row=>row.type==='creatorContinue')).toHaveLength(1);
   expect(externalCalls).toHaveLength(0);
-  expect(document.body.textContent).toContain('核对并重试发卡');
+  expect(document.body.textContent).toContain('核对并重试');
 });
 
 it('does not open a newly inferred chat when a legacy request lost both its reply and its original source',async()=>{
@@ -830,4 +869,158 @@ it('offers App login before revealing creation sources and retains the incoming 
   expect(document.querySelector('[aria-label="配方来源 Bot"]')).not.toBeNull();
   expect(document.querySelector('[aria-label="配方来源群聊"]')).not.toBeNull();
   expect(calls).toEqual([]);
+});
+
+it('combines personal recipe states and starts creation from the same account-scoped library', async () => {
+  const normal=cloud;
+  cloud=async request=>request.type==='recipeGroups'?{items:request.scope==='published'?[{recipeId:accountB,versionId:challengeId,revision:1,owned:true,public:{...draft.public,name:'已发布测试配方'}}]:[{recipeId:A,versionId:B,revision:1,public:{...draft.public,name:'已获取测试配方'}}],nextCursor:null}:normal(request);
+  await draw(); await click('社区');
+  expect([...document.querySelectorAll('[aria-label="配方导航"] button')].map(button=>button.textContent)).toEqual(['Bot 配方','我的配方','Bot 租赁 敬请期待']);
+  await click('我的配方');
+  expect([...document.querySelectorAll('[aria-label="我的配方内容"] button')].map(button=>button.textContent)).toEqual(['已获取','创作中','已发布']);
+  const visible=()=>[...document.querySelectorAll('.community-workspace-section:not([hidden])')].map(section=>section.textContent).join('');
+  expect(visible()).toContain('已获取测试配方');expect(visible()).not.toContain('同一份私人草稿');expect(visible()).not.toContain('已发布测试配方');
+  await click('已发布');expect(visible()).toContain('已发布测试配方');expect(visible()).not.toContain('已获取测试配方');expect(visible()).not.toContain('同一份私人草稿');
+  expect(document.querySelector('.community-studio-heading h2')?.textContent).toBe('我的配方');
+  await click('创作配方');
+  expect([...document.querySelectorAll('select')].map(select=>select.selectedOptions[0]?.textContent)).toEqual(['Bot A','群聊 A']);
+  expect(calls).toEqual([]);expect(externalCalls).toEqual([]);
+  await click('取消');
+  status=signedIn(accountB);await act(async()=>emit({type:'account',value:status}));
+  expect(document.querySelector('.community-studio-heading')).toBeNull();
+  expect(document.querySelector('[aria-label="配方导航"] [aria-current="page"]')?.textContent).toBe('Bot 配方');
+});
+
+it('guides anonymous users into the same personal library without reading any private recipes',async()=>{
+  status={kind:'signedOut'};await draw();await click('社区');await click('我的配方');
+  expect(document.body.textContent).toContain('登录后继续');
+  expect([...document.querySelectorAll('button')].some(button=>button.textContent==='登录')).toBe(true);
+  expect(cloudCalls.some(request=>['recipeGroups','drafts','publications'].includes(request.type))).toBe(false);
+  expect(document.body.textContent).not.toContain('成为创作者');
+});
+it('shows one clear empty personal-library state and permits creation without a creator role',async()=>{
+  const normal=cloud;cloud=async request=>request.type==='drafts'?{items:[]}:request.type==='recipeGroups'?{items:[],nextCursor:null}:normal(request);
+  await draw();await click('社区');await click('我的配方');
+  expect(document.querySelector('.community-workspace-section')?.textContent).toContain('还没有获取配方');
+  const createButton=[...document.querySelectorAll('button')].find(button=>button.textContent==='创作配方');
+  expect(createButton?.closest('.glow-button')?.getAttribute('data-variant')).toBe('dark');
+  await click('创作配方');expect(document.querySelector('[aria-label="配方来源 Bot"]')).not.toBeNull();expect(calls).toEqual([]);
+});
+it('does not let late library reads from the previous account populate the new account library',async()=>{
+  const normal=cloud;let finish!:(value:unknown)=>void;
+  cloud=async request=>request.type==='recipeGroups'&&request.accountId===accountA?new Promise(resolve=>{finish=resolve;}):normal(request);
+  await draw();await click('社区');await click('我的配方');expect(finish).toBeTypeOf('function');
+  status=signedIn(accountB);await act(async()=>emit({type:'account',value:status}));await click('我的配方');
+  await act(async()=>finish({items:[{recipeId:A,versionId:B,revision:1,public:{...draft.public,name:'旧账号私有哨兵'}}],nextCursor:null}));
+  expect(document.body.textContent).not.toContain('旧账号私有哨兵');
+  expect(cloudCalls.filter(request=>request.type==='recipeGroups').map(request=>request.accountId)).toEqual([accountA,accountB]);
+});
+
+it('loads granted version metadata on demand with retry and pagination, then opens and shares only the chosen version',async()=>{
+  const normal=cloud;let failed=false;
+  const item=(versionId:string,revision:number)=>({recipeId:accountB,versionId,revision,public:{...draft.public,version:String(revision)},versionCount:3});
+  cloud=async request=>{
+    if(request.type==='recipeGroups')return {items:[item(operationId,3)],nextCursor:null};
+    if(request.type==='recipeGroupVersions'){
+      if(!failed){failed=true;throw Error('临时版本读取失败');}
+      return {items:request.cursor?[item(challengeId,1)]:[item(draftId,2)],nextCursor:request.cursor?null:pageCursor};
+    }
+    return normal(request);
+  };
+  await draw();await click('社区');await click('我的配方');
+  expect(cloudCalls.some(request=>request.type==='recipeGroupVersions'||request.type==='latestVersion')).toBe(false);
+  expect(document.querySelector('.community-card-footer')?.textContent).toContain('3');
+  await click('选择版本 · 3 个');expect(document.querySelector('[role="alert"]')?.textContent).toContain('临时版本读取失败');
+  await click('重试读取版本');await click('加载更多版本');
+  const select=document.querySelector<HTMLSelectElement>('.community-library-versions select')!;
+  expect([...select.options].map(option=>option.value)).toEqual([operationId,draftId,challengeId]);
+  await act(async()=>{select.value=draftId;select.dispatchEvent(new Event('change',{bubbles:true}));});
+  await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());
+  expect(cloudCalls.filter(request=>request.type==='browse')).toEqual([{type:'browse',accountId:accountA,recipeId:accountB,versionId:draftId}]);
+  expect(cloudCalls.filter(request=>request.type==='shareLink')).toEqual([{type:'shareLink',recipeId:accountB,versionId:draftId}]);
+  await click('返回我的配方');expect(document.querySelector('.community-card-footer')?.textContent).toContain('2');
+  expect(cloudCalls.some(request=>request.type==='acquire'||request.type==='latestVersion')).toBe(false);
+});
+it('keeps equal names as different recipe groups and deduplicates paginated groups by recipe ID',async()=>{
+  const normal=cloud;const item=(recipeId:string,versionId:string)=>({recipeId,versionId,revision:1,public:{...draft.public,name:'同名配方'}});
+  cloud=async request=>request.type==='recipeGroups'?{items:request.cursor?[item(A,B),item(accountB,challengeId)]:[item(A,B)],nextCursor:request.cursor?null:pageCursor}:normal(request);
+  await draw();await click('社区');await click('我的配方');await click('加载更多');
+  expect(document.querySelectorAll('.community-card')).toHaveLength(2);
+  expect([...document.querySelectorAll('.community-card h2')].map(node=>node.textContent)).toEqual(['同名配方','同名配方']);
+});
+it('discards a late version list from the old scope instead of offering it in the new permission scope',async()=>{
+  const normal=cloud;let finish!:(value:unknown)=>void;
+  const item=(versionId:string,version:string)=>({recipeId:accountB,versionId,revision:1,public:{...draft.public,version},versionCount:2});
+  cloud=async request=>request.type==='recipeGroups'?{items:[item(operationId,'当前授权')],nextCursor:null}:request.type==='recipeGroupVersions'?request.scope==='acquired'?new Promise(resolve=>{finish=resolve;}):{items:[item(draftId,'新范围允许版本')],nextCursor:null}:normal(request);
+  await draw();await click('社区');await click('我的配方');await click('选择版本 · 2 个');
+  await click('已发布');await click('选择版本 · 2 个');
+  await act(async()=>finish({items:[item(challengeId,'旧范围迟到版本')],nextCursor:null}));
+  expect(document.querySelector('.community-library-versions')?.textContent).toContain('新范围允许版本');
+  expect(document.querySelector('.community-library-versions')?.textContent).not.toContain('旧范围迟到版本');
+});
+it('drops pending version metadata and selected versions when the account changes',async()=>{
+  const normal=cloud;let finish!:(value:unknown)=>void;
+  const item={recipeId:accountB,versionId:operationId,revision:2,public:draft.public,versionCount:2};
+  cloud=async request=>request.type==='recipeGroups'?{items:[item],nextCursor:null}:request.type==='recipeGroupVersions'?new Promise(resolve=>{finish=resolve;}):normal(request);
+  await draw();await click('社区');await click('我的配方');await click('选择版本 · 2 个');
+  status=signedIn(accountB);await act(async()=>emit({type:'account',value:status}));
+  await act(async()=>finish({items:[{...item,versionId:draftId,public:{...draft.public,name:'旧账号版本哨兵'}}],nextCursor:null}));
+  expect(document.body.textContent).not.toContain('旧账号版本哨兵');expect(document.querySelector('.community-library-versions')).toBeNull();
+});
+
+it.each([false,true])('opens the exact handoff in the public view and waits for confirmation (owned=%s)',async owned=>{
+  const normal=cloud;cloud=async request=>request.type==='browse'?browseFixture(request.recipeId,request.versionId,{owned,acquired:!owned}):normal(request);
+  await draw();await act(async()=>emit({type:'recipePreview',value:{kind:'handoff',recipeId:accountB,versionId:draftId,navigationId:challengeId}}));
+  expect(dialog('交给 Bot')).toBeDefined();expect(calls).toEqual([]);expect(acknowledgedNavigations).toContain(challengeId);
+  expect(cloudCalls.filter(request=>request.type==='browse')).toEqual([{type:'browse',accountId:accountA,recipeId:accountB,versionId:draftId}]);
+  await click('关闭');await draw();expect(dialog('交给 Bot')).toBeUndefined();expect(calls).toEqual([]);
+  expect(document.body.textContent).toContain(owned ? '我的作品' : '已获取此版本');
+  expect(document.body.textContent).toContain('去我的配方查看');
+  expect(document.body.textContent).not.toMatch(/创作新版本|下架此版本|删除此版本/);
+  await click('交给 Bot');await click('前往私聊');expect(calls.filter(request=>request.type==='resourceHandoff')).toMatchObject([{target:{recipeId:accountB,versionId:draftId}}]);
+});
+it('retains an anonymous handoff through explicit login cancellation and retry, then offers only the same entitled version',async()=>{
+  status={kind:'signedOut'};const normal=cloud;
+  cloud=async request=>request.type==='browse'?browseFixture(request.recipeId,request.versionId,{acquired:Boolean(request.accountId)}):normal(request);
+  await draw();await act(async()=>emit({type:'recipePreview',value:{kind:'handoff',recipeId:accountB,versionId:draftId,navigationId:challengeId}}));
+  expect(dialog('交给 Bot')).toBeUndefined();expect(acknowledgedNavigations).not.toContain(challengeId);
+  await click('登录并继续');expect(nativeLoginCalls).toBe(1);await click('取消登录');expect(document.body.textContent).toContain('已取消登录');
+  await click('登录并继续');status=signedIn();await act(async()=>emit({type:'account',value:status}));
+  expect(dialog('交给 Bot')).toBeDefined();expect(calls).toEqual([]);expect(acknowledgedNavigations).toContain(challengeId);
+  expect(cloudCalls.filter(request=>request.type==='browse').every(request=>request.recipeId===accountB&&request.versionId===draftId)).toBe(true);
+  expect(cloudCalls.some(request=>request.type==='acquire')).toBe(false);
+});
+it('requires explicit acquisition of an unentitled coded handoff before offering the Bot chooser',async()=>{
+  let acquired=false;const normal=cloud;
+  cloud=async request=>request.type==='browse'?browseFixture(request.recipeId,request.versionId,{public:{...draft.public,access:'coded'},acquired,preview:acquired?{settings:[],skills:[],ruleCount:0,taskCount:0}:undefined}):request.type==='acquire'?(acquired=true,{recipeId:accountB,versionId:draftId,owned:false,acquired:true}):normal(request);
+  await draw();await act(async()=>emit({type:'recipePreview',value:{kind:'handoff',recipeId:accountB,versionId:draftId,navigationId:challengeId}}));
+  expect(dialog('交给 Bot')).toBeUndefined();expect(calls).toEqual([]);expect(cloudCalls.some(request=>request.type==='acquire')).toBe(false);
+  await click('获取配方');await fill('分享码','EXACT-CODE');
+  await act(async()=>document.getElementById('community-acquire-code')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+  expect(cloudCalls.filter(request=>request.type==='acquire')).toMatchObject([{accountId:accountA,versionId:draftId,code:'EXACT-CODE'}]);
+  expect(dialog('交给 Bot')).toBeDefined();expect(calls).toEqual([]);
+});
+it('ignores a late entitlement read from an older handoff navigation',async()=>{
+  const normal=cloud;let finish!:(value:unknown)=>void;
+  cloud=async request=>request.type==='browse'&&request.versionId===draftId?new Promise(resolve=>{finish=resolve;}):request.type==='browse'?browseFixture(request.recipeId,request.versionId,{public:{...draft.public,version:'新版目标'},acquired:true}):normal(request);
+  await draw();await act(async()=>emit({type:'recipePreview',value:{kind:'handoff',recipeId:accountB,versionId:draftId,navigationId:challengeId}}));
+  await act(async()=>emit({type:'recipePreview',value:{kind:'handoff',recipeId:accountB,versionId:B,navigationId:accountA}}));
+  await act(async()=>finish(browseFixture(accountB,draftId,{public:{...draft.public,version:'旧版迟到'},acquired:true})));
+  expect(dialog('交给 Bot')?.textContent).toContain('新版目标');expect(dialog('交给 Bot')?.textContent).not.toContain('旧版迟到');expect(calls).toEqual([]);
+});
+it('opens the drafts navigation in the local personal-library filter without starting creation or sending a message',async()=>{
+  await draw();await act(async()=>emit({type:'recipePreview',value:{kind:'drafts',navigationId:challengeId}}));
+  expect(document.querySelector('[aria-label="我的配方内容"] [aria-current="page"]')?.textContent).toBe('创作中');
+  expect(document.body.textContent).toContain(draft.public.name);expect(acknowledgedNavigations).toContain(challengeId);expect(calls).toEqual([]);
+});
+
+it('requires a new exact entitlement read for a fresh handoff even when the same version was previously entitled',async()=>{
+  const normal=cloud;let count=0,finish!:(value:unknown)=>void;
+  cloud=async request=>request.type==='browse'?++count===1?browseFixture(request.recipeId,request.versionId,{acquired:true}):new Promise(resolve=>{finish=resolve;}):normal(request);
+  await draw();await act(async()=>emit({type:'recipePreview',value:{kind:'handoff',recipeId:accountB,versionId:draftId,navigationId:challengeId}}));
+  expect(dialog('交给 Bot')).toBeDefined();await click('关闭');
+  await act(async()=>emit({type:'recipePreview',value:{kind:'handoff',recipeId:accountB,versionId:draftId,navigationId:accountA}}));
+  expect(dialog('交给 Bot')).toBeUndefined();
+  await act(async()=>finish(browseFixture(accountB,draftId,{acquired:false})));
+  expect(dialog('交给 Bot')).toBeUndefined();expect(calls).toEqual([]);expect(cloudCalls.some(request=>request.type==='acquire')).toBe(false);
 });

@@ -16,7 +16,7 @@ vi.mock('../src/community/RecipeContent', () => ({
   RecipeDetails: ({management}: {management?: ReactNode}) => <div>{management}</div>,
 }));
 vi.mock('../src/reference/components/ui/Dialog', () => ({Dialog: ({open, children, footer}: {open: boolean; children: ReactNode; footer: ReactNode}) => open ? <div>{children}{footer}</div> : null}));
-Object.assign(globalThis, {IS_REACT_ACT_ENVIRONMENT: true});
+Object.assign(globalThis, {IS_REACT_ACT_ENVIRONMENT: true, matchMedia: () => ({matches: false, addEventListener() {}, removeEventListener() {}})});
 const recipe: RecipeDetail = {
   recipeId: '22222222-2222-4222-8222-222222222222', versionId: '33333333-3333-4333-8333-333333333333', revision: 1,
   owned: true, acquired: false, format: 'rich-v2', state: 'listed',
@@ -42,7 +42,7 @@ it.each([false, true])('refreshes the current account catalog after an unmounted
       }
       case 'browse': return recipe;
       case 'shareLink': return {url: 'https://community.example/version'};
-      case 'withdraw': await new Promise<void>(resolve => {finish = resolve;}); committed = true; return;
+      case 'deletePublication': await new Promise<void>(resolve => {finish = resolve;}); committed = true; return;
       default: return {items: []};
     }
   });
@@ -59,8 +59,8 @@ it.each([false, true])('refreshes the current account catalog after an unmounted
   try {
     await act(async () => {draw();});
     await click('作者详情');
-    await click('撤下此版本');
-    await click('确认撤下');
+    await click('删除此版本');
+    await click('确认删除');
     await act(async () => {state.owner = 'b'; draw();});
     if (!late) expect(host.textContent).toContain('原精选');
     const before = events.filter(event => event === 'catalog:b').length;
@@ -69,7 +69,7 @@ it.each([false, true])('refreshes the current account catalog after an unmounted
     expect(events.filter(event => event === 'catalog:b')).toHaveLength(before + 1);
     expect(host.textContent).toContain('社区正在准备第一份配方');
     expect(host.textContent).not.toContain('原精选');
-    expect(events.filter(event => event === 'withdraw:a')).toHaveLength(1);
+    expect(events.filter(event => event === 'deletePublication:a')).toHaveLength(1);
     expect(events.filter(event => event === 'browse:b')).toHaveLength(0);
     expect(events.filter(event => event === 'browse:a')).toHaveLength(1);
   } finally {

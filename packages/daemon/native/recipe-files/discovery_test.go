@@ -35,3 +35,28 @@ func TestConfinedSkillNames(t *testing.T) {
 		t.Fatal("unexpected provider")
 	}
 }
+
+func TestCaptureDocumentsRejectsPartialSkill(t *testing.T) {
+	root := fixtureRoot(t)
+	if e := os.WriteFile(filepath.Join(root, "SKILL.md"), []byte("entry"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	deep := "a/b/c/d/e/f/g"
+	if e := os.MkdirAll(filepath.Join(root, deep), 0700); e != nil {
+		t.Fatal(e)
+	}
+	file := filepath.Join(root, deep, "guide.md")
+	if e := os.WriteFile(file, []byte("guide"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	result, e := run(request{Operation: "documents", Root: root})
+	if e != nil || !reflect.DeepEqual(result.Names, []string{"SKILL.md", deep + "/guide.md"}) {
+		t.Fatalf("%+v %v", result, e)
+	}
+	if e = os.Truncate(file, fileCap+1); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = run(request{Operation: "documents", Root: root}); e == nil {
+		t.Fatal("oversized document silently omitted")
+	}
+}

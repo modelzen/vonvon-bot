@@ -15,6 +15,8 @@ const payloads = [
   {type:'restoreHandoff',retryId:operationId,expected:{kind:'source',groupId}},
   {type:'handoffStatus',retryId:operationId},{type:'cancelHandoff',retryId:operationId},
   {type:'answerHandoff',request:{retryId:operationId,generation:1,ref:operationId,lease:digest,versions:[]},attestations:[]},
+  { type: 'localDraftAdvance', operationId, advance: { kind: 'dispatch', draftId } },
+  { type: 'localDraftAcknowledged', operationId, receipt: { operationId, status: 'accepted', stateRevision: 3, draftId, revision: 1 } },
   { type: 'richSourceOptions', groupId },
   { type: 'richInventory', groupId, options },
   { type: 'richPrepare', groupId, selection: { options, selected: [], reviewToken: digest, sourceAttested: true,
@@ -54,9 +56,9 @@ beforeAll(async () => {
 beforeEach(() => { handler.mockClear(); });
 afterAll(async () => { await owner?.close(); await fixture?.close(); });
 
-test('exercises every rich and creator authoring RPC through the socket permission matrix', () => {
-  const kinds = rpcKinds().filter(({ kind }) => /^recipeAuthoring\.(rich|creator|resource)/.test(kind)).map(({ kind }) => kind).sort();
-  const covered = payloads.map(payload => `recipeAuthoring.${payload.type}`).filter(kind => /^recipeAuthoring\.(rich|creator|resource)/.test(kind)).sort();
+test('exercises every rich, creator and local draft authoring RPC through the socket permission matrix', () => {
+  const kinds = rpcKinds().filter(({ kind }) => /^recipeAuthoring\.(rich|creator|resource|localDraft)/.test(kind)).map(({ kind }) => kind).sort();
+  const covered = payloads.map(payload => `recipeAuthoring.${payload.type}`).filter(kind => /^recipeAuthoring\.(rich|creator|resource|localDraft)/.test(kind)).sort();
   expect(covered).toEqual(kinds);
 });
 

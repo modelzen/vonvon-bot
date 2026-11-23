@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
-import { PROTOCOL_VERSION, serverInfoV2Schema, type DesktopSnapshot, type Request } from '@vonvon/protocol';
+import { agentIdSchema, PROTOCOL_VERSION, serverInfoV2Schema, type DesktopSnapshot, type Request } from '@vonvon/protocol';
 import { createInitiator, decodeFrame, encodeFrame, FRAME, generateStaticKey, readCloseBody, type Channel, type StaticKey } from '@vonvon/protocol/secure-channel';
 import { connectSecure, nodeBinarySocket, SecureChannelError, type BinarySocket, type SecureConnection } from '@vonvon/client/secure';
 import { createClientRegistry } from '../src/remote/clients';
@@ -75,10 +75,10 @@ const opened = async (port: number): Promise<WebSocket> => {
   return ws;
 };
 type Target = { port: number; device: { publicKeyBase64url: string; key: StaticKey } };
-async function connect(h: Target, options: { clientKey?: StaticKey; pairing?: { inviteId: string; inviteSecret: string; clientName: string }; pk?: string } = {}): Promise<SecureConnection> {
+async function connect(h: Target, options: { clientKey?: StaticKey; clientKind?: 'desktop' | 'cli'; pairing?: { inviteId: string; inviteSecret: string; clientName: string }; pk?: string } = {}): Promise<SecureConnection> {
   const ws = await opened(h.port);
   cleanup.push(async () => { ws.terminate(); });
-  return connectSecure({ socket: nodeBinarySocket(ws), device: { id: 'd', pk: options.pk ?? h.device.publicKeyBase64url }, clientKey: options.clientKey ?? generateStaticKey().key, clientKind: 'cli', ...(options.pairing ? { pairing: options.pairing } : {}) });
+  return connectSecure({ socket: nodeBinarySocket(ws), device: { id: 'd', pk: options.pk ?? h.device.publicKeyBase64url }, clientKey: options.clientKey ?? generateStaticKey().key, clientKind: options.clientKind ?? 'cli', ...(options.pairing ? { pairing: options.pairing } : {}) });
 }
 const refused = async (pending: Promise<unknown>): Promise<SecureChannelError> => {
   const error = await pending.then(() => undefined, (caught: unknown) => caught);
@@ -477,10 +477,10 @@ describe('the daemon, with I3 and D4a', () => {
     const port = await listen(server);
     cleanup.push(async () => { await remote.close(); await fixture.close(); await new Promise<void>(resolve => server.close(() => resolve())); });
     const target = { port, device: { publicKeyBase64url: secure.device.publicKey.toString('base64url'), key: secure.device } };
-    const pair = async () => {
+    const pair = async (clientKind: 'cli' | 'desktop' = 'cli') => {
       const clientKey = generateStaticKey().key;
       const invite = secure.invites.create({ invitedBy: 'local' });
-      return { clientKey, connection: await connect(target, { clientKey, pairing: { inviteId: invite.id, inviteSecret: invite.secret, clientName: '探针' } }) };
+      return { clientKey, connection: await connect(target, { clientKey, clientKind, pairing: { inviteId: invite.id, inviteSecret: invite.secret, clientName: '探针' } }) };
     };
     const loopback = async (credential: string) => {
       const client = await socketClient(fixture.api.port, credential);
@@ -492,6 +492,32 @@ describe('the daemon, with I3 and D4a', () => {
     return { fixture, target, pair, owner: () => loopback(fixture.credential), session };
   }
   const closeOf = (socket: WebSocket) => new Promise<[number, string]>(resolve => socket.once('close', (code, reason) => resolve([code, reason.toString()])));
+
+  it('lets a paired desktop dispatch a local draft and acknowledge it after reconnecting', async () => {
+    const operationId = randomUUID(), draftId = randomUUID(), session = randomUUID();
+    const botId = agentIdSchema.parse('cli_test');
+    const receipt = { operationId, status: 'accepted' as const, stateRevision: 3 as const, draftId, revision: 1 };
+    const binary = Buffer.alloc(32, 1).toString('base64url');
+    const operation = { operationId, draftId, purpose: 'prepareDraft', targetPublicKey: binary, nonceCommitment: binary,
+      format: 'rich-v2', storage: 'local', state: 'candidate', deliveryUnknown: false, createdAt: 1 };
+    const handler = vi.fn<NonNullable<ReturnType<typeof fakeService>['recipeAuthoring']>>(async (_botId, command) => {
+      if (command.kind === 'recipeAuthoring' && command.request.type === 'localDraftAdvance') return { kind: 'operation', operation };
+      return { kind: 'localDraftAcknowledged', operationId };
+    });
+    const { pair, target } = await daemon(fakeService({ recipeAuthoring: handler }));
+    const { connection, clientKey } = await pair('desktop');
+    expect(connection.serverInfo.principal).toBe('owner:paired');
+    connection.close();
+    await connection.closed;
+
+    const remote = await connect(target, { clientKey, clientKind: 'desktop' });
+    expect(remote.serverInfo.principal).toBe('owner:paired');
+    const advance = { type: 'localDraftAdvance' as const, botId, session, operationId, advance: { kind: 'dispatch' as const, draftId } };
+    const ack = { type: 'localDraftAcknowledged' as const, botId, session, operationId, receipt };
+    expect(await remote.client.recipeAuthoring!(advance)).toEqual({ kind: 'operation', operation });
+    expect(await remote.client.recipeAuthoring!(ack)).toEqual({ kind: 'localDraftAcknowledged', operationId });
+    expect(handler.mock.calls.map(([, command]) => command.kind === 'recipeAuthoring' && command.request)).toEqual([advance, ack]);
+  });
 
   it('answers a remote peer\'s coreUpdateStatus and snapshot while draining, through the shared message loop, refuses the rest and closes it 1001 at the release', async () => {
     let release = (): void => undefined;

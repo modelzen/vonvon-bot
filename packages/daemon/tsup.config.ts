@@ -4,8 +4,6 @@ import { defineConfig } from 'tsup';
 // 不将开发依赖打进产物。由 loadBackendDep 统一解析。
 const external = ['@anthropic-ai/claude-agent-sdk'];
 const define = {
-  __VONVON_RELEASE_CODE_ISSUER__: JSON.stringify(process.env.VONVON_RELEASE_CODE_ISSUER) ?? 'undefined',
-  __VONVON_RELEASE_CODE_MCP_URL__: JSON.stringify(process.env.VONVON_RELEASE_CODE_MCP_URL) ?? 'undefined',
   __VONVON_ACCOUNT_API_ORIGIN__: JSON.stringify(process.env.VONVON_ACCOUNT_API_ORIGIN) ?? 'undefined',
 };
 

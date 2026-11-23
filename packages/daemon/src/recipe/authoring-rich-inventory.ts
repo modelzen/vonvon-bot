@@ -11,7 +11,7 @@ import {itemsOf,type SourceEvidence,wireDigest} from './authoring-rich-snapshot'
 export interface SkillFileChoice {skill:string;files:string[]}
 export interface InventoryOptions {
   seed:string;row:Project;botRoot:string;botId:string;
-  skills:readonly SkillFileChoice[];includeBotMemories:boolean;
+  unavailable?:string[];skillRoots?:Map<string,string>;skills:readonly SkillFileChoice[];includeBotMemories:boolean;
   tasks?:readonly ScheduledTaskView[];expectedFiles?:Record<string,RecipeFileSnapshot>;
 }
 export function inventoryAlias(seed:string,key:string){
@@ -27,13 +27,25 @@ export async function nativeRichInventory(options:InventoryOptions){
   const publicField=(key:string)=>({...identity('public:'+key),value:''});
   const content:RecipeRichContent={format:'rich-v2',schemaVersion:2,public:{name:publicField('name'),overview:publicField('overview'),summary:publicField('summary'),version:publicField('version')},
     settings:[],rules:[],skills:[],files:[],memories:[],setup:[],tasks:[],parts:[]};
+  const omit=(label:string)=>{
+    if(!options.unavailable)return false;
+    const name=safeEditValue(label)?label:'一个来源项目';
+    if(!options.unavailable.includes(name))options.unavailable.push(name);
+    return true;
+  };
+  const shareable=(value:unknown,label:string)=>{
+    const safe=safeEditValue(value);
+    if(!safe&&!omit(label)&&options.skillRoots)throw new Error('群配置包含敏感信息，无法完整导出。');
+    return safe;
+  };
   function setting(field:string,value:unknown) {
-    if(value===undefined||!safeEditValue(value))return;
+    if(value===undefined||!shareable(value,field))return;
     const parsed=recipeRichSettingSchema.safeParse({field,value,...identity(field)});
     if(parsed.success)content.settings.push(parsed.data);
+    else if(!omit(field)&&options.skillRoots)throw new Error('群设置超出配方支持的范围。');
   }
   const role=supplementOf(row);
-  if(role&&safeEditValue(role))content.role={...identity('role'),text:{kind:'inline',value:role}};
+  if(role&&shareable(role,'群角色'))content.role={...identity('role'),text:{kind:'inline',value:role}};
   if(row.kind||row.smart!==undefined)setting('sessionMode',row.smart?'smart':row.kind);
   setting('response.noMention',row.noMention);
   setting('run.pendingPolicy',row.pendingPolicy);
@@ -46,7 +58,7 @@ export async function nativeRichInventory(options:InventoryOptions){
     else if(card)setting('presentation.cardDisplay',{version:card.version,...(card.reply&&{reply:card.reply}),blocks:card.blocks.flatMap(block=>{
       if(block.source!=='builtin'||block.script)return [];
       const {source:_s,script:_c,language:_l,sample:_p,...portable}=block;
-      return safeEditValue(portable)?[{...portable,...identity('block:'+block.id)}]:[];
+      return shareable(portable,'卡片区块')?[{...portable,...identity('block:'+block.id)}]:[];
     })});
   }
   const backend=groupBackendId(row);
@@ -65,32 +77,40 @@ export async function nativeRichInventory(options:InventoryOptions){
       });
     }
   }
-  if(row.workRules&&safeEditValue(row.workRules))content.rules.push({...identity('work'),purpose:'work',text:{kind:'inline',value:row.workRules}});
+  if(row.workRules&&shareable(row.workRules,'工作规则'))content.rules.push({...identity('work'),purpose:'work',text:{kind:'inline',value:row.workRules}});
   for(const [key,purpose] of [['respond','smartRespond'],['newTopic','smartNewTopic']] as const){
     const value=row.smartRules?.[key];
-    if(value&&safeEditValue(value))content.rules.push({...identity(purpose),purpose,text:{kind:'inline',value}});
+    if(value&&shareable(value,key==='respond'?'回应规则':'新话题规则'))content.rules.push({...identity(purpose),purpose,text:{kind:'inline',value}});
   }
   for(const task of options.tasks??[]){
     if(task.id.startsWith('rt_')||task.chatId!==row.chatId||task.botId!==options.botId||task.dm||task.placement.kind==='topic')continue;
     const spec=task.spec.kind==='every'?{kind:'every',minutes:task.spec.minutes}:task.spec;
     const parsed=schema.shape.tasks.element.safeParse({...identity('task:'+task.id),name:task.name,instruction:{kind:'inline',value:task.instruction},
       timeZone:{kind:'recommended',iana:task.timeZone},placement:task.placement.kind,spec});
-    if(parsed.success&&safeEditValue(parsed.data))content.tasks.push(parsed.data);
+    if(parsed.success){if(shareable(parsed.data,'定时任务 · '+task.name))content.tasks.push(parsed.data);}
+    else if(!omit('定时任务 · '+task.name)&&options.skillRoots)throw new Error('群任务超出配方支持的范围。');
   }
   const files:Record<string,RecipeFileSnapshot>=Object.create(null);
-  if(options.skills.length>16)throw new Error('所选技能过多。');
+  if(!options.skillRoots&&options.skills.length>16)throw new Error('所选技能过多。');
   for(const choice of options.skills){
-    if(!/^[\p{L}\p{N}][\p{L}\p{N} _-]{0,79}$/u.test(choice.skill)||Object.hasOwn(files,choice.skill)||!choice.files.includes('SKILL.md'))throw new Error('请选择实际的工作区技能及其说明。');
+    if((options.skillRoots?!options.skillRoots.has(choice.skill):!/^[\p{L}\p{N}][\p{L}\p{N} _-]{0,79}$/u.test(choice.skill))||Object.hasOwn(files,choice.skill)||!choice.files.includes('SKILL.md'))throw new Error('请选择实际的工作区技能及其说明。');
     const folder=backend==='claude-agent'?'.claude':'.agents';
-    const root=join(row.cwd,folder,'skills',choice.skill);
-    const snap=await readSelectedRecipeFiles(root,choice.files,options.expectedFiles?.[choice.skill]);
+    const root=options.skillRoots?.get(choice.skill)??join(row.cwd,folder,'skills',choice.skill);
+    let snap:RecipeFileSnapshot;
+    try{snap=await readSelectedRecipeFiles(root,choice.files,options.expectedFiles?.[choice.skill]);}
+    catch(error){if(omit('技能 · '+choice.skill))continue;throw error;}
     files[choice.skill]=snap;
-    const selected=snap.files.map(f=>{
-      if(!safeEditValue(f.text))throw new Error('所选技能文件含敏感信息。');
-      return {...identity('file:'+choice.skill+'/'+f.name),name:f.name,use:f.name==='SKILL.md'?'skillDescription' as const:'reference' as const,text:{kind:'inline' as const,value:f.text}};
+    const selected=snap.files.flatMap(f=>{
+      if(!safeEditValue(f.text)){
+        if(omit('技能文件 · '+choice.skill+' / '+f.name))return [];
+        throw new Error('所选技能文件含敏感信息。');
+      }
+      return [{...identity('file:'+choice.skill+'/'+f.name),name:f.name,use:f.name==='SKILL.md'?'skillDescription' as const:'reference' as const,text:{kind:'inline' as const,value:f.text}}];
     });
+    const entry=selected.find(f=>f.name==='SKILL.md');
+    if(!entry){omit('技能 · '+choice.skill);continue;}
     content.files.push(...selected);
-    content.skills.push({...identity('skill:'+choice.skill),name:choice.skill,entryFileId:selected.find(f=>f.name==='SKILL.md')!.itemId,fileIds:selected.map(i=>i.itemId)});
+    content.skills.push({...identity('skill:'+choice.skill),name:choice.skill,entryFileId:entry.itemId,fileIds:selected.map(i=>i.itemId)});
   }
   const evidence=new Map<string,SourceEvidence>(itemsOf(content).map(i=>[i.itemId,{kind:'native'}]));
   if(row.recipeInstall&&content.role)evidence.set(content.role.itemId,{kind:'unresolved'});

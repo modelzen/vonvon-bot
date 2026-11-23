@@ -1,3 +1,5 @@
+import {LocalRecipeDrafts} from '../src/local-recipe-drafts';
+import {LocalRecipePublisher} from '../src/local-recipe-publisher';
 import {randomUUID} from 'node:crypto';
 import {mkdtempSync,realpathSync,rmSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -57,23 +59,27 @@ it('drives actual private input and original final card through real daemon, cli
   expect(opened.session).not.toBe(old.session);
   const publicValue={name:'实际私聊闭环',summary:'原简介',overview:'原概览',version:'1.0',access:'direct' as const};
   const draft={draftId,recipeId:null,revision:2,public:publicValue,config:{role:'仅发布，不执行任何技能或任务'}};
-  const cloudWrites:string[]=[],signal=new AbortController();let publicationRequest:string|undefined;
+  const cloudWrites:string[]=[],signal=new AbortController();let remoteId:string|undefined,publicationRequest:string|undefined;
   const status:AccountStatus={kind:'signedIn',accountId,displayName:'作者',provider:'google',persistence:'memory'};
   const account:NativeAccount={status:()=>status,lease:id=>id===accountId?signal.signal:undefined,onStatus:()=>()=>{},login:async()=>status,cancelLogin:async()=>status,logout:async()=>status,dispose:async()=>{},recipeLink:(r,v)=>`https://vonvon.cc/recipes/${r}/versions/${v}`,
     request:async(id,path,init,beforeSend)=>{
       expect(id).toBe(accountId);await beforeSend?.();
-      if(path==='/v2/me/drafts')return Response.json({items:[{...draft,format:'role-v1'}]});
       if(path==='/v2/me/publications')return Response.json({items:[]});
-      if(path==='/v2/drafts/'+draftId)return Response.json({error:{code:'not_found'}},{status:404});
-      if(path==='/v1/drafts/'+draftId)return Response.json(draft);
-      if(path.includes('/creator-context?'))return Response.json({draftId,format:'role-v1',revision:2,sourceIntentId:null,parent:null});
-      if(path===`/v1/drafts/${draftId}/publish`){cloudWrites.push(path);publicationRequest=new Headers(init?.headers).get('idempotency-key')!;return Response.json({recipeId,versionId,revision:1,public:publicValue});}
-      if(path.startsWith('/v1/receipts/publications/'))return Response.json({status:'committed',receipt:{requestId:publicationRequest,format:'role-v1',draftId,draftRevision:2,recipeId,versionId,revision:1,public:publicValue,firstCodeId:null}});
+      if(path==='/v1/drafts'){
+        remoteId=new Headers(init?.headers).get('idempotency-key')!;
+        return Response.json({...draft,draftId:remoteId,revision:1});
+      }
+      if(path===`/v1/drafts/${remoteId}/publish`){cloudWrites.push(path);publicationRequest=new Headers(init?.headers).get('idempotency-key')!;return Response.json({recipeId,versionId,revision:1,public:publicValue});}
+      if(path.startsWith('/v1/receipts/publications/'))return Response.json(publicationRequest?{status:'committed',receipt:{requestId:publicationRequest,format:'role-v1',draftId:remoteId,draftRevision:1,recipeId,versionId,revision:1,public:publicValue,firstCodeId:null}}:{status:'unknown'});
       throw Error(path);
     }};
   const authoring=new AuthoringJournal(),journal=new RecipeCreatorJournal(join(root,'native-journal')),metadata=new MetadataJournal();
-  const executor=new RecipeCreatorExecutor(account,journal,metadata,authoring);
+  const drafts=new LocalRecipeDrafts(),publisher=new LocalRecipePublisher();
+  const executor=new RecipeCreatorExecutor(account,journal,metadata,authoring,undefined,undefined,undefined,drafts,publisher);
   const association={accountId,viewId:'local',deviceId,deviceKey:Buffer.alloc(32,1).toString('base64url'),botId,binding:opened.binding,scope:opened.scope};
+  const local={association,work:{draftId,source:null},members:[],draft};
+  drafts.commit({requestId:randomUUID(),expectedRevision:null,record:{...local,draft:{...draft,revision:1}}});
+  drafts.commit({requestId:randomUUID(),expectedRevision:1,record:local});
   const context:CreatorContext={association,session:opened.session,check:()=>signal.signal.throwIfAborted(),rpc,settled:async()=>{}};
   const jobs=async()=>asKind(await rpc({type:'creatorPoll',botId,session:opened.session}),'creatorJobs').jobs;
   const choice=(label:string)=>{
@@ -97,5 +103,5 @@ it('drives actual private input and original final card through real daemon, cli
     expect(cloudWrites).toHaveLength(1);expect(publicationRequest).toBe(pending[0]!.id);
     expect(journal.command(accountId,pending[0]!.id)?.result).toMatchObject({kind:'published',target:{recipeId,versionId},draftRevision:2,revision:1});
     expect(await jobs()).toEqual([]);
-  }finally{daemon.close();authoring.history.close();await client.close();}
+  }finally{drafts.close();publisher.close();daemon.close();authoring.history.close();await client.close();}
 },15000);

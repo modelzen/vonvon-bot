@@ -150,7 +150,11 @@ it('delivers 1 MiB with all 130 memory-free member references through the encryp
   expect(entries.filter(e => e.kind === 'rule' && e.label === 'smartRespond')).toHaveLength(16);
   const skill = JSON.parse(text.get(entries.find(e => e.kind === 'skill')!.documentId)!);
   expect(skill.files).toHaveLength(64);
-  for (const file of skill.files) expect(text.get(file.documentId)).toBe(fileBodies.get(file.name));
+  for (const file of skill.files) {
+    const original = fileBodies.get(file.name)!;
+    expect(text.get(file.documentId)).toBe(original);
+    expect(file).toMatchObject({bytes: Buffer.byteLength(original), sha256: sha(Buffer.from(original))});
+  }
   expect(text.get(skill.entryDocumentId)).toBe(fileBodies.get('SKILL.md'));
   const logo = text.get(entries.find(e => e.kind === 'logo')!.documentId)!;
   expect(JSON.parse(logo)).toEqual({mediaType:'image/webp', bytes:4, sha256:sha(Buffer.from('logo'))});

@@ -1,3 +1,1 @@
-import type {Buffer} from 'node:buffer';
-
-export function staticLogoFormat(bytes: Buffer, normalized?: boolean): 'png' | 'jpeg' | 'webp';
+export function staticLogoFormat(bytes: Uint8Array, normalized?: boolean): 'png' | 'jpeg' | 'webp';

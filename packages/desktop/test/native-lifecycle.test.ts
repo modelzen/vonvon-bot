@@ -1164,7 +1164,7 @@ describe('native window lifecycle', () => {
     expect(window.visible).toBe(false);
     expect(fake.dock.visible).toBe(false);
     expect(fake.tray.destroy).not.toHaveBeenCalled();
-    app.emit('second-instance');
+    app.emit('second-instance', {}, []);
     await vi.waitFor(() => expect(window.visible).toBe(true));
     expect(fake.dock.show).toHaveBeenCalledOnce();
     expect(fake.dock.visible).toBe(true);
@@ -1207,7 +1207,7 @@ describe('native window lifecycle', () => {
     fake.dock.show.mockImplementationOnce(() => new Promise<void>(resolve => { restored = () => { fake.dock.visible = true; resolve(); }; }));
     app.emit('activate');
     actions.hide();
-    app.emit('second-instance');
+    app.emit('second-instance', {}, []);
     expect(fake.dock.show).toHaveBeenCalledOnce();
     restored();
     await vi.waitFor(() => expect(window.visible).toBe(true));

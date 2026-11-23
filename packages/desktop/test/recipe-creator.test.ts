@@ -3,12 +3,15 @@ import {mkdtempSync,readFileSync,readdirSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {afterEach,expect,it,vi} from 'vitest';
-import {agentIdSchema,groupIdSchema,canonicalizeRichRecipeContent,creatorReplies,creatorSnapshotSchema,recipeAuthoringRequestSchema,newRichMetadataRequestId,type CreatorJob,type CreatorAnswer,type RecipeAuthoringRequest,type RecipeAuthoringReply,type AccountStatus} from '@vonvon/protocol';
+import {agentIdSchema,groupIdSchema,canonicalizeRichRecipeContent,creatorReplies,creatorSnapshotSchema,inheritedPublicationSchema,recipeAuthoringRequestSchema,newRichMetadataRequestId,type CreatorJob,type CreatorAnswer,type RecipeAuthoringRequest,type RecipeAuthoringReply,type AccountStatus} from '@vonvon/protocol';
 import {createClient,type ClientConnection} from '../../client/src/client.js';
 import {RecipeCreatorExecutor,type CreatorContext} from '../src/recipe-creator.js';
 import {RecipeCreatorJournal,creatorSha,creatorSnapshotDigest} from '../src/recipe-creator-journal.js';
 import {MetadataJournal} from '../src/community-metadata-journal.js';
 import {AuthoringJournal} from '../src/recipe-authoring-journal.js';
+import {LocalRecipeDrafts,type LocalRecipeDraftRecord} from '../src/local-recipe-drafts.js';
+import {LocalRecipePublisher} from '../src/local-recipe-publisher.js';
+import * as publicationInheritance from '../src/recipe-publication-inheritance.js';
 import type {NativeAccount} from '../src/account-session.js';
 
 const cleanup:Array<()=>void>=[];
@@ -38,9 +41,7 @@ function fixture(){
   const state:AccountStatus={kind:'signedIn',accountId,displayName:'作者',provider:'google',persistence:'memory'};
   const accountSignal=new AbortController();
   const cloud=vi.fn(async(_id:string,path:string,init?:RequestInit):Promise<Response>=>{
-    if(path==='/v2/drafts/'+draftId)return Response.json({error:{code:'not_found'}},{status:404});
-    if(path==='/v1/drafts/'+draftId)return Response.json(draft);
-    if(path.startsWith('/v1/drafts/'+draftId+'/creator-context?'))return Response.json({draftId,format:'role-v1',revision:draft.revision,sourceIntentId:null,parent:null});
+    if(path==='/v1/drafts'&&init?.method==='POST')return Response.json({...draft,draftId:new Headers(init.headers).get('idempotency-key'),revision:1});
     throw Error('Unexpected cloud '+path+' '+init?.method);
   });
   const native:NativeAccount={lease:id=>id===accountId?accountSignal.signal:undefined,status:()=>state,onStatus:()=>()=>{},login:async()=>state,logout:async()=>state,
@@ -48,12 +49,45 @@ function fixture(){
   const journalPath=join(dir,'creator'),journal=new RecipeCreatorJournal(journalPath),metadata=new MetadataJournal(join(dir,'metadata')),authoring=new AuthoringJournal();
   cleanup.push(()=>authoring.history.close());
   const publications=vi.fn(),saves=vi.fn(),previews=vi.fn();
-  const build=(saved=journal)=>new RecipeCreatorExecutor(native,saved,metadata,authoring,publications,saves,previews);
+  let drafts=new LocalRecipeDrafts();cleanup.push(()=>drafts.close());
+  const publisher=new LocalRecipePublisher(join(dir,'publications'));cleanup.push(()=>publisher.close());
+  const setLocal=(record?:LocalRecipeDraftRecord)=>{
+    drafts.close();drafts=new LocalRecipeDrafts();
+    if(record)for(let revision=1;revision<=record.draft.revision;revision++)drafts.commit({requestId:randomUUID(),expectedRevision:revision===1?null:revision-1,record:{...record,draft:{...record.draft,revision}}});
+  };
+  setLocal({association:structuredClone(association),work:{draftId,source:null},draft,members:[]});
+  const build=(saved=journal)=>new RecipeCreatorExecutor(native,saved,metadata,authoring,publications,saves,previews,drafts,publisher);
   const context:CreatorContext={association,session,check(){if(revoked||accountSignal.signal.aborted)throw Error('revoked');},rpc:input=>client.recipeAuthoring!(input),settled:async()=>{}};
   const set=(task:CreatorJob['task'],nextMode=mode,id:string=randomUUID())=>{mode=nextMode;job=creatorReplies[2].parse({kind:'creatorJobs',jobs:[{id,binding:association.binding,scope:association.scope,task}]}).jobs[0]!;return job;};
   return {account:native,dir,journalPath,groupId,preparationId,identity,accountId,draftId,recipeId,versionId,firstCodeId,association,publicValue,draft,journal,metadata,authoring,context,cloud,answers,deliveries,rpcs,build,set,
-    mode:(next:typeof mode)=>{mode=next;},revoke:()=>{revoked=true;},accountSignal,publications,saves,previews};
+    mode:(next:typeof mode)=>{mode=next;},revoke:()=>{revoked=true;},accountSignal,publications,saves,previews,setLocal,local:()=>drafts};
 }
+
+it.each(['current','lease','mode'] as const)('remembers a verified parent only after its Creator read remains current (%s)',async change=>{
+  const f=fixture(),target={recipeId:f.recipeId,versionId:f.versionId};
+  const inherited=inheritedPublicationSchema.parse({accountId:f.accountId,versionId:f.versionId,public:{name:'已核验父配方',summary:'父版本说明',overview:'父版本概览',version:''},access:'coded'});
+  let entered=()=>{},resume=()=>{};
+  const waiting=new Promise<void>(resolve=>{entered=resolve;}),gate=new Promise<void>(resolve=>{resume=resolve;});
+  const inheritance=vi.spyOn(publicationInheritance,'inheritedPublication').mockImplementation(async()=>{entered();await gate;return inherited;});
+  const run=f.build().run(f.context,f.set({kind:'read',read:{kind:'parent',target}},'read')).catch((error:unknown)=>error);
+  try{
+    await waiting;
+    expect(f.authoring.history.parent(f.association,target.versionId)).toBeUndefined();expect(f.answers).toEqual([]);
+    if(change==='lease')f.accountSignal.abort();if(change==='mode')f.mode('execute');
+    resume();const result=await run;
+    expect(inheritance).toHaveBeenCalledOnce();expect(inheritance.mock.calls[0]?.slice(1,4)).toEqual([f.accountId,target.recipeId,target.versionId]);
+    if(change==='current'){
+      expect(result).toBeUndefined();expect(f.authoring.history.parent(f.association,target.versionId)).toEqual(target);
+      expect(f.answers).toEqual([{kind:'parent',target,inherited}]);
+    }else{
+      expect(f.authoring.history.parent(f.association,target.versionId)).toBeUndefined();
+      expect(f.answers.some(answer=>answer.kind==='parent')).toBe(false);
+      if(change==='lease')expect(result).toBeInstanceOf(Error);
+      else expect(f.answers).toEqual([{kind:'rejected',reason:'unavailable'}]);
+    }
+    expect(f.cloud).not.toHaveBeenCalled();
+  }finally{resume();await run;inheritance.mockRestore();}
+});
 
 it.each(['valid','association','work','digest','source','revision','mode','lease'] as const)('opens the complete rich frozen preview only with the original %s evidence',async evidence=>{
   const {f,work,read,cloudDraft}=richMetadataFixture();
@@ -67,7 +101,7 @@ it.each(['valid','association','work','digest','source','revision','mode','lease
   if(evidence==='source')context={...context,rpc:async request=>{
     const reply=await f.context.rpc(request);return reply.kind==='groupSourceIdentity'?{...reply,identity:'f'.repeat(64)}:reply;
   }};
-  if(evidence==='revision')cloudDraft.revision++;
+  if(evidence==='revision'){cloudDraft.revision++;const row=f.local().read(f.accountId,f.draftId)!;f.setLocal({...row,draft:{...row.draft,revision:cloudDraft.revision}});}
   if(evidence==='lease')f.accountSignal.abort();
   const job=f.set({kind:'read',read:{kind:'openPreview',work:selected,snapshotDigest:digest}},evidence==='mode'?'execute':'read');
   await f.build().run(context,job).catch(()=>{});
@@ -96,35 +130,85 @@ it('freezes every preview page once, binds access outside canonical, and serves 
 
 it.each(['lost response','limited receipt'])('recovers publication after %s and draft retirement without another POST or draft read',async failure=>{
   const f=fixture(),executor=f.build(),work={draftId:f.draftId,source:null};
+  f.authoring.history.markLocal(f.association,f.draftId);
   await executor.run(f.context,f.set({kind:'read',read:{kind:'draft',work}},'read'));
   const frozen=f.answers.at(-1);if(frozen?.kind!=='snapshot')throw Error('snapshot');
   const command={kind:'publish' as const,snapshotDigest:creatorSnapshotDigest(frozen.snapshot),snapshot:frozen.snapshot};
-  const job=f.set({kind:'command',command,approval:'a'.repeat(64),expiresAt:Date.now()+60000},'execute');
+  const job=f.set({kind:'command',command,confirmation:{kind:'feishu-card'},approval:'a'.repeat(64),expiresAt:Date.now()+60000},'execute');
   const prior=f.cloud.getMockImplementation()!;
   let submitted=0,committed=false,receiptAvailable=false;
   f.cloud.mockImplementation(async(id,path,init)=>{
-    if(path===`/v1/drafts/${f.draftId}/publish`){
+    if(/^\/v1\/drafts\/[^/]+\/publish$/.test(path)){
       submitted++;committed=true;
       if(failure==='lost response')throw Error('response lost');
       return Response.json({recipeId:f.recipeId,versionId:f.versionId,revision:1,public:f.publicValue});
     }
-    if(path.startsWith('/v1/receipts/publications/'))return !receiptAvailable?Response.json({error:{code:'rate_limited'}},{status:429}):Response.json({status:'committed',receipt:{requestId:job.id,format:'role-v1',draftId:f.draftId,
-      draftRevision:3,recipeId:f.recipeId,versionId:f.versionId,revision:1,public:f.publicValue,firstCodeId:f.firstCodeId}});
+    if(path.startsWith('/v1/receipts/publications/'))return !committed?Response.json({status:'unknown'}):!receiptAvailable?Response.json({error:{code:'rate_limited'}},{status:429}):Response.json({status:'committed',receipt:{requestId:job.id,format:'role-v1',draftId:new URL(path,'https://fixture.invalid').searchParams.get('draftId'),
+      draftRevision:1,recipeId:f.recipeId,versionId:f.versionId,revision:1,public:f.publicValue,firstCodeId:f.firstCodeId}});
     if(committed)throw Error('retired draft must not be read');
     return prior(id,path,init);
   });
   await executor.run(f.context,job);expect(f.answers.at(-1)).toEqual({kind:'unknown'});
   expect(f.publications).not.toHaveBeenCalled();
-  expect(f.journal.command(f.accountId,job.id)?.phase).toBe(failure==='lost response'?'unknown':'awaitingReceipt');
+  expect(f.journal.command(f.accountId,job.id)?.phase).toBe('unknown');
   receiptAvailable=true;f.mode('receipt');
   await f.build(new RecipeCreatorJournal(f.journalPath)).run(f.context,job);
   expect(submitted).toBe(1);expect(f.answers.at(-1)).toMatchObject({kind:'published',draftRevision:3,revision:1,firstCodeId:f.firstCodeId});
   expect(f.publications).toHaveBeenCalledWith({accountId:f.accountId,draftId:f.draftId,recipeId:f.recipeId,versionId:f.versionId,revision:1});
   expect(f.journal.command(f.accountId,job.id)?.phase).toBe('committed');
+  expect(f.local().read(f.accountId,f.draftId)).toBeUndefined();
+  expect(f.authoring.history.publication(f.association,f.draftId)).toEqual({state:'published',operationId:f.draftId,
+    draftId:f.draftId,recipeId:f.recipeId,versionId:f.versionId,name:f.publicValue.name,version:f.publicValue.version,revision:1});
+});
+
+it.each([401,403])('keeps publication after receipt HTTP %s recoverable without another upload or publication',async status=>{
+  const f=fixture(),executor=f.build(),work={draftId:f.draftId,source:null};
+  await executor.run(f.context,f.set({kind:'read',read:{kind:'draft',work}},'read'));
+  const snapshot=f.answers.at(-1);if(snapshot?.kind!=='snapshot')throw Error('snapshot');
+  const job=f.set({kind:'command',command:{kind:'publish',snapshot:snapshot.snapshot,snapshotDigest:creatorSnapshotDigest(snapshot.snapshot)},
+    confirmation:{kind:'feishu-card'},approval:'a'.repeat(64),expiresAt:Date.now()+60000},'execute');
+  let published=false,receiptReady=false;const prior=f.cloud.getMockImplementation()!;
+  f.cloud.mockImplementation(async(id,path,init)=>{
+    if(/^\/v1\/drafts\/[^/]+\/publish$/.test(path)){published=true;return Response.json({recipeId:f.recipeId,versionId:f.versionId,revision:1,public:f.publicValue});}
+    if(path.startsWith('/v1/receipts/publications/')){
+      if(!published)return Response.json({status:'unknown'});
+      if(!receiptReady)return Response.json({error:{code:status===401?'unauthorized':'forbidden'}},{status});
+      return Response.json({status:'committed',receipt:{requestId:job.id,format:'role-v1',draftId:new URL(path,'https://fixture.invalid').searchParams.get('draftId'),
+        draftRevision:1,recipeId:f.recipeId,versionId:f.versionId,revision:1,public:f.publicValue,firstCodeId:f.firstCodeId}});
+    }
+    return prior(id,path,init);
+  });
+  await executor.run(f.context,job);
+  expect(published).toBe(true);expect(f.answers.at(-1)).toEqual({kind:'unknown'});
+  expect(f.journal.command(f.accountId,job.id)?.phase).toBe('unknown');expect(f.publications).not.toHaveBeenCalled();
+  const before=f.cloud.mock.calls.length;receiptReady=true;
+  expect(await f.build(new RecipeCreatorJournal(f.journalPath)).recoverPublication(f.accountId,f.draftId,()=>{})).toMatchObject({kind:'publicationRecovery',result:{kind:'published'}});
+  expect(f.cloud.mock.calls.slice(before).every(([,path,init])=>(init?.method??'GET')==='GET'&&path.includes('/receipts/publications/'))).toBe(true);
+  expect(f.cloud.mock.calls.filter(([,path])=>path.endsWith('/publish'))).toHaveLength(1);
+  expect(f.journal.command(f.accountId,job.id)?.result?.kind).toBe('published');
+});
+
+it.each([408,429])('retains publication as unknown after a temporary receipt failure (%s) without uploading',async status=>{
+  const f=fixture(),executor=f.build(),work={draftId:f.draftId,source:null};
+  await executor.run(f.context,f.set({kind:'read',read:{kind:'draft',work}},'read'));
+  const frozen=f.answers.at(-1);if(frozen?.kind!=='snapshot')throw Error('snapshot');
+  const job=f.set({kind:'command',command:{kind:'publish',snapshot:frozen.snapshot,snapshotDigest:creatorSnapshotDigest(frozen.snapshot)},
+    confirmation:{kind:'feishu-card'},approval:'a'.repeat(64),expiresAt:Date.now()+60000},'execute');
+  f.cloud.mockImplementation(async(_id,path,init)=>{
+    expect(init?.method??'GET').toBe('GET');expect(path).toContain('/receipts/publications/');
+    return Response.json({error:{code:status===429?'rate_limited':'request_timeout'}},{status});
+  });
+  await executor.run(f.context,job);
+  expect(f.answers.at(-1)).toEqual({kind:'unknown'});expect(f.journal.command(f.accountId,job.id)?.phase).toBe('unknown');
+  expect(f.local().read(f.accountId,f.draftId)?.draft.revision).toBe(3);
+  expect(f.publications).not.toHaveBeenCalled();
+  f.mode('receipt');await executor.run(f.context,job);
+  expect(f.answers.at(-1)).toEqual({kind:'unknown'});expect(f.cloud.mock.calls.every(([, ,init])=>(init?.method??'GET')==='GET')).toBe(true);
 });
 
 it.each(['matching','other'] as const)('uses only the exact metadata receipt and preserves the %s shared entry on recovery',async slot=>{
   const f=fixture(),id=newRichMetadataRequestId(),work={draftId:f.draftId,source:null};
+  f.setLocal();
   const command={kind:'metadata' as const,work,revision:3,baseSha256:'b'.repeat(64),change:{field:'summary' as const,value:'新简介'}};
   const request={type:'saveRichDraftMetadata' as const,accountId:f.accountId,requestId:id,draftId:f.draftId,revision:3,
     baseManifestSha256:'b'.repeat(64),public:{...f.publicValue,summary:'新简介'},logo:{kind:'keep' as const}};
@@ -189,35 +273,28 @@ it('rejects changed original bytes and never stores or broadcasts code plaintext
   for(const name of readdirSync(f.journalPath))expect(readFileSync(join(f.journalPath,name),'utf8')).not.toContain(code);
 });
 
-it('verifies rich bytes and every part, retains the exact parent, and refuses memory or substituted part content',async()=>{
-  const f=fixture(),text='完整文件正文\n'.repeat(5000),partId=randomUUID(),manifestId=randomUUID();
+it('previews verified local rich bytes and exact parent, refusing corrupt members or writable memory without a cloud read',async()=>{
+  const f=fixture(),text='完整文件正文\n'.repeat(5000),partId=randomUUID();
   const work={draftId:f.draftId,source:{preparationId:f.preparationId,groupId:f.groupId,identity:f.identity}};
-  f.authoring.history.remember(f.association,f.preparationId,f.identity,f.groupId);
-  const publicText=(value:string)=>({itemId:randomUUID(),originId:randomUUID(),value});
-  const file={itemId:randomUUID(),originId:randomUUID(),name:'SKILL.md',use:'skillDescription',text:{kind:'part' as const,objectId:partId}};
-  const content={format:'rich-v2',schemaVersion:2,public:{name:publicText(f.publicValue.name),summary:publicText(f.publicValue.summary),overview:publicText('概览'),version:publicText('1.1')},
-    settings:[],rules:[],skills:[{itemId:randomUUID(),originId:randomUUID(),name:'示例技能',entryFileId:file.itemId,fileIds:[file.itemId]}],files:[file],tasks:[],memories:[] as unknown[],setup:[],parts:[{objectId:partId,kind:'text',sha256:creatorSha(text),bytes:Buffer.byteLength(text),mediaType:'text/plain;charset=utf-8'}]};
-  let document=canonicalizeRichRecipeContent(content),corrupt=false;
-  f.cloud.mockImplementation(async(_id,path)=>{
-    const manifest={objectId:manifestId,kind:'manifest',sha256:creatorSha(document.canonicalUTF8),bytes:document.canonicalUTF8.length,mediaType:'application/json'};
-    if(path==='/v2/drafts/'+f.draftId)return Response.json({format:'rich-v2',draftId:f.draftId,recipeId:f.recipeId,revision:3,access:'coded',sourceIntentId:f.preparationId,
-      manifest,sourceManifest:manifest,logicalBytes:document.logicalBytes,retainedCandidateBytes:0});
-    if(path.endsWith('/objects/'+manifestId))return new Response(document.canonical);
-    if(path.endsWith('/objects/'+partId))return new Response(corrupt?'substitution':text);
-    if(path.includes('/creator-context?'))return Response.json({format:'rich-v2',draftId:f.draftId,revision:3,sourceIntentId:f.preparationId,parent:{recipeId:f.recipeId,versionId:f.versionId}});
-    throw Error(path);
-  });
+  const value=(value:string)=>({itemId:randomUUID(),originId:randomUUID(),value});
+  const file={itemId:randomUUID(),originId:randomUUID(),name:'SKILL.md',use:'skillDescription' as const,text:{kind:'part' as const,objectId:partId}};
+  const doc=canonicalizeRichRecipeContent({format:'rich-v2',schemaVersion:2,public:{name:value('完整配方'),summary:value('简介'),overview:value('概览'),version:value('1.1')},
+    settings:[],rules:[],skills:[{itemId:randomUUID(),originId:randomUUID(),name:'示例技能',entryFileId:file.itemId,fileIds:[file.itemId]}],files:[file],tasks:[],memories:[],setup:[],
+    parts:[{objectId:partId,kind:'text',sha256:creatorSha(text),bytes:Buffer.byteLength(text),mediaType:'text/plain;charset=utf-8'}]});
+  const record:LocalRecipeDraftRecord={association:structuredClone(f.association),work,parent:{recipeId:f.recipeId,versionId:f.versionId},members:[{descriptor:doc.content.parts[0]!,base64:Buffer.from(text).toString('base64')}],
+    sourceCanonical:Buffer.from(doc.canonicalUTF8).toString('base64url'),draft:{format:'rich-v2',draftId:f.draftId,recipeId:f.recipeId,revision:3,sourceIntentId:f.preparationId,
+      public:{name:'完整配方',summary:'简介',overview:'概览',version:'1.1',access:'coded'},rich:{content:doc.content,canonical:Buffer.from(doc.canonicalUTF8).toString('base64url'),texts:{[partId]:text}}}};
+  f.setLocal(record);
   await f.build().run(f.context,f.set({kind:'read',read:{kind:'draft',work}},'read'));
-  const frozen=f.answers.at(-1);expect(frozen).toMatchObject({kind:'snapshot',snapshot:{parent:{recipeId:f.recipeId,versionId:f.versionId},parts:content.parts}});
+  const frozen=f.answers.at(-1);expect(frozen).toMatchObject({kind:'snapshot',snapshot:{parent:record.parent,parts:doc.content.parts}});
   if(frozen?.kind!=='snapshot')throw Error('snapshot');
-  const saved=f.journal.snapshot(creatorSnapshotDigest(frozen.snapshot))!;
-  expect(saved.pages.flat().join('')).toContain(text);
-  corrupt=true;
-  await f.build().run(f.context,f.set({kind:'read',read:{kind:'draft',work}},'read'));
-  expect(f.answers.at(-1)).toEqual({kind:'rejected',reason:'unavailable'});
-  corrupt=false;document=canonicalizeRichRecipeContent({...content,memories:[{itemId:randomUUID(),originId:randomUUID(),text:{kind:'inline',value:'不应发布的记忆'}}]});
-  await f.build().run(f.context,f.set({kind:'read',read:{kind:'draft',work}},'read'));
-  expect(f.answers.at(-1)).toEqual({kind:'rejected',reason:'unavailable'});
+  expect(f.journal.snapshot(creatorSnapshotDigest(frozen.snapshot))!.pages.flat().join('')).toContain(text);
+  expect(()=>f.setLocal({...record,members:[{...record.members[0]!,base64:Buffer.from('substitution').toString('base64')}]})).toThrow();
+  if(record.draft.format!=='rich-v2')throw Error('rich fixture');
+  const richDraft=record.draft;
+  const memory=canonicalizeRichRecipeContent({...doc.content,memories:[{itemId:randomUUID(),originId:randomUUID(),text:{kind:'inline',value:'不应发布的记忆'}}]});
+  expect(()=>f.setLocal({...record,draft:{...richDraft,rich:{content:memory.content,canonical:Buffer.from(memory.canonicalUTF8).toString('base64url'),texts:{[partId]:text}}}})).toThrow();
+  expect(f.cloud).not.toHaveBeenCalled();
 });
 
 it('backfills exact historical publication source from trusted operation history and ignores other accounts',async()=>{
@@ -303,18 +380,19 @@ it('saves a legacy draft on its first private approval and notifies only after t
   await f.build().run(f.context,job);
   expect(f.answers.at(-1)).toEqual({kind:'saved',work,revision:4});
   expect(f.saves).toHaveBeenCalledExactlyOnceWith({accountId:f.accountId,draftId:f.draftId,revision:4});
-  expect(f.cloud.mock.calls.filter(([, ,init])=>init?.method==='PATCH')).toHaveLength(1);
+  expect(f.cloud).not.toHaveBeenCalled();
+  expect(f.local().read(f.accountId,f.draftId)?.draft).toMatchObject({revision:4,public:{name:'新名'}});
 });
 
 function richMetadataFixture(){
-  const f=fixture(),requestId=newRichMetadataRequestId(),objectId=randomUUID();
+  const f=fixture(),requestId=newRichMetadataRequestId();
   const work={draftId:f.draftId,source:{preparationId:f.preparationId,groupId:f.groupId,identity:f.identity}};
   f.authoring.history.remember(f.association,f.preparationId,f.identity,f.groupId);
   const field=(value:string)=>({itemId:randomUUID(),originId:randomUUID(),value});
   const doc=canonicalizeRichRecipeContent({format:'rich-v2',schemaVersion:2,public:{name:field('当前名称'),summary:field(''),overview:field(''),version:field('')},
     settings:[],rules:[],skills:[],files:[],tasks:[],memories:[],setup:[],parts:[]});
   const hash=creatorSha(doc.canonicalUTF8);
-  const request={type:'saveRichDraftMetadata' as const,accountId:f.accountId,requestId,draftId:f.draftId,revision:2,baseManifestSha256:'e'.repeat(64),
+  const request={type:'saveRichDraftMetadata' as const,accountId:f.accountId,requestId,draftId:f.draftId,revision:2,baseManifestSha256:hash,
     public:{name:'当前名称',summary:'',overview:'',version:'',access:'direct' as const},logo:{kind:'keep' as const}};
   const key=f.metadata.key(f.accountId,f.draftId);
   f.metadata.write(key,{request});
@@ -322,46 +400,40 @@ function richMetadataFixture(){
   const receipt={requestId,draftId:f.draftId,revision:3,manifestSha256:hash};
   f.cloud.mockImplementation(async(id,path,init)=>{
     expect(id).toBe(f.accountId);expect(init?.method??'GET').toBe('GET');
-    const {revision,committed}=cloudDraft;
+    const {committed}=cloudDraft;
     if(path.startsWith('/v2/receipts/metadata/'+requestId+'?'))return Response.json(committed?{status:'committed',receipt}:{status:'unknown'});
-    if(path==='/v2/drafts/'+f.draftId)return Response.json({format:'rich-v2',draftId:f.draftId,recipeId:null,revision,access:'direct',sourceIntentId:f.preparationId,
-      manifest:{objectId,kind:'manifest',bytes:doc.canonicalUTF8.length,sha256:hash,mediaType:'application/json'},sourceManifest:null,logicalBytes:doc.logicalBytes,retainedCandidateBytes:0});
-    if(path.endsWith('/objects/'+objectId))return new Response(doc.canonical);
-    if(path.includes('/creator-context?'))return Response.json({format:'rich-v2',draftId:f.draftId,revision,sourceIntentId:f.preparationId,parent:null});
     throw Error(path);
   });
   const command={kind:'metadata' as const,work,revision:request.revision,baseSha256:request.baseManifestSha256,change:{field:'name' as const,value:'当前名称'}};
   const writer={association:f.association,id:requestId,command,request,phase:'unknown' as const,grant:{approval:'a'.repeat(64),expiresAt:Date.now()+60000}};
+  const syncLocal=()=>f.setLocal({association:structuredClone(f.association),work,draft:{format:'rich-v2',draftId:f.draftId,recipeId:null,revision:cloudDraft.revision,sourceIntentId:f.preparationId,public:request.public,
+    rich:{content:doc.content,canonical:Buffer.from(doc.canonicalUTF8).toString('base64url'),texts:{}}},sourceCanonical:Buffer.from(doc.canonicalUTF8).toString('base64url'),members:[]});
+  syncLocal();
   const read=()=>f.build().run(f.context,f.set({kind:'read',read:{kind:'draft',work}},'read'));
-  return {f,work,writer,read,key,request,receipt,cloudDraft};
+  return {f,work,writer,read,key,request,receipt,cloudDraft,syncLocal};
 }
 
-it('reconciles historical App metadata by GET before full private preview, retaining unknown and stale evidence',async()=>{
-  const {f,key,request,receipt,read,cloudDraft}=richMetadataFixture();
-  cloudDraft.revision=2;
-  cloudDraft.committed=false;
-  await read();expect(f.answers.at(-1)?.kind).toBe('rejected');expect(f.metadata.read(key)).toEqual({request});
-  cloudDraft.committed=true;
-  await read();expect(f.answers.at(-1)?.kind).toBe('rejected');expect(f.metadata.read(key)).toEqual({request,receipt});
-  cloudDraft.revision=3;
+it('keeps an old cloud metadata request untouched while previewing authoritative local content without a cloud read',async()=>{
+  const {f,key,request,read,cloudDraft,syncLocal}=richMetadataFixture();
+  cloudDraft.revision=2;cloudDraft.committed=false;syncLocal();
+  await read();expect(f.answers.at(-1)).toMatchObject({kind:'snapshot',snapshot:{revision:2}});
+  expect(f.metadata.read(key)).toEqual({request});
+  cloudDraft.committed=true;cloudDraft.revision=3;syncLocal();
   await read();expect(f.answers.at(-1)).toMatchObject({kind:'snapshot',snapshot:{revision:3}});
-  expect(f.metadata.read(key)).toBeUndefined();
-  expect(f.cloud.mock.calls.filter(([,path])=>path.startsWith('/v2/receipts/metadata/'))).toHaveLength(2);
+  expect(f.metadata.read(key)).toEqual({request});expect(f.cloud).not.toHaveBeenCalled();
 });
 
-it('previews the confirmed metadata revision after renewing only the Link binding',async()=>{
-  const {f,writer,work,read,key,request,receipt}=richMetadataFixture();
+it('recovers an exact local metadata receipt and previews it after renewing only the Link binding',async()=>{
+  const {f,writer,work,read,key,request}=richMetadataFixture();
+  const latest=f.local().read(f.accountId,f.draftId)!;
+  f.setLocal({...latest,draft:{...latest.draft,revision:2}});
+  f.local().commit({requestId:writer.id,requestSha256:creatorSha(JSON.stringify(request)),expectedRevision:2,record:latest});
   f.journal.save(writer);
-  const task={kind:'command' as const,command:writer.command,...writer.grant};
-  await f.build().run(f.context,f.set(task,'receipt',writer.id));
+  await f.build().run(f.context,f.set({kind:'command',command:writer.command,...writer.grant},'receipt',writer.id));
   expect(f.answers.at(-1)).toEqual({kind:'saved',work,revision:3});
-  expect(f.metadata.read(key)).toEqual({request,receipt});
-
-  f.association.binding=randomUUID();
-  await read();
-  expect(f.answers.at(-1)).toMatchObject({kind:'snapshot',snapshot:{work,revision:3,contentSha256:receipt.manifestSha256}});
-  expect(f.metadata.read(key)).toBeUndefined();
-  expect(f.cloud.mock.calls.every(([, ,init])=>(init?.method??'GET')==='GET')).toBe(true);
+  f.association.binding=randomUUID();await read();
+  expect(f.answers.at(-1)).toMatchObject({kind:'snapshot',snapshot:{work,revision:3}});
+  expect(f.metadata.read(key)).toEqual({request});expect(f.cloud).not.toHaveBeenCalled();
 });
 
 it('keeps the original metadata grant bound to the old Link',async()=>{
@@ -390,7 +462,7 @@ it.each([
   expect(f.metadata.read(key)).toEqual({request,receipt});
 });
 
-it.each(['view','scope','draft','group identity','request','manifest'] as const)('retains the receipt when the metadata %s differs after Link renewal',async mismatch=>{
+it.each(['view','scope','draft','group identity','request','manifest'] as const)('keeps stale cloud metadata %s evidence separate from authoritative local preview after Link renewal',async mismatch=>{
   const {f,writer,work,read,key,request,receipt}=richMetadataFixture();
   const storedWork=structuredClone(work);
   if(mismatch==='draft')storedWork.draftId=randomUUID();
@@ -405,8 +477,9 @@ it.each(['view','scope','draft','group identity','request','manifest'] as const)
   if(mismatch==='scope')f.association.scope='a'.repeat(64);
   if(mismatch==='view')f.association.viewId=randomUUID();
   await read();
-  expect(f.answers.at(-1)).toEqual({kind:'rejected',reason:'unavailable'});
-  expect(f.metadata.read(key)).toEqual(held);
+  if(mismatch==='view')expect(f.answers.at(-1)).toEqual({kind:'rejected',reason:'unavailable'});
+  else expect(f.answers.at(-1)).toMatchObject({kind:'snapshot',snapshot:{work,revision:3}});
+  expect(f.metadata.read(key)).toEqual(held);expect(f.cloud).not.toHaveBeenCalled();
 });
 
 it('refuses version management from a replacement source before its cloud request',async()=>{
@@ -423,13 +496,13 @@ it('APP PUBLICATION preview freezes actual draft bytes and never executes an una
   const f=fixture(),executor=f.build(),work={draftId:f.draftId,source:null};
   await executor.run(f.context,f.set({kind:'read',read:{kind:'draft',work}},'read'));
   const frozen=f.answers.at(-1);if(frozen?.kind!=='snapshot')throw Error('snapshot');
-  expect(frozen.snapshot.appPreviewUrl).toBe(`https://vonvon.cc/open/draft#${f.draftId}?revision=3`);
+  expect(frozen.snapshot.appPreviewUrl).toBeUndefined();
   const task={kind:'command' as const,command:{kind:'publish' as const,snapshot:frozen.snapshot,snapshotDigest:creatorSnapshotDigest(frozen.snapshot)},approval:'0'.repeat(64),expiresAt:Date.now()+60000};
   const job=f.set(task,'preview');
   const preview=await executor.preview(f.context,job);expect(preview.draft).toEqual(f.draft);
   await expect(executor.run(f.context,job)).rejects.toThrow();
   expect(f.journal.command(f.accountId,job.id)).toBeUndefined();
-  f.draft.config.role='Changed after App preview';
+  f.draft.config.role='Changed after App preview';f.setLocal({association:structuredClone(f.association),work,draft:f.draft,members:[]});
   await expect(executor.preview(f.context,job)).rejects.toThrow();
   expect(f.cloud.mock.calls.every(([,path,init])=>!path.endsWith('/publish')&&(init?.method??'GET')==='GET')).toBe(true);
 });
@@ -442,8 +515,8 @@ it('APP PUBLICATION preserves explicit App grant and exact receipt recovery in t
   const job=f.set({kind:'command',command:{kind:'publish',snapshot:frozen.snapshot,snapshotDigest:creatorSnapshotDigest(frozen.snapshot)},confirmation,approval:'a'.repeat(64),expiresAt:Date.now()+60000},'execute');
   const prior=f.cloud.getMockImplementation()!;let posted=0,committed=false,recovered=false;
   f.cloud.mockImplementation(async(id,path,init)=>{
-    if(path===`/v1/drafts/${f.draftId}/publish`){posted++;committed=true;throw Error('lost reply');}
-    if(path.startsWith('/v1/receipts/publications/'))return recovered?Response.json({status:'committed',receipt:{requestId:job.id,format:'role-v1',draftId:f.draftId,draftRevision:3,
+    if(/^\/v1\/drafts\/[^/]+\/publish$/.test(path)){posted++;committed=true;throw Error('lost reply');}
+    if(path.startsWith('/v1/receipts/publications/'))return recovered?Response.json({status:'committed',receipt:{requestId:job.id,format:'role-v1',draftId:new URL(path,'https://fixture.invalid').searchParams.get('draftId'),draftRevision:1,
       recipeId:f.recipeId,versionId:f.versionId,revision:1,public:f.publicValue,firstCodeId:f.firstCodeId}}):Response.json({status:'unknown'});
     if(committed)throw Error('retired draft');
     return prior(id,path,init);

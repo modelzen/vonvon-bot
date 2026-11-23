@@ -1,7 +1,7 @@
 import {isDeepStrictEqual} from 'node:util';
 import {randomUUID} from 'node:crypto';
 import {z} from 'zod';
-import {creatorChatTargetSchema,deviceReplySchema,recipeAuthoringReplySchema,recipePublicationMetadataIssue,type DesktopAuthoringReply,type DesktopAuthoringRequest,type RecipeAuthoringRequest,type RecipeAuthoringReply,type RecipeDraft,type CreatorWork,type CreatorAnswer,type CreatorJob,type GroupId} from '@vonvon/protocol';
+import {creatorChatTargetSchema,deviceReplySchema,recipeAuthoringReplySchema,recipePublicationMetadataIssue,type DesktopAuthoringReply,type DesktopAuthoringRequest,type RecipeAuthoringRequest,type RecipeAuthoringReply,type RecipeDraft,type CreatorWork,type CreatorAnswer,type CreatorJob} from '@vonvon/protocol';
 import type {NativeAccount} from './account-session.js';
 import type {RecipeDeviceLease} from './recipe-use.js';
 import {RecipeAuthoringController} from './recipe-authoring.js';
@@ -9,12 +9,12 @@ import {AuthoringError} from './recipe-authoring-cloud.js';
 import {AuthoringJournal} from './recipe-authoring-journal.js';
 import {RecipeCreatorJournal,checkVersionSource,type CreatorAssociation} from './recipe-creator-journal.js';
 import {RecipeCreatorExecutor,type CreatorContext} from './recipe-creator.js';
-import {creatorDraft} from './recipe-creator-cloud.js';
+import {LocalRecipeDrafts,type LocalRecipeDraftRecord} from './local-recipe-drafts.js';
 
 type Continue=Extract<DesktopAuthoringRequest,{type:'creatorContinue'}>;
 export interface CreatorSourceLease extends RecipeDeviceLease {signal:AbortSignal;release():void}
 type Worker={resourceContext:boolean;botName:string;contextHandle:string;association:CreatorAssociation;source:CreatorSourceLease;session:string;stop:()=>void;context:CreatorContext;busy:boolean;queue:Promise<void>;timer:ReturnType<typeof setInterval>};
-type DraftSource={kind:'resolved';work:CreatorWork;selected?:Pick<CreatorAssociation,'viewId'|'botId'>;original?:NonNullable<ReturnType<AuthoringJournal['history']['locator']>>};
+type DraftSource={work:CreatorWork;selected:Pick<CreatorAssociation,'viewId'|'botId'>;original:CreatorAssociation;expected:CreatorAssociation};
 type PublicationReview={worker:Worker;signal:AbortSignal;draft:RecipeDraft;job:CreatorJob;snapshotDigest:string;confirmationId:string;expiresAt:number;sent:boolean};
 type PublicationPreparationStage='account'|'source'|'association'|'worker'|'workerSource'|'queue'|'daemonPreview'|'prepareExecution'|'existingExecution'|'freezePreview'|'compareDraft'|'review';
 const diagnosticErrorNames=new Set(['Error','TypeError','RangeError','ZodError','AuthoringError','AbortError','TimeoutError']);
@@ -33,9 +33,12 @@ export class RecipeCreatorSupervisor {
   private activeAccount?:AbortSignal;
   private reconnecting?:Promise<void>;
   private readonly reconnect:ReturnType<typeof setInterval>;
+  private readonly localDrafts:LocalRecipeDrafts;
+  private readonly ownsLocalDrafts:boolean;
   constructor(private readonly account:NativeAccount,private readonly retain:(viewId:string,signal:AbortSignal)=>Promise<CreatorSourceLease>,
     private readonly sources:()=>string[],private readonly journal:RecipeCreatorJournal,private readonly authoringJournal:AuthoringJournal,
-    private readonly authoring:RecipeAuthoringController,private readonly executor:RecipeCreatorExecutor){
+    private readonly authoring:RecipeAuthoringController,private readonly executor:RecipeCreatorExecutor,localDrafts?:LocalRecipeDrafts){
+    this.localDrafts=localDrafts??new LocalRecipeDrafts();this.ownsLocalDrafts=localDrafts===undefined;
     const accountChanged=()=>{
       this.invalidate();const status=account.status(),signal=status.kind==='signedIn'?account.lease?.(status.accountId):undefined;
       if(signal===this.activeAccount)return;this.activeAccount=signal;this.restore();
@@ -82,7 +85,7 @@ export class RecipeCreatorSupervisor {
       const {binding,scope}=discovered.association;
       if(expected&&(expected.binding!==binding||expected.scope!==scope))throw unavailable();
       const association={accountId,viewId,deviceId,deviceKey,botId,binding,scope};
-      const opened=expect(await rpc({type:'creatorOpen',accountId,botId,binding,scope,wakeId:discovered.wakeId,nativePreview:true,...(source.client.supportsResourceContext&&{resourceContext:true})}),'creatorSession');
+      const opened=expect(await rpc({type:'creatorOpen',accountId,botId,binding,scope,wakeId:discovered.wakeId,nativePreview:true,draftScope:true,...(source.client.supportsResourceContext&&{resourceContext:true})}),'creatorSession');
       session=opened.session;
       if(opened.binding!==binding||opened.scope!==scope)throw unavailable();
       adopted=await this.authoring.adoptCreator({accountId,viewId,botId,lease:source,session,leaseMs:opened.leaseMs});check();
@@ -158,34 +161,29 @@ export class RecipeCreatorSupervisor {
   async associated(accountId:string,viewId:string,botId:CreatorAssociation['botId']){
     return this.open(accountId,viewId,botId);
   }
-  private async draftSource(accountId:string,draft:RecipeDraft,check:()=>void,source?:Continue['source']):Promise<DraftSource|Extract<DesktopAuthoringReply,{kind:'creatorSourceRequired'}>>{
-    if(draft.format!=='rich-v2')return {kind:'resolved',work:{draftId:draft.draftId,source:null}};
-    let original=this.authoringJournal.history.locator(accountId,draft.sourceIntentId);
-    if(!original?.groupId){
-      await this.restoring;check();
-      const candidates:Array<{worker:Worker;groupId:GroupId;identity:string}>=[];
-      for(const worker of this.workers.values())if(worker.association.accountId===accountId){
-        if(original&&(original.deviceId!==worker.association.deviceId||original.deviceKey!==worker.association.deviceKey||original.botId!==worker.association.botId))continue;
-        try {
-          const found:Extract<RecipeAuthoringReply,{kind:'operationSourceIdentity'}>=expect(await worker.context.rpc({type:'operationSourceIdentity',botId:worker.association.botId,session:worker.session,operationId:draft.sourceIntentId}),'operationSourceIdentity');
-          if(found.operationId!==draft.sourceIntentId||!found.identity||original&&original.identity!==found.identity)continue;
-          const current=expect(await worker.context.rpc({type:'groupSourceIdentity',botId:worker.association.botId,session:worker.session,groupId:found.groupId}),'groupSourceIdentity');
-          if(current.groupId===found.groupId&&current.identity===found.identity)candidates.push({worker,groupId:found.groupId,identity:found.identity});
-        }catch{check();}
-      }
-      const chosen=candidates.filter(candidate=>!source||candidate.worker.association.viewId===source.viewId&&candidate.worker.association.botId===source.botId);
-      if(chosen.length!==1){
-        if(chosen.length>1)return {kind:'creatorSourceRequired',options:chosen.map(({worker})=>({viewId:worker.association.viewId,botId:worker.association.botId,botName:worker.botName}))};
-        throw unavailable();
-      }
-      const verified=chosen[0];if(!verified)throw unavailable();
-      this.authoringJournal.history.remember(verified.worker.association,draft.sourceIntentId,verified.identity,verified.groupId);
-      original=this.authoringJournal.history.locator(accountId,draft.sourceIntentId);
-    }
-    if(!original?.groupId)throw unavailable();
-    const linked=this.journal.associations(accountId).find(row=>row.deviceId===original.deviceId&&row.deviceKey===original.deviceKey&&row.botId===original.botId);
-    return {kind:'resolved',original,selected:{viewId:linked?.viewId??original.deviceId,botId:original.botId},
-      work:{draftId:draft.draftId,source:{preparationId:draft.sourceIntentId,groupId:original.groupId,identity:original.identity}}};
+  private localDraft(accountId:string,draftId:string,check:()=>void):LocalRecipeDraftRecord{
+    check();
+    const record=this.localDrafts.read(accountId,draftId);check();
+    if(!record)throw new AuthoringError('本机未找到这份草稿。旧云草稿需要显式导入后才能继续。');
+    if(record.association.accountId!==accountId||record.work.draftId!==draftId||record.draft.draftId!==draftId)throw unavailable();
+    return record;
+  }
+  private draftSource(accountId:string,record:LocalRecipeDraftRecord,check:()=>void,source?:Continue['source']):DraftSource{
+    check();const original=record.association;
+    if(original.accountId!==accountId||source&&(source.viewId!==original.viewId||source.botId!==original.botId))throw unavailable();
+    if(record.draft.format==='rich-v2'&&(!record.work.source||!record.sourceCanonical||record.work.source.preparationId!==record.draft.sourceIntentId))
+      throw new AuthoringError('本地草稿的来源资料尚未完整保存，请在原来源 Bot 中重新核对。');
+    const linked=this.journal.associations(accountId).find(row=>row.viewId===original.viewId&&row.botId===original.botId);
+    if(linked)checkVersionSource(original,linked);
+    const expected=linked??original;
+    return {original,expected,selected:{viewId:expected.viewId,botId:expected.botId},work:record.work};
+  }
+  private async checkDraftSource(worker:Worker,resolved:DraftSource){
+    checkVersionSource(resolved.original,worker.association);
+    const source=resolved.work.source;
+    if(!source)return;
+    const current=expect(await worker.context.rpc({type:'groupSourceIdentity',botId:worker.association.botId,session:worker.session,groupId:source.groupId}),'groupSourceIdentity');
+    if(current.groupId!==source.groupId||current.identity!==source.identity)throw unavailable();
   }
   invalidateDraft(accountId:string,draftId:string){
     for(const [id,review] of this.reviews)if(review.worker.association.accountId===accountId&&review.draft.draftId===draftId)this.reviews.delete(id);
@@ -205,8 +203,10 @@ export class RecipeCreatorSupervisor {
     const answer=result??this.journal.command(worker.association.accountId,job.id)?.result;
     if(answer?.kind==='rejected')throw new AuthoringError('原发布请求未完成，请重新读取草稿并核对来源和修订。');
     if(answer?.kind!=='published')return {kind:'publicationResult',result:{kind:'pending'}};
+    const destination=this.journal.command(worker.association.accountId,job.id)?.destination;
+    const recipeId=destination===undefined?task.command.snapshot.recipeId:destination?.recipeId;
     if(answer.draftId!==task.command.snapshot.work.draftId||answer.draftRevision!==task.command.snapshot.revision||
-      task.command.snapshot.recipeId&&task.command.snapshot.recipeId!==answer.target.recipeId)throw unavailable();
+      recipeId&&recipeId!==answer.target.recipeId)throw unavailable();
     return {kind:'publicationResult',result:{kind:'published',publication:{accountId:worker.association.accountId,draftId:answer.draftId,
       ...answer.target,revision:answer.revision}}};
   }
@@ -226,25 +226,17 @@ export class RecipeCreatorSupervisor {
     let stage:PublicationPreparationStage='account';
     try {
       const signal=this.account.lease?.(input.accountId);if(!signal)throw unavailable();
-      const check=()=>{if(signal.aborted||this.account.lease?.(input.accountId)!==signal)throw unavailable();};
-      const draft=input.draft;
+      const check=()=>{const status=this.account.status();if(this.stop.signal.aborted||signal.aborted||this.account.lease?.(input.accountId)!==signal||status.kind!=='signedIn'||status.accountId!==input.accountId)throw unavailable();};
+      const record=this.localDraft(input.accountId,input.draft.draftId,check),draft=record.draft;
+      if(!isDeepStrictEqual(draft,input.draft))throw new AuthoringError('草稿内容或修订已改变，请重新读取本地草稿后确认发布。');
       stage='source';
-      const resolved=await this.draftSource(input.accountId,draft,check);
-      if(resolved.kind!=='resolved')throw unavailable();
-      let selected=resolved.selected;
+      const resolved=this.draftSource(input.accountId,record,check);
       stage='association';
-      if(!selected){
-        await this.restoring;check();
-        const options=this.journal.associations(input.accountId);
-        if(options.length!==1)throw unavailable();
-        selected=options[0];
-      }
-      if(!selected)throw unavailable();
-      const expected=this.journal.associations(input.accountId).find(row=>row.viewId===selected.viewId&&row.botId===selected.botId);
+      const {selected,expected}=resolved;
       stage='worker';
       const worker=await this.open(input.accountId,selected.viewId,selected.botId,expected);if(!worker)throw unavailable();check();
       stage='workerSource';
-      if(resolved.original&&(worker.association.deviceId!==resolved.original.deviceId||worker.association.deviceKey!==resolved.original.deviceKey||worker.association.botId!==resolved.original.botId))throw unavailable();
+      await this.checkDraftSource(worker,resolved);check();
       stage='queue';
       return await this.publicationWait(this.exclusive(worker,async()=>{
         const deadline=Date.now()+15000;
@@ -295,24 +287,41 @@ export class RecipeCreatorSupervisor {
   async confirmPublication(input:Extract<DesktopAuthoringRequest,{type:'confirmPublication'}>):Promise<DesktopAuthoringReply>{
     try {
       const review=this.reviews.get(input.reviewId);
-      if(!review||review.worker.association.accountId!==input.accountId||review.expiresAt<=Date.now()||review.signal.aborted||this.account.lease?.(input.accountId)!==review.signal)
-        throw new AuthoringError('发布确认已失效，请重新读取草稿并确认。');
+      if(!review)throw new AuthoringError('发布确认已失效，请重新读取草稿并确认。');
+      const checkReview=()=>{
+        const status=this.account.status();
+        if(this.reviews.get(input.reviewId)!==review||review.worker.association.accountId!==input.accountId||review.expiresAt<=Date.now()||
+          review.signal.aborted||this.account.lease?.(input.accountId)!==review.signal||status.kind!=='signedIn'||status.accountId!==input.accountId)
+          throw new AuthoringError('发布确认已失效，请重新读取草稿并确认。');
+        review.worker.context.check();
+      };
+      checkReview();
       const {worker}=review,task=review.job.task;
       if(task.kind!=='command'||task.command.kind!=='publish')throw unavailable();
       const {work,revision}=task.command.snapshot;
+      const checkDestination=(job:CreatorJob)=>{
+        if(job.task.kind!=='command'||job.task.command.kind!=='publish')throw unavailable();
+        const approval=job.task.confirmation;
+        const destination=approval?.kind==='app'?this.journal.publicationChoice(input.accountId,job.id,approval.confirmationId):undefined;
+        if(!isDeepStrictEqual(destination,input.destination))throw new AuthoringError('此草稿已按另一项发布选择确认，请核对原发布结果。');
+      };
       return await this.exclusive(worker,async()=>{
+        checkReview();
         let state=await this.previewState(worker,work,revision);
         if(state.job.id!==review.job.id)throw unavailable();
-        if(state.state==='finished')return this.publicationResult(worker,state.job,state.result);
+        if(state.state==='finished'){checkDestination(state.job);return this.publicationResult(worker,state.job,state.result);}
         if(!review.sent&&state.state!=='active'){
           const frozen=await this.executor.preview(worker.context,state.job);
           if(!isDeepStrictEqual(frozen.draft,review.draft)||state.job.task.kind!=='command'||state.job.task.command.kind!=='publish'||state.job.task.command.snapshotDigest!==review.snapshotDigest)
             throw new AuthoringError('草稿内容或修订已改变，请重新读取后确认发布。');
+          checkReview();
+          if(input.destination!==undefined)this.journal.bindPublicationChoice(input.accountId,review.job.id,review.confirmationId,input.destination);
           review.sent=true;
           expect(await worker.context.rpc({type:'creatorAppConfirm',botId:worker.association.botId,session:worker.session,id:review.job.id,
             snapshotDigest:review.snapshotDigest,confirmationId:review.confirmationId}),'creatorAck');
           state=await this.previewState(worker,work,revision);
         }
+        if(state.state==='active'||state.state==='finished')checkDestination(state.job);
         if(state.state==='active'||state.state==='unknown'){
           await this.executor.run(worker.context,state.job);
           state=await this.previewState(worker,work,revision);
@@ -370,8 +379,9 @@ export class RecipeCreatorSupervisor {
   async continue(input:Continue):Promise<DesktopAuthoringReply>{
     const signal=this.account.lease?.(input.accountId);if(!signal)throw unavailable();
     let selected:Pick<CreatorAssociation,'viewId'|'botId'>|undefined=input.entry.kind==='source'?input.entry:undefined;
-    const check=()=>{if(signal.aborted||signal!==this.account.lease?.(input.accountId))throw unavailable();};
+    const check=()=>{const status=this.account.status();if(this.stop.signal.aborted||signal.aborted||signal!==this.account.lease?.(input.accountId)||status.kind!=='signedIn'||status.accountId!==input.accountId)throw unavailable();};
     let expected:CreatorAssociation|undefined;
+    let localSource:DraftSource|undefined;
     let roleDraft:RecipeDraftForSelection|undefined;
     if(input.entry.kind==='version'){
       let original=this.journal.version(input.accountId,input.entry.versionId);
@@ -392,10 +402,10 @@ export class RecipeCreatorSupervisor {
       }
     }
     if(input.entry.kind==='draft'){
-      const draft=await creatorDraft(this.account,input.accountId,input.entry.draftId,check);check();
+      const record=this.localDraft(input.accountId,input.entry.draftId,check),draft=record.draft;
       if(draft.revision!==input.entry.revision)throw unavailable();
-      const resolved=await this.draftSource(input.accountId,draft,check,input.source);
-      if(resolved.kind==='creatorSourceRequired')return resolved;
+      const resolved=this.draftSource(input.accountId,record,check,input.source);
+      localSource=resolved;expected=resolved.expected;
       selected=resolved.selected;
       if(draft.format!=='rich-v2')roleDraft={name:draft.public.name,version:draft.public.version,draftId:draft.draftId};
     }
@@ -414,6 +424,7 @@ export class RecipeCreatorSupervisor {
     check();
     const worker=await this.open(input.accountId,selected.viewId,selected.botId,expected);if(!worker)throw unavailable();
     check();
+    if(localSource){await this.checkDraftSource(worker,localSource);check();}
     worker.context.check();
     const snapshot=await worker.source.client.snapshot();
     worker.context.check();
@@ -439,6 +450,6 @@ export class RecipeCreatorSupervisor {
     if(input.entry.kind==='version'&&result.delivery==='delivered')this.journal.rememberVersion(worker.association,input.entry.versionId);
     return result;
   }
-  dispose(){if(this.stop.signal.aborted)return;this.invalidateReviews();this.stop.abort();clearInterval(this.reconnect);this.unsubscribe();for(const worker of this.workers.values())worker.stop();}
+  dispose(){if(this.stop.signal.aborted)return;this.invalidateReviews();this.stop.abort();clearInterval(this.reconnect);this.unsubscribe();for(const worker of this.workers.values())worker.stop();if(this.ownsLocalDrafts)this.localDrafts.close();}
 }
 type RecipeDraftForSelection={draftId:string;name:string;version:string};

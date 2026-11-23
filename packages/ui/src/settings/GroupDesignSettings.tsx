@@ -1,6 +1,6 @@
 import {useCallback, useContext, useEffect, useRef, useState, type ReactNode} from 'react';
 import {DEFAULT_DM_SMART_RULES_TEXT, smartRulesText} from '@vonvon/protocol';
-import {Blocks, ChevronRight, Folder, GitBranch, Plus, RefreshCw, X} from 'lucide-react';
+import {ChevronRight, Folder, GitBranch, Plus, RefreshCw, X} from 'lucide-react';
 import {backendLabel, isKnownJudgeSelection, type Agent, type AgentId, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ProjectSettingsView, type SettingsReply, type ToolState} from '@vonvon/protocol';
 import {useActiveDevice, useClient} from '../client-context';
 import {settingAnchor} from '../search';
@@ -19,6 +19,7 @@ import {useProviderDiscovery} from './useProviderDiscovery';
 import {DecisionFields, providerDecisionProblem} from './DecisionFields';
 export {DecisionFields} from './DecisionFields';
 import {AnnouncedReadonlyMessages, hasReadonlyMessage, type ReadonlyMessage} from './readonly-messages';
+import {groupProviderIcon} from './GroupSettingsSummary';
 import {CompactModelSelection} from './CompactModelSelection';
 import {modelAccessDefault} from './model-access-draft';
 import {useDecisionCatalogs} from './useDecisionCatalogs';
@@ -62,10 +63,6 @@ export function useProviders(tools?: readonly ToolState[]) {
 }
 function providerChoices(providers: Provider[], current: string) {
   return [...providers.map(provider => ({value: provider.id, label: provider.displayName, disabled: false})), ...(!providers.some(provider => provider.id === current) && current ? [{value: current, label: `${backendLabel(current)}（当前不可用）`, disabled: true}] : [])];
-}
-function providerIcon(backend: string) {
-  const path = backend === 'codex-appserver' ? './agent-icons/codex-light.png' : backend === 'claude-agent' ? './agent-icons/claude-code.svg' : undefined;
-  return path ? <img src={path} className={backend === 'codex-appserver' ? 'gd-provider-icon--codex' : undefined} alt="" width={16} height={16}/> : <Blocks size={16} aria-hidden="true"/>;
 }
 export function GroupDesignSettings(props: Props) {
   return <GroupSettingsLoader key={`${props.scope.botId}:${props.scope.projectName}`} {...props}/>;
@@ -244,7 +241,7 @@ export function ModelAccessFields({botId, value, onChange, disabled, providers, 
   const choices = providerChoices(providers, value.backend);
   return <div className="gd-model-fields gd-model-fields--compact">
     <div className="gd-model-summary-row gd-model-provider-row"><span className="gd-model-summary-label">Provider</span>
-      <div className="gd-model-provider-control"><SelectControl label="模型 Provider" getOptionIcon={providerIcon} className="gd-model-provider-select" options={choices} value={value.backend} disabled={disabled}
+      <div className="gd-model-provider-control"><SelectControl label="模型 Provider" getOptionIcon={groupProviderIcon} className="gd-model-provider-select" options={choices} value={value.backend} disabled={disabled}
         onChange={backend => {if (!disabled && backend !== value.backend && providers.some(provider => provider.id === backend)) onChange({backend, models: [], efforts: [], modelEfforts: {}, modelServiceTiers: {}, defaultModel: undefined, defaultEffort: undefined});}}/>
         {!available && <span className="gd-model-provider-state">当前不可用</span>}
         {onCheckProviders && <IconButton size="sm" variant="ghost" label="重新检查 Provider" title="重新检查 Provider 是否可用" disabled={checkingProviders} onClick={onCheckProviders}><RefreshCw size={14}/></IconButton>}</div>

@@ -79,6 +79,19 @@ export const scheduleReplySchema = z.discriminatedUnion('kind', [
 ]);
 
 export type ScheduleSpec = z.infer<typeof scheduleSpecSchema>;
+
+export function describeRecurringSchedule(spec: Exclude<ScheduleSpec, {kind: 'once'}>): string {
+  switch (spec.kind) {
+    case 'every': return spec.minutes % 60 === 0 ? `每 ${spec.minutes / 60} 小时` : `每 ${spec.minutes} 分钟`;
+    case 'daily': return `每天 ${spec.time}`;
+    case 'weekly': {
+      const days = [...new Set(spec.days)].sort((a, b) => a - b);
+      const interval = days.join(',') === '1,2,3,4,5' ? '每个工作日' : `每周${days.map(day => '日一二三四五六'[day]).join('、')}`;
+      return `${interval} ${spec.time}`;
+    }
+    case 'cron': return `cron「${spec.expr}」`;
+  }
+}
 export type SchedulePlacement = z.infer<typeof schedulePlacementSchema>;
 export type ScheduledTaskView = z.infer<typeof scheduledTaskViewSchema>;
 export type ScheduleRequest = z.infer<typeof scheduleRequestSchema>;

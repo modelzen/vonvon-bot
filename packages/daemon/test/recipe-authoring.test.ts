@@ -11,6 +11,13 @@ import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type {RichModelInput} from '../src/recipe/authoring-rich-model';
 import type { DraftInstructionParser, ReadDraftField } from '../src/recipe/draft-instruction';
 import type { AppConfig } from '../src/config/schema';
+import {LocalRecipeDrafts,type LocalRecipeDraftRecord} from '../../desktop/src/local-recipe-drafts';
+vi.mock('../src/agent',async original=>({...await original<object>(),createBackend:(id:string)=>({
+  id,displayName:'Offline recipe fixture',capabilities:{},listModels:async()=>[],peekModels:()=>[],
+  startThread:async()=>{throw Error('Recipe tests forbid Provider turns.');},resumeThread:async()=>{throw Error('Recipe tests forbid Provider turns.');},
+})}));
+const localStores:LocalRecipeDrafts[]=[];
+function localStore(record?:LocalRecipeDraftRecord){const drafts=new LocalRecipeDrafts();localStores.push(drafts);if(record)for(let revision=1;revision<=record.draft.revision;revision++)drafts.commit({requestId:randomUUID(),expectedRevision:revision===1?null:revision-1,record:{...record,draft:{...record.draft,revision}}});return drafts;}
 
 const root = await realpath(await mkdtemp(join(tmpdir(),'vonvon-authoring-')));
 vi.stubEnv('VONVON_HOME',root);
@@ -29,7 +36,7 @@ const owner = 'ou_author', stranger = 'ou_stranger', tenant = 'tenant_fixture';
 const msg = (content: string, id = 'om_'+randomUUID(), openId = owner, chat = chatId): NormalizedMessage => ({
   content, messageId:id, senderId:openId,chatId:chat,chatType:'p2p',rawContentType:'text',resources:[],mentions:[],
   mentionAll:false,mentionedBot:false,createTime:Date.now(),raw:{sender:{sender_type:'user',sender_id:{open_id:openId},tenant_key:tenant},
-    message:{message_id:id,chat_id:chat,chat_type:'p2p'}},
+    message:{message_id:id,chat_id:chat,chat_type:'p2p',message_type:'text',content:JSON.stringify({text:content}),create_time:String(Date.now())}},
 });
 let server: Server, origin: string, session: string, n: number, clock: number;
 let cfg: AppConfig, service: InstanceType<typeof AuthoringService>, channel: LarkChannel;
@@ -59,7 +66,7 @@ const propose = vi.fn<DraftInstructionParser['propose']>();
 const readDraftField = vi.fn<ReadDraftField>();
 function restart(parser: ConstructorParameters<typeof AuthoringService>[0]['parser'] | null = {propose,proposeRich}) {
   service?.close();
-  service = new AuthoringService({bot,cfg,channel,parser:parser??undefined,readDraftField,now:()=>clock,origin:accountApi ?? origin,loopback:true,
+  service = new AuthoringService({bot,cfg,channel,groupSkills:async()=>[],tasks:async()=>[],parser:parser??undefined,readDraftField,now:()=>clock,origin:accountApi ?? origin,loopback:true,
     fetch: async (url,options) => {
       const {pathname} = new URL(String(url)), action = pathname.split('/').pop()!, body = JSON.parse(String(options!.body));
       expect(new Headers(options?.headers).has('authorization')).toBe(false);
@@ -104,6 +111,8 @@ beforeEach(async () => {
       }
       updateKeys.add(data.uuid); cards.set(path.split('/').pop()!,data.card.data);
       if (updateFault === 'loseReply') { res.destroy(); return; }
+    } else if (path.startsWith('/open-apis/im/v1/messages?') && req.method === 'POST' && data.msg_type==='text') {
+      value={code:0,data:{message_id:'om_text_'+data.uuid,chat_id:data.receive_id}};
     } else if (path.startsWith('/open-apis/im/v1/messages?') && req.method === 'POST') {
       if(denyPrivateSend){res.writeHead(403,{'content-type':'application/json'}).end(JSON.stringify({code:99991672,msg:'fixture denied'}));return;}
       const m = messages.get(data.uuid) ?? {message_id:'om_card_'+ ++n,chat_id:data.receive_id,card_id:JSON.parse(data.content).data.card_id};
@@ -150,7 +159,7 @@ beforeEach(async () => {
   orch = createOrchestrator(channel,cfg,root,undefined,{authoring:service});
   await open();
 });
-afterEach(async () => { service.close(); await orch.shutdown(); server.closeAllConnections(); await new Promise<void>(r=>server.close(()=>r())); });
+afterEach(async () => {while(localStores.length)localStores.pop()!.close();await rm(join(root,'local-members-source'),{recursive:true,force:true}); service.close(); await orch.shutdown(); server.closeAllConnections(); await new Promise<void>(r=>server.close(()=>r())); });
 afterAll(async () => { vi.unstubAllEnvs();await rm(root,{recursive:true,force:true}); });
 
 const rpc = (type: string, more: Record<string,unknown> = {}) => service.request(peer,recipeAuthoringRequestSchema.parse({type,botId:appId,session,...more}));
@@ -174,7 +183,11 @@ async function prepare() {
   return kind(await rpc('prepare',{groupId,reviewToken:src.reviewToken,sourceAttested:true}),'operation').operation;
 }
 async function status(id: string) { return kind(await rpc('status'),'status').operations.find(o=>o.operationId===id)!; }
+async function legacyOperation(operationId:string){const {AuthoringJournal}=await import('../src/recipe/authoring-journal');await new AuthoringJournal(root,()=>clock).run(db=>{delete db.operations[operationId]!.view.storage;});}
 async function auth(op: AuthoringOperation, stage: 'dispatch'|'accept'): Promise<AuthoringAuthorization> {
+  // These cases exercise recovery of pre-local cloud operations.
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  await new AuthoringJournal(root,()=>clock).run(db=>{delete db.operations[op.operationId]!.view.storage;});
   const {operationId,targetPublicKey,nonceCommitment,draftId,baseRevision,purpose} = op;
   const registration={targetPublicKey,nonceCommitment,purpose,draftId,baseRevision};
   const fields={stage,stateRevision:stage==='dispatch'?1:2,payloadDigest:stage==='dispatch'?dispatchDigest:op.payloadDigest!};
@@ -207,6 +220,391 @@ async function act(action: ReturnType<typeof ref>, more: {by?:string;chat?:strin
   await dispatchAuthoring({messageId:more.messageId ?? action.messageId,chatId:more.chat ?? chatId,operator:{openId:by},
     raw:{operator:{open_id:by,tenant_key:more.tenant ?? tenant}},action:{tag:'button',value:{a:'recipe.authoring',ref:action.ref,verb:more.verb ?? 'confirm'}}});
 }
+
+const localDraft=(operationId:string,advance:Extract<RecipeAuthoringRequest,{type:'localDraftAdvance'}>['advance'])=>
+  rpc('localDraftAdvance',{operationId,advance}).then(r=>kind(r,'operation').operation);
+
+async function localControllerMembers(fault?:'source'|'context'|'acceptedReply',parent?:{recipeId:string;versionId:string}){
+  const challenge=kind(await rpc('beginLink'),'challenge');
+  expect(await service.onMessage(msg('/recipe link '+challenge.code))).toBe(true);
+  const seen=kind(await rpc('inspectLink',{challengeId:challenge.challengeId}),'link');
+  await rpc('confirmLink',{challengeId:challenge.challengeId,evidence:seen.evidence});
+  const {RecipeAuthoringController}=await import('../../desktop/src/recipe-authoring');
+  const {AuthoringJournal:NativeHistory}=await import('../../desktop/src/recipe-authoring-journal');
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const drafts=localStore(),history=new NativeHistory(),ledger=new AuthoringJournal(root,()=>clock),generation=new AbortController();
+  const sourceDir=join(root,'local-members-source');await mkdir(join(sourceDir,'.agents/skills/local-proof'),{recursive:true});
+  const text='---\ndescription: 本地正文测试\n---\nOnly local selected skill bytes.';
+  await writeFile(join(sourceDir,'.agents/skills/local-proof/SKILL.md'),text);await mutateProjectByChatId(groupId,row=>{row.cwd=sourceDir;});
+  const webp=Buffer.from('UklGRjwAAABXRUJQVlA4IDAAAADQAQCdASoCAAIAAgA0JaACdLoB+AADsAD+8Oj3/yC5YXXI1/8gP+QH/ID/+PIAAAA=','base64');
+  const normalize=vi.fn(async(bytes:Buffer)=>{expect(bytes).toEqual(webp);return Buffer.from(webp);}),saved=vi.fn();
+  const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol'),field=(value:string)=>({itemId:randomUUID(),originId:randomUUID(),value});
+  const parentDoc=canonicalizeRichRecipeContent({format:'rich-v2',schemaVersion:2,public:{name:field('父版本'),summary:field('父版本简介'),overview:field('父版本概览'),version:field('0.9')},
+    settings:[],rules:[],skills:[],files:[],tasks:[],memories:[],setup:[],parts:[]});
+  const parentManifest={objectId:randomUUID(),kind:'manifest',sha256:digest(Buffer.from(parentDoc.canonicalUTF8)),bytes:parentDoc.canonicalUTF8.length,mediaType:'application/json'};
+  const requests:string[]=[],rpcs:RecipeAuthoringRequest[]=[],state={kind:'signedIn' as const,accountId:account,displayName:'本地作者',provider:'google' as const,persistence:'memory' as const};
+  const native={status:()=>state,lease:(id:string)=>id===account?generation.signal:undefined,onStatus:()=>()=>{},login:async()=>state,logout:async()=>state,cancelLogin:async()=>state,dispose:async()=>{},
+    request:async(id:string,path:string,_init?:RequestInit,beforeSend?:()=>void|Promise<void>)=>{
+      await beforeSend?.();expect(id).toBe(account);requests.push(path);if(path==='/v1/me')return Response.json({accountId:account});
+      if(parent){
+        if(path===`/v2/versions/${parent.versionId}/source-items`)return Response.json({versionId:parent.versionId,authorId:account,access:'direct',items:[]});
+        if(path===`/v2/recipes/${parent.recipeId}/versions/${parent.versionId}`)return Response.json({...parent,format:'rich-v2',revision:1,public:{name:'父版本',summary:'父版本简介',overview:'父版本概览',version:'0.9',access:'direct'},
+          creator:{authorId:account,displayName:'本人'},state:'listed',visibility:'full',owned:true,acquired:false,hasDisplayLogo:false,manifest:parentManifest,
+          release:{format:'rich-v2',...parent,authorId:account,revision:1,access:'direct',logicalBytes:parentDoc.logicalBytes,contentSha256:parentManifest.sha256}});
+        if(path===`/v2/versions/${parent.versionId}/objects/${parentManifest.objectId}`)return new Response(parentDoc.canonicalUTF8);
+      }
+      throw Error('Local authoring must never request cloud draft content: '+path);
+    }};
+  let faulted=false;
+  const client={device:async()=>({kind:'deviceStatus',status:{device:{id:peer.device,name:'本地来源',publicKey:Buffer.alloc(32,7).toString('base64url')},remote:{addresses:[],port:3000},clients:{active:1,total:1}}}),
+    snapshot:async()=>({agents:[{id:appId,name:'本地 Bot',running:true}],groups:[{id:groupId,name:'本地群'}],memberships:[{agentId:appId,groupId}]}),
+    recipeAuthoring:async(req:RecipeAuthoringRequest)=>{
+      rpcs.push(req);
+      if((fault==='source'||fault==='context')&&!faulted&&req.type==='localDraftAdvance'&&req.advance.kind==='richAccept'){
+        faulted=true;
+        expect(drafts.read(account,req.advance.draftId)).toBeUndefined();expect(drafts.list(account)).toEqual([]);
+        expect(drafts.pending(account,req.advance.draftId,req.operationId)).toBeTruthy();
+        if(fault==='source')await mutateProjectByChatId(groupId,row=>{row.supplement='Changed after local stage';});
+        else await ledger.run(db=>{db.operations[req.operationId]!.contextUntil=clock-1;});
+      }
+      const result=await service.request(peer,req);
+      if(fault==='acceptedReply'&&!faulted&&req.type==='localDraftAdvance'&&req.advance.kind==='richAccept'){faulted=true;throw Error('Accepted reply was lost.');}
+      if(req.type==='open'&&result.kind==='session')session=result.session;
+      return result;
+    }};
+  const controller=new RecipeAuthoringController(native,viewId=>({viewId,client:client as unknown as import('@vonvon/client/browser').VonvonClient,check:()=>generation.signal.throwIfAborted()}),history,saved,drafts,normalize);
+  const opened=await controller.request({type:'open',accountId:account,viewId:'local',botId:agentIdSchema.parse(appId),groupId});
+  if(opened.kind!=='session')throw Error('local controller session');
+  let op:AuthoringOperation;
+  if(parent){
+    const retryId=randomUUID();await controller.request({type:'beginHandoff',handle:opened.handle,groupId,retryId,source:parent});
+    for(const label of ['☐ 群角色','确认所选来源']){
+      const button=privateChoice(label);await service.onAction({operator:{openId:owner},raw:{operator:{open_id:owner,tenant_key:tenant}},chatId,messageId:button.messageId,action:{tag:'button',value:button.value}});
+    }
+    const request=kind(await rpc('workflow'),'workflow').handoff!;
+    const handoff=kind(await rpc('answerHandoff',{request,attestations:[]}),'handoff').handoff;
+    op=await status(handoff.operationId!);
+  }else{
+    const options={includeTasks:false,includeBotMemories:false,skills:[{skill:'local-proof',files:['SKILL.md']}]};
+    const {inventory}=kind(await rpc('richInventory',{groupId,options}),'richInventory');
+    op=kind(await rpc('richPrepare',{groupId,selection:{options,reviewToken:inventory.reviewToken,selected:[inventory.content.role!.itemId,...inventory.content.skills.map(skill=>skill.itemId),...inventory.content.files.map(file=>file.itemId)],sourceAttested:true,
+      public:{name:'本地附件',summary:'本地附件保存集成',overview:'',version:'1'},access:'direct',setup:[]},attestations:[]}),'operation').operation;
+  }
+  const confirm=async()=>{const button=privateChoice('保存到草稿');await service.onAction({operator:{openId:owner},raw:{operator:{open_id:owner,tenant_key:tenant}},chatId,messageId:button.messageId,action:{tag:'button',value:button.value}});};
+  return {controller,drafts,history,saved,normalize,webp,text,requests,rpcs,op,confirm,handle:opened.handle,faulted:()=>faulted};
+}
+
+it('LOCAL DRAFT CONTROLLER saves real daemon members after preview inspection and binding, with zero cloud content requests',async()=>{
+  const f=await localControllerMembers();
+  try{
+    const dispatched=await f.controller.request({type:'status',handle:f.handle});
+    expect(dispatched).toMatchObject({operations:[expect.objectContaining({state:'candidate'})]});await f.confirm();
+    const transfer=kind(await rpc('richMembers',{operationId:f.op.operationId}),'richMembers');
+    expect(transfer.members.length).toBeGreaterThan(0);
+    await expect(rpc('richInspect',{operationId:f.op.operationId})).rejects.toThrow();
+    expect(kind(await rpc('richInspect',{operationId:f.op.operationId,preview:true}),'richCandidate').reviewDigest).toBe(transfer.reviewDigest);
+    await f.controller.request({type:'status',handle:f.handle});
+    const done=await status(f.op.operationId);expect(done.receipt).toMatchObject({status:'accepted',revision:1});
+    if(done.receipt?.status!=='accepted')throw Error('local receipt');
+    const record=f.drafts.read(account,done.receipt.draftId)!;
+    expect(record.draft.format).toBe('rich-v2');expect(record.members).toHaveLength(1);expect(record.members[0]!.base64).toBe(Buffer.from(f.text).toString('base64'));
+    expect(f.normalize).not.toHaveBeenCalled();expect(f.saved).toHaveBeenCalledOnce();
+    expect(f.rpcs.filter(req=>req.type==='richInspect').map(req=>req.preview??false)).toEqual([true,false]);
+    expect(f.requests.every(path=>path==='/v1/me')).toBe(true);expect(cloud).toEqual([]);
+  }finally{f.controller.closeAll();}
+});
+
+it.each(['source','context'] as const)('LOCAL DRAFT CONTROLLER keeps a staged draft invisible when the real daemon rejects changed %s before accept',async fault=>{
+  const f=await localControllerMembers(fault);
+  try{
+    await f.controller.request({type:'status',handle:f.handle});await f.confirm();
+    await f.controller.request({type:'status',handle:f.handle});
+    expect(f.faulted()).toBe(true);expect(f.drafts.read(account,f.op.operationId)).toBeUndefined();expect(f.drafts.list(account)).toEqual([]);
+    expect(f.drafts.pending(account,f.op.operationId,f.op.operationId)).toBeTruthy();
+    expect((await status(f.op.operationId)).receipt?.status).not.toBe('accepted');expect(f.saved).not.toHaveBeenCalled();
+    expect(f.requests.every(path=>path==='/v1/me')).toBe(true);expect(cloud).toEqual([]);
+  }finally{f.controller.closeAll();}
+});
+
+it('LOCAL DRAFT CONTROLLER retains an inherited parent when its first observed operation arrives through status after a physical private selection',async()=>{
+  const parent={recipeId:randomUUID(),versionId:randomUUID()},f=await localControllerMembers(undefined,parent);
+  try{
+    expect(f.history.parent(f.op.operationId)).toBeUndefined();
+    await f.controller.request({type:'status',handle:f.handle});
+    expect(f.history.parent(f.op.operationId)).toEqual(parent);
+    const begin=f.rpcs.find(req=>req.type==='beginHandoff');expect(begin).toMatchObject({sourceVersionId:parent.versionId,inherited:{accountId:account,versionId:parent.versionId,public:{name:'父版本',version:''}}});
+    await f.confirm();await f.controller.request({type:'status',handle:f.handle});
+    const done=await status(f.op.operationId);expect(done.receipt?.status).toBe('accepted');
+    expect(f.drafts.read(account,f.op.operationId)).toMatchObject({parent,draft:{recipeId:parent.recipeId,revision:1}});
+    expect(f.requests.every(path=>path==='/v1/me'||path.includes(parent.versionId))).toBe(true);expect(cloud).toEqual([]);
+  }finally{f.controller.closeAll();}
+});
+
+it('LOCAL DRAFT ACK retains an accepted receipt beyond seven days until Main has recovered its pending draft and acknowledged it',async()=>{
+  const f=await localControllerMembers('acceptedReply');
+  try{
+    await f.controller.request({type:'status',handle:f.handle});await f.confirm();await f.controller.request({type:'status',handle:f.handle});
+    expect(f.faulted()).toBe(true);expect(f.drafts.list(account)).toEqual([]);expect(f.drafts.pending(account,f.op.operationId,f.op.operationId)).toBeTruthy();
+    f.controller.closeAll();clock+=8*86_400_000;restart();await open();
+    const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+    expect(await new AuthoringJournal(root,()=>clock).run(db=>db.operations[f.op.operationId]?.richSaved)).toBeUndefined();
+    const recovered=await status(f.op.operationId);expect(recovered?.receipt).toMatchObject({status:'accepted',revision:1});
+    if(!recovered?.receipt)throw Error('Original accepted receipt was pruned before Main could recover.');
+    f.drafts.finishPending({accountId:account,draftId:f.op.operationId,requestId:f.op.operationId,receipt:recovered.receipt});
+    expect(f.drafts.read(account,f.op.operationId)?.draft.revision).toBe(1);
+    const ack=await rpc('localDraftAcknowledged',{operationId:f.op.operationId,receipt:recovered.receipt});
+    expect(ack).toEqual({kind:'localDraftAcknowledged',operationId:f.op.operationId});
+    expect((await rpc('status'))).toMatchObject({operations:[]});
+    expect(f.drafts.read(account,f.op.operationId)?.draft.revision).toBe(1);expect(cloud).toEqual([]);
+  }finally{f.controller.closeAll();}
+});
+
+async function directLocalLink(){
+  const challenge=kind(await rpc('beginLink'),'challenge');
+  expect(await service.onMessage(msg('/recipe link '+challenge.code))).toBe(true);
+  const seen=kind(await rpc('inspectLink',{challengeId:challenge.challengeId}),'link');
+  await rpc('confirmLink',{challengeId:challenge.challengeId,evidence:seen.evidence});
+}
+async function directLocalRole(){
+  await directLocalLink();const op=await prepare(),draftId=randomUUID();
+  await localDraft(op.operationId,{kind:'dispatch',draftId});
+  const button=ref();await service.onAction({operator:{openId:owner},raw:{operator:{open_id:owner,tenant_key:tenant}},chatId,messageId:button.messageId,
+    action:{tag:'button',value:{a:'recipe.authoring',ref:button.ref,verb:'confirm'}}});
+  const candidate=kind(await rpc('inspectCandidate',{operationId:op.operationId}),'candidate');
+  return localDraft(op.operationId,{kind:'roleAccept',draftId,reviewDigest:candidate.payloadDigest,revision:1});
+}
+
+it('LOCAL DRAFT ACK accepts only the exact terminal receipt from the original account and device scope, including after revocation',async()=>{
+  const done=await directLocalRole(),receipt=done.receipt!;
+  if(receipt.status!=='accepted')throw Error('accepted fixture');
+  for(const changed of [{operationId:receipt.operationId,status:'cancelled',stateRevision:3},
+    {...receipt,draftId:randomUUID()},{...receipt,revision:2},{...receipt,operationId:randomUUID()}])
+    await expect(rpc('localDraftAcknowledged',{operationId:done.operationId,receipt:changed})).rejects.toThrow();
+  const otherAccount=randomUUID(),otherScope={id:randomUUID(),device:randomUUID()};
+  for(const [actor,accountId] of [[peer,otherAccount],[otherScope,account]] as const){
+    const opened=kind(await service.request(actor,recipeAuthoringRequestSchema.parse({type:'open',botId:appId,accountId})),'session');
+    await expect(service.request(actor,recipeAuthoringRequestSchema.parse({type:'localDraftAcknowledged',botId:appId,session:opened.session,
+      operationId:done.operationId,receipt}))).rejects.toThrow();
+  }
+  const registryText=await readFile(join(root,'bots.json'),'utf8'),registry=JSON.parse(registryText),registrationId=randomUUID();
+  registry.bots[0].registrationId=registrationId;await writeFile(join(root,'bots.json'),JSON.stringify(registry));
+  const replacement=new AuthoringService({bot:{...bot,registrationId},cfg,channel,now:()=>clock,origin,loopback:true,parser:{propose,proposeRich}});
+  try{
+    const opened=kind(await replacement.request(peer,recipeAuthoringRequestSchema.parse({type:'open',botId:appId,accountId:account})),'session');
+    await expect(replacement.request(peer,recipeAuthoringRequestSchema.parse({type:'localDraftAcknowledged',botId:appId,session:opened.session,operationId:done.operationId,receipt}))).rejects.toThrow();
+  }finally{replacement.close();await writeFile(join(root,'bots.json'),registryText);}
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  expect(await new AuthoringJournal(root,()=>clock).run(db=>db.operations[done.operationId]!.localDraftAcknowledged)).toBeUndefined();
+  await open();await directLocalLink();await attachCreator();
+  const result=await rpc('localDraftAcknowledged',{operationId:done.operationId,receipt});
+  expect(result).toEqual({kind:'localDraftAcknowledged',operationId:done.operationId});
+  expect(await rpc('localDraftAcknowledged',{operationId:done.operationId,receipt})).toEqual(result);
+  expect(kind(await rpc('status'),'status').reconciliation).toContainEqual(expect.objectContaining({operationId:done.operationId,receipt}));
+  expect(cloud).toEqual([]);
+});
+
+it.each(['cancelled','expired'] as const)('LOCAL DRAFT ACK retains unacknowledged %s until Main processes its terminal outcome',async state=>{
+  await directLocalLink();const op=kind(await rpc('edit',{draftId:randomUUID(),baseRevision:1}),'operation').operation;
+  if(state==='cancelled')await localDraft(op.operationId,{kind:'cancel'});else{clock+=86_400_000+1;await open();}
+  const terminal=await status(op.operationId);expect(terminal.receipt?.status).toBe(state);
+  clock+=8*86_400_000;restart();await open();
+  expect((await status(op.operationId)).receipt).toEqual(terminal.receipt);
+  await rpc('localDraftAcknowledged',{operationId:op.operationId,receipt:terminal.receipt});
+  expect(await status(op.operationId)).toBeUndefined();expect(cloud).toEqual([]);
+});
+
+it('LOCAL DRAFT ACK cannot acknowledge an active operation, convert a legacy cloud receipt or change an accepted winner',async()=>{
+  await directLocalLink();const pending=await prepare();
+  await expect(rpc('localDraftAcknowledged',{operationId:pending.operationId,receipt:{operationId:pending.operationId,status:'cancelled',stateRevision:3}})).rejects.toThrow();
+  await localDraft(pending.operationId,{kind:'cancel'});await legacyOperation(pending.operationId);
+  const receipt=(await status(pending.operationId)).receipt!;
+  await expect(rpc('localDraftAcknowledged',{operationId:pending.operationId,receipt})).rejects.toThrow();
+  expect((await status(pending.operationId)).receipt).toEqual(receipt);clock+=8*86_400_000;await open();expect(await status(pending.operationId)).toBeUndefined();expect(cloud).toEqual([]);
+});
+
+it('LOCAL DRAFT ACK bounds retained operations per account without deleting pending receipts, and permits creation after an exact ACK is collected',async()=>{
+  const done=await directLocalRole(),{AuthoringJournal}=await import('../src/recipe/authoring-journal'),ledger=new AuthoringJournal(root,()=>clock);
+  const ids=await ledger.run(db=>{
+    const original=db.operations[done.operationId]!;delete db.operations[done.operationId];const ids:string[]=[];
+    for(let index=0;index<512;index++){
+      const row=structuredClone(original),id=randomUUID();ids.push(id);row.view.operationId=id;row.view.receipt={...done.receipt!,operationId:id};
+      row.terminalAt=clock-8*86_400_000;row.view.createdAt=row.terminalAt-1;delete row.localDraftAcknowledged;db.operations[id]=row;
+    }
+    return ids;
+  });
+  expect(kind(await rpc('status'),'status').operations).toHaveLength(512);
+  await expect(rpc('edit',{draftId:randomUUID(),baseRevision:1})).rejects.toThrow('待确认');
+  expect(await ledger.run(db=>Object.keys(db.operations))).toHaveLength(512);
+  const first=kind(await rpc('status',{operationId:ids[0]}),'status').operations[0]!;
+  await rpc('localDraftAcknowledged',{operationId:first.operationId,receipt:first.receipt});
+  const next=kind(await rpc('edit',{draftId:randomUUID(),baseRevision:1}),'operation').operation;
+  expect(next.state).toBe('pendingMain');
+  expect(await ledger.run(db=>Boolean(db.operations[first.operationId]))).toBe(false);
+  expect(await ledger.run(db=>ids.slice(1).every(id=>Boolean(db.operations[id])))).toBe(true);expect(cloud).toEqual([]);
+});
+
+it.each(['accepted','cancelled','expired'] as const)('LOCAL DRAFT ACK blocks normal Bot deletion until Main acknowledges its %s terminal receipt',async state=>{
+  const {createAdminService}=await import('../src/admin/service'),{setBotActivation}=await import('../src/config/bots');
+  let done:AuthoringOperation;
+  if(state==='accepted')done=await directLocalRole();
+  else{
+    await directLocalLink();const pending=kind(await rpc('edit',{draftId:randomUUID(),baseRevision:1}),'operation').operation;
+    if(state==='cancelled')done=await localDraft(pending.operationId,{kind:'cancel'});
+    else{clock+=86_400_000+1;await open();done=await status(pending.operationId);}
+  }
+  expect(done.receipt?.status).toBe(state);
+  service.close();await setBotActivation(appId,false);
+  const admin=createAdminService({liveStatus:async()=>({running:false})});
+  expect(await admin.deleteBot(appId)).toMatchObject({ok:false,reason:expect.stringContaining('草稿')});
+  expect(JSON.parse(await readFile(join(root,'bots.json'),'utf8')).bots[0].registrationId).toBe(bot.registrationId);
+  await setBotActivation(appId,true);restart();await open();
+  await rpc('localDraftAcknowledged',{operationId:done.operationId,receipt:done.receipt});
+  service.close();await setBotActivation(appId,false);
+  expect(await admin.deleteBot(appId)).toEqual({ok:true});expect(cloud).toEqual([]);
+});
+
+it('LOCAL DRAFT dispatches, confirms and saves a private role draft with no cloud request and replays its receipt after restart',async()=>{
+  await link();const op=await prepare(),draftId=randomUUID();
+  expect(op.storage).toBe('local');
+  expect(await localDraft(op.operationId,{kind:'dispatch',draftId})).toMatchObject({state:'waiting',storage:'local'});
+  const original=ref();
+  await localDraft(op.operationId,{kind:'dispatch',draftId});expect(messages.size).toBe(1);
+  await act(original);
+  const candidate=kind(await rpc('inspectCandidate',{operationId:op.operationId}),'candidate');
+  const accept={kind:'roleAccept' as const,draftId,reviewDigest:candidate.payloadDigest,revision:1};
+  const done=await localDraft(op.operationId,accept);
+  expect(done).toMatchObject({state:'completed',storage:'local',receipt:{status:'accepted',draftId,revision:1}});
+  restart();await open();
+  expect((await localDraft(op.operationId,accept)).receipt).toEqual(done.receipt);
+  expect((await localDraft(op.operationId,{kind:'cancel'})).receipt).toEqual(done.receipt);
+  await expect(localDraft(op.operationId,{...accept,reviewDigest:'0'.repeat(64)})).rejects.toThrow();
+  expect(messages.size).toBe(1);expect(cloud).toEqual([]);
+});
+
+it('LOCAL DRAFT releases all three revoked slots immediately after a new Link without a cloud receipt',async()=>{
+  await link();const ids:string[]=[];
+  for(let index=0;index<3;index++)ids.push(kind(await rpc('edit',{draftId:randomUUID(),baseRevision:1}),'operation').operation.operationId);
+  await link();
+  const listed=kind(await rpc('status'),'status');
+  expect(listed.reconciliation.filter(op=>ids.includes(op.operationId)).map(op=>op.receipt?.status)).toEqual(['cancelled','cancelled','cancelled']);
+  const next=kind(await rpc('edit',{draftId:randomUUID(),baseRevision:1}),'operation').operation;
+  expect(ids).not.toContain(next.operationId);expect(next.storage).toBe('local');expect(cloud).toEqual([]);
+});
+
+it('LOCAL DRAFT expires an unacknowledged save locally while retaining an accepted winner and leaving cloud untouched',async()=>{
+  await link();const accepted=await prepare(),acceptedDraft=randomUUID();
+  await localDraft(accepted.operationId,{kind:'dispatch',draftId:acceptedDraft});await act(ref());
+  const candidate=kind(await rpc('inspectCandidate',{operationId:accepted.operationId}),'candidate');
+  const done=await localDraft(accepted.operationId,{kind:'roleAccept',draftId:acceptedDraft,reviewDigest:candidate.payloadDigest,revision:1});
+  const pending=await prepare();await localDraft(pending.operationId,{kind:'dispatch',draftId:randomUUID()});await act(ref());
+  expect((await status(pending.operationId)).state).toBe('pendingCloud');
+  clock+=86400_000+1;restart();await open();
+  expect((await status(pending.operationId))).toMatchObject({state:'expired',receipt:{status:'expired'}});
+  expect((await status(accepted.operationId)).receipt).toEqual(done.receipt);
+  expect((await prepare()).state).toBe('pendingMain');expect(cloud).toEqual([]);
+});
+
+it('LOCAL DRAFT requires the original confirmed digest, revision, destination, account and source',async()=>{
+  await link();const op=await prepare(),draftId=randomUUID();
+  const accept={kind:'roleAccept' as const,draftId,reviewDigest:'0'.repeat(64),revision:1};
+  await expect(localDraft(op.operationId,accept)).rejects.toThrow();
+  await localDraft(op.operationId,{kind:'dispatch',draftId});await act(ref());
+  const candidate=kind(await rpc('inspectCandidate',{operationId:op.operationId}),'candidate');
+  await expect(localDraft(op.operationId,accept)).rejects.toThrow();
+  await expect(localDraft(op.operationId,{...accept,reviewDigest:candidate.payloadDigest,revision:2})).rejects.toThrow();
+  await expect(localDraft(op.operationId,{...accept,reviewDigest:candidate.payloadDigest,draftId:randomUUID()})).rejects.toThrow();
+  const other=kind(await service.request(peer,recipeAuthoringRequestSchema.parse({type:'open',botId:appId,accountId:randomUUID()})),'session');
+  await expect(service.request(peer,recipeAuthoringRequestSchema.parse({type:'localDraftAdvance',botId:appId,session:other.session,operationId:op.operationId,
+    advance:{...accept,reviewDigest:candidate.payloadDigest}}))).rejects.toThrow();
+  await open();
+  await mutateProjectByChatId(groupId,row=>{row.supplement='changed source';});
+  await expect(localDraft(op.operationId,{...accept,reviewDigest:candidate.payloadDigest})).rejects.toThrow();
+  expect(cloud).toEqual([]);expect((await status(op.operationId)).receipt).toBeUndefined();
+});
+
+it('LOCAL DRAFT prevents cloud advances and bare receipts, preserves cancellation and leaves legacy operations unmarked',async()=>{
+  await link();const op=await prepare(),draftId=randomUUID();
+  const authFields={operationId:op.operationId,accountId:account,purpose:op.purpose,targetPublicKey:op.targetPublicKey,nonceCommitment:op.nonceCommitment,
+    status:'registered',stage:'dispatch',stateRevision:1,operationDeadline:clock+86400000,payloadDigest:dispatchDigest,
+    serverPublicKey:Buffer.alloc(32,2).toString('base64url'),ticket:Buffer.alloc(32,3).toString('base64url'),deadline:clock+300000};
+  await expect(rpc('advance',{operationId:op.operationId,authorization:authFields})).rejects.toThrow();
+  await expect(rpc('richAdvance',{operationId:op.operationId,destinationDraftId:draftId,authorization:{...authFields,format:'rich-v2'}})).rejects.toThrow();
+  await expect(rpc('settle',{operationId:op.operationId,receipt:{operationId:op.operationId,status:'accepted',stateRevision:3,draftId,revision:1}})).rejects.toThrow();
+  await localDraft(op.operationId,{kind:'dispatch',draftId});await act(ref());
+  const candidate=kind(await rpc('inspectCandidate',{operationId:op.operationId}),'candidate');
+  const cancelled=await localDraft(op.operationId,{kind:'cancel'});
+  expect(cancelled.receipt?.status).toBe('cancelled');
+  await expect(localDraft(op.operationId,{kind:'roleAccept',draftId,reviewDigest:candidate.payloadDigest,revision:1})).rejects.toThrow();
+  expect((await localDraft(op.operationId,{kind:'cancel'})).receipt).toEqual(cancelled.receipt);
+  const legacy=await prepare();
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  await new AuthoringJournal(root,()=>clock).run(db=>{delete db.operations[legacy.operationId]!.view.storage;});
+  restart();await open();
+  expect((await status(legacy.operationId)).storage).toBeUndefined();
+  await expect(localDraft(legacy.operationId,{kind:'dispatch',draftId:randomUUID()})).rejects.toThrow();
+  expect(cloud).toEqual([]);
+});
+
+it.each([true,false])('LOCAL DRAFT serializes an accept/cancel race without replacing the winning receipt; accept first=%s',async acceptFirst=>{
+  await link();const op=await prepare(),draftId=randomUUID();
+  await localDraft(op.operationId,{kind:'dispatch',draftId});await act(ref());
+  const candidate=kind(await rpc('inspectCandidate',{operationId:op.operationId}),'candidate');
+  const accept={kind:'roleAccept' as const,draftId,reviewDigest:candidate.payloadDigest,revision:1};
+  const calls=acceptFirst?[accept,{kind:'cancel' as const}]:[{kind:'cancel' as const},accept];
+  const outcomes=await Promise.allSettled(calls.map(advance=>localDraft(op.operationId,advance)));
+  expect(outcomes[0]!.status).toBe('fulfilled');
+  expect(outcomes[1]!.status).toBe(acceptFirst?'fulfilled':'rejected');
+  expect((await status(op.operationId)).receipt?.status).toBe(acceptFirst?'accepted':'cancelled');
+  expect(cloud).toEqual([]);
+});
+
+it('LOCAL DRAFT saves a role edit only after the exact private confirmation and edit approval',async()=>{
+  await link();const draftId=randomUUID();
+  const op=kind(await rpc('edit',{draftId,baseRevision:2}),'operation').operation;
+  await localDraft(op.operationId,{kind:'dispatch',draftId});
+  await orch.onMessage(msg('/recipe role 本地编辑的新角色'));
+  const candidate=kind(await rpc('inspectCandidate',{operationId:op.operationId}),'candidate');
+  const advance={kind:'roleAccept' as const,draftId,reviewDigest:candidate.payloadDigest,revision:3};
+  await expect(localDraft(op.operationId,advance)).rejects.toThrow();
+  await act(ref());
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  const approval=await ledger.run(db=>{const row=db.operations[op.operationId]!,approval=row.editApproval;delete row.editApproval;return approval;});
+  await expect(localDraft(op.operationId,advance)).rejects.toThrow();
+  await ledger.run(db=>{db.operations[op.operationId]!.editApproval=approval;});
+  expect(await localDraft(op.operationId,advance)).toMatchObject({state:'completed',receipt:{status:'accepted',draftId,revision:3}});
+  expect(cloud).toEqual([]);
+});
+
+it('LOCAL DRAFT verifies frozen rich content, retains saved selection and origins, and continues editing after restart',async()=>{
+  await link();
+  const options={includeTasks:false,includeBotMemories:false,skills:[]};
+  const {inventory}=kind(await rpc('richInventory',{groupId,options}),'richInventory');
+  const op=kind(await rpc('richPrepare',{groupId,selection:{options,reviewToken:inventory.reviewToken,selected:[inventory.content.role!.itemId],sourceAttested:true,
+    public:{name:'本地周报',summary:'每周整理',overview:'',version:'1'},access:'direct',setup:[]},attestations:[]}),'operation').operation;
+  const draftId=randomUUID();await localDraft(op.operationId,{kind:'dispatch',draftId});await act(ref());
+  const candidate=kind(await rpc('richInspect',{operationId:op.operationId}),'richCandidate');
+  const {freezeSnapshot,richWireBytes}=await import('../../../services/recipe-api/src/rich-document.mjs');
+  const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
+  const {content}=freezeSnapshot(candidate.request,Buffer.alloc(32,2));
+  const doc=canonicalizeRichRecipeContent(content),bytes=Buffer.from(doc.canonicalUTF8);
+  const payload=richWireBytes({format:'rich-v2',purpose:'prepareDraft',sourceIntentId:op.operationId,content});
+  const frozen={format:'rich-v2' as const,sourceReviewSha256:candidate.reviewDigest,destinationDraftId:draftId,canonical:bytes.toString('base64url'),
+    contentSha256:digest(bytes),logicalBytes:doc.logicalBytes,payload:payload.toString('base64url'),payloadDigest:digest(payload)};
+  const accept={kind:'richAccept' as const,draftId,reviewDigest:candidate.reviewDigest,frozen};
+  await expect(localDraft(op.operationId,{...accept,reviewDigest:'0'.repeat(64)})).rejects.toThrow();
+  await expect(localDraft(op.operationId,{...accept,frozen:{...frozen,contentSha256:'0'.repeat(64)}})).rejects.toThrow();
+  const done=await localDraft(op.operationId,accept);
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const saved=await new AuthoringJournal(root,()=>clock).run(db=>db.operations[op.operationId]!.richSaved);
+  expect(saved).toMatchObject({canonical:frozen.canonical,selected:expect.arrayContaining([content.role!.itemId]),origins:expect.any(Object)});
+  await orch.shutdown();restart();await open();orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});
+  expect((await localDraft(op.operationId,accept)).receipt).toEqual(done.receipt);
+  proposeRich.mockResolvedValueOnce({kind:'proposal',commands:[{action:'setPublicText',target:'T1',text:'继续本地周报'}]});
+  await orch.onMessage(msg('把名称改为继续本地周报'));
+  expect(kind(await rpc('status'),'status').operations).toContainEqual(expect.objectContaining({storage:'local',purpose:'editDraft',draftId,baseRevision:1}));
+  expect(cloud).toEqual([]);
+});
 
 it('links the actual sender, then prepares and edits the same private draft through the intake and CardKit dispatcher',async()=>{
   await orch.onMessage(msg('/recipe'));
@@ -415,33 +813,124 @@ async function closePreparation(group = groupId) {
   const src = kind(await rpc('reviewSource',{groupId:group}),'source');
   const {operationId} = kind(await rpc('prepare',{groupId:group,reviewToken:src.reviewToken,sourceAttested:true}),'operation').operation;
   await rpc('cancel',{operationId});
-  await rpc('settle',{operationId,receipt:{operationId,status:'cancelled',stateRevision:1}});
+  await localDraft(operationId,{kind:'cancel'});
 }
 async function chooseSource(action: ReturnType<typeof ref>, index: number, messageId = action.messageId) {
   await dispatchAuthoring({messageId,chatId,operator:{openId:owner},raw:{operator:{open_id:owner,tenant_key:tenant}},
     action:{tag:'button',value:{a:'recipe.authoring',ref:action.ref,verb:'source',index}}});
 }
-it('consumes unlinked, ambiguous and source-free draft requests before opening an Agent',async()=>{
+it('routes human creation to the private Agent, while a forged message cannot get the source tool',async()=>{
   const instruction=msg('请把产品群的周报做成配方');
-  expect(await service.onMessage(instruction)).toBe(true);
-  expect(textSend.mock.lastCall?.[1]).toEqual({text:expect.stringContaining('关联')});
+  const caller=(m:NormalizedMessage)=>()=>({sessionId:'provider',openId:m.senderId,chatId:m.chatId,messageId:m.messageId});
+  expect(await service.onMessage(instruction)).toBe(false);
+  expect(await service.conversation.tool(caller(instruction),{kind:'sources'})).toMatchObject({state:'unlinked',message:expect.stringContaining('关联')});
   await link();
-  for (const input of ['帮我用产品群做一份配方','打开私人草稿','要改群的提醒还是改这个草稿？']) {
-    await orch.onMessage(msg(input));
-    expect(textSend.mock.lastCall?.[1]).toEqual({text:expect.stringContaining('选择来源群或草稿')});
-  }
+  const natural=msg('帮我用产品群做一份配方');
+  expect(await service.onMessage(natural)).toBe(false);
+  expect(await service.conversation.tool(caller(natural),{kind:'sources'})).toMatchObject({state:'offline'});
+  const discover=()=>service.request(peer,recipeAuthoringRequestSchema.parse({type:'creatorDiscover',botId:appId,accountId:account}));
+  const wake=kind(await discover(),'creatorBinding');
+  expect(wake.wakeId).toBeTruthy();
+  await service.request(peer,recipeAuthoringRequestSchema.parse({type:'creatorOpen',botId:appId,accountId:account,scope:wake.association!.scope,binding:wake.association!.binding,wakeId:wake.wakeId}));
+  expect(await service.conversation.tool(caller(natural),{kind:'sources'})).toMatchObject({state:'ready',groups:[{groupId,name:'PRIVATE-GROUP-SENTINEL'}]});
+  expect(await service.onMessage(msg('就叫周报'))).toBe(false);
   expect(await service.onMessage(msg('今天天气如何'))).toBe(false);
-  expect(kind(await rpc('status'),'status').operations).toEqual([]);
-  expect(propose).not.toHaveBeenCalled(); expect(messages.size).toBe(0);
-  const forged = msg('做个配方'); forged.raw = {};
+  expect(propose).not.toHaveBeenCalled();expect(cards.size).toBe(0);expect(messages.size).toBe(0);
+  const forged=msg('做个配方');forged.raw={};
   expect(await service.onMessage(forged)).toBe(true);
+  await expect(service.conversation.tool(caller(forged),{kind:'sources'})).rejects.toThrow();
+});
+it('reads the published receipt without a draft ID after the App handed its version to a shared private chat',async()=>{
+  await link();await attachCreator();
+  const source={...beginInput(),conversation:true};await rpc('beginHandoff',source);
+  const file=join(root,'recipe-authoring','journal.json'),db=JSON.parse(await readFile(file,'utf8'));
+  const h=db.handoffs[source.retryId],key=Object.keys(db.links)[0]!,l=db.links[key];
+  const {linkKey}=await import('../src/recipe/authoring-journal');
+  const otherAccount=randomUUID(),otherKey=linkKey(h.scope,otherAccount),otherBinding=randomUUID();
+  const draftId=randomUUID(),requestId=randomUUID(),target={recipeId:randomUUID(),versionId:randomUUID()};
+  const ask='刚才那份反馈配方保存好了吗，现在发出去的是哪个版本？';
+  const bound={binding:h.binding,scope:h.scope,recipient:h.recipient,bot:l.bot};
+  h.expiresAt=clock-1;h.phase={state:'prepared',operationId:draftId};h.capture={requestId:randomUUID(),public:{name:'原草稿',version:'1'}};
+  db.operations[draftId]={...bound,instructionId:h.retryId,accountId:h.account,conversation:true,localDraftAcknowledged:true,terminalAt:clock,
+    view:{operationId:draftId,state:'completed',storage:'local',purpose:'prepareDraft',createdAt:clock,receipt:{status:'accepted',draftId,revision:1}}};
+  l.creator.chosenUntil=0;l.selectionOrder=clock;
+  l.creator.jobs.published={state:'finished',job:{id:randomUUID(),binding:h.binding,scope:h.scope,task:{kind:'command',command:{kind:'publish',
+    snapshot:{work:{draftId,source:{groupId,preparationId:draftId}},revision:2,public:{name:'反馈配方',version:'0.3.5-preview'}}}}},
+    result:{kind:'published',target,draftId,draftRevision:2,revision:3}};
+  db.links[otherKey]={...l,binding:otherBinding,selectionOrder:clock-1,creator:{cards:{},jobs:{}}};
+  db.resources={[requestId]:{...bound,requestId,target,account:h.account,active:{target},focus:true,expires:clock+60_000,delivery:'sent'}};
+  await writeFile(file,JSON.stringify(db));
+  const m=msg(ask),caller=()=>({sessionId:'private-agent',openId:m.senderId,chatId:m.chatId,messageId:m.messageId});
+  expect(await service.onMessage(m)).toBe(false);
+  const result={state:'published',name:'反馈配方',version:'0.3.5-preview',draftId,draftRevision:2,releaseRevision:3,target};
+  expect(await service.conversation.tool(caller,{kind:'status'})).toMatchObject(result);
+  // The selected resource only authorizes this receipt, even if the model asks for a write.
+  expect(await service.conversation.tool(caller,{kind:'draft',action:'publish',draftId})).toMatchObject(result);
+  const switched=JSON.parse(await readFile(file,'utf8'));switched.resources[requestId].active.target={recipeId:randomUUID(),versionId:randomUUID()};
+  await writeFile(file,JSON.stringify(switched));expect(await service.conversation.tool(caller,{kind:'status'})).toMatchObject({state:'none'});
+  switched.resources[requestId].active.target=target;switched.resources[requestId].account=otherAccount;switched.resources[requestId].binding=otherBinding;
+  switched.links[otherKey].selectionOrder=clock+1;await writeFile(file,JSON.stringify(switched));
+  await expect(service.conversation.tool(caller,{kind:'status'})).rejects.toThrow();
+  const next=msg(ask);await service.onMessage(next);
+  const elsewhere=()=>({...caller(),messageId:next.messageId});
+  expect(await service.conversation.tool(elsewhere,{kind:'status'})).toMatchObject({state:'none'});
+  switched.resources[requestId].expires=clock-1;await writeFile(file,JSON.stringify(switched));
+  await expect(service.conversation.tool(elsewhere,{kind:'status'})).rejects.toThrow();
+});
+it('pins App source, group replacement and the original human turn even with an older card pending',async()=>{
+  await link();await attachCreator();
+  await rpc('beginHandoff',beginInput());
+  const first={...beginInput(),conversation:true};
+  await rpc('beginHandoff',first);
+  const second=groupIdSchema.parse('oc_alternate');
+  await addProject({chatId:second,name:'另一个群',createdAt:1,cwd:root,blank:false});
+  const caller=(m:NormalizedMessage)=>()=>({sessionId:'provider',openId:m.senderId,chatId:m.chatId,messageId:m.messageId});
+  const intro=bodies.filter(b=>b.path.startsWith('/open-apis/im/v1/messages?')).map(b=>JSON.parse(b.body)).find(b=>b.msg_type==='text');
+  const reply={...msg('就叫周报'),replyToMessageId:'om_text_'+intro.uuid};
+  expect(await service.onMessage(reply)).toBe(false);
+  expect(await service.conversation.tool(caller(reply),{kind:'sources'})).toMatchObject({selected:{groupId}});
+  const stale=msg('我要根据周报群发布一个配方');
+  expect(await service.onMessage(stale)).toBe(false);
+  expect(await service.conversation.tool(caller(stale),{kind:'sources'})).toMatchObject({
+    state:'ready',selected:{groupId},groups:expect.arrayContaining([{groupId:second,name:'另一个群'}]),
+  });
+  await rpc('beginHandoff',{...first,retryId:randomUUID()});
+  await expect(service.conversation.tool(caller(stale),{kind:'sources'})).rejects.toThrow();
+  const m=msg('把另一个群配置分享成配方');
+  expect(await service.onMessage(m)).toBe(false);
+  const input={groupId:second,public:{name:'另一份',version:'',summary:'',overview:''}};
+  const {AuthoringSession}=await import('../src/recipe/authoring-service');
+  const capture=vi.spyOn(AuthoringSession.prototype,'captureConversation').mockResolvedValue({state:'saved',draftId:randomUUID()});
+  try{
+    const inv=await service.conversation.tool(caller(m),{kind:'inventory',groupId:second});
+    if(!('inventoryId' in inv)||!inv.inventoryId)throw new Error('missing inventory');
+    const offer={kind:'propose' as const,...input,inventoryId:inv.inventoryId,selectedIds:[]};
+    expect(await service.conversation.tool(caller(m),offer)).toMatchObject({state:'sourceConflict',selected:{groupId}});
+    expect(capture).not.toHaveBeenCalled();
+    const proposed=await service.conversation.tool(caller(m),{...offer,switchFromGroupId:groupId});
+    if(!('proposalId' in proposed)||!proposed.proposalId)throw new Error('missing proposal');
+    const create={kind:'create' as const,proposalId:proposed.proposalId};
+    expect(await service.conversation.tool(caller(m),create)).toMatchObject({state:'awaitingConfirmation'});
+    const renamed=msg('就叫周报');expect(await service.onMessage(renamed)).toBe(false);
+    expect(await service.conversation.tool(caller(renamed),create)).toMatchObject({state:'awaitingConfirmation'});
+    const approved=msg('确认这个范围，保存草稿');expect(await service.onMessage(approved)).toBe(false);
+    expect(await service.conversation.tool(caller(approved),create)).toMatchObject({state:'saved'});
+    expect(capture.mock.calls[0]?.[1]).toMatchObject({...input,expectedSelection:{handoffId:undefined}});
+    const crossTenant=msg('创建配方');
+    (crossTenant.raw as {sender:{tenant_key:string}}).sender.tenant_key='different';
+    expect(await service.onMessage(crossTenant)).toBe(true);
+    await expect(service.conversation.tool(caller(crossTenant),{kind:'sources'})).rejects.toThrow();
+    await expect(service.conversation.tool(()=>({...caller(m)(),openId:stranger}),{kind:'sources'})).rejects.toThrow();
+    clock+=31*60_000;
+    await expect(service.conversation.tool(caller(m),{kind:'sources'})).rejects.toThrow();
+  }finally{capture.mockRestore();}
 });
 it('offers stable private aliases and reuses the exact chosen source card through preparation',async()=>{
   await link(); await closePreparation();
   const second=groupIdSchema.parse('oc_another');
   await addProject({chatId:second,name:'PRIVATE-NAME-2',createdAt:1,cwd:root,blank:false});
   await closePreparation(second);
-  const instruction=msg('创建周报配方');
+  const instruction=msg('/recipe create');
   await orch.onMessage(instruction); await service.onMessage(instruction);
   expect(messages.size).toBe(1);
   const menu=ref(),wire=[...cards.values()].join('');
@@ -724,11 +1213,11 @@ it.each(['relink', 'remove'] as const)('recovers only terminal arbitration after
 });
 
 
-it.each([6*60_000, 2*86400_000, 8*86400_000])('keeps revoked local IDs until checked, then releases all three slots at age %i', async (age) => {
+it.each([6*60_000, 2*86400_000, 8*86400_000])('keeps revoked legacy cloud IDs until checked, then releases all three slots at age %i', async (age) => {
   await link();
   const edit = async () => kind(await rpc('edit',{draftId:randomUUID(),baseRevision:1}),'operation').operation;
   const ids = [];
-  for (let i=0;i<3;i++) ids.push((await edit()).operationId);
+  for (let i=0;i<3;i++){const op=await edit();await legacyOperation(op.operationId);ids.push(op.operationId);}
   await link();
   clock+=age;
   restart(); await open();
@@ -761,11 +1250,11 @@ it('keeps only the registration and a possible winning receipt when pending acce
   expect(await rpc('settle',{operationId:op.operationId,receipt})).toMatchObject({operation:{state:'completed',receipt}});
 });
 
-it('blocks normal deletion of this Bot registration until its revoked operations settle', async () => {
+it('blocks normal deletion of this Bot registration with legacy cloud receipts until its revoked operations settle', async () => {
   const {createAdminService} = await import('../src/admin/service');
   const {setBotActivation} = await import('../src/config/bots');
   await link();
-  const op = await prepare();
+  const op = await prepare();await legacyOperation(op.operationId);
   await link();
   service.close();
   await setBotActivation(appId,false);
@@ -1084,10 +1573,11 @@ it('routes candidate generation language to an existing rich edit',async()=>{
 it.each(['/recipe create','/recipe start','创建配方','创作配方'])('keeps explicit new creation separate from an active edit: %s',async instruction=>{
   const {op}=await richChatContext();
   const before=await status(op.operationId);
-  await service.onMessage(msg(instruction));
+  const legacy=instruction.startsWith('/');
+  expect(await service.onMessage(msg(instruction))).toBe(legacy);
   expect(proposeRich).not.toHaveBeenCalled();
   expect(await status(op.operationId)).toEqual(before);
-  expect(replies()).toContain('已有草稿正在编辑');
+  if(legacy)expect(replies()).toContain('已有草稿正在编辑');
 });
 
 it('does not choose among multiple active drafts from fuzzy creation language',async()=>{
@@ -1219,7 +1709,8 @@ it('reports an elapsed rich parser deadline safely without saving or falling thr
     if(signal.aborted)reject(signal.reason);
     else signal.addEventListener('abort',()=>reject(signal.reason),{once:true});
   }));
-  expect(await service.onMessage(msg('把名称改成尚未完成'))).toBe(true);
+  const realTimeout=AbortSignal.timeout.bind(AbortSignal),timeout=vi.spyOn(AbortSignal,'timeout').mockImplementation(ms=>realTimeout(Math.min(ms,10)));
+  try{expect(await service.onMessage(msg('把名称改成尚未完成'))).toBe(true);}finally{timeout.mockRestore();}
   expect(proposeRich).toHaveBeenCalledTimes(1);expect(propose).not.toHaveBeenCalled();
   expect(replies()).toContain('解析超时');expect(replies()).toContain('重新发送');
   expect((await status(op.operationId)).state).toBe('waiting');expect(cloud.map(c=>c.action)).toEqual(['dispatch']);
@@ -1576,7 +2067,7 @@ it.each(['original','draft','baseRevision','purpose','instruction','originalGrou
   await rpc('beginDraftHandoff',arg);await tap(privateChoice('☐ 名称'));await tap(privateChoice('确认本次修改范围'));
   const handoff=kind(await rpc('handoffStatus',{retryId:arg.retryId}),'handoff').handoff;
   const id=handoff.operationId!;
-  if(change==='original')await rpc('settle',{operationId:id,receipt:{operationId:id,status:'accepted',stateRevision:3,draftId,revision:5}});
+  if(change==='original'){await legacyOperation(id);await rpc('settle',{operationId:id,receipt:{operationId:id,status:'accepted',stateRevision:3,draftId,revision:5}});}
   else {
     const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
     await new AuthoringJournal(root,()=>clock).run(db=>{
@@ -1960,7 +2451,7 @@ it('returns unavailable when normal maintenance has pruned the prepared receipt 
   const h=kind(await rpc('answerHandoff',{request,attestations:[]}),'handoff').handoff;
   const id=h.operationId!;
   clock+=60_000;await open();
-  await rpc('settle',{operationId:id,receipt:{operationId:id,status:'accepted',stateRevision:3,draftId:randomUUID(),revision:1}});
+  await legacyOperation(id);await rpc('settle',{operationId:id,receipt:{operationId:id,status:'accepted',stateRevision:3,draftId:randomUUID(),revision:1}});
   clock+=7*86400000+60_000;await open();
   const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
   const ledger=new AuthoringJournal(root,()=>clock);
@@ -2097,9 +2588,9 @@ it('keeps two original peer and account presences independent and never exports 
   expect(await rpc('status')).toMatchObject({operations:[{operationId:privateWork.operationId}]});
 });
 
-async function attachCreator(nativePreview=true){
+async function attachCreator(nativePreview=true,draftScope=false){
   const association=kind(await service.request(peer,recipeAuthoringRequestSchema.parse({type:'creatorDiscover',botId:appId,accountId:account})),'creatorBinding').association!;
-  session=kind(await service.request(peer,recipeAuthoringRequestSchema.parse({type:'creatorOpen',botId:appId,accountId:account,binding:association.binding,scope:association.scope,wakeId:null,...(nativePreview&&{nativePreview:true})})),'creatorSession').session;
+  session=kind(await service.request(peer,recipeAuthoringRequestSchema.parse({type:'creatorOpen',botId:appId,accountId:account,binding:association.binding,scope:association.scope,wakeId:null,...(nativePreview&&{nativePreview:true}),...(draftScope&&{draftScope:true})})),'creatorSession').session;
 }
 it('rejects an old creator session and adopted workflow after the same account is linked to another private author',async()=>{
   await link();
@@ -2134,6 +2625,112 @@ async function openManualWork(name:string,revision=2,draftId=randomUUID(),sectio
   await rpc('creatorAnswer',{id:job.id,answer:{kind:'snapshot',snapshot}});
   return snapshot;
 }
+
+it('recovers only the displayed edit proposal for a fresh private Agent turn and refuses unconfirmed apply without an id',async()=>{
+  await link();await attachCreator(true,true);
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const journal=new AuthoringJournal(root,()=>clock),id=randomUUID(),draftId=randomUUID();
+  const identity=kind(await rpc('groupSourceIdentity',{groupId}),'groupSourceIdentity').identity;
+  const work={draftId,source:{preparationId:randomUUID(),groupId,identity}};
+  await journal.run(db=>{
+    const link=Object.values(db.links)[0]!;
+    (link.creator!.sources??={})[draftId]=work.source;
+    link.conversationEdit={proposal:{id,work,order:link.selectionOrder??0,thread:'author-thread',from:'offering-message',shown:clock-100,expires:clock+60000,
+      inventoryId:digest('offered'),addIds:[randomUUID()],removeIds:[],revision:4,baseSha256:digest('draft'),lease:digest('source')}};
+  });
+  const read=async(text:string,threadId:string)=>{
+    const message={...msg(text),threadId};expect(await service.onMessage(message)).toBe(false);
+    const caller=()=>({sessionId:'fresh-provider-turn',chatId,openId:owner,messageId:message.messageId});
+    return {caller,status:await service.conversation.tool(caller,{kind:'status'})};
+  };
+  const other=await read('刚才哪份改动？','other-thread');expect(other.status).toMatchObject({state:'none'});
+  const fresh=await read('刚才哪份改动？','author-thread');
+  expect(fresh.status).toMatchObject({state:'awaitingConfirmation',operation:'editDraftScope',nextAction:'apply',proposalId:id,draftId,revision:4});
+  await expect(service.conversation.tool(fresh.caller,{kind:'draft',action:'apply',proposalId:randomUUID()})).rejects.toThrow('相符');
+  await expect(service.conversation.tool(other.caller,{kind:'draft',action:'apply'})).rejects.toThrow('相符');
+  expect(await service.conversation.tool(fresh.caller,{kind:'draft',action:'apply'})).toMatchObject({state:'awaitingConfirmation',proposalId:id});
+  await journal.run(db=>{Object.values(db.links)[0]!.conversationEdit!.proposal!.id=randomUUID();});
+  await expect(service.conversation.tool(fresh.caller,{kind:'draft',action:'apply'})).rejects.toThrow('相符');
+  await journal.run(db=>{delete Object.values(db.links)[0]!.conversationEdit!.proposal!.shown;});
+  expect((await read('确认这个范围，保存修改','author-thread')).status).toMatchObject({state:'none'});
+  await journal.run(db=>{
+    const link=Object.values(db.links)[0]!,edit=link.conversationEdit!.proposal!;
+    edit.shown=clock-50;link.creator!.sources![draftId]={...work.source,identity:digest('different source')};
+  });
+  expect((await read('确认这个范围，保存修改','author-thread')).status).toMatchObject({state:'none'});
+  await journal.run(db=>{
+    const link=Object.values(db.links)[0]!;
+    link.creator!.sources![draftId]=work.source;link.conversationEdit!.proposal!.expires=clock;
+  });
+  expect((await read('确认这个范围，保存修改','author-thread')).status).toMatchObject({state:'none'});
+});
+
+it('reads exact local names without minting cards and asks which draft when several exist',async()=>{
+  await link();await attachCreator(true,true);
+  async function caller(text:string){
+    const message=msg(text);expect(await service.onMessage(message)).toBe(false);
+    return ()=>({sessionId:'fresh-provider',chatId,openId:owner,messageId:message.messageId});
+  }
+  const c=await caller('在私聊创作配方，想看看我的草稿。');
+  const a={draftId:randomUUID(),source:null},b={draftId:randomUUID(),source:null};
+  const list={kind:'draft',action:'list'} as const;
+  expect(await service.conversation.tool(c,list)).toMatchObject({state:'reading'});
+  const read=(await creatorJobs())[0]!;
+  expect(read.task).toMatchObject({kind:'read',read:{kind:'works',draftsOnly:true}});
+  await rpc('creatorAnswer',{id:read.id,answer:{kind:'works',items:[{kind:'draft',work:a,name:'cc01',version:'1'},
+    {kind:'draft',work:b,name:'第二份',version:'1'}],nextOffset:null}});
+  expect(await service.conversation.tool(c,list)).toMatchObject({state:'ready',savedDrafts:[{draftId:a.draftId,name:'cc01'},{draftId:b.draftId,name:'第二份'}]});
+  const ambiguous=await caller('请把名字改成另一个');
+  expect(await service.conversation.tool(ambiguous,{kind:'draft',action:'edit',change:{field:'name',value:'另一个'}})).toMatchObject({state:'chooseDraft'});
+  expect(cards.size).toBe(0);expect(await creatorJobs()).toEqual([]);
+  const explicit=await caller('把 cc01 改名为 cx02。');
+  await expect(service.conversation.tool(explicit,{kind:'draft',action:'edit',draftId:b.draftId,change:{field:'name',value:'cx02'}})).rejects.toThrow('原名称不符');
+  const inspect={kind:'draft',action:'inspect',draftId:a.draftId} as const;
+  expect(await service.conversation.tool(explicit,inspect)).toMatchObject({state:'reading',draftId:a.draftId});
+  const inspectJob=(await creatorJobs())[0]!;
+  const snapshot={work:a,format:'role-v1',recipeId:null,parent:null,revision:5,public:{name:'已在 App 改过',summary:'',overview:'',version:'1',access:'direct'},
+    contentSha256:digest('现有内容'),parts:[],sections:[{title:'角色',pageHashes:[digest('角色')]}]};
+  await rpc('creatorAnswer',{id:inspectJob.id,answer:{kind:'snapshot',snapshot}});
+  expect(await service.conversation.tool(explicit,inspect)).toEqual({state:'ready',draftId:a.draftId,name:'已在 App 改过',revision:5});
+  expect(cards.size).toBe(0);expect(await creatorJobs()).toEqual([]);
+  expect(await service.conversation.tool(explicit,{kind:'draft',action:'edit',draftId:a.draftId,change:{field:'name',value:'cx02'}})).toMatchObject({state:'requested'});
+  const update=(await creatorJobs())[0]!;
+  await rpc('creatorAnswer',{id:update.id,answer:{kind:'snapshot',snapshot}});
+  expect(await creatorJobs()).toEqual([]);expect(lastCard()).toContain('已在 App 改过');expect(lastCard()).not.toContain('采用修改');
+  expect(await service.conversation.tool(await caller('刚才的改名保存了吗'),{kind:'status'})).toMatchObject({state:'needsReview',draftId:a.draftId,verified:{name:'已在 App 改过',revision:5}});
+});
+
+it.each(['edit','publish'] as const)('continues the exact App draft once in plain text and offers the current %s revision from conversation',async action=>{
+  await link();await attachCreator();
+  const work={draftId:randomUUID(),source:null};
+  const fields={name:'团队复核',summary:'每周核对',overview:'现有草稿',version:'2',access:'direct'};
+  const snapshot={work,format:'role-v1',recipeId:null,parent:null,revision:3,public:fields,
+    contentSha256:digest('这里是目前保存的内容'),parts:[],sections:[{title:'角色',pageHashes:[digest('角色')]}]};
+  const entry={selection:{kind:'draft',work,name:fields.name,version:fields.version},conversationRevision:3,conversationRetryId:randomUUID()};
+  await rpc('creatorContinue',entry);await rpc('creatorContinue',entry);
+  const reads=await creatorJobs();expect(reads).toHaveLength(1);
+  await rpc('creatorAnswer',{id:reads[0]!.id,answer:{kind:'snapshot',snapshot}});
+  await rpc('creatorAnswer',{id:reads[0]!.id,answer:{kind:'snapshot',snapshot}});
+  expect(cards.size).toBe(0);
+  const textSends=bodies.filter(b=>b.path.startsWith('/open-apis/im/v1/messages?')).map(b=>JSON.parse(b.body)).filter(b=>b.msg_type==='text'&&b.content.includes('团队复核'));
+  expect(textSends).toHaveLength(1);
+  expect(await creatorJobs()).toEqual([]);
+  const message=msg(action==='edit'?'把简介改为周五复核。':'正式发布');
+  expect(await service.onMessage(message)).toBe(false);
+  const caller=()=>({sessionId:'agent',chatId,openId:owner,messageId:message.messageId});
+  const result=await service.conversation.tool(caller,{kind:'draft',action,...(action==='edit'&&{change:{field:'summary',value:'周五复核。'}})});
+  expect(result).toMatchObject({state:'requested',draftId:work.draftId});
+  const latest=(await creatorJobs())[0]!;expect(latest.task).toMatchObject({kind:'read',read:{kind:'draft',work}});
+  await rpc('creatorAnswer',{id:latest.id,answer:{kind:'snapshot',snapshot}});
+  expect(cards.size).toBe(1);
+  const command=action==='edit'?'metadata':'publish';
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const offer=await new AuthoringJournal(root,()=>clock).run(db=>Object.values(Object.values(db.links)[0]!.creator!.jobs).find(r=>r.job.task.kind==='command'&&r.job.task.command.kind===command));
+  expect(offer?.state).toBe('offer');
+  expect(offer?.job.task).toMatchObject(action==='edit'?{command:{kind:'metadata',work,revision:3,change:{field:'summary',value:'周五复核。'}}}:
+    {command:{kind:'publish',snapshot:{work,revision:3}}});
+  expect((await creatorJobs()).filter(j=>j.task.kind==='command')).toEqual([]);
+});
 
 async function seedLegacyCreatorCard(){
   const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
@@ -2321,37 +2918,14 @@ it('keeps secret CardKit content out of later model quotes and history in each F
   }
 });
 
-it('uses the selected parent for a new private version, restores original selection after restart, and withdraws only the chosen immutable version',async()=>{
+it('keeps the published-version private card focused on share codes',async()=>{
   await link();await attachCreator();
-  const target={recipeId:randomUUID(),versionId:randomUUID()},selection={kind:'version',target,name:'旧版本',version:'0.9'};
-  await rpc('creatorContinue',{selection});
-  await tap(privateChoice('准备新版'));
-  const parent=(await creatorJobs())[0]!;
-  expect(parent.task).toEqual({kind:'read',read:{kind:'parent',target}});
-  await rpc('creatorAnswer',{id:parent.id,answer:{kind:'parent',target,inherited:{accountId:account,versionId:target.versionId,public:{name:'旧版本',summary:'原简介',overview:'原概览',version:''},access:'coded'}}});
-  await tap(privateChoice('PRIVATE-GROUP-SENTINEL'));
-  const original=privateChoice('群角色');
-  await orch.shutdown();restart();orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});await attachCreator();
-  await tap(original);
-  await orch.onMessage(msg('/recipe works'));
-  const list=(await creatorJobs()).find(j=>j.task.kind==='read'&&j.task.read.kind==='works')!;
-  await rpc('creatorAnswer',{id:list.id,answer:{kind:'works',items:[],nextOffset:null}});
-  await tap(privateChoice('继续选择'));
-  const restoredMessage=original.messageId;
-  const stored=(await readFile(join(root,'recipe-authoring','journal.json'),'utf8'));
-  const prior=Object.values(JSON.parse(stored).handoffs as Record<string,{sourceVersionId?:string;ref:string;messageId?:string}>).find(h=>h.messageId===restoredMessage)!;
-  expect(prior.ref).not.toBe(original.value.ref);expect(prior.sourceVersionId).toBe(target.versionId);
-  await rpc('creatorContinue',{selection});
-  await tap(privateChoice('撤下版本'));
-  const confirm=privateChoice('确认撤下');
-  expect(await creatorJobs()).toEqual([]);
-  await tap(confirm);
-  const withdraw=(await creatorJobs())[0]!;
-  expect(withdraw.task).toMatchObject({kind:'command',command:{kind:'withdraw',target}});
-  await rpc('creatorAnswer',{id:withdraw.id,answer:{kind:'withdrawn',target}});
-  const originalResult=[...messages.values()].find(m=>m.message_id===confirm.messageId)!;
-  expect(cards.get(originalResult.card_id)).toContain('版本已撤下');
-},25000);
+  const target={recipeId:randomUUID(),versionId:randomUUID()};
+  await rpc('creatorContinue',{selection:{kind:'version',target,name:'旧版本',version:'0.9'}});
+  expect(privateChoice('管理分享码')).toBeDefined();
+  expect(()=>privateChoice('准备新版')).toThrow();
+  expect(()=>privateChoice('撤下版本')).toThrow();
+});
 
 it('reads all 151 frozen pages in one private message and publishes only from the original approval',async()=>{
   await link();await attachCreator();
@@ -2905,7 +3479,7 @@ it.each(['waiting','candidate','live'] as const)('CHAT RESUME selects an exact %
 
 it.each(['works','create'] as const)('CHAT WAKE lets an existing creator worker consume a new account choice for %s exactly once',async(intent)=>{
   await link();await anotherAuthor();await attachCreator();
-  await service.onMessage(msg(intent==='works'?'我的配方':'创建配方'));
+  await service.onMessage(msg(intent==='works'?'我的配方':'/recipe create'));
   await tap(privateChoice('关联 1'));
   const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
   const ledger=new AuthoringJournal(root,()=>clock),before=messages.size;
@@ -2989,7 +3563,7 @@ it.each(['draft','account'] as const)('CHAT RESUME preserves a newer %s selectio
 
 it('CHAT WAKE discards A before creating or displaying a group card when B is selected during inventory',async()=>{
   await link();const b=await anotherAuthor();await attachCreator();
-  await service.onMessage(msg('创建配方'));await tap(privateChoice('关联 1'));
+  await service.onMessage(msg('/recipe create'));await tap(privateChoice('关联 1'));
   const before=messages.size;
   onMembership=async()=>{onMembership=undefined;await b.request('edit',{draftId:randomUUID(),baseRevision:1});};
   expect(await creatorJobs()).toEqual([]);
@@ -3000,7 +3574,7 @@ it('CHAT WAKE discards A before creating or displaying a group card when B is se
 
 it.each(['expired','superseded','wrongBinding','recipient','admin'] as const)('CHAT WAKE keeps a %s wake inert during ordinary polling',async(change)=>{
   await link();await anotherAuthor();await attachCreator();
-  await service.onMessage(msg('创建配方'));await tap(privateChoice('关联 1'));
+  await service.onMessage(msg('/recipe create'));await tap(privateChoice('关联 1'));
   const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
   const ledger=new AuthoringJournal(root,()=>clock),before=messages.size;
   await ledger.run(db=>{
@@ -3018,7 +3592,7 @@ it.each(['expired','superseded','wrongBinding','recipient','admin'] as const)('C
 it('CHAT WAKE preserves a sole-link intent wake without asking for an account choice',async()=>{
   await link();
   await orch.shutdown();restart();orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});
-  await service.onMessage(msg('创建配方'));
+  await service.onMessage(msg('/recipe create'));
   const association=kind(await service.request(peer,recipeAuthoringRequestSchema.parse({type:'creatorDiscover',botId:appId,accountId:account})),'creatorBinding');
   expect(association.wakeId).not.toBeNull();await attachCreator();
   const before=messages.size;expect(await creatorJobs()).toEqual([]);
@@ -3040,7 +3614,7 @@ it('CHAT RESUME validates the original group while accepting an absent prior sna
 
 it('CHAT WAKE never redelivers an abandoned group card when B selects during card creation',async()=>{
   await link();const b=await anotherAuthor();await attachCreator();
-  await service.onMessage(msg('创建配方'));await tap(privateChoice('关联 1'));
+  await service.onMessage(msg('/recipe create'));await tap(privateChoice('关联 1'));
   const {AuthoringIm}=await import('../src/recipe/authoring-im');
   const create=AuthoringIm.prototype.createJson,before=messages.size;
   const delayed=vi.spyOn(AuthoringIm.prototype,'createJson').mockImplementationOnce(async function(this:InstanceType<typeof AuthoringIm>,body){
@@ -3052,7 +3626,7 @@ it('CHAT WAKE never redelivers an abandoned group card when B selects during car
 
 it('CHAT WAKE reuses the original group card and message after a lost send response',async()=>{
   await link();await anotherAuthor();await attachCreator();
-  await service.onMessage(msg('创建配方'));await tap(privateChoice('关联 1'));
+  await service.onMessage(msg('/recipe create'));await tap(privateChoice('关联 1'));
   loseSend=true;await expect(creatorJobs()).rejects.toThrow();
   const sent=messages.size,created=cards.size;
   loseSend=false;expect(await creatorJobs()).toEqual([]);
@@ -3107,7 +3681,7 @@ it('CHAT RESUME preserves B selected during the initial works-source validation'
 
 it('INDEPENDENT skips pending unsent group selection after its wake expires', async()=>{
   await link();await anotherAuthor();await attachCreator();
-  await service.onMessage(msg('创建配方'));await tap(privateChoice('关联 1'));
+  await service.onMessage(msg('/recipe create'));await tap(privateChoice('关联 1'));
   const {AuthoringIm}=await import('../src/recipe/authoring-im');
   const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
   const ledger=new AuthoringJournal(root,()=>clock),before=messages.size;
@@ -3136,7 +3710,7 @@ it('INDEPENDENT keeps B selected during the original works-card authenticity che
 });
 it('INDEPENDENT never sends an expired group card when the wake lapses during Feishu card creation',async()=>{
   await link();await anotherAuthor();await attachCreator();
-  await service.onMessage(msg('创建配方'));await tap(privateChoice('关联 1'));
+  await service.onMessage(msg('/recipe create'));await tap(privateChoice('关联 1'));
   const {AuthoringIm}=await import('../src/recipe/authoring-im');
   const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
   const ledger=new AuthoringJournal(root,()=>clock),before=messages.size;
@@ -3334,14 +3908,12 @@ async function nativePreviewFixture(){
     recipeLink:(r:string,v:string)=>`https://vonvon.cc/recipes/${r}/versions/${v}`,request:async(id:string,path:string,init?:RequestInit,beforeSend?:()=>void|Promise<void>)=>{
       await beforeSend?.();expect(id).toBe(account);requests.push({path,method:init?.method??'GET'});
       if(path==='/v1/me')return Response.json({accountId:account});
-      if(path==='/v2/drafts/'+work.draftId)return Response.json({error:{code:'not_found'}},{status:404});
-      if(path==='/v1/drafts/'+work.draftId)return Response.json(draft);
-      if(path.startsWith('/v1/drafts/'+work.draftId+'/creator-context?'))return Response.json({draftId:work.draftId,format:'role-v1',revision:draft.revision,sourceIntentId:null,parent:null});
       throw Error(path);
     }};
+  const drafts=localStore({association:nativeAssociation,work,draft,members:[]});
   const journal=new RecipeCreatorJournal(),executor=new RecipeCreatorExecutor(native,journal,new MetadataJournal(),history,published,saved,(value:AuthoringSaved)=>{
     opened(value);navigation.request({draftId:value.draftId,revision:value.revision});
-  });
+  },drafts);
   const context={association:nativeAssociation,session,check:()=>controller.signal.throwIfAborted(),settled:async()=>{},rpc:async(req:RecipeAuthoringRequest)=>{
     if(req.type==='creatorAnswer')answers.push(req.answer);
     return service.request(peer,req);
@@ -3350,7 +3922,7 @@ async function nativePreviewFixture(){
   await executor.run(context,initial.job);
   const offer=kind(await rpc('creatorPreview',{work,revision:2}),'creatorPreview');
   const choice=privateChoice('在 App 中预览'),messageCount=messages.size;
-  return {work,draft,ledger,history,journal,association,nativeAssociation,native,controller,requests,answers,navigation,opened,published,saved,executor,context,offer,choice,messageCount};
+  return {work,draft,drafts,ledger,history,journal,association,nativeAssociation,native,controller,requests,answers,navigation,opened,published,saved,executor,context,offer,choice,messageCount};
 }
 
 it('NATIVE PREVIEW sends the physical card through one durable readonly job into the existing native queue without approval or publication',async()=>{
@@ -3397,7 +3969,7 @@ it.each(['work','snapshot','generation','card','identity','expired','account','r
   try{
     await tap(f.choice);const job=(await creatorJobs())[0]!;
     if(fault==='account')f.controller.abort();
-    else if(fault==='revision')f.draft.revision++;
+    else if(fault==='revision'){f.draft.revision++;const row=f.drafts.read(account,f.work.draftId)!;f.drafts.commit({requestId:randomUUID(),expectedRevision:2,record:{...row,draft:f.draft}});}
     else if(fault==='pendingSave')await rpc('edit',{draftId:f.work.draftId,baseRevision:2});
     else if(fault==='approved')await tap(privateChoice('确认发布'));
     else if(fault==='expired')clock+=31*60_000;
@@ -3458,6 +4030,8 @@ it.each(['role','rich','rich-paired'] as const)('APP PREPARE INTEGRATION drives 
   const work:{draftId:string;source:null|{preparationId:string;groupId:typeof groupId;identity:string}}={draftId:randomUUID(),source:null};
   if(format!=='role'){
     const op=await prepare();
+    const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+    await new AuthoringJournal(root,()=>clock).run(db=>{delete db.operations[op.operationId]!.view.storage;});
     await rpc('settle',{operationId:op.operationId,receipt:{operationId:op.operationId,status:'accepted',stateRevision:3,draftId:work.draftId,revision:1}});
     const identity=kind(await rpc('operationSourceIdentity',{operationId:op.operationId}),'operationSourceIdentity').identity!;
     work.source={preparationId:op.operationId,groupId,identity};
@@ -3483,12 +4057,6 @@ it.each(['role','rich','rich-paired'] as const)('APP PREPARE INTEGRATION drives 
     recipeLink:(r:string,v:string)=>`https://vonvon.cc/recipes/${r}/versions/${v}`,request:async(id:string,path:string,init?:RequestInit,beforeSend?:()=>void|Promise<void>)=>{
       await beforeSend?.();expect(id).toBe(account);requests.push({path,method:init?.method??'GET'});
       if(path==='/v1/me')return Response.json({accountId:account});
-      if(path==='/v2/drafts/'+work.draftId)return format!=='role'?Response.json({format:'rich-v2',draftId:work.draftId,recipeId:null,revision:2,access:'direct',sourceIntentId:work.source!.preparationId,
-        manifest,sourceManifest:manifest,logicalBytes:document.logicalBytes,retainedCandidateBytes:0}):Response.json({error:{code:'not_found'}},{status:404});
-      if(path==='/v2/drafts/'+work.draftId+'/objects/'+manifest.objectId)return new Response(document.canonical);
-      const object=objects.get(path.split('/').at(-1)!);if(object)return new Response(object);
-      if(path==='/v1/drafts/'+work.draftId)return Response.json(draft);
-      if(path.includes('/drafts/'+work.draftId+'/creator-context?'))return Response.json({draftId:work.draftId,format:format!=='role'?'rich-v2':'role-v1',revision:draft.revision,sourceIntentId:work.source?.preparationId??null,parent:null});
       throw Error(path);
     }};
   const deviceKey=Buffer.alloc(32,7).toString('base64url');
@@ -3498,11 +4066,15 @@ it.each(['role','rich','rich-paired'] as const)('APP PREPARE INTEGRATION drives 
   },device:async()=>({kind:'deviceStatus',status:{device:{id:peer.device,name:'原设备',publicKey:deviceKey},remote:{addresses:[],port:3000},clients:{active:1,total:1}}}),
     snapshot:async()=>({agents:[{id:agentIdSchema.parse(appId),name:'原 Bot',running:true}],memberships:[{agentId:appId,groupId}],groups:[{id:groupId,name:'原群'}]})};
   const retain=async(viewId:string,signal:AbortSignal)=>({viewId,client,signal,pairedKey:deviceKey,release(){},check(){signal.throwIfAborted();}});
-  const journal=new RecipeCreatorJournal(),history=new NativeHistory(),authoring=new RecipeAuthoringController(native,()=>{throw Error('must adopt');},history);
-  const executor=new RecipeCreatorExecutor(native,journal,new MetadataJournal(),history),supervisor=new RecipeCreatorSupervisor(native,retain,()=>[],journal,history,authoring,executor);
+  const drafts=localStore(),journal=new RecipeCreatorJournal(),history=new NativeHistory(),authoring=new RecipeAuthoringController(native,()=>{throw Error('must adopt');},history,undefined,drafts);
+  const executor=new RecipeCreatorExecutor(native,journal,new MetadataJournal(),history,undefined,undefined,undefined,drafts),supervisor=new RecipeCreatorSupervisor(native,retain,()=>[],journal,history,authoring,executor,drafts);
   try{
     await supervisor.associated(account,format==='rich-paired'?peer.device:'local',agentIdSchema.parse(appId));
-    if(work.source)history.history.remember(journal.associations(account)[0]!,work.source.preparationId,work.source.identity,groupId);
+    const association=journal.associations(account)[0]!;
+    if(work.source)history.history.remember(association,work.source.preparationId,work.source.identity,groupId);
+    const members=format==='role'?[]:draft.format==='rich-v2'?draft.rich.content.parts.map(descriptor=>({descriptor,base64:objects.get(descriptor.objectId)!.toString('base64')})):[];
+    const record:LocalRecipeDraftRecord={association,work,draft,members,...(draft.format==='rich-v2'&&{sourceCanonical:draft.rich.canonical})};
+    for(let revision=1;revision<=2;revision++)drafts.commit({requestId:randomUUID(),expectedRevision:revision===1?null:revision-1,record:{...record,draft:{...record.draft,revision}}});
     const {desktopAuthoringRequestSchema}=await import('@vonvon/protocol');
     const input=desktopAuthoringRequestSchema.parse(JSON.parse(JSON.stringify({type:'preparePublication',accountId:account,draft})));
     if(input.type!=='preparePublication')throw Error('prepare request');
@@ -3569,12 +4141,12 @@ it('NATIVE PREVIEW reads the daemon status through the real supervisor and contr
   const f=await nativePreviewFixture();
   const {RecipeCreatorSupervisor}=await import(new URL('../../desktop/src/recipe-creator-supervisor.ts',import.meta.url).href);
   const {RecipeAuthoringController}=await import(new URL('../../desktop/src/recipe-authoring.ts',import.meta.url).href);
-  const authoring=new RecipeAuthoringController(f.native,()=>{throw Error('unexpected source capture');},f.history);
+  const authoring=new RecipeAuthoringController(f.native,()=>{throw Error('unexpected source capture');},f.history,undefined,f.drafts);
   const rpcs:RecipeAuthoringRequest[]=[];
   const client={device:async()=>({kind:'deviceStatus',status:{device:{id:peer.device,name:'来源设备',publicKey:f.nativeAssociation.deviceKey},remote:{addresses:[],port:3000},clients:{active:1,total:1}}}),
     snapshot:async()=>({agents:[{id:appId,name:'作者 Bot'}],groups:[],memberships:[]}),
     recipeAuthoring:async(req:RecipeAuthoringRequest)=>{rpcs.push(req);return service.request(peer,req);}};
-  const supervisor=new RecipeCreatorSupervisor(f.native,async(_view:string,signal:AbortSignal)=>({viewId:'local',client,signal,release(){},check:()=>signal.throwIfAborted()}),()=>[],f.journal,f.history,authoring,f.executor);
+  const supervisor=new RecipeCreatorSupervisor(f.native,async(_view:string,signal:AbortSignal)=>({viewId:'local',client,signal,release(){},check:()=>signal.throwIfAborted()}),()=>[],f.journal,f.history,authoring,f.executor,f.drafts);
   try{
     const worker=await supervisor.associated(account,'local',appId);expect(worker?.session).toBe(session);
     await worker!.queue;
@@ -3604,7 +4176,7 @@ it('NATIVE PREVIEW prepares a fresh readonly offer if the prior unapproved offer
   const f=await nativePreviewFixture();
   try{
     await f.ledger.run(db=>{Object.values(db.links).find(l=>l.binding===f.association.binding)!.creator!.jobs[f.offer.job.id]!.expiresAt=clock-1;});
-    f.draft.revision++;
+    f.draft.revision++;const row=f.drafts.read(account,f.work.draftId)!;f.drafts.commit({requestId:randomUUID(),expectedRevision:2,record:{...row,draft:f.draft}});
     const request={work:f.work,revision:f.draft.revision};
     const fresh=kind(await rpc('creatorPreview',request),'creatorPreview');expect(fresh.state).toBe('preparing');
     await f.executor.run(f.context,fresh.job);
@@ -3622,7 +4194,7 @@ it('NATIVE PREVIEW keeps an existing publication readable for an App without the
     const result=kind(await rpc('creatorPreview',{work:f.work,revision:2}),'creatorPreview');
     expect(result.job.id).toBe(f.offer.job.id);expect(result.state).toBe('offer');
     const rendered=[...cards.values()].at(-1)!;
-    expect(rendered).toContain('open_url');expect(rendered).toContain('确认发布 2');expect(rendered).toContain('继续修改内容');
+    expect(rendered).not.toContain('open_url');expect(rendered).toContain('请打开 App');expect(rendered).toContain('确认发布 2');expect(rendered).toContain('继续修改内容');
     await tap(f.choice);expect(await creatorJobs()).toEqual([]);
   }finally{f.history.history.close();}
 });

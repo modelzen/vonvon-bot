@@ -47,7 +47,7 @@ func skillOptions(workspace *held, provider string) ([]skillOption, error) {
 			continue
 		}
 		files := []string{}
-		e = discoverDocuments(dir, "", 0, &budget, &files)
+		e = discoverDocuments(dir, "", 0, &budget, &files, false)
 		dir.close()
 		if e != nil {
 			return nil, e
@@ -63,7 +63,7 @@ func skillOptions(workspace *held, provider string) ([]skillOption, error) {
 	sort.Slice(options, func(i, j int) bool { return options[i].Name < options[j].Name })
 	return options, root.check()
 }
-func discoverDocuments(dir *held, prefix string, depth int, budget *int, files *[]string) error {
+func discoverDocuments(dir *held, prefix string, depth int, budget *int, files *[]string, strict bool) error {
 	names, e := listNames(dir, *budget)
 	if e != nil {
 		return e
@@ -75,7 +75,9 @@ func discoverDocuments(dir *held, prefix string, depth int, budget *int, files *
 			continue
 		}
 		if portable(relative) {
-			if ok := documentMetadata(dir, name); ok {
+			if valid, tooLarge := documentMetadata(dir, name); strict && tooLarge {
+				return refused
+			} else if valid {
 				*files = append(*files, relative)
 				if len(*files) > 64 {
 					return refused
@@ -83,14 +85,14 @@ func discoverDocuments(dir *held, prefix string, depth int, budget *int, files *
 				continue
 			}
 		}
-		if depth >= 6 {
+		if depth >= 6 && !strict {
 			continue
 		}
 		sub, e := child(dir, name, directory)
 		if e != nil {
 			continue
 		}
-		e = discoverDocuments(sub, relative+"/", depth+1, budget, files)
+		e = discoverDocuments(sub, relative+"/", depth+1, budget, files, strict)
 		sub.close()
 		if e != nil {
 			return e

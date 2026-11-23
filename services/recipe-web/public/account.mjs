@@ -6,7 +6,6 @@ const save = $('account-save'), feedback = $('account-feedback'), recover = $('a
 const sessionActions = $('account-session-actions'), logout = $('account-logout'), retry = $('account-retry');
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const expectedStorage = 'vv-account-login-expected';
-const providerNames = {github: 'GitHub', google: 'Google', apple: 'Apple'};
 let expectedAccount, invalidExpected = false;
 function readExpectedAccount() {
   expectedAccount = undefined; invalidExpected = false;
@@ -21,15 +20,25 @@ function readExpectedAccount() {
     } else {
       expectedAccount = history.state?.accountExpected;
       invalidExpected = history.state?.invalidAccountExpected === true;
-      const pending = JSON.parse(sessionStorage.getItem(expectedStorage) || 'null');
-      sessionStorage.removeItem(expectedStorage);
-      if (!expectedAccount && pending?.expiresAt > Date.now() && uuid.test(pending.accountId || '')) {
-        expectedAccount = pending.accountId.toLowerCase();
-        history.replaceState({...history.state, accountExpected: expectedAccount}, '', location.pathname);
+      if (expectedAccount !== undefined && (typeof expectedAccount !== 'string' || !uuid.test(expectedAccount))) {expectedAccount = undefined; invalidExpected = true;}
+      const raw = sessionStorage.getItem(expectedStorage);
+      if (!expectedAccount && raw !== null) {
+        let pending;
+        try {pending = JSON.parse(raw);} catch {}
+        if (typeof pending?.expiresAt !== 'number' || !Number.isFinite(pending.expiresAt) || pending.expiresAt <= Date.now() || !uuid.test(pending.accountId || '')) {
+          invalidExpected = true;
+          history.replaceState({...history.state, invalidAccountExpected: true}, '', location.pathname);
+        } else {
+          expectedAccount = pending.accountId.toLowerCase();
+          history.replaceState({...history.state, accountExpected: expectedAccount}, '', location.pathname);
+        }
+        sessionStorage.removeItem(expectedStorage);
       }
     }
-  } catch { if (location.hash) invalidExpected = true; }
+  } catch {invalidExpected = true;}
 }
+const accountLink = new URLSearchParams(location.hash.slice(1)).get('link');
+if (accountLink) history.replaceState(null, '', location.pathname);
 readExpectedAccount();
 let session, profile, generation = 0, owner = new AbortController(), busy = false;
 let avatarChange = {kind: 'keep'}, avatarPreview;
@@ -46,6 +55,8 @@ async function request(path, options = {}) {
   return data;
 }
 function profileHeaders() {return {'X-Vonvon-Session': session.displaySession};}
+const after = document.documentElement.dataset.after;
+const nextPage = after && !after.startsWith('__') ? decodeURIComponent(after) : undefined;
 function parseProfile(value) {
   if (!value || !uuid.test(value.authorId || '') || typeof value.displayName !== 'string' ||
       !Number.isInteger(value.revision) || value.revision < 0 || value.revision > 2147483647 ||
@@ -68,6 +79,9 @@ function update() {
   name.setAttribute('aria-invalid', String(!valid));
   $('name-error').textContent = valid ? '' : '请输入 1–60 个字，不含 @ 或控制字符。';
   const unchanged = profile && normalizedName() === profile.displayName && avatarChange.kind === 'keep';
+  const resume = $('account-continue');
+  resume.hidden = !nextPage || !profile || busy;
+  if (nextPage) resume.href = nextPage;
   save.disabled = busy || !profile || !valid || unchanged && recover.hidden;
   for (const control of [name, avatar, remove, recover]) control.disabled = busy;
   initials.textContent = Array.from(name.value.trim()).slice(0, 2).join('').toLocaleUpperCase();
@@ -83,29 +97,19 @@ function applyProfile(value) {
   recover.hidden = true; update();
 }
 function clearProfile() {
+  if (cropDialog.open) cropDialog.close('cancel');
   profile = undefined; form.hidden = true; name.value = ''; $('account-id').value = '';
-  avatar.value = ''; avatarChange = {kind: 'keep'}; avatarPreview = undefined; preview();
+  avatarError(); avatar.value = ''; avatarChange = {kind: 'keep'}; avatarPreview = undefined; preview();
   feedback.textContent = ''; $('name-error').textContent = ''; recover.hidden = true;
 }
 function showLogin() {
   loginPanel.hidden = false;
-  const providers = $('account-providers'); providers.replaceChildren();
-  for (const provider of session?.providers || []) {
-    if (!Object.hasOwn(providerNames, provider)) continue;
-    const entry = document.createElement('form'); entry.method = 'post'; entry.action = '/auth/start';
-    for (const [key, value] of Object.entries({provider, returnTo: '/account'})) {
-      const field = document.createElement('input'); field.type = 'hidden'; field.name = key; field.value = value; entry.append(field);
-    }
-    const button = document.createElement('button'); button.className = 'secondary'; button.textContent = '使用 ' + providerNames[provider] + ' 继续'; entry.append(button);
-    entry.addEventListener('submit', event => {
-      if (!expectedAccount) return;
-      try {sessionStorage.setItem(expectedStorage, JSON.stringify({accountId: expectedAccount, expiresAt: Date.now() + 15 * 60_000}));}
-      catch {event.preventDefault(); status.textContent = '当前浏览器无法保留 App 账号核对信息。请允许此网站使用会话存储后重试。';}
-    });
-    providers.append(entry);
-  }
-  if (!providers.childElementCount) providers.textContent = '暂时没有可用的登录方式，请稍后再试。';
 }
+$('account-login-link').addEventListener('click', event => {
+  if (!expectedAccount) return;
+  try {sessionStorage.setItem(expectedStorage, JSON.stringify({accountId: expectedAccount, expiresAt: Date.now() + 15 * 60_000}));}
+  catch {event.preventDefault(); status.textContent = '当前浏览器无法保留 App 账号核对信息。请允许此网站使用会话存储后重试。';}
+});
 function showMismatch() {
   clearProfile(); mismatch.hidden = false; status.textContent = '网站与 App 当前使用了不同账号。';
 }
@@ -114,7 +118,7 @@ async function load() {
   owner.abort(); owner = new AbortController(); busy = false;
   clearProfile(); loginPanel.hidden = mismatch.hidden = sessionActions.hidden = retry.hidden = true;
   status.textContent = '正在读取账号信息…';
-  if (invalidExpected) {status.textContent = 'App 账号链接不完整。请回到 App 重新打开账号设置。'; return;}
+  if (invalidExpected) {status.textContent = 'App 账号链接不完整或已过期。请回到 App 重新打开账号设置。'; return;}
   try {
     const next = await request('/auth/session');
     if (current !== generation) return;
@@ -147,27 +151,81 @@ async function reconcile(current) {
 }
 name.addEventListener('input', () => {feedback.textContent = ''; update();});
 image.addEventListener('error', () => {image.hidden = true;});
+const cropDialog = $('avatar-crop'), canvas = $('avatar-canvas'), zoom = $('avatar-zoom');
+let crop, pointer;
+function avatarError(message = '') {
+  $('avatar-error').textContent = message;
+  avatar.setAttribute('aria-invalid', String(Boolean(message)));
+}
+function paintCrop() {
+  if (!crop) return;
+  const side = canvas.width;
+  const scale = side / Math.min(crop.bitmap.width, crop.bitmap.height) * Number(zoom.value);
+  const width = crop.bitmap.width * scale, height = crop.bitmap.height * scale;
+  crop.x = Math.max((side - width) / 2, Math.min((width - side) / 2, crop.x));
+  crop.y = Math.max((side - height) / 2, Math.min((height - side) / 2, crop.y));
+  const context = canvas.getContext('2d');
+  context.clearRect(0, 0, side, side);
+  context.drawImage(crop.bitmap, (side - width) / 2 + crop.x, (side - height) / 2 + crop.y, width, height);
+}
+zoom.addEventListener('input', paintCrop);
+canvas.addEventListener('pointerdown', event => {
+  if (!crop || pointer) return;
+  canvas.setPointerCapture(event.pointerId);
+  pointer = {id: event.pointerId, x: event.clientX, y: event.clientY};
+});
+canvas.addEventListener('lostpointercapture', () => {pointer = undefined;});
+canvas.addEventListener('pointermove', event => {
+  if (!crop || pointer?.id !== event.pointerId) return;
+  const scale = canvas.width / canvas.getBoundingClientRect().width;
+  crop.x += (event.clientX - pointer.x) * scale;
+  crop.y += (event.clientY - pointer.y) * scale;
+  pointer.x = event.clientX; pointer.y = event.clientY; paintCrop();
+});
+canvas.addEventListener('keydown', event => {
+  if (!crop || !['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)) return;
+  event.preventDefault();
+  crop.x += event.key === 'ArrowLeft' ? -5 : event.key === 'ArrowRight' ? 5 : 0;
+  crop.y += event.key === 'ArrowUp' ? -5 : event.key === 'ArrowDown' ? 5 : 0;
+  paintCrop();
+});
+cropDialog.addEventListener('close', () => {
+  if (!crop) return;
+  try {
+    if (crop.generation === generation && cropDialog.returnValue === 'confirm') {
+      const data = canvas.toDataURL('image/webp', 0.9);
+      avatarChange = {kind: 'replace', base64: data.slice(data.indexOf(',') + 1)};
+      avatarPreview = data; preview(data); feedback.textContent = '头像已裁切，保存资料后生效。';
+    }
+  } finally {crop.bitmap.close(); crop = undefined; pointer = undefined; update();}
+});
 avatar.addEventListener('change', async () => {
   const file = avatar.files?.[0]; avatar.value = '';
   if (!file || busy || !profile) return;
-  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || !file.size || file.size > 2 * 1024 * 1024) {
-    feedback.textContent = '请选择不超过 2 MiB 的 PNG、JPEG 或 WebP 静态图片。'; return;
-  }
-  const current = generation; busy = true; feedback.textContent = ''; update();
+  avatarError();
+  feedback.textContent = '';
+  if (!file.size) return avatarError('所选文件为空，请重新选择。');
+  if (file.size > 2 * 1024 * 1024) return avatarError('这张图片超过 2 MiB。请压缩后重试。');
+  const current = generation; busy = true; update();
+  let problem = '未能读取图片，请重新选择文件。';
   try {
-    const bitmap = await createImageBitmap(file);
-    try {if (bitmap.width < 1 || bitmap.height < 1 || bitmap.width > 2048 || bitmap.height > 2048) throw new AccountError('invalid_logo');}
-    finally {bitmap.close();}
-    const data = await new Promise((resolve, reject) => {
-      const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file);
-    });
-    if (current !== generation) return;
-    avatarChange = {kind: 'replace', base64: data.slice(data.indexOf(',') + 1)};
-    avatarPreview = data; preview(avatarPreview); feedback.textContent = '头像将在保存时居中裁成方形。';
-  } catch {if (current === generation) feedback.textContent = '图片无法使用。请选择最大 2048 × 2048 像素、不超过 2 MiB 的 PNG、JPEG 或 WebP 静态图片。';}
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const {staticLogoFormat} = await import('/avatar-format.mjs');
+    problem = '请选择 PNG、JPEG 或 WebP 格式的静态图片。';
+    const format = staticLogoFormat(bytes);
+    problem = '浏览器无法解码这张图片。请重新导出为 PNG 或 JPEG 后再试。';
+    const bitmap = await createImageBitmap(new Blob([bytes], {type:'image/' + format}));
+    if (current !== generation) {bitmap.close(); return;}
+    crop = {bitmap, generation: current, x: 0, y: 0}; zoom.value = '1'; cropDialog.returnValue = '';
+    problem = '未能打开裁切预览。请刷新页面后重新选择图片。';
+    paintCrop(); cropDialog.showModal(); zoom.focus();
+  } catch {
+    if (crop?.generation === current && !cropDialog.open) {crop.bitmap.close(); crop = undefined;}
+    if (current === generation) avatarError(problem);
+  }
   finally {if (current === generation) {busy = false; update();}}
 });
-remove.addEventListener('click', () => {if (busy) return; avatarChange = {kind: 'remove'}; avatarPreview = undefined; preview(); feedback.textContent = '保存后恢复默认头像。'; update();});
+remove.addEventListener('click', () => {if (busy) return; avatarError(); avatarChange = {kind: 'remove'}; avatarPreview = undefined; preview(); feedback.textContent = '保存后恢复默认头像。'; update();});
 form.addEventListener('submit', async event => {
   event.preventDefault();
   if (busy || !profile || !validName() || save.disabled) return;
@@ -179,11 +237,12 @@ form.addEventListener('submit', async event => {
     if (current !== generation) return;
     if (value.authorId !== accountId) throw new AccountError('session_changed');
     applyProfile(value); feedback.textContent = '个人资料已保存。';
+    if (nextPage) location.replace(nextPage);
   } catch (error) {
     if (current !== generation) return;
     if (['session_changed', 'login_required', 'auth_required', 'account_mismatch'].includes(error.code)) {await load(); return;}
     if (error.code === 'nickname_taken') {feedback.textContent = '这个昵称已被使用，请换一个。'; return;}
-    if (error.code === 'invalid_logo') {feedback.textContent = '头像未通过校验。请选择最大 2048 × 2048 像素、不超过 2 MiB 的 PNG、JPEG 或 WebP 静态图片。'; return;}
+    if (error.code === 'invalid_logo') {avatarError('裁切后的头像未通过校验。请重新选择图片并裁切后再保存。'); return;}
     if (error.code === 'invalid_input') {feedback.textContent = '请检查昵称和头像格式后再保存。'; return;}
     recover.hidden = false;
     feedback.textContent = error.code === 'conflict' ? '资料已在其他页面更新。请重新读取后再确认保存。' : '保存结果暂未确认，请重新读取云端资料后再确认。';
@@ -236,4 +295,27 @@ window.addEventListener('focus', checkSession);
 document.addEventListener('visibilitychange', checkSession);
 window.addEventListener('pageshow', event => {if (event.persisted) void load();});
 if (events) {events.onmessage = checkSession; events.postMessage('check');}
-await load();
+async function connectAppAccount(ticket) {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(ticket)) throw new AccountError('link_expired');
+  const url = '/auth/account-link/consume';
+  const post = data => request(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)});
+  const offer = await post({ticket});
+  status.textContent = '从 App 打开账号设置';
+  const confirm = document.createElement('button');
+  confirm.type = 'button'; confirm.className = 'button'; confirm.textContent = '使用「' + offer.displayName + '」继续';
+  status.after(confirm);
+  confirm.addEventListener('click', async () => {
+    confirm.disabled = true;
+    try {
+      const value = await post({ticket, confirm: true, displaySession: offer.displaySession});
+      if (value.accountId !== offer.accountId) throw new AccountError('session_changed');
+      confirm.remove();
+      expectedAccount = value.accountId;
+      history.replaceState({accountExpected: expectedAccount}, '', location.pathname);
+      events?.postMessage('check'); await load();
+    } catch {confirm.remove(); status.textContent = '这个连接已失效，请回到 App 重新打开账号设置。';}
+  }, {once: true});
+}
+if (accountLink) {
+  try {await connectAppAccount(accountLink);} catch {status.textContent = '这个连接已失效，请回到 App 重新打开账号设置。';}
+} else await load();

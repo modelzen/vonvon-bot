@@ -1,20 +1,56 @@
-.glow-button { --glow-button-width:84px; --glow-button-height:var(--control-height,32px); position:relative; display:inline-flex; flex:none; vertical-align:middle; border-radius:var(--control-radius,8px); background:var(--color-surface); }
-.glow-button[data-size=md] { --glow-button-width:98px; --glow-button-height:var(--control-height-lg,36px); }
-/* These compact controls keep the original library's light in the bottom
-   13px, clear of the label. Both layers use the same official Line palette. */
-.glow-button__art { display:grid; pointer-events:none; clip-path:inset(1px round 7px); mask-image:linear-gradient(to top,#000 0 3px,transparent 13px); }
-.glow-button__idle,.glow-button__sweep { display:inline-flex; grid-area:1 / 1; transition:opacity 200ms var(--ease-standard); }
+.glow-button {
+  --glow-button-min-width:84px;
+  --glow-button-height:var(--control-height,32px);
+  --glow-button-surface:var(--color-surface);
+  --glow-button-label:var(--color-text);
+  --glow-button-border:var(--color-border);
+  position:relative;
+  display:inline-grid;
+  flex:none;
+  vertical-align:middle;
+  border-radius:var(--control-radius,8px);
+  background:var(--glow-button-surface);
+  transition:transform 150ms var(--ease-standard);
+}
+.glow-button[data-size=md] { --glow-button-min-width:98px; --glow-button-height:var(--control-height-lg,36px); }
+.glow-button[data-variant=dark] { --glow-button-surface:var(--color-text); --glow-button-label:var(--color-surface); --glow-button-border:var(--color-text); }
+
+.glow-button .glow-button__control {
+  position:relative;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  box-sizing:border-box;
+  min-width:var(--glow-button-min-width);
+  min-height:var(--glow-button-height);
+  padding:0 12px;
+  border:1px solid var(--glow-button-border);
+  border-radius:inherit;
+  background:transparent;
+  color:var(--glow-button-label);
+  font:500 var(--font-size-body,13px)/1.4 var(--font-family-system);
+  white-space:nowrap;
+  cursor:pointer;
+}
+.glow-button:has(button:focus-visible) { outline:2px solid var(--color-focus); outline-offset:3px; }
+.glow-button .glow-button__control:focus-visible { outline:none; box-shadow:none; }
+.glow-button[data-disabled] { opacity:.45; }
+.glow-button .glow-button__control:disabled { cursor:default; }
+
+.glow-button__art {
+  position:absolute;
+  inset:0;
+  display:grid;
+  pointer-events:none;
+  clip-path:inset(1px round calc(var(--control-radius,8px) - 1px));
+  mask-image:linear-gradient(to top,#000 0 8%,transparent 40%);
+}
+.glow-button__idle,.glow-button__sweep { display:grid; grid-area:1 / 1; transition:opacity 200ms var(--ease-standard); }
+.glow-button__beam { --beam-stroke-opacity:0; }
+.glow-button__shape { border-radius:var(--control-radius,8px); }
 .glow-button__sweep { opacity:0; }
 .glow-button[data-moving] .glow-button__sweep { opacity:1; }
 .glow-button[data-moving] .glow-button__idle { opacity:0; }
-.glow-button .glow-button__art .glow-button__button { color:transparent; }
-.glow-button .glow-button__button.glow-button__control { position:absolute; inset:0; z-index:1; width:100%; height:100%; background:transparent; }
-.glow-button__beam { display:inline-flex; border-radius:var(--control-radius,8px); --beam-stroke-opacity:0; }
-.glow-button .glow-button__button { display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box; min-width:var(--glow-button-width); height:var(--glow-button-height); padding:0 12px; border:1px solid var(--color-border); border-radius:var(--control-radius,8px); background:var(--color-surface); color:var(--color-text); font:500 var(--font-size-body,13px)/1.4 var(--font-family-system); white-space:nowrap; cursor:pointer; transition:transform 150ms var(--ease-standard); }
-.glow-button:has(button:focus-visible) { outline:2px solid var(--color-focus); outline-offset:3px; }
-.glow-button .glow-button__button:focus-visible { outline:none; box-shadow:none; }
-.glow-button[data-disabled] { opacity:.45; }
-.glow-button .glow-button__button:disabled { cursor:default; }
 .glow-button__beam,
 .glow-button__beam::before,
 .glow-button__beam::after,
@@ -28,12 +64,8 @@
   .glow-button[data-moving] .glow-button__beam--sweep:not([data-paused])::before,
   .glow-button[data-moving] .glow-button__beam--sweep:not([data-paused])::after,
   .glow-button[data-moving] .glow-button__beam--sweep:not([data-paused]) > [data-beam-bloom] { animation-play-state:running!important; }
-  .glow-button .glow-button__button:active:not(:disabled) { transform:scale(.98); }
+  .glow-button:has(button:active:not(:disabled)) { transform:scale(.98); }
 }
-@media (prefers-reduced-motion:reduce) { .glow-button__idle,.glow-button__sweep,.glow-button .glow-button__button { transition:none; } }
-@media (pointer:coarse) { .glow-button .glow-button__button { min-height:44px; } }
-
-.glow-button[data-variant=dark] { --glow-button-surface:var(--color-text); --glow-button-label:var(--color-surface); --glow-button-border:var(--color-text); background:var(--glow-button-surface); }
-.glow-button[data-variant=dark] .glow-button__button { background:var(--glow-button-surface); color:var(--glow-button-label); border-color:var(--glow-button-border); }
-.glow-button[data-variant=dark] .glow-button__control { background:transparent; }
+@media (prefers-reduced-motion:reduce) { .glow-button,.glow-button__idle,.glow-button__sweep { transition:none; } }
+@media (pointer:coarse) { .glow-button .glow-button__control { min-height:44px; } }
 @media (hover:hover) { .glow-button[data-variant=dark]:has(button:hover:not(:disabled)) { --glow-button-surface:color-mix(in srgb,var(--color-text) 85%,var(--color-surface)); } }

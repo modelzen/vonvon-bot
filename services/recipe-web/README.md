@@ -12,15 +12,22 @@ npm start
 
 `npm run build` 生成 `dist/viewer.mjs`、`dist/viewer.css` 与 `dist/rich-detail.mjs`。网页与 App 读取同一个 Recipe API 的账号权益和固定版本数据。网页使用独立的社区首页、导航与详情布局，沿用官网的白底、墨黑字和橙色品牌点缀；详情为可通过目录链接定位的长页面，桌面右侧提供作者、版本及获取入口，窄屏将获取入口放在正文前。配置文字和 Markdown 复用内容渲染器，页面布局与操作控件由 Web 自己实现。`npm start` 或 `node server.mjs` 直接运行这些产物，不在运行机器上构建或写入发布目录。开发时可用 `npm run dev` 先构建再启动。
 
-部署包须保留 `server.mjs`、`auth.mjs`、`native-auth.mjs`、`release-code-oauth.mjs`、`release-code-store.mjs`、`public/`、上述三个 `dist/` 文件、服务的 package 文件，以及 API 的 `src/credential-shapes.mjs`。构建只在有共享 UI 源码和根目录开发依赖的源码树运行；构建完成后，运行机器只需 `npm ci --omit=dev` 安装网页及账号服务的运行依赖，无需 React、esbuild、TypeScript 或 UI 源码。
+部署包须保留 `server.mjs`、`auth.mjs`、`native-auth.mjs`、`oauth-provider.mjs`、`release-code-oauth.mjs`、`release-code-store.mjs`、`public/`、上述三个 `dist/` 文件、服务的 package 文件，以及 API 的 `src/credential-shapes.mjs`。构建只在有共享 UI 源码和根目录开发依赖的源码树运行；构建完成后，运行机器只需 `npm ci --omit=dev` 安装网页及账号服务的运行依赖，无需 React、esbuild、TypeScript 或 UI 源码。
 
 开发入口为 `http://127.0.0.1:49151/`。服务监听本机端口。Web 到 API 的默认连接是 `http://127.0.0.1:4317`，到 broker 的默认连接是 `http://127.0.0.1:4318`。`RECIPE_API_ORIGIN` 和 `RECIPE_BROKER_ORIGIN` 只接受固定 loopback origin。若修改 `RECIPE_WEB_PORT`，相应设置 `RECIPE_WEB_ORIGIN`；从 Nginx 暴露时，后者必须等于浏览器实际打开的 HTTPS origin。
 
-登录需设置 `SUPABASE_URL`、`SUPABASE_PUBLISHABLE_KEY`，并在 Supabase 控制台给该环境登记精确回程 `<RECIPE_WEB_ORIGIN>/auth/callback`。测试和生产各用自己的应用配置。用 `RECIPE_WEB_PROVIDERS=github,google,apple` 指定该项目实际启用的身份提供方。缺少配置时网页提供公开浏览，真实登录按钮会提示当前不可用。社交认证走 PKCE，浏览器持有 HttpOnly 会话 cookie。一次性票据与上游会话保存在服务进程内存，部署时仅运行一个实例。重启此服务后，用户需要再次登录。Nginx 对 `/auth/` 关闭带查询串的访问日志。
+登录需设置 `SUPABASE_URL`、`SUPABASE_PUBLISHABLE_KEY`，并在 Supabase 控制台给该环境登记精确回程 `<RECIPE_WEB_ORIGIN>/auth/callback`。测试和生产各用自己的应用配置。本轮 UI 仅提供 GitHub 与 Google，用 `RECIPE_WEB_PROVIDERS=github,google` 按该项目实际启用情况配置；缺少凭据的方式必须保持禁用。通用协议仍保留 Apple 的历史兼容，本轮不展示或接入。缺少配置时网页提供公开浏览，真实登录按钮会提示当前不可用。社交认证走 PKCE，浏览器持有 HttpOnly 会话 cookie。一次性票据与上游会话保存在服务进程内存，部署时仅运行一个实例。重启此服务后，用户需要再次登录。Nginx 对 `/auth/` 关闭带查询串的访问日志。
 
 浏览器在同一 origin 发起 `/api/v1/…` 和 `/api/v2/…` 请求。公开入口必须将两个前缀都交给这个 Web BFF，由它检查会话、Origin 和 CSRF 绑定，再转交 API。原生 App 的 `/v2/…` Bearer 请求继续路由到 API 或 broker；不能把浏览器的 `/api/v2/…` 直接转到它们。
 
-rich 详情固定到 URL 中的 recipeId 和 versionId。BFF 验证 canonical manifest、release 哈希、被引用成员的大小与哈希，并只向浏览器返回已校验内容、解析后的文字及归一化 WebP Logo。凭码概览只读取公共 Logo，不请求 manifest 或私有成员。浏览器没有任意对象读取或本机安装接口。网页领取只把权益保存到当前账号，用户在 App 登录同一账号后，将配方交给 Bot，在本人私聊中说明如何调整配置。网页「创作配方」无需登录即可查看 App 创作步骤，不提供手动编辑或发布入口。配方从本地 Bot 和已有群聊的配置开始，在飞书私聊中整理，再从卡片打开 App 查看完整预览并确认发布，或在私聊卡片中直接确认发布。App「我的配方」统一展示已获取、创作中与已发布；新创作入口为右上角「创作配方」，Bot 主动发送引导卡并打开本人私聊，首次使用需验证本人身份。已发布版本和分享码也在这里管理。旧草稿链接仍进入这份说明，云端内容保留，后端 owner API 兼容保持不变。
+公开详情固定到 URL 中的 recipeId 和 versionId，仅向 API 请求安全的 `/preview` 元数据，并固定发送 `X-Vonvon-Browse: public-v2` 能力头。直接获取与凭码获取展示相同的允许公开的结构；私有规则和技能正文不返回，领取后浏览详情也不因此下载 manifest、正文对象或附件。原始对象仍由现有权益校验保护，只在 App 真正交给 Bot 的准备步骤中按精确版本读取。网页不提供任意对象读取或安装接口。
+
+个人库使用 `/v2/me/recipe-groups?scope=all|acquired|published`，按不可变 recipeId 一张卡；版本选择按需读取该配方权限范围内的版本分页，不将一个版本的分享码升级成整份配方权益。默认展示 API 指定的最新已授权版本，原固定版本链接与已安装版本不自动变化。版本页以 nextCursor 为后续页依据，初始卡片计数不是永久快照。
+
+网站的「创作中」仅说明草稿保存在本地，并以严格渠道 URI 打开 App 本地创作列表，不读写云草稿。顶部「发布配方」只打开 App 本地创作；用户确认发布后才上传。既有云端遗留数据不盲删。网页的「在 App 中交给 Bot」携带精确 recipeId/versionId，App 重新核对账号与权益后打开 Bot 选择，并保留最终确认；点击链接不自动获取、安装或发送。
+
+Web 与 App 共用独立 `/login` 页面：普通 Web 继续带白名单 returnTo，App 使用 `/login?mode=app#ticket=…`，回程使用绑定原 cookie/标签页的密封 receipt。旧 `/auth/native` 两个页面路径兼容渲染同一模板。App 模式使用 no-referrer，普通 OAuth 表单保留 same-origin；nonce、state、PKCE 与显式身份确认机制不变。
+
 
 OAuth 回程会立即跳转到干净的原始版本页面，登录本身不会消耗分享码。
 

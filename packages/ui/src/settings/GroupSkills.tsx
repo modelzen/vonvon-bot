@@ -1,9 +1,11 @@
-import {useState} from 'react';
-import {setupSkillsFirst, type ProjectSettingsView} from '@vonvon/protocol';
+import {useState, type ReactNode} from 'react';
+import {isSetupSkillName, setupSkillsFirst, type ProjectSettingsView} from '@vonvon/protocol';
 import {ChevronRight, RefreshCw, Search} from 'lucide-react';
 import {Button, IconButton, Toggle} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
-import {SetupSkillBadge} from '../skills/SetupSkillBadge';
+import {RecipeSkillList} from '../community/RecipeSkills';
+import {SetupSkillInfo, setupSkillPurpose} from '../skills/SetupSkillBadge';
+import {SkillDetailsButton} from '../skills/SkillDetailsButton';
 
 type Skills = NonNullable<ProjectSettingsView['skills']>;
 const groups = [
@@ -11,6 +13,30 @@ const groups = [
   {source: 'user', title: '全局技能', description: '来自用户目录，可在多个项目中使用'},
   {source: 'provider', title: 'Provider 技能', description: 'Provider 自带或通过插件提供的技能'},
 ] as const satisfies readonly {source: Skills[number]['source']; title: string; description: string}[];
+
+type SkillDescription = {name: string; description?: string};
+
+function SkillRow({skill, enabled, note, onOpen, children}: {skill: SkillDescription; enabled?: boolean; note?: string; onOpen: () => void; children?: ReactNode}) {
+  return <div className="gd-skill-row" role="listitem" data-enabled={enabled}>
+    <SkillDetailsButton name={skill.name} description={skill.description} note={note} onOpen={onOpen}/>
+    <SetupSkillInfo name={skill.name}/>{children}
+  </div>;
+}
+
+function SkillDialog({skill, source, location, showSetupPurpose, onClose}: {skill?: SkillDescription; showSetupPurpose?: boolean; source?: string; location?: string; onClose: () => void}) {
+  return <Dialog open={Boolean(skill)} title={skill?.name ?? '技能'} onClose={onClose} footer={<Button onClick={onClose}>完成</Button>}>
+    {skill && <dl className="gd-skill-facts"><div><dt>说明</dt><dd>{skill.description || '未提供说明'}</dd></div>{showSetupPurpose && isSetupSkillName(skill.name) && <div><dt>Setup 用途</dt><dd>{setupSkillPurpose}</dd></div>}<div><dt>来源</dt><dd>{source}</dd></div><div><dt>位置</dt><dd>{location}</dd></div></dl>}
+  </Dialog>;
+}
+
+export function ReadonlyRecipeSkills({skills}: {skills: (SkillDescription & {itemId:string})[]}) {
+  const [selected, setSelected] = useState<SkillDescription>();
+  if (!skills.length) return <p className="gd-empty">未选择技能</p>;
+  return <>
+    <RecipeSkillList skills={skills} onOpen={setSelected}/>
+    <SkillDialog skill={selected} showSetupPurpose source="配方技能" location="交给 Bot 后，由目标群聊管理。" onClose={() => setSelected(undefined)}/>
+  </>;
+}
 
 export function SkillsList({skills, disabledPaths, disabled, onToggle, refresh}: {
   skills: Skills; disabledPaths: string[]; disabled: boolean;
@@ -42,18 +68,17 @@ export function SkillsList({skills, disabledPaths, disabled, onToggle, refresh}:
             <span className="gd-skill-count">{needle ? `${matches.length} / ${total.length} 项` : `${total.length} 项 · ${total.filter(isEnabled).length} 已启用`}</span>
           </summary>
           <div className="gd-skill-list" role="list" aria-label={group.title}>
-            {matches.length ? matches.map(skill => <div className="gd-skill-row" role="listitem" key={skill.path} data-enabled={isEnabled(skill)}>
-              <button type="button" className="gd-skill-detail" onClick={() => setSelected(skill)}><span><strong>{skill.name}</strong>{skill.description && <small>{skill.description}</small>}{!skill.enabled && !disabledPaths.includes(skill.path) && <small>Provider 已停用</small>}</span><ChevronRight size={14} aria-hidden="true"/></button>
-              <SetupSkillBadge name={skill.name}/>
+            {matches.length ? matches.map(skill => <SkillRow key={skill.path} skill={skill} enabled={isEnabled(skill)}
+              note={!skill.enabled && !disabledPaths.includes(skill.path) ? 'Provider 已停用' : undefined} onOpen={() => setSelected(skill)}>
               <Toggle className="settings-row-switch" label={`使用 ${skill.name}`} aria-label={`使用 ${skill.name}`} checked={isEnabled(skill)} disabled={disabled || !skill.enabled && !disabledPaths.includes(skill.path)} onChange={event => onToggle(skill.path, event.target.checked)}/>
-            </div>) : <p className="gd-empty">本项目尚未发现技能。配方安装的技能会显示在这里。</p>}
+            </SkillRow>) : <p className="gd-empty">本项目尚未发现技能。配方安装的技能会显示在这里。</p>}
           </div>
         </details>;
       })}
       {needle && !visible.length && <div className="gd-empty" role="status">没有匹配的技能。<button type="button" className="gd-text-action" onClick={() => setQuery('')}>清除搜索</button></div>}
     </div>
-    <Dialog open={Boolean(selected)} title={selected?.name ?? '技能'} onClose={() => setSelected(undefined)} footer={<Button onClick={() => setSelected(undefined)}>完成</Button>}>
-      {selected && <dl className="gd-skill-facts"><div><dt>说明</dt><dd>{selected.description || '未提供说明'}</dd></div><div><dt>来源</dt><dd>{selected.path.startsWith('recipe:') ? '配方安装 · 项目技能' : groups.find(group => group.source === selected.source)?.title}</dd></div><div><dt>位置</dt><dd>{selected.path.startsWith('recipe:') ? '由本群配方管理' : selected.path}</dd></div></dl>}
-    </Dialog>
+    <SkillDialog skill={selected} onClose={() => setSelected(undefined)}
+      source={selected?.path.startsWith('recipe:') ? '配方安装 · 项目技能' : groups.find(group => group.source === selected?.source)?.title}
+      location={selected?.path.startsWith('recipe:') ? '由本群配方管理' : selected?.path}/>
   </>;
 }

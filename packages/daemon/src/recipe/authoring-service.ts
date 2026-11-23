@@ -1,11 +1,12 @@
+import {editJobRequest} from './conversation-draft-edit';
 import {AuthoringRouter} from './authoring-router';
 import {PrivateCreator, invalidateWorkOffer,creatorClick,creatorIntent} from './private-creator';
 import {PrivateHandoffs} from './authoring-handoff';
-import {handoffClick} from './authoring-handoff-menu';
-import {richSkillOptions,readRichSource,preparedRich,richReviewDigest,bindRichMembers,richMemberCap,richCardReview,typedRichEdit,chatRichProposal,richEditCardContext,type RichLocalDraft,type RichNativeOptions} from './authoring-rich-flow';
-import {postRichStage,verifyFrozenRich} from './authoring-rich-proof';
-import {itemsOf,wireDigest} from './authoring-rich-snapshot';
-import {decodeRichRecipeContent,richFreezeInputSchema} from '@vonvon/protocol';
+import {handoffClick,type ConversationCapture} from './authoring-handoff-menu';
+import {conversationSource,richSkillOptions,readRichSource,preparedRich,richReviewDigest,bindRichMembers,richMemberCap,richCardReview,typedRichEdit,chatRichProposal,richEditCardContext,type RichLocalDraft,type RichNativeOptions} from './authoring-rich-flow';
+import {postRichStage,savedRichDraft,verifyFrozenRich} from './authoring-rich-proof';
+import {wireDigest} from './authoring-rich-snapshot';
+import {richFreezeInputSchema} from '@vonvon/protocol';
 import type {RichModelInput} from './authoring-rich-model';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
@@ -26,12 +27,14 @@ import { operationUuid } from './manifest';
 export interface AuthoringPeer {id: string; device: string}
 export type AuthoringIpc = {kind: 'recipeAuthoring'; peer: AuthoringPeer; request: RecipeAuthoringRequest} |
   {kind: 'recipeAuthoringDisconnect'; peer: AuthoringPeer};
-export interface Presence {readonly peer: AuthoringPeer; readonly session: string; readonly account: string; readonly scope: string; readonly binding?: string; readonly nativePreview?: true; readonly resourceContext?: true; until: number; activity: number; activeAt: number}
+export interface Presence {readonly peer: AuthoringPeer; readonly session: string; readonly account: string; readonly scope: string; readonly binding?: string; readonly nativePreview?: true; readonly resourceContext?: true; draftScope?:true; until: number; activity: number; activeAt: number}
 interface Challenge {
   id: string; session: string; hash: Buffer; expiresAt: number; attempts: number;
   recipient?: Recipient; messageId?: string; evidence?: string;
 }
 export interface AuthoringOptions {
+  runtimeInventory?: (group:import('../project/registry').Project) => Promise<import('./authoring-runtime-inventory').RecipeRuntimeInventory>;
+  groupSkills?:RichNativeOptions['groupSkills'];
   bot: BotIdentity; cfg: AppConfig; channel: LarkChannel; root?: string; now?: () => number;
   origin?: string; fetch?: typeof fetch; loopback?: boolean; parser?: DraftInstructionParser & {proposeRich?(input:RichModelInput,signal:AbortSignal):Promise<unknown>}; tasks?:RichNativeOptions['tasks'];managedSources?:RichNativeOptions['managedSources']; readDraftField?: ReadDraftField;
   currentBot?: () => Promise<void>; source?: (scope: string, account: string, group: string) => Promise<ReviewedSource>;
@@ -62,12 +65,19 @@ export function fromMessage(msg: NormalizedMessage): Recipient | undefined {
       raw.message.message_id !== msg.messageId || raw.sender.sender_id.open_id !== msg.senderId) return;
   return {openId: msg.senderId, chatId: msg.chatId, tenantKey: raw.sender.tenant_key};
 }
-function revokeOperation(op: LocalOperation) {
-  if (!active(op) || op.revoked) return;
+function revokeOperation(op: LocalOperation,now:number) {
+  if(op.revoked)return;
+  if(!active(op)){
+    if(op.view.storage==='local'){op.revoked=true;op.contextOpen=false;}
+    return;
+  }
   op.revoked = true;
   op.view.state = 'cancelPending';
   op.contextOpen = false;
-  discardAuthoringMaterial(op);
+  if(op.view.storage==='local'){
+    op.view.receipt={operationId:op.view.operationId,status:'cancelled',stateRevision:3};
+    retire(op,'cancelled',now);
+  }else discardAuthoringMaterial(op);
 }
 function bound(op: LocalOperation, link?: Link) {
   return !op.revoked && op.binding === link?.binding && sameRecipient(op.recipient,link.recipient);
@@ -79,8 +89,8 @@ function editCandidate(op: LocalOperation) {
       details.revision === op.view.baseRevision && details.payloadDigest === op.proposalDigest) return details;
 }
 function reconciliationOf(op: LocalOperation): AuthoringReconciliation {
-  const {operationId,purpose,targetPublicKey,nonceCommitment,draftId,baseRevision,createdAt,receipt} = op.view;
-  return {operationId,purpose,targetPublicKey,nonceCommitment,draftId,baseRevision,createdAt,receipt,...(op.view.format&&{format:op.view.format})};
+  const {operationId,purpose,targetPublicKey,nonceCommitment,draftId,baseRevision,createdAt,receipt,storage} = op.view;
+  return {operationId,purpose,targetPublicKey,nonceCommitment,draftId,baseRevision,createdAt,receipt,...(op.view.format&&{format:op.view.format}),...(storage&&{storage})};
 }
 function refusal(): never { throw new Error('身份、来源或草稿上下文已改变，请回到 App 核对。'); }
 function richInstructionReply(result:Exclude<Awaited<ReturnType<typeof chatRichProposal>>,{kind:'proposal'}>){
@@ -132,6 +142,16 @@ export class AuthoringSession {
       edit:(p,link,work,revision,selectionCommit)=>this.start(p,link.recipient,{draftId:work.draftId,baseRevision:revision,selectionCommit}),
     });
   }
+  captureConversation(recipient:Recipient,input:ConversationCapture,guard:()=>void):Promise<{state:'preparing'|'saved';draftId?:string}>{
+    const p=this.p;
+    if(!p?.binding)refusal();
+    return this.serial(async()=>{
+      guard();
+      const link=await this.allowed(p,recipient);
+      this.interact(p);
+      return this.handoffs.capture(p,link,input,guard,target=>this.start(p,recipient,target));
+    });
+  }
   private serial<T>(task: () => Promise<T>): Promise<T> {
     const result = this.queue.then(task);
     this.queue = result.then(() => {}, () => {});
@@ -180,7 +200,7 @@ export class AuthoringSession {
         }
         delete db.links[key];
       }
-      for (const op of Object.values(db.operations)) if (op.bot === this.botKey && op.recipient.openId === openId) revokeOperation(op);
+      for (const op of Object.values(db.operations)) if (op.bot === this.botKey && op.recipient.openId === openId) revokeOperation(op,this.now());
     });
   }
   close() { this.lifetime.abort(); this.menu = undefined; this.stopped = true; this.p = undefined; this.challenge = undefined; }
@@ -225,7 +245,8 @@ export class AuthoringSession {
       if(identity!==await groupSourceIdentity(this.opts.channel,this.opts.bot,p.scope,groupId))refusal();
     }
     if(op.view.format==='rich-v2'&&op.rich?.source){
-      const src=op.rich.source, current=await readRichSource(this.opts,p.scope,p.account,src.groupId,src.options);
+      const src=op.rich.source, current=op.conversation?(await conversationSource(this.opts,p.scope,p.account,src.groupId)).inventory:
+        await readRichSource(this.opts,p.scope,p.account,src.groupId,src.options);
       if(current.lease!==src.token){
         await this.change(p,op.view.operationId,row=>{if(active(row)){row.view.state='needsReview';setCard(row,'review');}});
         refusal();
@@ -253,7 +274,7 @@ export class AuthoringSession {
     if (req.type === 'creatorOpen') {
       const association = await this.creator.discover(peer,req.accountId);
       if (association.association?.binding !== req.binding || association.association.scope !== req.scope) refusal();
-      const p = this.p = {peer,session:randomUUID(),account:req.accountId,scope:req.scope,binding:req.binding,nativePreview:req.nativePreview,resourceContext:req.resourceContext,until:this.now()+LEASE,activity:0,activeAt:this.now()};
+      const p = this.p = {peer,session:randomUUID(),account:req.accountId,scope:req.scope,binding:req.binding,nativePreview:req.nativePreview,resourceContext:req.resourceContext,draftScope:req.draftScope,until:this.now()+LEASE,activity:0,activeAt:this.now()};
       await this.creator.open(p,req.binding,req.wakeId);
       return {kind:'creatorSession',session:p.session,binding:req.binding,scope:p.scope,leaseMs:LEASE,...(p.resourceContext&&{resourceContext:true})};
     }
@@ -275,9 +296,37 @@ export class AuthoringSession {
     this.present(p);
     p.until = this.now()+LEASE;
     if (req.type === 'resourceHandoff') refusal(); // The resource broker owns this action.
+    if(p.draftScope&&p.binding&&(req.type==='creatorCheck'||req.type==='creatorAnswer'||req.type==='creatorPoll')){
+      await this.allowed(p);
+      const result=await editJobRequest(this.ledger,p,req,this.now,()=>this.present(p),this.opts);
+      if(result?.kind==='creatorJobs'&&req.type==='creatorPoll'){
+        const prior=await this.serial(()=>this.creator.request(p,req));
+        if(prior.kind!=='creatorJobs')refusal();
+        return {kind:'creatorJobs',jobs:[...result.jobs,...prior.jobs].slice(0,16)};
+      }
+      if(result)return result;
+    }
     if (req.type === 'creatorContinue' || req.type === 'creatorPoll' || req.type === 'creatorCheck' || req.type === 'creatorAnswer' || req.type === 'creatorLogo' || req.type === 'creatorDeliver' || req.type === 'creatorPreview' || req.type === 'creatorAppConfirm') {
       return this.serial(()=>this.creator.request(p,req));
     }
+    if(req.type==='localDraftAcknowledged')return this.serial(()=>this.ledger.run(db=>{
+      this.present(p);
+      const op=this.locate(db,p,req.operationId);
+      if(op.view.storage!=='local'||active(op)||!op.view.receipt||wireDigest(op.view.receipt)!==wireDigest(req.receipt))refusal();
+      if(!op.localDraftAcknowledged&&op.conversation&&!op.revoked&&req.receipt.status==='accepted'){
+        const link=db.links[linkKey(p.scope,p.account)],handoff=op.instructionId&&db.handoffs?.[op.instructionId];
+        if(link&&handoff&&handoff.captureOrder!==undefined&&handoff.captureOrder===(link.selectionOrder??0)&&
+          link.bot===op.bot&&link.binding===op.binding&&sameRecipient(link.recipient,op.recipient)&&
+          handoff.phase.state==='prepared'&&handoff.phase.operationId===op.view.operationId){
+          const creator=link.creator??={jobs:{},cards:{}},draftId=req.receipt.draftId;
+          creator.conversationFocus={draftId,order:handoff.captureOrder};
+          creator.focusDraft=draftId;creator.focusUntil=this.now()+CONTEXT;
+          if(creator.current?.kind!=='draft'||creator.current.snapshot.work.draftId!==draftId)delete creator.current;
+        }
+      }
+      op.localDraftAcknowledged=true;
+      return {kind:'localDraftAcknowledged' as const,operationId:req.operationId};
+    }));
     if (p.binding) {
       if (req.type === 'beginLink' || req.type === 'inspectLink' || req.type === 'confirmLink') refusal();
       await this.allowed(p);
@@ -348,7 +397,7 @@ export class AuthoringSession {
           await this.ledger.run(db => {
             this.present(p);
             if (Object.keys(db.links).length >= 1024 && !db.links[linkKey(p.scope,p.account)]) throw new Error('本机关联数量已到上限。');
-            for (const op of Object.values(db.operations)) if (op.scope === p.scope && op.accountId === p.account) revokeOperation(op);
+            for (const op of Object.values(db.operations)) if (op.scope === p.scope && op.accountId === p.account) revokeOperation(op,this.now());
             const previous=db.links[linkKey(p.scope,p.account)];
             for(const h of Object.values(db.handoffs??{}))if(h.binding===previous?.binding){h.phase={state:'cancelled'};delete h.edit;}
             db.links[linkKey(p.scope,p.account)] = {bot:this.botKey, binding:randomUUID(), recipient, sources:[]};
@@ -365,7 +414,7 @@ export class AuthoringSession {
               if (bound(op,link)) operations.push(operationView(op,this.now()));
               else {
                 // Also recover a disk/journal failure during removal or an orphan from an older daemon.
-                revokeOperation(op);
+                revokeOperation(op,this.now());
                 if (op.revoked) reconciliation.push(reconciliationOf(op));
               }
             }
@@ -441,6 +490,7 @@ export class AuthoringSession {
         }
         case 'richAdvance': {
           const op=await this.operation(p,req.operationId);
+          if(op.view.storage==='local')refusal();
           await this.validate(p,op);
           if(!op.rich||op.view.format!=='rich-v2'||op.view.draftId&&op.view.draftId!==req.destinationDraftId||
             op.rich.destinationDraftId&&op.rich.destinationDraftId!==req.destinationDraftId)refusal();
@@ -451,28 +501,7 @@ export class AuthoringSession {
           this.present(p);
           if(req.accepted&&op.rich.request){
             const frozen=verifyFrozenRich(op.view.operationId,req.destinationDraftId,op.rich.boundRequest??op.rich.request,req.accepted.frozen);
-            const saved=decodeRichRecipeContent(Buffer.from(frozen.canonical,'base64url')).content;
-            const original=op.rich.boundRequest??op.rich.request;
-            let selected=op.rich.base?.selected??[];
-            let origins=op.rich.base?.origins;
-            if('content' in original){
-              const allow=itemsOf(original.content).filter(x=>Object.values(original.content.public).some(f=>f.itemId===x.itemId)||op.rich!.source?.selected.includes(x.itemId));
-              const accepted=itemsOf(saved),items=itemsOf(original.content);
-              selected=allow.map(i=>accepted[items.findIndex(x=>x.itemId===i.itemId)]!.itemId);
-              const sourceMap=new Map(original.origins.map(o=>[o.itemId,o.source]));
-              origins=Object.fromEntries(items.map((item,i)=>[accepted[i]!.itemId,sourceMap.get(item.itemId)!]));
-            }
-            if('payload' in original && op.rich.base){
-              const before=decodeRichRecipeContent(Buffer.from(op.rich.base.canonical,'base64url')).content;
-              const inserted=saved.setup.filter(step=>!before.setup.some(old=>old.itemId===step.itemId));
-              const adds=original.payload.changes.filter(c=>c.op==='addSetup');
-              if(adds.length && adds.length===inserted.length){
-                origins={...origins};
-                selected=[...selected,...inserted.map(item=>item.itemId)];
-                for(const [index,item] of inserted.entries())origins[item.itemId]=adds[index]!.source;
-              }
-            }
-            await this.change(p,req.operationId,row=>{row.richSaved={canonical:frozen.canonical,origins,selected:selected.filter(id=>itemsOf(saved).some(item=>item.itemId===id))};});
+            await this.change(p,req.operationId,row=>{row.richSaved=savedRichDraft(op.rich!,frozen);});
           }
           if(req.authorization.stage==='dispatch')await this.change(p,req.operationId,row=>{row.richDispatch=req.authorization;});
           const receipt=await postRichStage(this.origin!,op,req,this.now(),this.opts.fetch,this.opts.loopback);
@@ -520,6 +549,7 @@ export class AuthoringSession {
           await this.ledger.run(db => {
             this.present(p);
             const op = this.locate(db,p,req.operationId);
+            if(op.view.storage==='local')refusal();
             if (!op.revoked) refusal();
             this.recordReceipt(op,req.receipt);
           });
@@ -529,6 +559,7 @@ export class AuthoringSession {
         case 'updateCard': await this.refresh(p,req.operationId); break;
         case 'settle': await this.settle(p,req.receipt,req.operationId); break;
         case 'advance': await this.advance(p,req.operationId,req.authorization); break;
+        case 'localDraftAdvance': await this.localAdvance(p,req.operationId,req.advance); break;
         case 'resend':
         case 'deliver': await this.deliver(p,req.operationId,req.type === 'resend'); break;
       }
@@ -550,16 +581,16 @@ export class AuthoringSession {
     });
     await this.refresh(p,id);
   }
-  private async start(p: Presence, recipient: Recipient, target: {selectionCommit?:(db:AuthoringLedger,link:Link)=>void;userSelection?:true;handoff?:{id:string;ref:string;groupId:string;generation:number;cardId:string;messageId:string};originalGroup?:LocalOperation['originalGroup'];rich?:RichLocalDraft;source?: Source; sourceIdentity?: string; sourceCard?: Pick<SourceMenu,'cardId'|'messageId'|'createdAt'>&{seq?:number}; draftId?: string; baseRevision?: number; instructionId?: string; payload?: string; proposalDigest?: string}): Promise<RecipeAuthoringReply> {
+  private async start(p: Presence, recipient: Recipient, target: {conversation?:true;selectionCommit?:(db:AuthoringLedger,link:Link)=>void;userSelection?:true;handoff?:{id:string;ref:string;groupId:string;generation:number;cardId?:string;messageId?:string};originalGroup?:LocalOperation['originalGroup'];rich?:RichLocalDraft;source?: Source; sourceIdentity?: string; sourceCard?: Pick<SourceMenu,'cardId'|'messageId'|'createdAt'>&{seq?:number}; draftId?: string; baseRevision?: number; instructionId?: string; payload?: string; proposalDigest?: string}): Promise<RecipeAuthoringReply> {
     if (target.source && !target.sourceIdentity) refusal();
-    this.menu = undefined;
+    if(!target.conversation)this.menu = undefined;
     const op = await withRegisteredBot(this.opts.bot.appId, () => this.ledger.run(db => {
       this.present(p);
       const link = this.liveLink(db,p);
       if (!sameRecipient(link?.recipient, recipient) || !isAdmin(this.opts.cfg,recipient.openId)) refusal();
       const handoff=target.handoff&&db.handoffs?.[target.handoff.id];
       if(target.handoff&&(!handoff||handoff.ref!==target.handoff.ref||handoff.session!==p.session||handoff.scope!==p.scope||
-        handoff.generation!==target.handoff.generation||handoff.cardId!==target.handoff.cardId||handoff.messageId!==target.handoff.messageId||
+        Boolean(handoff.conversation)!==Boolean(target.conversation)||handoff.generation!==target.handoff.generation||handoff.cardId!==target.handoff.cardId||handoff.messageId!==target.handoff.messageId||
         handoff.groupId!==target.handoff.groupId||target.draftId&&(handoff.edit?.draftId!==target.draftId||handoff.edit.baseRevision!==target.baseRevision)||
         handoff.account!==p.account||handoff.binding!==link!.binding||!sameRecipient(handoff.recipient,recipient)||handoff.expiresAt<=this.now()||
         handoff.phase.state!==(target.draftId?'selecting':'awaitingAttestations')||handoff.identity!==target.sourceIdentity))refusal();
@@ -574,9 +605,10 @@ export class AuthoringSession {
       };
       const current = Object.values(db.operations).filter(o => o.scope === p.scope && o.accountId === p.account && o.binding === link!.binding && sameRecipient(o.recipient,recipient));
       const prior = current.find(o => target.instructionId && (o.instructionId === target.instructionId || active(o) && o.seenInstructions?.includes(target.instructionId))) ??
-        current.find(o => (!this.creator.enabled||target.draftId||!target.handoff)&&active(o) && Boolean(o.view.format)===Boolean(target.rich) && (target.draftId ? o.view.draftId === target.draftId :
+        current.find(o => !target.conversation&&!o.conversation&&(!this.creator.enabled||target.draftId||!target.handoff)&&active(o) && Boolean(o.view.format)===Boolean(target.rich) && (target.draftId ? o.view.draftId === target.draftId :
           target.rich?.source ? o.rich?.source?.groupId===target.rich.source.groupId : o.source?.groupId === target.source?.groupId && o.source?.reviewToken === target.source?.reviewToken));
       if (prior) {
+        if(Boolean(prior.conversation)!==Boolean(target.conversation))refusal();
         if(target.rich&&active(prior)){
           const matches=target.rich.selectionDigest ? target.rich.selectionDigest===prior.rich?.selectionDigest :
             target.rich.base&&prior.rich?.base&&wireDigest(target.rich.base)===wireDigest(prior.rich.base);
@@ -594,10 +626,10 @@ export class AuthoringSession {
       reserve(db,p.account,this.now());
       const material = newAuthoringKey();
       const operationId = operationUuid(this.now());
-      const row: LocalOperation = {...(this.creator.enabled&&{creatorSave:true as const}),accountId:p.account, scope:p.scope, bot:this.botKey, binding:link!.binding, recipient, secret:material.secret, nonce:material.nonce,
+      const row: LocalOperation = {...(target.conversation&&{conversation:true}),...(!target.conversation&&this.creator.enabled&&{creatorSave:true as const}),accountId:p.account, scope:p.scope, bot:this.botKey, binding:link!.binding, recipient, secret:material.secret, nonce:material.nonce,
         originalGroup:handoff?{groupId:handoff.groupId,identity:handoff.identity}:target.originalGroup,rich:target.rich, source:target.source, sourceIdentity:target.sourceIdentity, instructionId: target.instructionId, payload: target.payload, proposalDigest: target.proposalDigest,
         contextUntil:this.now()+CONTEXT, carrier:newCarrier(target.rich?.request ? 'confirm' : target.source ? 'prepare' : target.payload ? 'confirm' : target.rich?'richEdit':'edit'), dispatched:false, contextOpen:true,
-        view:{operationId, targetPublicKey:material.targetPublicKey, nonceCommitment:material.nonceCommitment,
+        view:{operationId, storage:'local', targetPublicKey:material.targetPublicKey, nonceCommitment:material.nonceCommitment,
           ...(target.rich&&{format:'rich-v2'}),purpose:target.source||target.rich?.source ? 'prepareDraft' : 'editDraft', draftId:target.draftId, baseRevision:target.baseRevision,
           groupId:target.source||target.rich?.source ? groupIdSchema.parse(target.source?.groupId??target.rich!.source!.groupId) : undefined,
           state:'pendingMain', deliveryUnknown:false,createdAt:this.now()}};
@@ -606,7 +638,7 @@ export class AuthoringSession {
         cardId:target.sourceCard.cardId,messageId:target.sourceCard.messageId,createdAt:target.sourceCard.createdAt,
         firstSend:target.sourceCard.createdAt,seq:target.sourceCard.seq??0,
       });
-      if(target.rich?.source && target.sourceIdentity){
+      if(!target.conversation&&target.rich?.source && target.sourceIdentity){
         const source=target.rich.source;
         const saved:Source={groupId:source.groupId,reviewToken:source.token,rich:{ref:target.rich.sourceRef??randomUUID(),
           draft:target.rich,identity:target.sourceIdentity}};
@@ -615,8 +647,10 @@ export class AuthoringSession {
       if (target.source) {
         link!.sources = [target.source, ...link!.sources.filter(s => s.groupId !== target.source!.groupId)].slice(0,16);
       }
-      for (const prior of current) if (prior.view.state === 'completed' && (!this.creator.enabled || target.draftId&&prior.view.receipt?.status==='accepted'&&prior.view.receipt.draftId===target.draftId)) {prior.contextOpen = false;delete prior.richSaved;}
-      link!.context = {operationId, until:this.now()+CONTEXT};
+      if(!target.conversation){
+        for (const prior of current) if (prior.view.state === 'completed' && (!this.creator.enabled || target.draftId&&prior.view.receipt?.status==='accepted'&&prior.view.receipt.draftId===target.draftId)) {prior.contextOpen = false;delete prior.richSaved;}
+        link!.context = {operationId, until:this.now()+CONTEXT};
+      }
       db.operations[operationId] = row;
       if(target.userSelection)selectCreatorOperation(db,link!,this.now(),target.draftId);
       return done(row);
@@ -631,11 +665,68 @@ export class AuthoringSession {
     if (receipt.status === 'accepted' && (op.view.purpose === 'prepareDraft' ? receipt.revision !== 1 :
         op.view.draftId !== receipt.draftId || op.view.baseRevision! + 1 !== receipt.revision)) refusal();
     op.view.receipt = receipt;
+    if(op.conversation)op.contextOpen=false;
     retire(op,receipt.status === 'accepted' ? 'completed' : receipt.status, this.now());
-    if (!op.revoked) setCard(op,receipt.status === 'accepted' ? 'saved' : receipt.status);
+    if (!op.revoked&&!op.conversation) setCard(op,receipt.status === 'accepted' ? 'saved' : receipt.status);
   }
   private async settle(p: Presence, receipt: AuthoringReceipt, id: string) {
-    await this.change(p,id,op => this.recordReceipt(op,receipt));
+    await this.change(p,id,op => {if(op.view.storage==='local')refusal();this.recordReceipt(op,receipt);});
+    await this.refresh(p,id);
+  }
+  private async localAdvance(p:Presence,id:string,advance:Extract<RecipeAuthoringRequest,{type:'localDraftAdvance'}>['advance']){
+    const op=await this.operation(p,id);
+    if(op.view.storage!=='local')refusal();
+    const accept=advance.kind==='richAccept'||advance.kind==='roleAccept';
+    const acceptDigest=accept?wireDigest(advance):undefined;
+    if(op.view.receipt){
+      if(advance.kind!=='cancel'&&(!op.localDraft||advance.draftId!==op.localDraft.draftId||
+        accept&&op.localDraft.acceptDigest!==acceptDigest))refusal();
+      await this.refresh(p,id);return;
+    }
+    if(advance.kind==='cancel'){
+      await this.change(p,id,row=>{
+        if(row.view.receipt)return;
+        this.recordReceipt(row,{operationId:id,status:'cancelled',stateRevision:3});
+      });
+      await this.refresh(p,id);return;
+    }
+    await this.validate(p,op);
+    if(op.conversation&&advance.draftId!==id)refusal();
+    if(op.view.draftId&&op.view.draftId!==advance.draftId||op.localDraft&&op.localDraft.draftId!==advance.draftId)refusal();
+    if(advance.kind==='dispatch'){
+      await this.change(p,id,row=>{
+        if(row.view.storage!=='local'||row.view.draftId&&row.view.draftId!==advance.draftId||
+          row.localDraft&&row.localDraft.draftId!==advance.draftId)refusal();
+        if(row.dispatched)return;
+        if(row.view.state!=='pendingMain'||!row.contextOpen||!row.conversation&&(row.contextUntil??0)<=this.now())refusal();
+        row.localDraft={draftId:advance.draftId};
+        if(row.rich)row.rich.destinationDraftId=advance.draftId;
+        row.dispatched=true;
+        if(row.conversation){
+          if(!row.rich?.request||!row.proposalDigest||richReviewDigest(row.rich)!==row.proposalDigest||row.view.purpose!=='prepareDraft')refusal();
+          row.view.payloadDigest=row.proposalDigest;row.editApproval=editApproval(row,row.proposalDigest);
+          row.view.state='pendingCloud';
+        }else row.view.state='sending';
+      });
+      if(!op.conversation)await this.deliver(p,id,false);return;
+    }
+    await this.change(p,id,row=>{
+      if(row.view.storage!=='local'||!row.dispatched||row.localDraft?.draftId!==advance.draftId||
+        row.view.state!=='pendingCloud'||!row.contextOpen||!row.conversation&&(row.contextUntil??0)<=this.now()||
+        row.view.payloadDigest!==advance.reviewDigest)refusal();
+      const revision=(row.view.baseRevision??0)+1;
+      if(advance.kind==='richAccept'){
+        if(row.view.format!=='rich-v2'||!row.rich?.request||richReviewDigest(row.rich)!==advance.reviewDigest||
+          row.editApproval!==editApproval(row,advance.reviewDigest))refusal();
+        const frozen=verifyFrozenRich(id,advance.draftId,row.rich.boundRequest??row.rich.request,advance.frozen);
+        row.richSaved=savedRichDraft(row.rich,frozen);
+      }else{
+        if(row.view.format||!row.payload||digest(Buffer.from(row.payload,'base64url'))!==advance.reviewDigest||advance.revision!==revision||
+          row.view.purpose==='editDraft'&&row.editApproval!==editApproval(row,advance.reviewDigest))refusal();
+      }
+      row.localDraft.acceptDigest=acceptDigest;
+      this.recordReceipt(row,{operationId:id,status:'accepted',stateRevision:3,draftId:advance.draftId,revision});
+    });
     await this.refresh(p,id);
   }
   private async requireEditApproval(p: Presence, op: LocalOperation) {
@@ -656,6 +747,7 @@ export class AuthoringSession {
   }
   private async advance(p: Presence, id: string, auth: AuthoringAuthorization) {
     const op = await this.operation(p,id);
+    if(op.view.storage==='local')refusal();
     if (!active(op) || op.view.receipt) return;
     await this.validate(p,op);
     if (auth.stage === 'dispatch' && op.dispatched) { await this.deliver(p,id,false); return; }
@@ -709,11 +801,13 @@ export class AuthoringSession {
   }
   private async deliver(p: Presence, id: string, resend: boolean) {
     let op = await this.operation(p,id);
+    if(op.conversation)return;
     if (!active(op) || !['pendingMain','sending','waiting','candidate','pendingCloud'].includes(op.view.state)) {
       await this.refresh(p,id); return;
     }
     await this.validate(p,op);
     if (!op.dispatched) {
+      if(op.view.storage==='local')refusal();
       if(op.view.format==='rich-v2'){
         if(!op.richDispatch||!op.rich?.destinationDraftId)refusal();
         this.present(p);
@@ -857,10 +951,10 @@ export class AuthoringSession {
       if (p && live && await this.creator.message(p,recipient,msg,route)) return true;
       const {contexts,pausedEdit,selecting} = await this.ledger.run(db => {
         const link=p&&this.liveLink(db,p);
-        const own = Object.values(db.operations).filter(o => o.bot === this.botKey && sameRecipient(o.recipient,recipient)&&
+        const own = Object.values(db.operations).filter(o => !o.conversation&&o.bot === this.botKey && sameRecipient(o.recipient,recipient)&&
           (!p||o.scope===p.scope&&o.accountId===p.account&&o.binding===link?.binding));
         return {
-          selecting:Object.values(db.handoffs??{}).some(h=>p&&h.scope===p.scope&&h.account===p.account&&h.binding===link?.binding&&h.session===p.session&&sameRecipient(h.recipient,recipient)&&['selecting','awaitingAttestations'].includes(h.phase.state)&&
+          selecting:Object.values(db.handoffs??{}).some(h=>!h.conversation&&p&&h.scope===p.scope&&h.account===p.account&&h.binding===link?.binding&&h.session===p.session&&sameRecipient(h.recipient,recipient)&&['selecting','awaitingAttestations'].includes(h.phase.state)&&
             (!msg.replyToMessageId||h.messageId===msg.replyToMessageId)),
           pausedEdit: own.some(o => o.contextOpen && (o.contextUntil ?? 0) <= this.now() && (active(o) || o.view.state === 'completed') &&
             (msg.replyToMessageId && msg.replyToMessageId === o.carrier.messageId || requestedField(cmd) !== undefined || /角色|步骤/.test(cmd))),

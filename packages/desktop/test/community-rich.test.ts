@@ -17,6 +17,42 @@ it('browses settings and skill summaries through one bounded request without rea
   expect(await communityRequest(f.account, {type: 'browse', recipeId, versionId})).toEqual(preview);
   expect(f.request).toHaveBeenCalledOnce();
 });
+it('reads only the signed-in version task projection and retains a count-only fallback on older services',async()=>{
+  const f=fixture(),args={type:'recipeTaskSummaries' as const,accountId,recipeId,versionId};
+  await expect(communityRequest(f.account,args)).rejects.toThrow();
+  expect(f.request).not.toHaveBeenCalled();
+  f.account.status=()=>({kind:'signedIn',accountId,provider:'github',displayName:'Owner',persistence:'memory'});
+  const task={itemId:objectId,name:'Review',spec:{kind:'daily',time:'08:10'},timeZone:{kind:'targetChoice'},placement:'follow'};
+  const route=`/v2/recipes/${recipeId}/versions/${versionId}/task-summaries`;
+  f.account.request=vi.fn(async(_id,path)=>{expect(path).toBe(route);return Response.json({recipeId,versionId,tasks:[task]});});
+  expect(await communityRequest(f.account,args)).toEqual({recipeId,versionId,tasks:[task]});
+  expect(f.account.request).toHaveBeenCalledOnce();
+  f.account.request=vi.fn(async()=>new Response(null,{status:404}));
+  expect(await communityRequest(f.account,args)).toEqual({recipeId,versionId});
+  for(const page of [{recipeId,versionId:objectId,tasks:[]},{recipeId,versionId,tasks:[{...task,instruction:'PRIVATE'}]}]){
+    f.account.request=vi.fn(async()=>Response.json(page));
+    await expect(communityRequest(f.account,args)).rejects.toThrow();
+  }
+});
+it.each(['direct','coded'] as const)('keeps %s browsing on the same metadata-only path before and after acquiring', async access => {
+  for (const acquired of [false,true]) {
+    const f=fixture();
+    f.account.status=()=>({kind:'signedIn',accountId,displayName:'昵称',provider:'github',persistence:'memory'});
+    f.account.publicRequest=vi.fn();
+    const authenticated=vi.spyOn(f.account,'request');
+    const preview={recipeId,versionId,revision:1,format:'rich-v2',public:{...f.detail.public,access},creator:f.detail.creator,
+      state:'listed',owned:false,acquired,hasDisplayLogo:false,
+      preview:{settings:[],skills:[{itemId:objectId,name:'排错',description:'公开用途说明'}],ruleCount:1,taskCount:1}};
+    f.request.mockImplementation(async path=>{
+      expect(path).toBe(`/v2/recipes/${recipeId}/versions/${versionId}/preview`);
+      return Response.json(preview);
+    });
+    expect(await communityRequest(f.account,{type:'browse',accountId,recipeId,versionId})).toEqual(preview);
+    expect(f.request).toHaveBeenCalledOnce();
+    expect(authenticated).toHaveBeenCalledExactlyOnceWith(accountId,`/v2/recipes/${recipeId}/versions/${versionId}/preview`,{headers:{'X-Vonvon-Browse':'public-v2'}},expect.any(Function));
+    expect(f.account.publicRequest).not.toHaveBeenCalled();
+  }
+});
 function fixture(partCount = 0) {
   const content=JSON.parse(readFileSync(new URL('../../protocol/test/fixtures/recipe-rich-v2.content.json',import.meta.url),'utf8')) as RecipeRichContent;
   content.parts=[];content.memories=[];delete content.finalLogo;

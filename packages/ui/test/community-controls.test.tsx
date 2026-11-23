@@ -22,6 +22,8 @@ it('submits a community dialog form from the dark control and respects disabled'
   const button = document.querySelector('button')!;
   expect(button.closest('.glow-button')?.getAttribute('data-variant')).toBe('dark');
   expect(button.textContent).toBe('获取配方');
+  expect(button.parentElement?.textContent?.match(/获取配方/g)).toHaveLength(1);
+  expect(button.parentElement?.querySelector('.glow-button__art')?.textContent).not.toContain('获取配方');
   await act(async () => button.click());
   expect(submit).toHaveBeenCalledOnce();
   await act(async () => root.render(render(true)));

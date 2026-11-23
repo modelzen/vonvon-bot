@@ -1260,7 +1260,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
           cleanup: async () => {
             const key = authoringBotKey(expected);
             const pending = await new AuthoringJournal(paths.appDir, Date.now).run(ledger =>
-              Object.values(ledger.operations).some(op => op.bot === key && activeAuthoring(op)));
+              Object.values(ledger.operations).some(op => op.bot === key && (activeAuthoring(op) || op.view.storage==='local'&&!op.localDraftAcknowledged)));
             if (pending) throw new RecipeRecoveryRequired('这个 Bot 还有待恢复的配方草稿操作。请启用它，用原账号恢复或取消后再移除。');
             await assertRecipeRemovalSafe({file: botPaths(appId).projectsFile, dataRoot: paths.appDir});
             await removeSecret(secretKeyForApp(appId));

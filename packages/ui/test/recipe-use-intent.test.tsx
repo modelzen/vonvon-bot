@@ -1,22 +1,29 @@
 // @vitest-environment jsdom
-import {act} from 'react';
+import {act, useEffect, useMemo, useState} from 'react';
 import {createRoot, type Root} from 'react-dom/client';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import {
-  agentIdSchema, groupIdSchema, desktopSnapshotSchema,
+  newAcquisitionKey, agentIdSchema, groupIdSchema, desktopSnapshotSchema,
   commandSchema, type Command, type AccountStatus, type RecipeUseRequest, type RecipeUseReply, type ProjectSettingsView,
 } from '@vonvon/protocol';
 import {createDesktopFacades, type FacadeTransport} from '../../desktop/src/facade';
 import {desktopChannels} from '../../desktop/src/ipc-contract';
-import {DesktopRoot} from '../src/devices/DesktopRoot';
+import {DesktopRoot as ProductionDesktopRoot, DesktopRootView as ProductionDesktopRootView, DeviceGate} from '../src/devices/DesktopRoot';
 import {projectState} from '../../daemon/src/server/projection';
 import type {AdminState} from '../../daemon/src/server/state';
-import {useCommunity} from '../src/community/community-context';
+import {RecipeUseProvider, useRecipeUse} from '../src/recipes/recipe-use-context';
+import {CommunityProvider, useCommunity} from '../src/community/community-context';
 import {RecipeSourcePanel} from '../src/recipes/RecipeSourcePanel';
 import {DraftGuardProvider} from '../src/settings/DraftGuard';
 import {A, B, devicesState} from './devices-fixture';
 import {recipeBridge} from './helpers/recipe-bridge';
 import {recipeConnections} from './helpers/recipe-connections';
+
+import {AccountProvider, useAccount} from '../src/account-context';
+import {AccountPageProvider} from '../src/accounts/account-page';
+import {ClientProvider, activeDeviceFrom, shellForDevice, LOCAL_ACTIVE_DEVICE} from '../src/client-context';
+import {CommunityWindow} from '../src/community/CommunityWindow';
+import {DirectoryPickerProvider} from '../src/directory-picker';
 
 const accountId = '44444444-4444-4444-8444-444444444444';
 const otherAccount = '99999999-9999-4999-8999-999999999999';
@@ -54,13 +61,54 @@ let services: FacadeTransport['invoke'];
 let dispatch: (event: unknown) => void;
 let requests: RecipeUseRequest[], status: AccountStatus;
 let useReply: (r: RecipeUseRequest) => RecipeUseReply | Promise<RecipeUseReply>;
-let entitled: boolean;
+
 let readSnapshot: () => Promise<unknown>;
 let acquireReply: () => Promise<void>;
 let readIdentity: (request: Extract<Command, {type: 'readGroupIdentity'}>) => unknown | Promise<unknown>;
 let directoryChoices: string[];
 let identityRequests: Array<Extract<Command, {type: 'readGroupIdentity'}>>;
 const groupTwo=groupIdSchema.parse('oc_second');
+
+const fixtureGrants=new Set<string>();
+const fixtureRecipes=new Map<string,string>();
+const ungrantedVersion='dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+const ungrantedRecipe='eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+const grantKey=(actor:string,recipe:string,version:string)=>JSON.stringify([actor,recipe,version]);
+function grantFixture(actor:string,recipe:string,version:string){
+  const known=fixtureRecipes.get(version);if(known&&known!==recipe)throw Error('Fixture version belongs to another recipe');
+  fixtureRecipes.set(version,recipe);fixtureGrants.add(grantKey(actor,recipe,version));
+}
+function revokeFixture(actor:string,recipe:string,version:string){fixtureGrants.delete(grantKey(actor,recipe,version));}
+const fixtureEntitled=(actor:string|undefined,recipe:string,version:string)=>Boolean(actor&&fixtureGrants.has(grantKey(actor,recipe,version)));
+function acquireFixture(actor:string,version:string){const recipe=fixtureRecipes.get(version);if(!recipe)throw Error('Unknown fixture version');grantFixture(actor,recipe,version);return {recipeId:recipe,versionId:version,owned:false,acquired:true};}
+async function completeAcquire(actor:string,version:string){await acquireReply();return acquireFixture(actor,version);}
+
+// Retained installation-engine fixture, not the current community-to-private-chat product entry.
+// Real providers and strict native facade remain active; installation requires this explicit test control.
+function FixtureCommunity(props: Parameters<typeof ProductionDesktopRootView>[0]) {
+  const recipeUse=useRecipeUse()!;
+  return <CommunityProvider shell={props.shell?.community} onUse={(recipe,target)=>recipeUse.start(recipe,target)}><FixtureContent {...props}/></CommunityProvider>;
+}
+function FixtureContent({state,renderApp}: Parameters<typeof ProductionDesktopRootView>[0]) {
+  const community=useCommunity()!;
+  const account=useAccount();
+  const actor=account.status?.kind==='signedIn'?account.status.accountId:undefined;
+  const target=community.route.kind==='detail'?community.route.recipe:undefined;
+  return <DirectoryPickerProvider>{community.isOpen ? <><CommunityWindow/>{community.route.kind==='detail' && <button data-test-only-legacy-install onClick={()=>{if(!target||!fixtureEntitled(actor,target.recipeId,target.versionId))return;community.onUse?.({...detail,...target,acquired:fixtureEntitled(actor,target.recipeId,target.versionId)});}}>添加到群聊</button>}{community.route.kind==='detail' && <><button data-test-only-legacy-install onClick={()=>community.open({kind:'detail',recipe:{recipeId,versionId:ungrantedVersion}})}>查看未授权版本</button><button data-test-only-legacy-install onClick={()=>community.open({kind:'detail',recipe:{recipeId:ungrantedRecipe,versionId}})}>查看未授权配方</button></>}</> : <DeviceGate state={state} renderApp={renderApp}/>}</DirectoryPickerProvider>;
+}
+function DesktopRootView(props: Parameters<typeof ProductionDesktopRootView>[0]) {
+  const device=props.state?activeDeviceFrom(props.state):LOCAL_ACTIVE_DEVICE;
+  const client=useMemo(()=>props.shell?.devices?props.shell.devices.clientFor(device.id):props.fallback,[props.shell,device.id,props.fallback]);
+  const shell=useMemo(()=>shellForDevice(props.shell,device),[props.shell,device.isRemote]);
+  return <AccountProvider account={props.shell?.account}><AccountPageProvider><ClientProvider client={client} shell={shell} device={device} devices={props.state}><DraftGuardProvider><RecipeUseProvider><FixtureCommunity {...props}/></RecipeUseProvider></DraftGuardProvider></ClientProvider></AccountPageProvider></AccountProvider>;
+}
+
+function DesktopRoot(props: Parameters<typeof ProductionDesktopRoot>[0]) {
+ const [state,setState]=useState<Parameters<typeof ProductionDesktopRootView>[0]['state']>(undefined);
+ useEffect(()=>props.shell?.devices?.onState(setState),[props.shell?.devices]);
+ return <DesktopRootView {...props} state={state} renderApp={props.renderApp??(()=>null)}/>;
+}
+
 function Launcher() {
   const community=useCommunity()!;
   return <><button onClick={() => community.open({kind:'detail',recipe:detail})}>打开配方</button>
@@ -82,7 +130,7 @@ beforeEach(()=>{
   vi.stubGlobal('IntersectionObserver',class{observe(){} unobserve(){} disconnect(){}});
   vi.stubGlobal('matchMedia',()=>({matches:true,addEventListener(){},removeEventListener(){}}));
   document.body.innerHTML='<div id="root"></div>';root=createRoot(document.getElementById('root')!);
-  requests=[];entitled=true;
+  requests=[];fixtureGrants.clear();fixtureRecipes.clear();fixtureRecipes.set(ungrantedVersion,recipeId);grantFixture(accountId,recipeId,versionId);grantFixture(accountId,recipeId,nextVersion);
   status={kind:'signedIn',accountId,displayName:'Synthetic',provider:'github',persistence:'memory'};
   useReply=r=>r.type==='begin' && !r.groupId ? {kind:'choose',handle}
     : r.type==='begin' ? {...prepared,groupId:r.groupId!,handle:r.groupId===groupTwo?secondHandle:handle}
@@ -103,8 +151,8 @@ beforeEach(()=>{
     else if(channel===desktopChannels.environment) v={kind:'backends',entries:[]};
     else if(channel===desktopChannels.settings) v={kind:'refused',message:'not configured'};
     else if(channel===desktopChannels.recipeUse){requests.push(raw); v=await useReply(raw);}
-    else if(channel===desktopChannels.recipeSource){v=raw.type==='read'?{source:asRead}:{source:asRead,latest:{recipeId,versionId:nextVersion, revision:2,version:'2.0',entitled}};}
-    else if(channel===desktopChannels.community){if(raw.type==='acquire') await acquireReply(); v=raw.type==='detail'?{...detail,versionId:raw.versionId,acquired:entitled}:raw.type==='shareLink'?{url:'https://example.invalid/share'}:raw.type==='catalog'?{hero:{recipeId,versionId:nextVersion,revision:2,public:detail.public},items:[],nextCursor:null}:raw.type==='acquire'?(entitled=true,{recipeId,versionId:raw.versionId,owned:false,acquired:true}):{items:[]};}
+    else if(channel===desktopChannels.recipeSource){v=raw.type==='read'?{source:asRead}:{source:asRead,latest:{recipeId,versionId:nextVersion, revision:2,version:'2.0',entitled:fixtureEntitled(raw.accountId,recipeId,nextVersion)}};}
+    else if(channel===desktopChannels.community){v=raw.type==='browse'?{recipeId:raw.recipeId,versionId:raw.versionId,revision:1,format:'role-v1',state:'listed',creator:{authorId:accountId,displayName:'Synthetic'},hasDisplayLogo:false,public:detail.public,owned:false,acquired:fixtureEntitled(raw.accountId,raw.recipeId,raw.versionId),...(fixtureEntitled(raw.accountId,raw.recipeId,raw.versionId)?{preview:{settings:[],skills:[],ruleCount:0,taskCount:0}}:{})}:raw.type==='detail'?{...detail,recipeId:raw.recipeId,versionId:raw.versionId,acquired:fixtureEntitled(raw.accountId,raw.recipeId,raw.versionId)}:raw.type==='shareLink'?{url:'https://example.invalid/share'}:raw.type==='catalog'?{hero:{recipeId,versionId:nextVersion,revision:2,public:detail.public},items:[],nextCursor:null}:raw.type==='acquire'?await completeAcquire(raw.accountId,raw.versionId):{items:[]};}
     else return {ok:false,error:{kind:'rpc',message:'synthetic channel unavailable'}};
     return {ok:true,value:v};
   };
@@ -112,7 +160,7 @@ beforeEach(()=>{
   dispatch({type:'account',value:status});dispatch({type:'devices',value:devicesState({id:A,phase:'ready'})});
 });
 afterEach(async()=>{await act(async()=>root.unmount());vi.unstubAllGlobals();});
-it('offers the exact current target without silently confirming a suspended group',async()=>{
+it('legacy engine fixture offers the exact current target without silently confirming a suspended group',async()=>{
   await draw();
   await inGroup(groupId,'检查新版');await inGroup(groupId,'预览更新');
   expect(requests.at(-1)).toMatchObject({type:'begin',groupId});
@@ -155,6 +203,7 @@ it.each(['device', 'account'] as const)('requires a new begin after a pending re
   expect(button('确认应用到这个群')).toBeDefined();
 });
 it('lets another account start independently while preserving the original private operation',async()=>{
+  grantFixture(otherAccount,recipeId,nextVersion);
   await draw();await inGroup(groupId,'检查新版');await inGroup(groupId,'预览更新');await click('稍后继续');
   await account(otherAccount);await inGroup(groupTwo,'检查新版');await inGroup(groupTwo,'预览更新');
   expect(requests.map(r=>r.type)).toEqual(['begin','begin']);expect(requests[1]).toMatchObject({accountId:otherAccount,groupId:groupTwo});
@@ -178,11 +227,13 @@ it('keeps global search behind the active recipe join dialog and restores focus 
 });
 
 it('drops the abandoned group acquisition intent when leaving its detail navigation',async()=>{
-  entitled=false;await draw();await inGroup(groupId,'检查新版');await inGroup(groupId,'获取新版');
+  revokeFixture(accountId,recipeId,nextVersion);await draw();await inGroup(groupId,'检查新版');await inGroup(groupId,'获取新版');
   await click('返回 Bot 配方');
-  const card=document.querySelector<HTMLButtonElement>('.community-card--hero');
+  const card=document.querySelector<HTMLButtonElement>('.community-card');
   expect(card,document.body.textContent ?? '').not.toBeNull();await act(async()=>card!.click());
   await click('获取配方');
+  expect(requests).toEqual([]);
+  await click('添加到群聊');
   expect(document.querySelector('input[name="join-bot"]')).not.toBeNull();
   expect(requests).toEqual([]);
 });
@@ -197,19 +248,23 @@ it('continues the old target only after that choice is explicit', async () => {
 });
 
 it.each(['device', 'account'] as const)('drops acquisition targeting after a %s round trip', async kind => {
-  entitled = false; await draw(); await inGroup(groupId, '检查新版'); await inGroup(groupId, '获取新版');
+  revokeFixture(accountId,recipeId,nextVersion); await draw(); await inGroup(groupId, '检查新版'); await inGroup(groupId, '获取新版');
   if (kind === 'device') {await device(B); await device(A);}
   else {await account(otherAccount); await account(accountId);}
   await click('获取配方');
+  expect(requests).toEqual([]);
+  await click('添加到群聊');
   expect(document.querySelector('input[name="join-bot"]')).not.toBeNull(); expect(requests).toEqual([]);
 });
 
 it('requires the current detail action after a targeted acquisition crosses a device switch', async () => {
   let complete!: () => void; acquireReply = () => new Promise(resolve => complete = resolve);
-  entitled = false; await draw(); await inGroup(groupId, '检查新版'); await inGroup(groupId, '获取新版');
+  revokeFixture(accountId,recipeId,nextVersion); await draw(); await inGroup(groupId, '检查新版'); await inGroup(groupId, '获取新版');
   await click('获取配方'); await device(B); await act(async () => complete());
   expect(requests).toEqual([]); expect(document.querySelector('input[name="join-bot"]')).toBeNull();
   acquireReply = async () => {}; await click('获取配方');
+  expect(requests).toEqual([]);
+  await click('添加到群聊');
   expect(document.querySelector('input[name="join-bot"]')).not.toBeNull();
   await act(async () => document.querySelector<HTMLInputElement>('input[name="join-bot"]')!.click()); await click('下一步');
   expect(requests).toEqual([{type: 'begin', accountId, viewId: B, recipeId, versionId: nextVersion, botId}]);
@@ -339,6 +394,7 @@ it('disambiguates equal platform group names with immutable physical IDs', async
 });
 
 it('does not let another account late closure dismiss the active account operation', async () => {
+  grantFixture(otherAccount,recipeId,nextVersion);
   let done!: (reply: RecipeUseReply) => void;
   useReply = request => request.type === 'cancel' ? new Promise(resolve => done = resolve) : {...prepared, groupId: request.type === 'begin' ? request.groupId! : groupId};
   await draw(); await inGroup(groupId, '检查新版'); await inGroup(groupId, '预览更新'); await click('取消应用'); await click('稍后继续');
@@ -656,4 +712,33 @@ it('offers the group identity retry while a rich review is blocked by an unreada
   readIdentity=request=>({kind:'groupIdentity',agentId:request.agentId,groupId:request.groupId,name:'重新核对群名'});
   await click('重新读取群名');
   expect(requests.filter(request=>request.type==='richResolve')).toHaveLength(1);
+});
+
+it.each(['account','version','recipe'] as const)('manual legacy installation does not reuse A:X authority after changing %s',async change=>{
+  revokeFixture(accountId,recipeId,versionId);
+  await draw();
+  await facade.shell.community.request({type:'acquire',accountId,versionId,requestId:newAcquisitionKey()});
+  expect(fixtureEntitled(accountId,recipeId,versionId)).toBe(true);
+  await click('打开配方');
+  if(change==='account'){await account(otherAccount);}
+  else await click(change==='version'?'查看未授权版本':'查看未授权配方');
+  const actor=change==='account'?otherAccount:accountId;
+  const selectedRecipe=change==='recipe'?ungrantedRecipe:recipeId;
+  const selectedVersion=change==='version'?ungrantedVersion:versionId;
+  expect(await facade.shell.community.request({type:'browse',accountId:actor,recipeId:selectedRecipe,versionId:selectedVersion})).toMatchObject({recipeId:selectedRecipe,versionId:selectedVersion,acquired:false,owned:false});
+  expect(await facade.shell.community.request({type:'detail',accountId:actor,recipeId:selectedRecipe,versionId:selectedVersion})).toMatchObject({recipeId:selectedRecipe,versionId:selectedVersion,acquired:false,owned:false});
+  await click('添加到群聊');expect(requests).toEqual([]);
+  expect(fixtureEntitled(actor,selectedRecipe,selectedVersion)).toBe(false);
+});
+it('credits a late acquire only to its issuing actor and exact version, never the newly active account',async()=>{
+  revokeFixture(accountId,recipeId,versionId);let release!:()=>void,entered=false;
+  acquireReply=async()=>{entered=true;await new Promise<void>(resolve=>{release=resolve;});};
+  await draw();const pending=facade.shell.community.request({type:'acquire',accountId,versionId,requestId:newAcquisitionKey()});
+  await vi.waitFor(()=>expect(entered).toBe(true));
+  await account(otherAccount);
+  await click('打开配方');release();await pending;
+  expect(fixtureEntitled(accountId,recipeId,versionId)).toBe(true);expect(fixtureEntitled(otherAccount,recipeId,versionId)).toBe(false);
+  expect(fixtureEntitled(accountId,recipeId,ungrantedVersion)).toBe(false);expect(fixtureEntitled(accountId,ungrantedRecipe,versionId)).toBe(false);
+  expect(await facade.shell.community.request({type:'browse',accountId:otherAccount,recipeId,versionId})).toMatchObject({acquired:false});
+  await click('添加到群聊');expect(requests).toEqual([]);
 });

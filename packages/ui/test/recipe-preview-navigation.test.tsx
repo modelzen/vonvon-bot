@@ -154,3 +154,20 @@ it('protects unsaved local edits before opening creation', async () => {
   await click('放弃并离开');
   expect(current.route).toEqual({kind:'create',navigationId:accountId});
 });
+
+it.each(['handoff','drafts'] as const)('keeps the exact %s destination through login and acknowledges only after account binding',async kind=>{
+  const next=kind==='handoff'?{kind,recipeId:accountId,versionId:draftId,navigationId:navigation.navigationId}:{kind,navigationId:navigation.navigationId};
+  pending=async()=>[next];await render();
+  const expected=kind==='handoff'?{kind:'detail',recipe:{recipeId:accountId,versionId:draftId},handoffNavigationId:next.navigationId}:{kind:'workspace',tab:'drafts',navigationId:next.navigationId};
+  expect(current.route).toEqual(expected);expect(acknowledge).not.toHaveBeenCalled();
+  state.account={kind:'signedIn',accountId,displayName:'作者',provider:'github',persistence:'memory'};await render();
+  expect(current.route).toEqual(expected);expect(acknowledge).toHaveBeenCalledWith(next.navigationId);
+  if(kind==='handoff'){expect(current.claimHandoffNavigation(next.navigationId,accountId)).toBe(true);expect(current.claimHandoffNavigation(next.navigationId,accountId)).toBe(false);}
+  state.account={...state.account,accountId:draftId};await render();expect(current.route).toEqual({kind:'catalog'});
+});
+it('rejects a late handoff claim from a navigation superseded by a newer one',async()=>{
+  pending=async()=>[];state.account={kind:'signedIn',accountId,displayName:'作者',provider:'github',persistence:'memory'};await render();
+  const first={kind:'handoff' as const,recipeId:accountId,versionId:draftId,navigationId:navigation.navigationId};
+  const second={...first,navigationId:accountId};await act(async()=>emit(first));await act(async()=>emit(second));
+  expect(current.claimHandoffNavigation(first.navigationId,accountId)).toBe(false);expect(current.claimHandoffNavigation(second.navigationId,accountId)).toBe(true);
+});

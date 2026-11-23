@@ -7,8 +7,7 @@ import { z } from 'zod';
 import { ClaudeAgentBackend, type ClaudeSdkFacade } from '../src/agent/claude-agent/backend';
 import { createAgentEntries } from '../src/agent/entry/registry';
 import { feedbackTool } from '../src/agent/entry/feedback-tool';
-import { releaseCodeTools } from '../src/agent/entry/release-code-tools';
-import type { CodeSource } from '../src/release-code/host';
+import { recipeCreationTools,recipeCreationToolNames } from '../src/agent/entry/recipe-creation-tools';
 import { claudeAccess, decide } from '../src/agent/claude-agent/permission';
 import type { AgentEntry, AgentThread, AgentToolReply } from '../src/agent/types';
 const threads: AgentThread[] = [];
@@ -42,6 +41,20 @@ function fixture(withSdk = true, stream?: AsyncIterable<SDKMessage>) {
   return { registered, schemas, handlers, backend: new ClaudeAgentBackend(async () => sdk, () => undefined), query,
     options: () => options, invoke: (args: object, extra: unknown) => { if (!invoke) throw Error('missing handler'); return invoke(args, extra); } };
 }
+it('exposes private recipe creation through Claude SDK MCP with the authenticated human tool origin',async()=>{
+  const f=fixture(),broker=vi.fn<Parameters<typeof recipeCreationTools>[0]>(async(get,query)=>({caller:get(),kind:query.kind}));
+  const registry=createAgentEntries({appId:'cli_fixture',isAdmin:id=>id==='ou_owner',tools:recipeCreationTools(broker)});
+  const grant=registry.issue({kind:'p2p',chatId:'oc_private'});
+  const thread=await f.backend.startThread({cwd:'/fixture',entry:grant});
+  threads.push(thread);grant.attach(thread);
+  const facts={requesterOpenId:'ou_owner',requesterKind:'user',triggerMessageId:'om_owner',retry:false,initiative:false,wake:false} as const;
+  registry.openTurn(thread,facts);grant.noteToolUse('recipe-turn');
+  expect(f.registered).toEqual(expect.arrayContaining([...recipeCreationToolNames]));
+  const result=await f.handlers.get('recipe_author_sources')!({},{_meta:{'claudecode/toolUseId':'recipe-turn'}});
+  expect(result).toEqual({content:[{type:'text',text:JSON.stringify({caller:{sessionId:grant.sessionId,openId:'ou_owner',messageId:'om_owner',chatId:'oc_private'},kind:'sources'})}]});
+  registry.closeAll('shutdown');
+});
+
 it('registers all optional diagnostic and suggestion fields with the actual Claude tool schema', async () => {
   const f = fixture();
   const grant = createAgentEntries({appId: 'fixture', isAdmin: () => false, feedbackEnabled: () => true,
@@ -80,48 +93,14 @@ it.each([
   await threads.at(-1)?.close();
   expect(e.revoke).toHaveBeenCalledWith('closed');
 });
-it('exposes the opted-in release-code MCP and resolves SDK tool_use to the actual member', async () => {
-  const registry = createAgentEntries({appId:'fixture', isAdmin:() => false,
-    codeEnabled:chat => chat === 'oc_help', tools:releaseCodeTools()});
-  let send!: () => void;
-  const pause = new Promise<void>(resolve => {send = resolve;});
-  const stream = (async function* (): AsyncGenerator<SDKMessage> {
-    await pause;
-    const block = {type:'tool_use',id:'code-read',name:'mcp__vonvon-release-code__read',input:{path:'README.md'}};
-    yield {type:'assistant',message:{content:[block]}} as SDKMessage;
-  })();
-  const chatId = 'oc_help', openId = 'ou_member', messageId = 'om_user';
-  const grant = registry.issue({kind:'group',chatId});
-  const f = fixture(true,stream);
-  const thread = await f.backend.startThread({cwd:'/fixture',entry:grant});
-  threads.push(thread); grant.attach(thread);
-  expect(f.options()?.mcpServers?.['vonvon-release-code']).toMatchObject({name:'vonvon-release-code'});
-  expect(f.options()?.allowedTools).toEqual(expect.arrayContaining(['mcp__vonvon-release-code__rg','mcp__vonvon-release-code__read']));
-  const call = vi.fn<CodeSource['call']>(async () => 'code reply');
-  registry.openTurn(thread,{requesterKind:'user',requesterOpenId:openId,triggerMessageId:messageId,
-    retry:false,initiative:false,wake:false,releaseCode:{chatId,openId,messageId,call}});
-  const noted=vi.spyOn(grant,'noteToolUse');
-  send();
-  await vi.waitFor(()=>expect(noted).toHaveBeenCalledWith('code-read'));
-  const invoke = () => f.handlers.get('read')!({path:'README.md'},{_meta:{'claudecode/toolUseId':'code-read'}});
-  await expect(invoke()).resolves.toEqual({content:[{type:'text',text:'code reply'}]});
-  let running: AbortSignal | undefined;
-  call.mockImplementationOnce(async (_name, _args, signal) => {
-    running = signal;
-    await new Promise<void>(done => signal.addEventListener('abort', () => done(), {once:true}));
-    signal.throwIfAborted();
-    return 'unreachable';
-  });
-  const pending = invoke();
-  await vi.waitFor(() => expect(running).toBeDefined());
-  registry.noteSteer(thread,{kind:'user',openId:'ou_another'});
-  await expect(pending).resolves.toMatchObject({isError:true});
-  expect(running?.aborted).toBe(true);
-  await expect(invoke()).resolves.toMatchObject({isError:true});
-  expect(call).toHaveBeenCalledTimes(2);
-  const other = fixture();
-  threads.push(await other.backend.startThread({cwd:'/fixture',entry:registry.issue({kind:'group',chatId:'oc_other'})}));
-  expect(other.options()?.mcpServers?.['vonvon-release-code']).toBeUndefined();
+it('exposes the review tool without a private source server or source tool grants', async () => {
+  const registry=createAgentEntries({appId:'fixture',isAdmin:()=>false,feedbackEnabled:()=>true,tools:[feedbackTool]});
+  const f=fixture();
+  threads.push(await f.backend.startThread({cwd:'/fixture',entry:registry.issue({kind:'group',chatId:'oc_help'})}));
+  expect(Object.keys(f.options()?.mcpServers??{})).toEqual(['vonvon_bot']);
+  expect(f.handlers.has('feedback_prepare')).toBe(true);
+  expect(f.handlers.has('rg')).toBe(false);expect(f.handlers.has('read')).toBe(false);
+  expect(f.options()?.allowedTools??[]).not.toContain('mcp__vonvon-release-code__read');
 });
 
 it.each([true, false])('keeps sessions usable without entry or without SDK MCP exports (%s)', async withSdk => {

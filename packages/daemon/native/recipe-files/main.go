@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 )
 
 type request struct {
@@ -14,6 +15,7 @@ type request struct {
 }
 type response struct {
 	Root   string        `json:"root"`
+	Names  []string      `json:"names,omitempty"`
 	Skills []skillOption `json:"skills,omitempty"`
 	Files  []document    `json:"files,omitempty"`
 }
@@ -27,6 +29,12 @@ func run(r request) (response, error) {
 	out := response{Root: hash([]byte(h.meta.id))}
 	if r.ExpectedRoot != "" && r.ExpectedRoot != out.Root {
 		return response{}, refused
+	}
+	if r.Operation == "documents" {
+		budget := 2048
+		e = discoverDocuments(h, "", 0, &budget, &out.Names, true)
+		sort.Strings(out.Names)
+		return out, e
 	}
 	if r.Operation == "skills" {
 		out.Skills, e = skillOptions(h, r.Provider)

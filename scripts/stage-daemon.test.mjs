@@ -263,7 +263,9 @@ test('stageDaemon ships a minified CLI with the workspace packages bundled from 
     }
   }
   const cli = await readFile(join(staged, 'dist/cli.js'), 'utf8');
-  for (const [key, url] of Object.entries(endpoints)) assert.ok(cli.includes(url), 'the packaged daemon retains ' + key);
+  assert.ok(cli.includes(endpoints.VONVON_ACCOUNT_API_ORIGIN));
+  assert.equal(cli.includes(endpoints.VONVON_RELEASE_CODE_MCP_URL), false);
+  assert.equal(cli.includes(endpoints.VONVON_RELEASE_CODE_ISSUER), false);
   assert.ok(cli.length / cli.split('\n').length > 400, 'dist/cli.js is minified');
   assert.doesNotMatch(cli, /sourceMappingURL|\bfrom\s*["']@vonvon\//);
   const metadata = JSON.parse(await readFile(join(staged, 'package.json'), 'utf8'));

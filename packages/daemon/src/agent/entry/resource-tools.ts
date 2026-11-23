@@ -1,10 +1,11 @@
 import {z} from 'zod';
 import type {ResourceCaller,ResourceQuery} from '../../recipe/resource-context';
+import {recipeCreationToolNames} from './recipe-creation-tools';
 import type {AgentTool} from './tools';
 
 /** Bump when persisted Codex sessions need new resource tool names or input schemas. */
-export const RESOURCE_TOOL_CATALOG_VERSION = 2;
-export const resourceToolNames=new Set(['recipe_resource_read','recipe_resource_acquire','recipe_resource_prepare']);
+export const RESOURCE_TOOL_CATALOG_VERSION = 5;
+export const resourceToolNames=new Set(['recipe_resource_read','recipe_resource_acquire','recipe_resource_prepare',...recipeCreationToolNames]);
 export function resourceTools(call:(get:()=>ResourceCaller|undefined,query:ResourceQuery)=>Promise<unknown>):AgentTool[]{
   const groupId=z.string().regex(/^oc_[A-Za-z0-9_-]{1,200}$/);
   const read=z.object({kind:z.enum(['index','text','latest']),documentId:z.string().max(80).optional(),cursor:z.string().max(160).optional(),groupId:groupId.optional()}).strict();

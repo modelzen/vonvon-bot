@@ -23,10 +23,11 @@ async function runtime(t, {signedIn = false, route = '/studio', sessionFails = f
       if (sessionFails) throw Error('Synthetic session outage');
       return Response.json({...state, providers: ['github']});
     }
+    if (path === '/api/v2/me/account-profile') {assert.equal(options.headers['X-Vonvon-Session'],state.displaySession);return Response.json({authorId:'11111111-1111-4111-8111-111111111111',displayName:'当前创作者',revision:1});}
     if (path === '/api/v1/me/drafts' || path === '/api/v2/me/publications') return Response.json({items: []});
     throw Error('Unexpected studio request ' + path);
   };
-  const location = {pathname: window.location.pathname, search: window.location.search, href: window.location.href, reloads: 0, reload() {this.reloads++;}, assign(path) {this.assigned = path;}};
+  const location = {get pathname(){return window.location.pathname;}, get search(){return window.location.search;}, get href(){return window.location.href;}, get origin(){return window.location.origin;}, assigned:[], reloads:0, reload(){this.reloads++;}, assign(path){this.assigned.push(path);}};
   const run = new AsyncFunction('document', 'window', 'location', 'history', 'fetch', 'BroadcastChannel', source);
   await run(window.document, window, location, window.history, fetch, undefined);
   await settle();
@@ -37,25 +38,25 @@ function assertGuide(document) {
   const main = document.querySelector('main');
   assert.equal(main.querySelectorAll('form,input,textarea,select,[contenteditable="true"]').length, 0, 'website studio must not expose manual authoring controls');
   assert.equal(main.querySelector('h1')?.textContent, '在 Bot 私聊中创作');
-  assert.match(main.textContent, /社区.*我的配方.*创作配方/s);
-  assert.match(main.textContent, /Bot.*已有群聊/s);
-  assert.match(main.textContent, /飞书私聊/);
-  assert.match(main.textContent, /App 查看完整预览.*App 确认发布.*飞书卡片上直接确认发布/s);
+  assert.match(main.textContent, /Bot 私聊里说「把周报群的配置做成配方」/);
+  assert.match(main.textContent, /App 点「创作配方」.*选好 Bot 和群聊/s);
+  assert.match(main.textContent, /本地 App 的「我的配方 → 创作中」/);
+  assert.match(main.textContent, /点「发布到社区」.*发布为新配方.*已有的配方发布新版本/s);
+  assert.doesNotMatch(main.textContent, /按卡片选择|确认来源/);
   assert.match(main.textContent, /已获取.*创作中.*已发布.*App/s);
   assert.doesNotMatch(main.textContent, /新建文字草稿|保存草稿|在私聊中查看完整预览|准备新版|生成分享码/);
-  assert.equal(document.querySelector('a[href="/"]')?.textContent.includes('Vonvon Bot'), true);
-  assert.equal(document.querySelector('header nav a[href="/library"]'), null);
+  assert.equal(document.querySelector('header .brand').textContent, 'Vonvon 灵感社区');
+  assert.equal(document.querySelector('header .brand img').getAttribute('src'), '/community-logo.webp');
+  assert.equal(document.querySelector('main form'),null);
 }
 
 for (const route of ['/studio', '/studio?draftId=old-draft', '/studio.html', '/studio.html?draftId=old-draft', '/studio?login=1', '/studio.html?login=1', '/studio.html?login=1&next=studio']) {
   test(`${route} returns account login to the canonical App guide`, async t => {
     const h = await runtime(t, {route});
-    const assertReturn = () => {
-      const form = h.document.querySelector('#modal form');
-      assert.equal(form.getAttribute('action'), '/auth/start');
-      const next = form.querySelector('[name="returnTo"]').value;
-      assert.equal(returnPath(next), '/studio', 'the real auth return path must keep visitors on the App guide');
-      assert.equal(form.querySelector('[name="continuation"]'), null);
+    const assertReturn=()=>{
+      const redirect=new URL(h.location.assigned.at(-1),'https://recipes.example');
+      assert.equal(redirect.pathname,'/login');assert.equal(returnPath(redirect.searchParams.get('returnTo')),'/studio');
+      assert.equal(redirect.searchParams.has('continuation'),false);assert.equal(h.document.querySelector('#modal form'),null);
     };
     if (route.includes('login=1')) assertReturn();
     h.document.querySelector('#account').click();
@@ -79,16 +80,17 @@ for (const signedIn of [false, true]) {
   test(`studio is an App guide for ${signedIn ? 'signed-in authors' : 'anonymous visitors'} and installs no creator actions`, async t => {
     const h = await runtime(t, {signedIn});
     assertGuide(h.document);
-    assert.deepEqual(h.calls.map(call => call.path), ['/auth/session']);
-    assert.equal(h.document.querySelector('#account').textContent, signedIn ? '账号' : '注册或登录');
+    assert.deepEqual(h.calls.map(call => call.path), signedIn?['/auth/session','/api/v2/me/account-profile']:['/auth/session']);
+    assert.equal(h.document.querySelector('#account').textContent, '登录');
+    assert.equal(h.document.querySelector('#account').hidden, signedIn);
+    if(signedIn)assert.match(h.document.querySelector('.account-menu summary').textContent,/当前创作者/);
     h.document.querySelector('#account').click();
     const form = h.document.querySelector('#modal form');
     if (signedIn) {
-      assert.equal(h.location.assigned, '/account'); assert.equal(form, null);
+      assert.equal(h.location.assigned.length, 0); assert.equal(form, null);
+      assert.equal(h.document.querySelector('.account-menu a[href^="/account#account="]').getAttribute('href'), '/account#account=11111111-1111-4111-8111-111111111111');
     } else {
-      assert.equal(form.getAttribute('action'), '/auth/start');
-      assert.equal(form.getAttribute('method'), 'post');
-      assert.equal(form.querySelector('[name="returnTo"]').value, '/studio');
+      assert.equal(form,null);assert.equal(h.location.assigned.at(-1),'/login?returnTo=%2Fstudio');
     }
     assertGuide(h.document);
   });
@@ -98,14 +100,16 @@ for (const route of ['/studio?draftId=11111111-1111-4111-8111-111111111111', '/s
   test(`${route} preserves the guide across ${signedIn ? 'logout' : 'login'} without opening an old draft`, async t => {
     const h = await runtime(t, {signedIn, route});
     assertGuide(h.document);
-    assert.deepEqual(h.calls.map(call => call.path), ['/auth/session']);
+    assert.deepEqual(h.calls.map(call => call.path),signedIn?['/auth/session','/api/v2/me/account-profile']:['/auth/session']);
     h.document.querySelector('#account').click();
-    assert.equal(h.document.querySelector('#modal').open, !signedIn);
+    assert.equal(h.document.querySelector('#modal').open,false);
+    if (signedIn) assert.equal(h.location.assigned.length, 0);
+    else assert.equal(h.location.assigned.at(-1), '/login?returnTo=%2Fstudio');
     h.state.signedIn = !signedIn; h.state.displaySession = signedIn ? null : 'new-author-session';
     h.window.dispatchEvent(new h.window.Event('focus'));
     await settle();
     assertGuide(h.document);
-    assert.equal(h.calls.every(call => call.path === '/auth/session'), true);
+    assert.equal(h.calls.every(call => ['/auth/session','/api/v2/me/account-profile'].includes(call.path)), true);
     assert.equal(h.location.reloads, 1);
     assert.equal(h.document.querySelector('#modal').open, false);
   });

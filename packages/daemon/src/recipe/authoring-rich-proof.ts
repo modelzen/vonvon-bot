@@ -6,6 +6,8 @@ import {richAuthoringAuthorizationSchema,richFrozenResponseSchema,decodeRichReci
 import {itemsOf,wireDigest,wireJson} from './authoring-rich-snapshot';
 import {richProof} from '../../../../services/recipe-api/src/rich-proof.mjs';
 import {applyChanges} from '../../../../services/recipe-api/src/rich-document.mjs';
+import type {RichLocalDraft} from './authoring-rich-flow';
+import type {LocalOperation} from './authoring-journal';
 
 export const richAuthorization=richAuthoringAuthorizationSchema;
 export type RichAuthorization=ReturnType<typeof richAuthorization.parse>;
@@ -67,6 +69,30 @@ export function verifyFrozenRich(
     compareRemapped(expected,doc.content,new Set(itemsOf(base.content).map(i=>i.itemId)));
   }
   return frozen;
+}
+export function savedRichDraft(rich:RichLocalDraft,frozen:FrozenRichResponse):NonNullable<LocalOperation['richSaved']>{
+  const saved=decodeRichRecipeContent(Buffer.from(frozen.canonical,'base64url')).content;
+  const original=rich.boundRequest??rich.request;
+  if(!original)throw mismatch();
+  let selected=rich.base?.selected??[];
+  let origins=rich.base?.origins;
+  if('content' in original){
+    const allow=itemsOf(original.content).filter(x=>Object.values(original.content.public).some(f=>f.itemId===x.itemId)||rich.source?.selected.includes(x.itemId));
+    const accepted=itemsOf(saved),items=itemsOf(original.content);
+    selected=allow.map(i=>accepted[items.findIndex(x=>x.itemId===i.itemId)]!.itemId);
+    const sourceMap=new Map(original.origins.map(o=>[o.itemId,o.source]));
+    origins=Object.fromEntries(items.map((item,i)=>[accepted[i]!.itemId,sourceMap.get(item.itemId)!]));
+  }
+  if('payload' in original&&rich.base){
+    const before=decodeRichRecipeContent(Buffer.from(rich.base.canonical,'base64url')).content;
+    const inserted=saved.setup.filter(step=>!before.setup.some(old=>old.itemId===step.itemId));
+    const adds=original.payload.changes.filter(c=>c.op==='addSetup');
+    if(adds.length&&adds.length===inserted.length){
+      origins={...origins};selected=[...selected,...inserted.map(item=>item.itemId)];
+      for(const [index,item] of inserted.entries())origins[item.itemId]=adds[index]!.source;
+    }
+  }
+  return {canonical:frozen.canonical,origins,selected:selected.filter(id=>itemsOf(saved).some(item=>item.itemId===id))};
 }
 export function richPossessionProof(secret:string,binding:RichAuthorization,review?:{
   request:ReviewedRichFreeze;frozen:FrozenRichResponse;destinationDraftId:string;

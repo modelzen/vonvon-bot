@@ -7,6 +7,8 @@ import {
   groupIdSchema,
   recipeBinary32Schema,
   viewIdSchema,
+  localDraftAdvanceSchema,
+  type LocalDraftAdvance,
   type AuthoringOperation,
   type AuthoringReconciliation,
 } from '@vonvon/protocol';
@@ -23,6 +25,9 @@ const record = z
     botId: agentIdSchema,
     operationId: uuid,
     format:z.literal('rich-v2').optional(),
+    storage:z.literal('local').optional(),
+    localAcceptance:localDraftAdvanceSchema.optional(),
+    parent:z.object({recipeId:uuid,versionId:uuid}).strict().optional(),
     purpose: z.enum(['prepareDraft', 'editDraft']),
     targetPublicKey: recipeBinary32Schema,
     nonceCommitment: recipeBinary32Schema,
@@ -45,7 +50,7 @@ export class AuthoringJournal {
   private all() {
     if (this.rows) return this.rows;
     try {
-      if (this.path && statSync(this.path).size > 1024 * 1024) throw invalidAuthoring();
+      if (this.path && statSync(this.path).size > 16 * 1024 * 1024) throw invalidAuthoring();
       this.rows = this.path ? file.parse(JSON.parse(readFileSync(this.path, 'utf8'))).rows : [];
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new AuthoringError('无法读取私人草稿操作记录。');
@@ -63,10 +68,10 @@ export class AuthoringJournal {
     const prior = this.all().find(row => row.operationId === recovery.operationId);
     if (!prior) return; // Revoked before first Main observation: verify against the authenticated daemon and cloud registration.
     const { operationId, purpose, targetPublicKey, nonceCommitment, draftId, baseRevision, createdAt } = recovery;
-    const identity = { ...binding, format:recovery.format, operationId, purpose, targetPublicKey, nonceCommitment, draftId, baseRevision, createdAt };
+    const identity = { ...binding, format:recovery.format, storage:recovery.storage, operationId, purpose, targetPublicKey, nonceCommitment, draftId, baseRevision, createdAt };
     if (Object.entries(identity).some(([key,value]) => prior[key as keyof Row] !== value)) throw invalidAuthoring();
   }
-  observe(binding: Binding, op: AuthoringOperation, cancel = false) {
+  observe(binding: Binding, op: AuthoringOperation, cancel = false, parent?:Row['parent']) {
     if (
       op.purpose === 'prepareDraft'
         ? !op.groupId || op.draftId || op.baseRevision
@@ -77,6 +82,7 @@ export class AuthoringJournal {
     const identity = {
       ...binding,
       format:op.format,
+      storage:op.storage,
       operationId,
       purpose,
       groupId,
@@ -96,14 +102,26 @@ export class AuthoringJournal {
     )
       throw invalidAuthoring();
     if (prior && (!cancel || prior.cancelling)) return prior;
-    const next = record.parse({ ...identity, cancelling: cancel });
+    const next = record.parse({ ...prior, ...identity, ...(parent&&{parent}), cancelling: cancel });
     // An operation cannot be registered or resumed after the seven-day receipt retention horizon.
     const cutoff = Date.now() - 9 * 86400_000;
     this.write([...rows.filter((row) => row.operationId !== operationId && row.createdAt >= cutoff), next]);
     return next;
   }
+  localAcceptance(operationId:string){return this.all().find(row=>row.operationId===operationId)?.localAcceptance;}
+  parent(operationId:string){return this.all().find(row=>row.operationId===operationId)?.parent;}
+  acceptLocal(binding:Binding,op:AuthoringOperation,advance:LocalDraftAdvance){
+    const current=this.observe(binding,op);
+    if(op.storage!=='local'||!['richAccept','roleAccept'].includes(advance.kind)||
+      current.localAcceptance&&JSON.stringify(current.localAcceptance)!==JSON.stringify(advance))throw invalidAuthoring();
+    this.write(this.all().map(row=>row.operationId===op.operationId?{...row,localAcceptance:advance}:row));
+  }
+  clearLocalAcceptance(operationId:string){
+    this.write(this.all().map(row=>{if(row.operationId!==operationId)return row;const {localAcceptance:_advance,...rest}=row;return rest;}));
+  }
   private write(rows: Row[]) {
     const content = JSON.stringify(file.parse({ version: 1, rows }));
+    if(Buffer.byteLength(content)>16*1024*1024)throw new AuthoringError('本地草稿操作记录过大，请稍后重试。');
     if (this.path) {
       const tmp = this.path + '.' + randomUUID() + '.tmp';
       const fd = openSync(tmp, 'wx', 0o600);

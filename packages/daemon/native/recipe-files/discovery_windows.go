@@ -9,14 +9,15 @@ import (
 func missingEntry(e error) bool {
 	return e == windows.STATUS_OBJECT_NAME_NOT_FOUND || e == windows.STATUS_OBJECT_PATH_NOT_FOUND
 }
-func documentMetadata(parent *held, name string) bool {
+func documentMetadata(parent *held, name string) (bool, bool) {
 	file, e := ntOpen(parent.file, name, windows.FILE_READ_ATTRIBUTES, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, windows.FILE_OPEN, windows.FILE_NON_DIRECTORY_FILE)
 	if e != nil {
-		return false
+		return false, false
 	}
 	defer file.Close()
 	m, e := inspect(file)
-	return e == nil && !m.directory && m.size <= fileCap
+	regular := e == nil && !m.directory
+	return regular && m.size <= fileCap, regular && m.size > fileCap
 }
 
 func listNames(dir *held, limit int) ([]string, error) {

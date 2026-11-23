@@ -1,0 +1,4 @@
+.recipe-group-settings .recipe-provider { display: inline-flex; align-items: center; gap: 7px; }
+.recipe-group-settings .ss-row__value { overflow-wrap: anywhere; min-width: 0; }
+.recipe-group-settings .ss-row__description { white-space: pre-wrap; overflow-wrap: anywhere; }
+.recipe-group-settings .gd-model-selection-copy { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

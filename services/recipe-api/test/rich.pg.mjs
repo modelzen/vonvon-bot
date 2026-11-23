@@ -62,7 +62,7 @@ try{
     const headers={};if(token)headers.authorization='Bearer '+token;if(body!==undefined)headers['content-type']='application/json';
     if(key)headers['idempotency-key']=key;if(rev)headers['if-match']='"'+rev+'"';
     const r=await fetch(orig(api.server)+path,{method:method??(body!==undefined?'POST':'GET'),headers,body:body===undefined?undefined:JSON.stringify(body)});
-    const out=await r.json();assert.equal(r.status,status,path+' '+JSON.stringify(out.error));return out;
+    const out=await r.json();assert.equal(r.status,status,path+' '+JSON.stringify(out?.error));return out;
   }
   const logoReceipts=new Map();
   async function upload(token,pkg,idx,kind,buf,status=200) {
@@ -162,6 +162,31 @@ try{
   const creatorReaders=files.find(f=>f.endsWith('_recipe_creator_readers.sql'));assert.ok(creatorReaders>receiptReaders);
   await checkCreatorReaders({req,start,fixture,body,upload,token:jwt(randomUUID()),other:jwt(randomUUID()),fresh:jwt(randomUUID()),sql,opId,
     connectAdmin:()=>new pg.Client({user:'cloud_test',database:'postgres',host:sock,port:5432}),applyMigration:()=>apply(creatorReaders)});
+  files.filter(file=>file>creatorReaders).forEach(apply);
+  {
+    const creator=jwt(randomUUID()), outsider=jwt(randomUUID());
+    const makeDraft=async(token,version)=>req('/v1/drafts',token,{...legacyDoc,public:{...legacyDoc.public,version}},{key:randomUUID()});
+    const standalone=await makeDraft(creator,'1.0');
+    const first=await req('/v1/drafts/'+standalone.draftId+'/publish',creator,{destination:null},{key:randomUUID(),rev:1});
+    const target={recipeId:first.recipeId,versionId:first.versionId};
+    const foreign=await makeDraft(outsider,'2.0');
+    await req('/v1/drafts/'+foreign.draftId+'/publish',outsider,{destination:target},{key:randomUUID(),rev:1,status:409});
+    const freshConfig=structuredClone(fixture);freshConfig.public.version.value='2.0';
+    const newSource=await start(creator),frozen=await newSource.freeze(body(freshConfig,'direct'));
+    const work=await newSource.commit(frozen),path='/v2/drafts/'+work.draftId+'/publish',publishKey=randomUUID();
+    const payload={canonical:frozen.canonical,destination:target},headers={key:publishKey,rev:1};
+    const update=await req(path,creator,payload,headers);
+    assert.equal(update.recipeId,first.recipeId);assert.equal(update.revision,2);assert.notEqual(update.versionId,first.versionId);
+    assert.equal((await req(path,creator,payload,headers)).versionId,update.versionId);
+    await req(path,creator,{...payload,destination:null},{...headers,status:409});
+    const stale=await makeDraft(creator,'3.0');
+    await req('/v1/drafts/'+stale.draftId+'/publish',creator,{destination:target},{key:randomUUID(),rev:1,status:409});
+    await req('/v2/versions/'+update.versionId+'/delete',creator,{});
+    assert.equal((await req('/v2/recipes/'+target.recipeId+'/versions/'+update.versionId,creator)).state,'deleted');
+    const next=await req('/v1/drafts/'+stale.draftId+'/publish',creator,{destination:target},{key:randomUUID(),rev:1});
+    assert.equal(next.recipeId,target.recipeId);assert.equal(next.revision,3);
+    console.log('PASS: independent draft to existing recipe, immutable history, exact retry, stale and foreign targets, deletion and subsequent version.');
+  }
   const prep=await start(a);const privateBytes=Buffer.from('SELECTED PRIVATE RULE');
   const p=await upload(a,prep.pkg,0,'text',privateBytes);
   const png=await sharp({create:{width:20,height:30,channels:3,background:'#22aa33'}}).png().toBuffer();
@@ -318,16 +343,16 @@ try{
   assert.equal((await req('/v2/recipes/'+v.recipeId+'/latest-install-version',b)).versionId,v.versionId);
   await req('/v2/drafts/'+derivedSaved.draftId+'/publish',b,{canonical:derivedPlan.canonical},{key:randomUUID(),rev:1,status:403});
   assert.equal((await req('/v2/drafts/'+derivedSaved.draftId,b)).revision,1);
-  assert.equal((await pending.complete('applied')).disposition,'settled');
-  assert.equal((await pending.complete('applied')).disposition,'settled');
-  assert.equal((await req('/v2/versions/'+nextVersion.versionId+'/install-preview',b)).release.versionId,nextVersion.versionId);
+  assert.equal((await pending.complete('applied')).disposition,'blocked');
+  assert.equal((await pending.complete('applied')).disposition,'blocked');
+  await req('/v2/versions/'+nextVersion.versionId+'/install-preview',b,undefined,{status:403});
   sql("select recipe_api.rich_moderate('ban','"+nextVersion.versionId+"',null)");await pending.readPart(nextDetail.manifest.objectId,403);
-  console.log('PASS: native-device operation proofs, old-domain refusal, verified member read, distinct settlement proof, direct update grant only on completion after withdrawal.');
+  console.log('PASS: native-device operation proofs, old-domain refusal, verified member read, distinct settlement proof, withdrawal closes operation resource access and prevents a new grant.');
   await req('/v2/versions/'+v.versionId+'/withdraw',a,{});
-  await publicLogo(404);assert.equal((await req(detail)).state,'withdrawn');assert.deepEqual(await read(b,'versions',v.versionId,p.objectId),privateBytes);
+  await publicLogo(404);assert.equal((await req(detail)).state,'withdrawn');await read(b,'versions',v.versionId,p.objectId,404);
   sql("select recipe_api.rich_moderate('ban','"+v.versionId+"',null)");await read(b,'versions',v.versionId,p.objectId,404);
   assert.equal((await req(detail,b)).state,'blocked');
-  sql("with seq as (select gen_random_uuid() rid,x from generate_series(1,12)x),rp as (insert into recipe_private.recipes(id,owner_id,revision) select rid,'"+account+"',1 from seq returning id) insert into recipe_private.versions(recipe_id,owner_id,revision,public_info,config,bytes) select id,'"+account+"',1,jsonb_build_object('name','分页','summary','page','version','1','overview','','access','direct'),'{\"role\":\"\"}',80 from rp");
+  sql("with authors as (insert into recipe_private.accounts(id) select gen_random_uuid() from generate_series(1,12) returning id),rp as (insert into recipe_private.recipes(id,owner_id,revision) select gen_random_uuid(),id,1 from authors returning id,owner_id) insert into recipe_private.versions(recipe_id,owner_id,revision,public_info,config,bytes) select id,owner_id,1,jsonb_build_object('name','分页','summary','page','version','1','overview','','access','direct'),'{\"role\":\"\"}',80 from rp");
   assert.equal((await req('/v2/community/recipes')).heroKind,'latest');
   const first=await req('/v2/community/recipes?q='+encodeURIComponent('分页'));assert.equal(first.hero,null);assert.equal(first.items.length,8);
   const next=await req('/v2/community/recipes?q='+encodeURIComponent('分页')+'&cursor='+first.nextCursor);assert.equal(next.items.length,4);

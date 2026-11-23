@@ -1,13 +1,11 @@
 import {createHash,randomUUID} from 'node:crypto';
-import {mkdtempSync,rmSync,unlinkSync} from 'node:fs';
-import {tmpdir} from 'node:os';
-import {join} from 'node:path';
 import {afterEach,expect,it,vi} from 'vitest';
 import {agentIdSchema,canonicalizeRichRecipeContent,groupIdSchema,type AccountStatus,type AuthoringFieldRequest,type AuthoringOperation,type AuthoringReceipt,
   desktopAuthoringRequestSchema,type HandoffAttestation,type RecipeAuthoringReply,type RecipeAuthoringRequest} from '@vonvon/protocol';
 import type {VonvonClient} from '@vonvon/client/browser';
 import {RecipeAuthoringController} from '../src/recipe-authoring';
 import {AuthoringJournal} from '../src/recipe-authoring-journal';
+import {LocalRecipeDrafts,type LocalRecipeDraftRecord} from '../src/local-recipe-drafts';
 import {AccountFault} from '../src/account-auth';
 import type {NativeAccount} from '../src/account-session';
 
@@ -73,50 +71,66 @@ function fixture(path?:string) {
     if(path==='/v1/me')return Response.json({accountId});
     if(path.startsWith('/v2/authoring/')&&path.endsWith('/recovery'))
       return remote.cloudReceipt?Response.json({format:'rich-v2',...remote.cloudReceipt}):new Response('{}',{status:503});
-    if(path==='/v2/drafts/'+draftId)return Response.json({format:'rich-v2',draftId,sourceIntentId:remote.sourceIntentId,
-      revision:2,manifest:draft.metadata,sourceManifest:original.metadata});
-    for(const item of [draft,original])if(path==='/v2/drafts/'+draftId+'/objects/'+item.metadata.objectId)return new Response(item.canonical);
     if(path.startsWith('/v2/versions/'))return Response.json({versionId:path.split('/')[3],authorId:accountId,access:'direct',items:[]});
     throw Error(path);
   });
   const account:NativeAccount={lease:id=>id===accountId?signal.signal:undefined,status:()=>state,onStatus:()=>()=>{},
     login:async()=>state,cancelLogin:async()=>state,logout:async()=>state,request,dispose:async()=>{}};
+  const drafts=new LocalRecipeDrafts();clean.push(()=>drafts.close());
+  const record:LocalRecipeDraftRecord={association:{...binding,binding:randomUUID(),scope:'a'.repeat(64)},
+    work:{draftId,source:{preparationId:sourceIntentId,groupId,identity}},sourceCanonical:Buffer.from(original.canonical).toString('base64url'),members:[],
+    draft:{format:'rich-v2',draftId,recipeId:null,revision:2,sourceIntentId,public:{name:'目前的内容',summary:'',overview:'',version:'',access:'direct'},rich:{content:JSON.parse(draft.canonical).content??JSON.parse(draft.canonical),canonical:Buffer.from(draft.canonical).toString('base64url'),texts:{}}}};
+  for(let revision=1;revision<=2;revision++)drafts.commit({requestId:randomUUID(),expectedRevision:revision===1?null:revision-1,record:{...record,draft:{...record.draft,revision}}});
   const build=()=>{
     const journal=new AuthoringJournal(path);
-    const controller=new RecipeAuthoringController(account,viewId=>({viewId,client,check(){}}),journal);
+    const controller=new RecipeAuthoringController(account,viewId=>({viewId,client,check(){}}),journal,undefined,drafts);
     clean.push(()=>controller.closeAll());
     return {journal,controller};
   };
   const openDraft={type:'openDraftSource' as const,accountId,viewId:'local',baseRevision:2,draftId};
-  return {build,binding,draftId,draft,original,op,openDraft,retryId,sourceIntentId,groupId,identity,remote,calls,rpc,request,signal};
+  return {build,binding,draftId,draft,original,op,openDraft,retryId,sourceIntentId,groupId,identity,remote,calls,rpc,request,signal,drafts,record};
 }
+it.each([404,503])('prepares local items when an unrelated source is deleted, and retries transport failures (%i)',async status=>{
+  const f=fixture(),{controller}=f.build();
+  const session=await controller.request({type:'open',accountId:f.binding.accountId,viewId:'local',botId:f.binding.botId,groupId:f.groupId});
+  if(session.kind!=='session')throw Error('session');
+  const removed=randomUUID(),accessible=randomUUID(),reviewToken='a'.repeat(64),content=JSON.parse(f.original.canonical);
+  const rpc=f.rpc.getMockImplementation()!,http=f.request.getMockImplementation()!;
+  f.request.mockImplementation((id,path)=>path==='/v2/versions/'+removed+'/source-items'?Promise.resolve(new Response('{}',{status})):http(id,path));
+  f.rpc.mockImplementation(async req=>{
+    if(req.type==='richInventory')return {kind:'richInventory',groupId:f.groupId,inventory:{reviewToken,content,versions:[removed,accessible],unavailable:[]}};
+    if(req.type==='richPrepare')return {kind:'operation',operation:f.op};
+    return rpc(req);
+  });
+  const prepare=controller.request({type:'richPrepare',handle:session.handle,groupId:f.groupId,selection:{
+    options:{skills:[],includeTasks:false,includeBotMemories:false},selected:[content.public.name.itemId],sourceAttested:true,
+    public:{name:'新配方',summary:'',overview:'',version:'1.0'},reviewToken,access:'direct',setup:[],
+  }});
+  if(status===404){
+    await expect(prepare).resolves.toMatchObject({kind:'operation'});
+    expect(f.rpc.mock.calls.flatMap(([req])=>req.type==='richPrepare'?req.attestations.map(a=>a.versionId):[])).toEqual([accessible]);
+  }else{
+    await expect(prepare).rejects.toThrow();
+    expect(f.rpc.mock.calls.some(([req])=>req.type==='richPrepare')).toBe(false);
+  }
+});
 function gate(){
   let release!:()=>void;
   const ready=new Promise<void>(resolve=>{release=resolve;});
   return {ready,release};
 }
 
-it('backfills an old verified target from the exact daemon operation, then reopens after both journals expire',async()=>{
-  const dir=mkdtempSync(join(tmpdir(),'authoring-locator-'));
-  clean.push(()=>rmSync(dir,{recursive:true,force:true}));
-  const path=join(dir,'operations.json');
-  const f=fixture(path),old=f.build();
-  old.journal.history.remember(f.binding,f.sourceIntentId,f.identity);
-  f.remote.operations.push(f.op);
-  const first=await old.controller.request(f.openDraft);
-  expect(first).toMatchObject({kind:'session',sourceGroup:{groupId:f.groupId,groupName:'原群'}});
-  expect(f.calls.filter(r=>r.type==='operationSourceIdentity')).toHaveLength(1);
-  old.controller.closeAll();
-  unlinkSync(path);
-  f.remote.operations.length=0;
+it('reopens only the locally saved draft after operation journals expire and never imports an old cloud draft',async()=>{
+  const f=fixture(),first=f.build();
+  const session=await first.controller.request(f.openDraft);
+  expect(session).toMatchObject({kind:'session',sourceGroup:{groupId:f.groupId}});
+  first.controller.closeAll();f.remote.operations=[];
   const fresh=f.build();
-  const session=await fresh.controller.request(f.openDraft);
-  if(session.kind!=='session')throw Error('session');
-  await fresh.controller.request({type:'beginDraftHandoff',handle:session.handle,draftId:f.draftId,baseRevision:2,retryId:f.retryId});
-  expect(f.calls.at(-1)).toMatchObject({type:'beginDraftHandoff',retryId:f.retryId,draftId:f.draftId,baseRevision:2,
-    groupId:f.groupId,identity:f.identity,groupName:'原群',canonical:Buffer.from(f.draft.canonical).toString('base64url'),
-    source:{sourceIntentId:f.sourceIntentId,canonical:Buffer.from(f.original.canonical).toString('base64url')}});
-  expect(f.calls.filter(r=>r.type==='operationSourceIdentity')).toHaveLength(1);
+  await expect(fresh.controller.request(f.openDraft)).resolves.toMatchObject({kind:'session',sourceGroup:{groupId:f.groupId}});
+  f.drafts.discard({accountId:f.binding.accountId,draftId:f.draftId,requestId:randomUUID(),expectedRevision:2});
+  await expect(fresh.controller.request(f.openDraft)).rejects.toThrow();
+  expect(f.request.mock.calls.every(([,path])=>path==='/v1/me')).toBe(true);
+  expect(f.calls.filter(r=>r.type==='operationSourceIdentity')).toEqual([]);
 });
 
 it('uses the immutable account source digest and group from the original Main journal when the daemon operation has expired',async()=>{
@@ -125,7 +139,7 @@ it('uses the immutable account source digest and group from the original Main jo
   journal.observe(f.binding,f.op);
   await expect(controller.request(f.openDraft)).resolves.toMatchObject({kind:'session',sourceGroup:{groupId:f.groupId}});
   expect(f.calls.map(r=>r.type)).not.toContain('operationSourceIdentity');
-  expect(journal.history.locator(f.binding.accountId,f.sourceIntentId)).toMatchObject({identity:f.identity,groupId:f.groupId});
+  expect(f.drafts.read(f.binding.accountId,f.draftId)?.work.source).toMatchObject({identity:f.identity,groupId:f.groupId});
 });
 
 it('refuses unrelated owned intents, replaced device keys, changed registrations/groups, switched accounts and draft substitution',async()=>{
@@ -137,15 +151,15 @@ it('refuses unrelated owned intents, replaced device keys, changed registrations
   await expect(controller.request({...begin,draftId:randomUUID()})).rejects.toThrow();
   await expect(controller.request({...f.openDraft,accountId:randomUUID()})).rejects.toThrow();
   f.remote.sourceIntentId=randomUUID();
-  await expect(controller.request(begin)).rejects.toThrow();
-  await expect(controller.request(f.openDraft)).rejects.toThrow('来源记录');
+  await expect(controller.request(begin)).resolves.toMatchObject({kind:'handoff'});
+  expect(f.request.mock.calls.every(([,path])=>path==='/v1/me')).toBe(true);
   f.remote.sourceIntentId=f.sourceIntentId;
   f.remote.deviceKey=Buffer.alloc(32,3).toString('base64url');
   await expect(controller.request(f.openDraft)).rejects.toThrow('来源设备');
   f.remote.deviceKey=f.binding.deviceKey;
   f.remote.identity='f'.repeat(64);
   await expect(controller.request(f.openDraft)).rejects.toThrow('绑定');
-  expect(f.calls.filter(r=>r.type==='beginDraftHandoff')).toHaveLength(0);
+  expect(f.calls.filter(r=>r.type==='beginDraftHandoff')).toHaveLength(1);
 });
 
 it('retains a detached preparation and checks the complete attestation challenge again after authenticated source reads',async()=>{
@@ -235,11 +249,12 @@ it.each([false,true])('restores the exact edit receipt after its original revisi
   expect(f.calls.filter(r=>r.type==='beginDraftHandoff')).toHaveLength(0);
   expect(f.request.mock.calls.slice(before).some(([,path])=>path.includes('/objects/'))).toBe(false);
   if(!revoked)expect(f.request.mock.calls.slice(before).some(([,path])=>path==='/v2/drafts/'+f.draftId)).toBe(false);
-  await expect(controller.request(f.openDraft)).rejects.toThrow('无法核验');
+  await expect(controller.request(f.openDraft)).resolves.toMatchObject({kind:'session'});
   if(restored.kind!=='handoffRestored')throw Error('restored');
   if(revoked)expect(restored.session.handle).not.toBe(session.handle);
   else expect(restored.session.handle).toBe(session.handle);
-  await expect(controller.request({type:'beginDraftHandoff',handle:restored.session.handle,retryId:randomUUID(),draftId:f.draftId,baseRevision:2})).rejects.toThrow('选择已改变');
+  expect(f.drafts.read(f.binding.accountId,f.draftId)?.draft.revision).toBe(2);
+  expect(f.request.mock.calls.every(([,path])=>!path.includes('/objects/'))).toBe(true);
 });
 
 
@@ -261,26 +276,19 @@ it('preserves a valid old handle after a transient restore read and revokes an a
 });
 
 
-it('does not let a delayed draft restore revoke a newer preparation for the same Bot',async()=>{
-  const f=fixture(),{journal,controller}=f.build();
-  journal.history.remember(f.binding,f.sourceIntentId,f.identity,f.groupId);
-  const old=await controller.request(f.openDraft);
-  if(old.kind!=='session')throw Error('session');
+it('serializes a local draft restore while account identity is pending, then allows a fresh preparation',async()=>{
+  const f=fixture(),{controller}=f.build(),open={type:'open' as const,accountId:f.binding.accountId,viewId:'local',botId:f.binding.botId,groupId:f.groupId};
+  const old=await controller.request(f.openDraft);if(old.kind!=='session')throw Error('session');
   await controller.request({type:'close',handle:old.handle});
-  const normal=f.request.getMockImplementation()!;
-  let release!:()=>void;
-  const held=new Promise<void>(resolve=>{release=resolve;});
-  f.request.mockImplementation(async(id,path)=>{if(path==='/v2/drafts/'+f.draftId)await held;return normal(id,path);});
-  const delayed=controller.request({type:'restoreHandoff',accountId:f.binding.accountId,viewId:'local',handle:old.handle,
-    retryId:f.retryId,target:{kind:'draft',draftId:f.draftId,baseRevision:2}});
-  const result=delayed.then(value=>({value}),error=>({error}));
-  await vi.waitFor(()=>expect(f.request.mock.calls.filter(([,path])=>path==='/v2/drafts/'+f.draftId)).toHaveLength(2));
-  const fresh=await controller.request({type:'open',accountId:f.binding.accountId,viewId:'local',botId:f.binding.botId,groupId:f.groupId});
-  if(fresh.kind!=='session')throw Error('session');
-  release();
-  expect(await result).toHaveProperty('error');
+  const resume=gate(),started=gate(),normal=f.request.getMockImplementation()!;
+  f.request.mockImplementation(async(id,path)=>{if(path==='/v1/me'){started.release();await resume.ready;}return normal(id,path);});
+  const pending=controller.request({type:'restoreHandoff',accountId:f.binding.accountId,viewId:'local',handle:old.handle,retryId:f.retryId,target:{kind:'draft',draftId:f.draftId,baseRevision:2}});
+  await started.ready;
+  await expect(controller.request(open)).rejects.toThrow('正在连接');
+  resume.release();await expect(pending).resolves.toMatchObject({kind:'handoffRestored'});
+  const fresh=await controller.request(open);if(fresh.kind!=='session')throw Error('session');
   await expect(controller.request({type:'status',handle:fresh.handle})).resolves.toMatchObject({kind:'session',handle:fresh.handle});
-  expect(f.calls.filter(r=>r.type==='open')).toHaveLength(2);
+  expect(f.request.mock.calls.every(([,path])=>path==='/v1/me')).toBe(true);
 });
 
 it.each([403,503])('requires online account confirmation before restoring an old handle (%s)',async code=>{
@@ -333,7 +341,7 @@ it.each([false,true])('restores and polls only the original operation without up
   expect(updated.operations.map(op=>op.operationId)).toEqual([original.operationId]);
 });
 
-it('finishes the original edit from background ticks after a restored selecting dialog is detached',async()=>{
+it('recovers the original legacy edit by read-only receipt lookup after a restored selecting dialog is detached',async()=>{
   vi.useFakeTimers();
   clean.push(()=>vi.useRealTimers());
   const f=fixture(),{journal,controller}=f.build();
@@ -361,34 +369,19 @@ it('finishes the original edit from background ticks after a restored selecting 
   expect(f.request.mock.calls.some(([,path])=>path.includes(other.operationId))).toBe(false);
 });
 
-it.each([false,true])('rejects a delayed draft restore after a new page reclaims the same detached handle (unavailable %s)',async missing=>{
-  const f=fixture(),{journal,controller}=f.build();
-  journal.history.remember(f.binding,f.sourceIntentId,f.identity,f.groupId);
-  const old=await controller.request(f.openDraft);
-  if(old.kind!=='session')throw Error('session');
+it.each([false,true])('holds new Bot opens until local draft restore resolves (unavailable %s)',async missing=>{
+  const f=fixture(),{controller}=f.build(),open={type:'open' as const,accountId:f.binding.accountId,viewId:'local',botId:f.binding.botId,groupId:f.groupId};
+  const old=await controller.request(f.openDraft);if(old.kind!=='session')throw Error('session');
   await controller.request({type:'close',handle:old.handle});
-  const open={type:'open' as const,accountId:f.binding.accountId,viewId:'local',botId:f.binding.botId,groupId:f.groupId};
-  const prior=await controller.request(open);
-  if(prior.kind!=='session')throw Error('session');
-  await controller.request({type:'beginHandoff',handle:prior.handle,retryId:f.retryId,groupId:f.groupId});
-  await controller.request({type:'detach',handle:prior.handle});
-  const normal=f.request.getMockImplementation()!;
-  let release!:()=>void;
-  const held=new Promise<void>(resolve=>{release=resolve;});
-  f.request.mockImplementation(async(id,path)=>{if(path==='/v2/drafts/'+f.draftId)await held;return normal(id,path);});
-  const delayed=controller.request({type:'restoreHandoff',accountId:f.binding.accountId,viewId:'local',handle:old.handle,
-    retryId:randomUUID(),target:{kind:'draft',draftId:f.draftId,baseRevision:2}});
-  const result=delayed.then(value=>({value}),error=>({error}));
-  await vi.waitFor(()=>expect(f.request.mock.calls.filter(([,path])=>path==='/v2/drafts/'+f.draftId)).toHaveLength(2));
-  const reopened=await controller.request(open);
-  expect(reopened).toMatchObject({kind:'session',handle:prior.handle});
-  const before=f.calls.length;
-  f.remote.missing=missing;
-  release();
-  expect(await result).toHaveProperty('error');
-  expect(f.calls.slice(before).filter(r=>r.type==='close')).toEqual([]);
-  await expect(controller.request({type:'status',handle:prior.handle})).resolves.toMatchObject({kind:'session',handle:prior.handle});
-  expect(f.calls.filter(r=>r.type==='open')).toHaveLength(2);
+  const resume=gate(),started=gate(),normal=f.request.getMockImplementation()!;
+  f.request.mockImplementation(async(id,path)=>{if(path==='/v1/me'){started.release();await resume.ready;}return normal(id,path);});
+  const pending=controller.request({type:'restoreHandoff',accountId:f.binding.accountId,viewId:'local',handle:old.handle,retryId:f.retryId,target:{kind:'draft',draftId:f.draftId,baseRevision:2}});
+  await started.ready;
+  await expect(controller.request(open)).rejects.toThrow('正在连接');
+  f.remote.missing=missing;resume.release();
+  await expect(pending).resolves.toMatchObject({kind:missing?'handoffUnavailable':'handoffRestored'});
+  await expect(controller.request(open)).resolves.toMatchObject({kind:'session'});
+  expect(f.request.mock.calls.every(([,path])=>path==='/v1/me')).toBe(true);
 });
 
 it.each(['503','network','timeout','offline account'])('pauses writes without closing a valid handle after transient presence failure (%s)',async failure=>{
@@ -493,14 +486,10 @@ it('pauses an in-flight field answer when concurrent restore loses account confi
       if(offline)return new Response('{}',{status:503});
     }
     if(path==='/v1/authoring/'+f.op.operationId)return Response.json(f.op.receipt);
-    if(path==='/v1/drafts/'+f.draftId){
-      if(hold){hold=false;atRead.release();await resume.ready;}
-      return Response.json({draftId:f.draftId,recipeId:null,revision:1,public:{name:'fixture title',summary:'',overview:'',version:'',access:'direct'},
-        format:'rich-v2',sourceIntentId:f.sourceIntentId,rich:{content:JSON.parse(f.draft.canonical),texts:{},canonical:f.draft.canonical}});
-    }
     return normalAccount(id,path);
   });
   f.rpc.mockImplementation(async input=>{
+    if(input.type==='groupSourceIdentity'&&hold){hold=false;atRead.release();await resume.ready;}
     if(input.type==='answerField'){events.push('answerField');return {kind:'fieldAnswered'};}
     return normalRpc(input);
   });

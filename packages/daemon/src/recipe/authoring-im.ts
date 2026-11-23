@@ -78,6 +78,20 @@ export class AuthoringIm {
     }
     return this.createJson(card(elements, {header:{title:'选择配方来源'},forward:false}));
   }
+  async sendText(chatId:string, text:string, uuid:string):Promise<string> {
+    if (!physicalChat(chatId)) throw new Error('需要真实私聊。');
+    const result=await this.channel.rawClient.im.v1.message.create({
+      params:{receive_id_type:'chat_id'},data:{receive_id:chatId,msg_type:'text',content:JSON.stringify({text}),uuid},
+    });
+    const id=result.data?.message_id;
+    if(result.code!==0||!id)throw new Error('尚无法核实消息送达。');
+    if(result.data?.chat_id!==chatId){
+      const lookup=await this.channel.rawClient.im.v1.message.get({path:{message_id:id}});
+      const item=lookup.data?.items?.find(m=>m.message_id===id&&m.chat_id===chatId&&m.msg_type==='text'&&!m.deleted);
+      if(lookup.code!==0||!item?.body?.content||JSON.parse(item.body.content).text!==text)throw new Error('尚无法核实消息送达。');
+    }
+    return id;
+  }
   async send(chatId: string, cardId: string, uuid: string): Promise<string> {
     if (!physicalChat(chatId)) throw new Error('需要真实私聊。');
     const result = await this.channel.rawClient.im.v1.message.create({

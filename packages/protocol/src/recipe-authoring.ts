@@ -53,7 +53,7 @@ export const authoringReceiptSchema = z.union([
 ]);
 export type AuthoringReceipt = z.infer<typeof authoringReceiptSchema>;
 export const authoringOperationSchema = z.object({
-  operationId: uuid, ...registration, format:z.literal('rich-v2').optional(),
+  operationId: uuid, ...registration, format:z.literal('rich-v2').optional(), storage:z.literal('local').optional(),
   state: z.enum(['pendingMain', 'sending', 'waiting', 'candidate', 'pendingCloud', 'completed', 'cancelPending', 'cancelled', 'expired', 'needsReview']),
   deliveryUnknown: z.boolean(), cardUpdate: z.enum(['pending','backoff','unavailable']).optional(), payloadDigest: digest.optional(), receipt: authoringReceiptSchema.optional(),
   groupId: groupIdSchema.optional(), createdAt: millis,
@@ -61,13 +61,20 @@ export const authoringOperationSchema = z.object({
 export type AuthoringOperation = z.infer<typeof authoringOperationSchema>;
 // Old links can reconcile cloud registration and its terminal receipt, never source, candidate or delivery.
 const reconciliation = z.object({
-  operationId: uuid, ...registration, format:z.literal('rich-v2').optional(), createdAt: millis, receipt: authoringReceiptSchema.optional(),
+  operationId: uuid, ...registration, format:z.literal('rich-v2').optional(), storage:z.literal('local').optional(), createdAt: millis, receipt: authoringReceiptSchema.optional(),
 }).strict();
 export type AuthoringReconciliation = z.infer<typeof reconciliation>;
 const recipient = z.object({openId: z.string().max(210), chatId: groupIdSchema, tenantKey: z.string().max(200)}).strict();
+export const localDraftAdvanceSchema=z.discriminatedUnion('kind',[
+  z.object({kind:z.literal('dispatch'),draftId:uuid}).strict(),
+  z.object({kind:z.literal('richAccept'),draftId:uuid,reviewDigest:digest,frozen:richFrozenResponseSchema}).strict(),
+  z.object({kind:z.literal('roleAccept'),draftId:uuid,reviewDigest:digest,revision:positive}).strict(),
+  z.object({kind:z.literal('cancel')}).strict(),
+]);
+export type LocalDraftAdvance=z.infer<typeof localDraftAdvanceSchema>;
 export const recipeAuthoringRequestSchema = z.discriminatedUnion('type', [
   ...creatorRequests,
-  z.object({type:z.literal('beginHandoff'),...session,retryId:uuid,groupId:groupIdSchema,groupName:z.string().min(1).max(512),sourceVersionId:uuid.optional(),inherited:inheritedPublicationSchema.optional()}).strict(),
+  z.object({type:z.literal('beginHandoff'),...session,retryId:uuid,groupId:groupIdSchema,groupName:z.string().min(1).max(512),conversation:z.literal(true).optional(),sourceVersionId:uuid.optional(),inherited:inheritedPublicationSchema.optional()}).strict(),
   z.object({type:z.literal('beginDraftHandoff'),...session,retryId:uuid,groupId:groupIdSchema,groupName:z.string().min(1).max(512),identity:digest,
     draftId:uuid,baseRevision:positive,canonical:z.string().min(1).max(1401000),source:editSource}).strict(),
   z.object({type:z.literal('restoreHandoff'),...session,retryId:uuid,expected:z.discriminatedUnion('kind',[
@@ -88,6 +95,8 @@ export const recipeAuthoringRequestSchema = z.discriminatedUnion('type', [
   z.object({type:z.literal('richInspect'),...operation,preview:z.literal(true).optional()}).strict(),
   z.object({type:z.literal('richAdvance'),...operation,destinationDraftId:uuid,authorization:richAuthoringAuthorizationSchema,
     accepted:z.object({frozen:richFrozenResponseSchema,manifestId:uuid,packageId:uuid}).strict().optional()}).strict(),
+  z.object({type:z.literal('localDraftAdvance'),...operation,advance:localDraftAdvanceSchema}).strict(),
+  z.object({type:z.literal('localDraftAcknowledged'),...operation,receipt:authoringReceiptSchema}).strict(),
   z.object({type: z.literal('open'), ...target, accountId: uuid}).strict(),
   z.object({type: z.literal('close'), ...session}).strict(),
   z.object({type: z.literal('status'), ...session, operationId:uuid.nullable().optional()}).strict(),
@@ -135,6 +144,7 @@ export const recipeAuthoringReplySchema = z.discriminatedUnion('kind', [
   z.object({kind: z.literal('source'), groupId: groupIdSchema, reviewToken: digest, role: z.string().max(16384), untracked: z.boolean()}).strict(),
   z.object({kind: z.literal('candidate'), operationId: uuid, payloadDigest: digest, reviewedDigest:digest.optional(), payload: z.string().max(180000)}).strict(),
   z.object({kind: z.literal('operation'), operation: authoringOperationSchema}).strict(),
+  z.object({kind:z.literal('localDraftAcknowledged'),operationId:uuid}).strict(),
   z.object({kind: z.literal('reconciled'), receipt: authoringReceiptSchema}).strict(),
   z.object({kind: z.literal('status'), linked: z.boolean(), operations: z.array(authoringOperationSchema).max(540),
     reconciliation: z.array(reconciliation).max(540)}).strict(),

@@ -65,9 +65,9 @@ test('same-origin PKCE login and claim use opaque session cookies', async t => {
   assert.equal(authorize.origin,issuer); assert.equal(authorize.searchParams.get('redirect_to'),origin+'/auth/callback');
   // A callback without the browser that started this flow cannot make a session or exchange the code.
   let finish=await fetch(host+'/auth/callback?code=hello',{redirect:'manual'});
-  assert.equal(finish.headers.get('location'),'/?auth=failed'); assert.equal(exchanges.length,0);
+  assert.equal(finish.headers.get('location'),'/login?returnTo=%2F&auth=failed#'); assert.equal(exchanges.length,0);
   finish=await fetch(host+'/auth/callback?code=hello',{redirect:'manual',headers:{cookie:cookie(start)}});
-  assert.equal(finish.status,303); assert.equal(finish.headers.get('location'),detail);
+  assert.equal(finish.status,303); assert.equal(finish.headers.get('location'),detail+'#');
   assert.equal(start.headers.get('referrer-policy'), 'same-origin');
   assert.equal(finish.headers.get('referrer-policy'), 'no-referrer');
   const opaque=cookie(finish);
@@ -77,16 +77,16 @@ test('same-origin PKCE login and claim use opaque session cookies', async t => {
   assert.equal(createHash('sha256').update(exchanges[0].body.code_verifier).digest('base64url'),authorize.searchParams.get('code_challenge'));
   assert.equal(exchanges[0].apiKey,'test-publishable');
   const replay=await fetch(host+'/auth/callback?code=hello',{redirect:'manual',headers:{cookie:cookie(start)}});
-  assert.equal(replay.headers.get('location'),'/?auth=failed');assert.equal(exchanges.length,1);
+  assert.equal(replay.headers.get('location'),'/login?returnTo=%2F&auth=failed#');assert.equal(exchanges.length,1);
   const path=host+'/api/v1/versions/'+v+'/redeem';
   const view = await fetch(host + '/auth/session', {headers:{cookie:opaque}}).then(r=>r.json());
   assert.equal(typeof view.displaySession, 'string'); assert.ok(!opaque.includes(view.displaySession));
   const headers={origin,cookie:opaque,'X-Vonvon-Session':view.displaySession,'Content-Type':'application/json','Idempotency-Key':r};
   response=await fetch(path,{method:'POST',headers:{...headers,origin:'https://wrong.example'},body:'{"code":"a"}'});
-  assert.equal(response.status,403); assert.equal(apiCalls.length,1);
+  assert.equal(response.status,403); assert.deepEqual(apiCalls.map(call=>call[1]),['/v1/community/recipes','/v2/me/account-profile']);
   response=await fetch(path,{method:'POST',headers:{...headers,'X-Vonvon-Session':'older-window'},body:'{"code":"a"}'});
   assert.equal(response.status,409); assert.equal((await response.json()).error.code, 'session_changed');
-  assert.equal(apiCalls.length,1);
+  assert.deepEqual(apiCalls.map(call=>call[1]),['/v1/community/recipes','/v2/me/account-profile']);
   response=await fetch(path,{method:'POST',headers,body:'{"code":"a"}'});
   assert.equal(response.status,200); assert.deepEqual(apiCalls.at(-1),['POST','/v1/versions/'+v+'/redeem','Bearer synthetic-ac','{"code":"a"}',r]);
   assert.equal((await fetch(host+'/api/v1/unrelated',{headers})).status,404);
@@ -97,7 +97,7 @@ test('same-origin PKCE login and claim use opaque session cookies', async t => {
 
 test('logout while a write body is pending prevents API forwarding', async t => {
   let forwarded = 0;
-  const api = await listen(createServer((req, res) => { forwarded++; toJson(res, { ok: true }); }), t);
+  const api = await listen(createServer((req, res) => { if (req.method === 'POST') forwarded++; toJson(res, { ok: true }); }), t);
   const issuer = await listen(createServer((req, res) => toJson(res,
     { access_token: 'synthetic-access', refresh_token: 'synthetic-refresh', expires_in: 3600 })), t);
   const origin = 'https://recipes.example';

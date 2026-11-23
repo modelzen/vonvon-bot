@@ -1,15 +1,22 @@
-import {RecipeBrowseConfiguration, RichConfiguration} from './RichConfiguration';
+import {useRecipeCardAlignment} from './use-recipe-card-alignment';
+import {RecipeGroupConfiguration} from './RecipeGroupConfiguration';
+import {RecipeSettingsConfiguration, RecipeTaskSummary} from './RichConfiguration';
 import {useEffect, useState, type ReactNode} from 'react';
 import {ArrowRight, ArrowUpRight, Bot, Check, Copy, KeyRound} from 'lucide-react';
 import type {RecipeBrowseDetail, RecipeConfig, RecipeDetail, RecipePublic, RecipeSummary} from '@vonvon/protocol';
 import {Button} from '../reference/components/ui';
+import {SettingsGroup} from '../reference/components/system-settings';
 import {useShellCapabilities} from '../client-context';
 import {allowedExternalUrl, openExternalUrl} from '../url-actions';
 import {useCommunity} from './community-context';
 import {useAccount} from '../account-context';
 
-export const recipeSections = ['概览', '模型与权限', '能力', '沟通方式', '任务'] as const;
-export type RecipeSection = typeof recipeSections[number];
+export const recipeTabs = [
+  {id: 'overview', label: '概览'}, {id: 'models', label: '模型与权限'}, {id: 'abilities', label: '能力'},
+  {id: 'communication', label: '沟通方式'}, {id: 'tasks', label: '任务'},
+] as const;
+export type RecipeSection = typeof recipeTabs[number]['label'];
+export const recipeSections = recipeTabs.map(tab => tab.label);
 type Section = RecipeSection;
 
 
@@ -75,41 +82,50 @@ export function RecipeMarkdown({text}: {text: string}) {
   return <div className="community-markdown">{nodes}</div>;
 }
 
+export function RecipeVersion({version, revision, draft}: {version: string; revision?: number; draft?: boolean}) {
+  return <span className="recipe-version-inline"><span className="recipe-version-value" title={version || '未指定'}>{version || '未指定'}</span>{draft && revision ? <small className="recipe-version-revision">草稿修订 {revision}</small> : null}</span>;
+}
 export function RecipeMetadata({meta, revision, draft, author}: {author?:ReactNode;draft?:boolean;meta: RecipePublic | RecipeSummary['public']; revision?: number}) {
-  return <dl className="community-metadata">{author && <div><dt>作者</dt><dd>{author}</dd></div>}<div><dt>版本</dt><dd>{meta.version || '未指定'}{revision ? <small>{draft ? `草稿修订 ${revision}` : `第 ${revision} 次发布`}</small> : null}</dd></div><div><dt>获取方式</dt><dd>{meta.access === 'coded' ? '凭分享码获取' : '直接获取'}</dd></div></dl>;
+  return <dl className="community-metadata">{author && <div><dt>作者</dt><dd>{author}</dd></div>}<div className="recipe-version-meta"><dt>版本</dt><dd><RecipeVersion version={meta.version} revision={revision} draft={draft}/></dd></div><div><dt>获取方式</dt><dd>{meta.access === 'coded' ? '凭分享码获取' : '直接获取'}</dd></div></dl>;
 }
 
 export function RecipeConfiguration({config, section}: {config: RecipeConfig; section: Section}) {
-  if (section === '模型与权限') return <div className="community-config"><h2>模型与权限</h2><dl><dt>推荐模型</dt><dd>未指定</dd><dt>权限要求</dt><dd>未指定</dd></dl></div>;
-  if (section === '能力') return <div className="community-config"><h2>角色与规则</h2><RecipeMarkdown text={config.role || '未指定'}/><h3>技能</h3><p className="community-muted">未指定</p></div>;
-  if (section === '沟通方式') return <div className="community-config"><h2>沟通方式</h2><p className="community-muted">未指定</p></div>;
-  if (section === '任务') return <div className="community-config"><h2>任务</h2><p className="community-muted">没有任务</p></div>;
+  if (section === '模型与权限' || section === '沟通方式') return <RecipeSettingsConfiguration settings={[]} section={section}/>;
+  if (section === '能力') return <div className="community-config"><h2>角色</h2><RecipeMarkdown text={config.role || '未指定'}/><h3>技能</h3><p className="community-muted">未指定</p></div>;
+  if (section === '任务') return <RecipeTaskSummary count={0}/>;
   return null;
 }
 
-type RecipeDisplay = Pick<RecipeDetail, 'public' | 'config' | 'rich' | 'logo'> & Partial<Pick<RecipeDetail, 'revision' | 'creator' | 'versionId' | 'hasDisplayLogo'>> & Pick<RecipeBrowseDetail, 'preview' | 'previewUnavailable'>;
+export type RecipeDisplay = Pick<RecipeDetail, 'public' | 'config' | 'rich' | 'logo'> & Partial<Pick<RecipeDetail, 'format' | 'state' | 'owned' | 'acquired' | 'revision' | 'creator' | 'versionId' | 'hasDisplayLogo'>> & {recipeId?: string | null} & Pick<RecipeBrowseDetail, 'preview' | 'previewUnavailable'>;
 export function useCreatorName(creator: RecipeDetail['creator']) {
   const {status} = useAccount();
   return status?.kind === 'signedIn' && creator?.authorId === status.accountId ? status.displayName : creator?.displayName;
 }
-export function RecipeOverview({recipe, draft}: {recipe: RecipeDisplay; draft?: boolean}) {
+export function RecipeOverview({recipe, draft, showMetadata = true}: {recipe: RecipeDisplay; draft?: boolean; showMetadata?: boolean}) {
   const notes = recipe.rich?.content.setup ?? recipe.config?.setup?.steps ?? [];
   const author = useCreatorName(recipe.creator);
-  return <><RecipeMetadata meta={recipe.public} revision={draft ? undefined : recipe.revision} author={recipe.creator && !draft ? <RecipeAuthor creator={recipe.creator}/> : author}/><RecipeMarkdown text={recipe.public.overview ?? ''}/>
+  return <>{showMetadata && <RecipeMetadata meta={recipe.public} revision={draft ? undefined : recipe.revision} author={recipe.creator && !draft ? <RecipeAuthor creator={recipe.creator}/> : author}/>}
+    <SettingsGroup label="配方介绍"><div className="recipe-reading-surface">{recipe.public.overview?.trim()
+      ? <RecipeMarkdown text={recipe.public.overview}/>
+      : <p className="community-muted">{draft ? '暂未填写配方介绍，可在私聊中补充。' : '作者暂未填写配方介绍。'}</p>}</div></SettingsGroup>
     {notes.length > 0 && <details className="community-additional-notes"><summary>补充说明</summary>{notes.map((note, index) => <article key={index}><h3>{note.title || `说明 ${index + 1}`}</h3><RecipeMarkdown text={note.instructions}/>{note.check && <p>核对方式：{note.check}</p>}</article>)}</details>}
   </>;
 }
 
-export function RecipeDetails({recipe, action, management, share, draft, heading, overview, overviewFooter, section: selectedSection, onSectionChange}: {draft?:boolean;recipe: RecipeDisplay; action?: ReactNode; management?: ReactNode; share?: ReactNode; heading?: ReactNode; overview?: ReactNode; overviewFooter?: ReactNode; section?: RecipeSection; onSectionChange?: (section: RecipeSection) => void}) {
+export function RecipeDetails({recipe, action, management, share, draft, heading, overview, overviewFooter, sidebar, section: selectedSection, onSectionChange}: {draft?:boolean;recipe: RecipeDisplay; action?: ReactNode; management?: ReactNode; share?: ReactNode; heading?: ReactNode; overview?: ReactNode; overviewFooter?: ReactNode; sidebar?: ReactNode; section?: RecipeSection; onSectionChange?: (section: RecipeSection) => void}) {
   const logo = useRecipeLogo(recipe);
   const [localSection, setLocalSection] = useState<Section>('概览');
   const section = selectedSection ?? localSection;
   const setSection = (value: RecipeSection) => {setLocalSection(value); onSectionChange?.(value);};
   const allowed = Boolean(recipe.preview || recipe.config || recipe.rich);
-  return <article className="community-detail">
-    {heading ?? <header className="community-detail-heading"><RecipeMark name={recipe.public.name} logo={logo}/><div><h1>{recipe.public.name}</h1><p>{recipe.public.summary}</p></div><div className="community-actions">{share}{action}</div></header>}
+  const published = !draft && !heading && Boolean(action);
+  const hasSidebar = published || Boolean(sidebar);
+  const reading = useRecipeCardAlignment(hasSidebar ? '.ss-section > .ss-group' : undefined);
+  return <article className={hasSidebar ? "community-detail community-published" : "community-detail"}>
+    {heading ?? <header className="community-detail-heading"><RecipeMark name={recipe.public.name} logo={logo}/><div><h1>{recipe.public.name}</h1><p>{recipe.public.summary}</p></div>{!published && <div className="community-actions">{share}{action}</div>}</header>}
     <div className="community-detail-layout"><nav aria-label="配方详细信息">{recipeSections.filter(item => allowed || item === '概览').map(item => <button type="button" key={item} aria-current={section === item ? 'page' : undefined} onClick={() => setSection(item)}>{item}</button>)}</nav>
-      <div className="community-detail-content">{section === '概览' ? <>{overview ?? <RecipeOverview recipe={recipe} draft={draft}/>}{overviewFooter}{!allowed && <p className="community-access-note">{recipe.previewUnavailable ? '配置概览暂不可用，请稍后重新打开。' : '获取此版本后，可查看配方配置概览并交给自己的 Bot 使用。'}</p>}{management}</> : recipe.preview ? <RecipeBrowseConfiguration preview={recipe.preview} section={section}/> : recipe.rich ? <RichConfiguration view={recipe.rich} section={section}/> : recipe.config && <RecipeConfiguration config={recipe.config} section={section}/>}</div></div>
+      <div className="community-detail-columns"><div className="community-detail-content" ref={reading}>{section === '概览' ? <>{overview ?? <RecipeOverview recipe={recipe} draft={draft} showMetadata={!hasSidebar}/>}{overviewFooter}{!allowed && <p className="community-access-note">{recipe.previewUnavailable ? '配置概览暂不可用，请稍后重新打开。' : '获取此版本后，可查看配方配置概览并交给自己的 Bot 使用。'}</p>}{!published && management}</> : <RecipeGroupConfiguration recipe={recipe} section={section}/>}</div>
+    {sidebar}{published && <aside className="community-detail-sidebar" aria-label="获取与使用配方"><h2>这份配方</h2><RecipeMetadata meta={recipe.public} author={recipe.creator && <RecipeAuthor creator={recipe.creator}/>}/><div className="community-side-actions">{action}{share}{management}</div></aside>}</div></div>
   </article>;
 }
 
@@ -119,15 +135,20 @@ function RecipeAuthor({creator}: {creator: NonNullable<RecipeSummary['creator']>
   return community ? <button type="button" className="community-author-link" onClick={() => community.open({kind: 'author', authorId: creator.authorId})}>{name}</button> : <>{name}</>;
 }
 
-export function RecipeCard({recipe, hero, heroKind, onOpen, context = 'catalog'}: {recipe: RecipeSummary; hero?: boolean;heroKind?: 'featured'|'latest'|null; context?: 'catalog' | 'library'; onOpen: () => void}) {
+export function RecipeCard({recipe, hero, heroKind, onOpen, context = 'catalog', children}: {children?: ReactNode; recipe: RecipeSummary; hero?: boolean;heroKind?: 'featured'|'latest'|null; context?: 'catalog' | 'library'; onOpen: () => void}) {
   const author = useCreatorName(recipe.creator);
   const logo = useRecipeLogo(recipe);
   if (hero) return <div className="community-card-entry"><button type="button" className="community-card community-card--hero" aria-label={`${heroKind === 'featured' ? '场景精选' : '最新配方'}：${recipe.public.name}`} onClick={onOpen}>
     <div className="community-hero-copy"><h2>{recipe.public.name}</h2><p>{recipe.public.summary}</p><span className="community-hero-cta">查看「{recipe.public.name}」<ArrowRight size={15}/></span></div>
     <div className="community-recipe-cover" aria-hidden="true"><span className="community-recipe-stamp"><RecipeMark name={recipe.public.name} logo={logo}/></span><div className="community-recipe-paper"><strong>{recipe.public.name}</strong><div className="community-cover-meta"><span>{author}</span><span>{recipe.public.version}</span></div></div></div>
   </button>{recipe.creator && <div className="community-card-author">作者 <RecipeAuthor creator={recipe.creator}/></div>}</div>;
-  return <div className="community-card-entry"><button type="button" className="community-card" onClick={onOpen}>
+  return <article className={'community-card-entry community-tile' + (context === 'library' ? ' community-library-entry' : '')}><button type="button" className="community-card" onClick={onOpen}>
     <div className="community-card-top"><RecipeMark name={recipe.public.name} logo={logo}/>{context === 'catalog' && recipe.public.access === 'coded' && <span className="community-card-access"><KeyRound size={13}/>需分享码</span>}</div>
     <div className="community-card-copy"><h2>{recipe.public.name}</h2><p>{recipe.public.summary}</p></div><div className="community-card-footer"><small>{recipe.public.version}</small><ArrowUpRight size={15}/></div>
-  </button>{recipe.creator && <div className="community-card-author">作者 <RecipeAuthor creator={recipe.creator}/></div>}</div>;
+  </button>
+    {(recipe.creator || children) && <div className="community-tile-meta">
+      {recipe.creator && <div className="community-card-author">作者 <RecipeAuthor creator={recipe.creator}/></div>}
+      {children}
+    </div>}
+  </article>;
 }

@@ -1,7 +1,8 @@
 import {z} from 'zod';
-import {recipeRichContentSchema} from './recipe-rich.js';
+import {recipeRichContentSchema, recipeTaskSummarySchema} from './recipe-rich.js';
 import {recipeBrowseDetailSchema} from './recipe-browse.js';
 import {accountAvatarDataUrlSchema} from './desktop-account.js';
+import {recipeLibraryScopeSchema, recipeLibraryCursorSchema, recipeLibraryGroupsSchema, recipeLibraryVersionsSchema} from './recipe-library.js';
 
 const id = z.string().uuid();
 export const acquisitionKeySchema = z.string().regex(/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|a2\.[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i);
@@ -51,7 +52,7 @@ const display = {format: z.enum(['role-v1','rich-v2']).optional(), creator: crea
 const summary = z.object({recipeId: id, versionId: id, revision, public: recipePublicSchema.partial({summary: true, overview: true}), ...display}).strict();
 export const recipeSummarySchema = summary;
 export type RecipeSummary = z.infer<typeof summary>;
-export const recipeDetailSchema = summary.extend({public: recipePublicSchema, state: z.enum(['listed','withdrawn']).optional(), owned: z.boolean(), acquired: z.boolean(), config: recipeConfigSchema.optional(), rich: richView.optional()}).strict().superRefine((value, ctx) => {
+export const recipeDetailSchema = summary.extend({public: recipePublicSchema, state: z.enum(['listed','withdrawn','deleted']).optional(), owned: z.boolean(), acquired: z.boolean(), config: recipeConfigSchema.optional(), rich: richView.optional()}).strict().superRefine((value, ctx) => {
   const permitted = value.owned || value.acquired || value.public.access === 'direct';
   if(value.format==='rich-v2'&&(Boolean(value.rich)!==permitted||Boolean(value.config)))ctx.addIssue({code:'custom',message:'Invalid rich configuration visibility'});
   if(value.rich&&value.format!=='rich-v2')ctx.addIssue({code:'custom',message:'Missing rich format'});
@@ -95,7 +96,10 @@ export const communityRequestSchema = z.discriminatedUnion('type', [
   z.object({type: z.literal('displayLogo'), accountId: id.optional(), versionId: id}).strict(),
   z.object({type: z.literal('detail'), accountId: id.optional(), ...version}).strict(),
   z.object({type: z.literal('browse'), accountId: id.optional(), ...version}).strict(),
+  z.object({type: z.literal('recipeTaskSummaries'), ...privateRequest, ...version}).strict(),
   z.object({type: z.literal('library'), ...privateRequest, ...page}).strict(),
+  z.object({type: z.literal('recipeGroups'), ...privateRequest, scope: recipeLibraryScopeSchema, cursor: recipeLibraryCursorSchema.optional()}).strict(),
+  z.object({type: z.literal('recipeGroupVersions'), ...privateRequest, scope: recipeLibraryScopeSchema, recipeId: id, cursor: recipeLibraryCursorSchema.optional()}).strict(),
   z.object({type: z.literal('drafts'), ...privateRequest}).strict(),
   z.object({type: z.literal('publications'), ...privateRequest}).strict(),
   z.object({type: z.literal('draft'), ...privateRequest, draftId: id}).strict(),
@@ -107,6 +111,7 @@ export const communityRequestSchema = z.discriminatedUnion('type', [
   z.object({type:z.literal('publishDraft'),...privateRequest,...request,draftId:id,revision,format:z.literal('rich-v2').optional(),canonical:z.string().min(1).max(1401000).regex(/^[A-Za-z0-9_-]+$/).optional()}).strict(),
   z.object({type: z.literal('acquire'), ...privateRequest, requestId: acquisitionKeySchema, versionId: id, code: z.string().regex(/^[a-z0-9-]{1,128}$/i).optional()}).strict(),
   z.object({type: z.literal('withdraw'), ...privateRequest, versionId: id}).strict(),
+  z.object({type: z.literal('deletePublication'), ...privateRequest, versionId: id}).strict(),
   z.object({type: z.literal('codes'), ...privateRequest, versionId: id, ...page}).strict(),
   z.object({type: z.literal('issueCodes'), ...privateRequest, ...request, versionId: id, count: z.number().int().min(1).max(100)}).strict(),
   z.object({type: z.literal('disableCode'), ...privateRequest, ...request, codeId: id}).strict(),
@@ -124,7 +129,9 @@ const richMetadataOutcomeSchema = z.discriminatedUnion('status',[
   ]);
 export const communityResponseSchemas = {
   latestVersion: recipeResourceLatestSchema,
+  recipeTaskSummaries: z.object({...version,tasks:recipeTaskSummarySchema.array().max(32).optional()}).strict(),
   withdraw: z.literal(''),
+  deletePublication: z.literal(''),
   profile: accountProfileSchema,
   saveProfile: accountProfileSchema,
   saveRichDraftMetadata:richMetadataOutcomeSchema,
@@ -136,6 +143,8 @@ export const communityResponseSchemas = {
   detail: recipeDetailSchema,
   browse: recipeBrowseDetailSchema,
   library: z.object({items: z.array(summary).max(50), nextCursor}).strict(),
+  recipeGroups: recipeLibraryGroupsSchema,
+  recipeGroupVersions: recipeLibraryVersionsSchema,
   drafts: z.object({items: z.array(z.union([recipeDraftSchema,z.object({format:z.literal('rich-v2'),draftId:id,recipeId:id.nullable(),revision,public:recipePublicSchema}).strict()])).max(1000)}).strict(),
   publications: z.object({items: z.array(summary).max(1000)}).strict(),
   draft: recipeDraftSchema,
@@ -174,7 +183,7 @@ export const communityFailureMessages = {
   unavailable: '获取结果暂未确认，请重试同一操作。',
   invalid_code: '分享码不可用，请核对后重试。', forbidden: '当前账号不能进行这项操作。',
   account_disabled: '当前账号已停用，请联系管理员。',
-  auth_required: '请重新登录。', quota_exceeded: '已达到账号或版本限额，请检查内容后重试。',
+  auth_required: '请重新登录。', publication_limit: '每个账号最多同时发布 10 个版本。请先下架或删除一个版本。', quota_exceeded: '已达到账号或版本限额，请检查内容后重试。',
   incomplete_setup: '请补全使用前准备步骤的名称和说明。', credential_detected: '内容中可能含有密钥或令牌，请移除后重试。',
   invalid_input: '请检查输入内容、长度和获取方式。',
   not_found: '没有找到这份配方或草稿。', rate_limited: '操作过于频繁，请稍后再试。',

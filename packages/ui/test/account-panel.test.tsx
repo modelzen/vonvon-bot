@@ -21,13 +21,13 @@ function click(label: string) {
 beforeEach(() => {h.account.supported = true; h.account.status = {kind: 'signedOut'}; h.account.error = undefined; vi.clearAllMocks();});
 
 it('starts native login directly and offers cancellation while waiting', () => {
-  expect(html()).toContain('注册或登录');
+  expect(html()).toContain('登录');
   expect(html()).not.toContain('网页登录');
-  click('注册或登录');
+  click('登录');
   expect(h.account.login).toHaveBeenCalledOnce();
   h.account.status = {kind: 'signingIn'};
   expect(html()).toContain('等待登录完成');
-  expect(html()).not.toContain('注册或登录</button>');
+  expect(html()).not.toContain('登录</button>');
   click('取消登录');
   expect(h.account.cancelLogin).toHaveBeenCalledOnce();
 });

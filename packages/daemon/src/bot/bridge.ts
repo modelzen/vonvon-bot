@@ -1,7 +1,6 @@
-import {bridgeReleaseCode} from '../release-code/host';
-import {releaseCodeTools} from '../agent/entry/release-code-tools';
 import { bridgeFeedback } from '../feedback/bridge';
 import { nativeRichSourceItems } from '../recipe/rich-source-lineage';
+import { recipeRuntimeInventory } from '../recipe/authoring-runtime-inventory';
 import { codexDraftParser } from '../recipe/codex-draft-parser';
 import { resolveModelPreference } from '../config/execution';
 import { AuthoringService, type AuthoringIpc } from '../recipe/authoring-service';
@@ -18,6 +17,7 @@ import type { AdminLibraryOp } from '../admin/library';
 import type { GroupIdentity, ScheduleReply, ScheduleRequest } from '@vonvon/protocol';
 import type { ScheduleActor } from '../admin/schedule-commands';
 import { isAdmin, type AppConfig } from '../config/schema';
+import {recipeCreationTools} from '../agent/entry/recipe-creation-tools';
 import {resourceTools} from '../agent/entry/resource-tools';
 import { createCommandTools } from '../agent/entry/command-tools';
 import { createFeishuReader, type FeishuReadReply, type FeishuReadRequest } from '../feishu-read/reader';
@@ -97,7 +97,6 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   await mergeTiers();
   const app = opts.cfg.accounts.app;
   const channel = createBridgeChannel(app, opts.appSecret);
-  const releaseCode=bridgeReleaseCode(identity,opts.cfg,channel);
   const feedback = bridgeFeedback(identity, opts.cfg, opts.appSecret, channel);
   const cardCallbacks = createCardCallbackRecorder(app.id, {
     onError: error => log.fail('setup', error, { phase: 'card-callback-verification', appId: app.id }),
@@ -123,8 +122,8 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     if (!('members' in result)) throw new Error('Invalid members reply');
     return result;
   };
-  const entries = createAgentEntries({ feedbackEnabled: feedback.enabled, codeEnabled: releaseCode.enabled, appId: app.id, isAdmin: id => isAdmin(opts.cfg, id), ...(sessions ? { sessions } : {}),
-    memoryPlace: turn => memory.placeOf(turn), tools: [...releaseCodeTools(),...resourceTools((get,query)=>authoring.resources.tool(get,query)),...createCommandTools({
+  const entries = createAgentEntries({ feedbackEnabled: feedback.enabled, appId: app.id, isAdmin: id => isAdmin(opts.cfg, id), ...(sessions ? { sessions } : {}),
+    memoryPlace: turn => memory.placeOf(turn), tools: [...recipeCreationTools((get,query)=>authoring.conversation.tool(get,query)),...resourceTools((get,query)=>authoring.resources.tool(get,query)),...createCommandTools({
     appId: app.id, feedback: true, memory, feishu, groupTier: chatId => orchestrator.permissionOf(chatId),
     schedule: { execute: (actor, request) => orchestrator.scheduleAs(actor, request) },
     groups: async cursor => {
@@ -142,13 +141,19 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     const backend = group.modelAccess?.backend ?? group.backend ?? 'codex-appserver';
     return {backend, model:resolveModelPreference({bot:opts.cfg.preferences, group},backend)?.model};
   });
-  const authoring = new AuthoringService({bot: identity, cfg: opts.cfg, channel, parser,managedSources:nativeRichSourceItems,tasks:async chatId=>{
+  const authoring = new AuthoringService({bot: identity, cfg: opts.cfg, channel, parser,
+    runtimeInventory: group => recipeRuntimeInventory(group,opts.cfg.preferences,entries.toolNames({kind:'group',chatId:group.chatId})),
+    managedSources:nativeRichSourceItems,groupSkills:async row=>{
+    const v=await orchestrator.settings.read({kind:'project',botId:identity.appId,projectName:row.name});
+    if(!('identity' in v)||v.identity.chatId!==row.chatId||!('skills' in v)||!v.skills||v.skillsError)throw new Error('暂时无法核对群已启用的技能。');
+    return v.skills;
+  },tasks:async chatId=>{
     const result=await orchestrator.scheduleAs({kind:'local',via:'desktop'},{action:'list',chatId});
     if(result.kind!=='tasks')throw new Error('无法读取所选群的任务。');
     return result.tasks;
   }});
   const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }),
-    { entries, memory, authoring, feedback, releaseCode, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity, ...(host ? { host } : {}), ...(sessionCli ? { sessionCli } : {}) });
+    { entries, memory, authoring, feedback, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity, ...(host ? { host } : {}), ...(sessionCli ? { sessionCli } : {}) });
   const firstHello = createFirstHello({ cfg: opts.cfg, appSecret: opts.appSecret, channel, write: orchestrator.writePreferences });
   const roles = createAppRoleRefresher(app, opts.appSecret);
   await roles.refresh();
@@ -174,7 +179,6 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     rolesStopped = true;
     firstHello.stop();
     clearTimeout(rolesTimer);
-    releaseCode.close();
     const feedbackClosing = Promise.allSettled([feedback.close()]);
     const rolesClosing = roles.stop();
     // s18c: stop taking events first. One that comes after this is not acknowledged, so Feishu pushes it again to the

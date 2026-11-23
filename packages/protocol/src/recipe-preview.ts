@@ -15,7 +15,14 @@ export type DraftPreviewNavigation = z.infer<typeof draftPreviewNavigationSchema
 export const recipeCreateNavigationSchema = z.object({
   kind: z.literal('create'), navigationId: draftPreviewNavigationIdSchema,
 }).strict();
-export const recipePreviewNavigationSchema = z.union([draftPreviewNavigationSchema, recipeCreateNavigationSchema]);
+export const recipeHandoffNavigationSchema = z.object({
+  kind: z.literal('handoff'), navigationId: draftPreviewNavigationIdSchema,
+  recipeId: z.string().uuid(), versionId: z.string().uuid(),
+}).strict();
+export const recipeDraftsNavigationSchema = z.object({
+  kind: z.literal('drafts'), navigationId: draftPreviewNavigationIdSchema,
+}).strict();
+export const recipePreviewNavigationSchema = z.union([draftPreviewNavigationSchema, recipeCreateNavigationSchema, recipeHandoffNavigationSchema, recipeDraftsNavigationSchema]);
 export type RecipePreviewNavigationPayload = z.infer<typeof recipePreviewNavigationSchema>;
 export interface RecipePreviewShell {
   pending(): Promise<RecipePreviewNavigationPayload[]>;

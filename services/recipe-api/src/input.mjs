@@ -13,6 +13,12 @@ export function objectKeys(value, required, optional = []) {
       Object.keys(value).some(k => !required.includes(k) && !optional.includes(k))) throw badInput();
 }
 
+export function publicationDestination(value) {
+  if (value === null) return [null, null];
+  objectKeys(value, ['recipeId', 'versionId']);
+  return [uuid(value.recipeId), uuid(value.versionId)];
+}
+
 function safeString(value) {
   return typeof value === 'string' && value.isWellFormed() && !value.includes('\0');
 }

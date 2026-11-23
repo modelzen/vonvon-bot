@@ -1,4 +1,5 @@
 import {boundedJson} from './community-response.js';
+import {communityLibrary} from './community-library.js';
 import {recipeResourceReader} from './recipe-resource.js';
 import {saveRichMetadata} from './community-metadata.js';
 import {MetadataJournal} from './community-metadata-journal.js';
@@ -13,8 +14,9 @@ export class CommunityError extends Error {
 }
 const fallback = '社区请求未完成，请稍后重试同一操作。';
 
-function endpoint(r: Exclude<CommunityRequest, {type: 'shareLink'|'saveRichDraftMetadata'|'recoverRichDraftMetadata'|'latestVersion'|'displayLogo'|'author'|'browse'}>): {path: string; method?: string; body?: unknown; revision?: number} {
+function endpoint(r: Exclude<CommunityRequest, {type: 'shareLink'|'saveRichDraftMetadata'|'recoverRichDraftMetadata'|'latestVersion'|'displayLogo'|'author'|'browse'|'recipeGroups'|'recipeGroupVersions'|'recipeTaskSummaries'}>): {path: string; method?: string; body?: unknown; revision?: number} {
   switch (r.type) {
+    case 'deletePublication': return {path: `/v2/versions/${r.versionId}/delete`, method: 'POST', body: {}};
     case 'withdraw': return {path: `/v2/versions/${r.versionId}/withdraw`, method: 'POST', body: {}};
     case 'profile': return {path: '/v2/me/account-profile'};
     case 'saveProfile': return {path: '/v2/me/account-profile', method: 'POST', body: {displayName: r.displayName, ...(r.avatar && {avatar: r.avatar}), ...(r.revision !== undefined && {revision: r.revision})}};
@@ -55,11 +57,14 @@ export async function communityRequest<T extends CommunityRequest['type']>(accou
   });
   try {
     const check = () => {if (changed) throw new CommunityError('账号已切换，请重新打开社区。', 'session_changed');};
+    if (r.type === 'recipeGroups') return await communityLibrary(account, r.accountId, check).groups(r.scope, r.cursor) as CommunityResponses[T];
+    if (r.type === 'recipeGroupVersions') return await communityLibrary(account, r.accountId, check).versions(r.recipeId, r.scope, r.cursor) as CommunityResponses[T];
     if (r.type === 'latestVersion') return await recipeResourceReader(account).latest(r.accountId,
       {recipeId: r.recipeId, versionId: r.versionId}, r.revision, check) as CommunityResponses[T];
     const rich = richCommunity(account, r.accountId, check);
     if (r.type === 'author') return await rich.author(r.authorId, r.cursor) as CommunityResponses[T];
     if (r.type === 'catalog') return await rich.catalog(r.query, r.cursor) as CommunityResponses[T];
+    if (r.type === 'recipeTaskSummaries') return await rich.taskSummaries(r.recipeId, r.versionId) as CommunityResponses[T];
     if (r.type === 'browse') return await rich.browse(r.recipeId, r.versionId) as CommunityResponses[T];
     if (r.type === 'displayLogo') return await rich.displayLogo(r.versionId) as CommunityResponses[T];
     if (r.type === 'library') return await rich.library(r.cursor) as CommunityResponses[T];
@@ -77,7 +82,7 @@ export async function communityRequest<T extends CommunityRequest['type']>(accou
     } else if (r.type === 'publishDraft' || r.type === 'deleteDraft') {
       try {
         const value = await rich.draft(r.draftId);
-        if (value.revision !== r.revision) throw new CommunityError(messages.conflict, 'conflict');
+        if (value.revision !== r.revision) throw new CommunityError(messages.conflict ?? fallback, 'conflict');
         e.path = `/v2/drafts/${r.draftId}` + (r.type === 'publishDraft' ? '/publish' : '');
         e.body = r.type === 'publishDraft' ? {canonical: value.rich!.canonical} : {};
       } catch (error) {if (!(error instanceof MissingRichRecipe)) throw error;}
@@ -97,7 +102,7 @@ export async function communityRequest<T extends CommunityRequest['type']>(accou
       const known = typeof code === 'string' && Object.hasOwn(messages, code);
       const retry = response.headers.get('retry-after');
       const retryAfter = retry && /^[1-9][0-9]{0,12}$/.test(retry) && Number.isSafeInteger(Number(retry)) ? Number(retry) : undefined;
-      throw new CommunityError(known ? messages[code] : fallback, known ? code : 'unavailable', retryAfter);
+      throw new CommunityError((known ? messages[code] : undefined) ?? fallback, known ? code : 'unavailable', retryAfter);
     }
     const parsed = communityResponseSchemas[r.type].safeParse(value);
     if (!parsed.success) throw new CommunityError(fallback);

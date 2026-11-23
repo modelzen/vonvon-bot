@@ -7,7 +7,6 @@ import { CodexAppServerBackend } from '../../src/agent/codex-appserver/backend';
 import { shutdownResidentClients } from '../../src/agent/codex-appserver/client-pool';
 import { createAgentEntries, type AgentPlace, type TurnFacts } from '../../src/agent/entry/registry';
 import { feedbackTool } from '../../src/agent/entry/feedback-tool';
-import { releaseCodeTools } from '../../src/agent/entry/release-code-tools';
 import { createScheduleTools } from '../../src/agent/entry/schedule-tools';
 import { sessionInfoTool } from '../../src/agent/entry/tools';
 import type { SessionProfile } from '../../src/agent/session-profile';
@@ -122,20 +121,20 @@ export async function closeCodexToolFixtures(): Promise<void> {
 }
 
 /** A real Codex backend and transport on the fake; the real registry with T3's schedule tools over a spied command core, and session_info, which Codex is not offered. */
-export function codexToolsFixture(feedbackEnabled?: (chatId: string) => boolean, codeEnabled?: (chatId: string) => boolean) {
+export function codexToolsFixture(feedbackEnabled?: (chatId: string) => boolean) {
   const dir = mkdtempSync(join(tmpdir(), 'codex-tools-'));
   dirs.push(dir);
   vi.stubEnv('CODEX_BIN', writeNodeExecutable(dir, 'codex', FAKE).bin);
   const execute = vi.fn<ScheduleCommands['execute']>(async () => ({ kind: 'tasks', tasks: [], now: 0, timeZone: 'Asia/Shanghai' }));
-  const entries = createAgentEntries({ appId: 'bot', isAdmin: id => id === OWNER, feedbackEnabled, codeEnabled,
-    tools: [sessionInfoTool, ...(feedbackEnabled ? [feedbackTool] : []), ...(codeEnabled ? releaseCodeTools() : []), ...createScheduleTools({ commands: { execute }, now: () => 0, hostTimeZone: () => 'Asia/Shanghai' })] });
+  const entries = createAgentEntries({ appId: 'bot', isAdmin: id => id === OWNER, feedbackEnabled,
+    tools: [sessionInfoTool, ...(feedbackEnabled ? [feedbackTool] : []), ...createScheduleTools({ commands: { execute }, now: () => 0, hostTimeZone: () => 'Asia/Shanghai' })] });
   const read = (file: string): Record<string, unknown>[] => {
     try { return readFileSync(join(dir, file), 'utf8').trim().split('\n').map(line => JSON.parse(line)); } catch { return []; }
   };
   async function drain(run: AgentRun) { for await (const _ of run.events) { /* the fake completes once its calls are answered */ } }
   async function open(how: 'start' | 'resume' = 'start', schedule = true, place: AgentPlace = { kind: 'group', chatId: 'oc_group' }) {
     const entry = entries.issue(place);
-    const backend = new CodexAppServerBackend(), opts = { cwd: dir, entry, profile: { ...profile(schedule), tools: { schedule, feedback: Boolean(feedbackEnabled), releaseCode: Boolean(place.chatId && codeEnabled?.(place.chatId)) } } };
+    const backend = new CodexAppServerBackend(), opts = { cwd: dir, entry, profile: { ...profile(schedule), tools: { schedule, feedback: Boolean(feedbackEnabled) } } };
     const thread = how === 'start' ? await backend.startThread(opts) : await backend.resumeThread({ ...opts, sessionId: 'th' });
     entry.attach(thread);
     threads.push(() => thread.close());
