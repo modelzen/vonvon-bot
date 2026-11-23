@@ -1,4 +1,3 @@
-import {setupList} from './setup.mjs';
 const main = document.querySelector('#main');
 const dialog = document.querySelector('#modal');
 const accountButton = document.querySelector('#account');
@@ -16,6 +15,21 @@ function el(tag, text, className) {
 }
 function link(text, href, className) {
   const a = el('a', text, className); a.href = href; return a;
+}
+function backLink(label, href) {
+  const a = link(null, href, 'back'); a.setAttribute('aria-label', label);
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  for (const [name, value] of Object.entries({width: '14', height: '14', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true'})) svg.setAttribute(name, value);
+  for (const d of ['m12 19-7-7 7-7', 'M19 12H5']) {
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path'); path.setAttribute('d', d); svg.append(path);
+  }
+  a.append(svg, el('span', label.replace(/^返回\s*/, '') || '返回')); return a;
+}
+function detailOrigin() {
+  return new URLSearchParams(location.search).get('from') === 'library' ? 'library' : 'catalog';
+}
+function detailBack() {
+  return detailOrigin() === 'library' ? backLink('返回已获取', '/library') : backLink('返回 Bot 配方', '/');
 }
 function button(text, action, cls = 'button') {
   const b = el('button', text, cls); b.type = 'button'; b.addEventListener('click', action); return b;
@@ -90,15 +104,15 @@ function empty(title, description, action) {
 const detailUrl = item => '/recipes/' + encodeURIComponent(item.recipeId) + '/versions/' + encodeURIComponent(item.versionId);
 const versionLabel = item => '版本 ' + item.public.version;
 
-function card(item, hero = false) {
-  const a = link(null, detailUrl(item), hero ? 'hero' : 'card');
+function card(item, hero = false, context = 'catalog') {
+  const a = link(null, detailUrl(item) + (context === 'library' ? '?from=library' : ''), hero ? 'hero' : 'card');
   const p = item.public;
   if (hero) {
     const text = group('intro', el('h2', p.name), el('p', p.summary));
     const cta = el('span', '查看配方 →', 'button'); text.append(group('row', cta));
     const ticket = group('ticket', el('strong', p.name), el('span', versionLabel(item)));
     ticket.setAttribute('aria-hidden', 'true'); a.append(text, ticket);
-  } else a.append(el('h3', p.name), el('p', p.summary), el('span', versionLabel(item) + (p.access === 'coded' ? ' · 需分享码' : ''), 'fine'));
+  } else a.append(el('h3', p.name), el('p', p.summary), el('span', versionLabel(item) + (context !== 'library' && p.access === 'coded' ? ' · 需分享码' : ''), 'fine'));
   return a;
 }
 
@@ -172,7 +186,7 @@ async function home() {
 }
 
 async function library() {
-  main.replaceChildren(link('← 社区', '/', 'back'), group('page-top', el('h1', '已获取')));
+  main.replaceChildren(backLink('返回 Bot 配方', '/'), group('page-top', el('h1', '已获取')));
   if (!session?.signedIn) { main.append(empty('登录后查看已获取的配方', null, button('登录', () => openLogin('/library')))); return; }
   const firstPage = await request('/api/v2/me/recipes');
   if (!firstPage.items.length) {
@@ -190,7 +204,7 @@ async function library() {
   }, 'secondary more');
   function add(page) {
     for (const item of page.items) {
-      if (!seen.has(item.recipeId)) { cards.append(card(item)); seen.add(item.recipeId); }
+      if (!seen.has(item.recipeId)) { cards.append(card(item, false, 'library')); seen.add(item.recipeId); }
     }
     cursor = page.nextCursor;
     next.hidden = !cursor;
@@ -243,7 +257,7 @@ async function detail(confirmed) {
   if (data.format === 'rich-v2') {
     const {renderRecipe} = await import('/viewer.mjs');
     if (!currentDetail()) return;
-    renderRecipe(main, data, trigger => claim(data, trigger, detailSession, currentDetail));
+    renderRecipe(main, data, trigger => claim(data, trigger, detailSession, currentDetail), detailOrigin());
     await resumeAcquisition();
     return;
   }
@@ -261,6 +275,15 @@ async function detail(confirmed) {
     content.replaceChildren(meta);
     const prose = el('article', null, 'prose');
     if (p.overview) { content.append(prose); import('./markdown.mjs').then(({ markdown }) => { prose.innerHTML = markdown(p.overview); }).catch(() => { prose.textContent = p.overview; }); }
+    if (data.config?.setup?.steps.length) {
+      const notes = el('details', null, 'additional-notes'); notes.append(el('summary', '补充说明'));
+      for (const step of data.config.setup.steps) {
+        const item = el('article'); item.append(el('h3', step.title), el('p', step.instructions));
+        if (step.check) item.append(el('p', '核对方式：' + step.check));
+        notes.append(item);
+      }
+      content.append(notes);
+    }
   };
   const tabs = group('tabs');
   function setTab(mode) {
@@ -268,13 +291,12 @@ async function detail(confirmed) {
     if (mode === 'intro') overview();
     else {
       content.replaceChildren(el('h2', '角色', 'section-title'), el('p', data.config.role || '未指定', 'panel role'));
-      if (data.config.setup?.steps.length) content.append(el('h2', '使用前准备', 'section-title'), setupList(data.config.setup.steps));
     }
   }
   for (const [key,label] of [['intro','概览'], ...(Object.hasOwn(data, 'config') ? [['settings','配置']] : [])]) {
     const b = button(label, () => setTab(key), 'secondary'); b.dataset.tab = key; tabs.append(b);
   }
-  main.replaceChildren(link('← 社区', '/', 'back'), top, tabs, content); setTab('intro');
+  main.replaceChildren(detailBack(), top, tabs, content); setTab('intro');
   await resumeAcquisition();
 }
 
@@ -298,9 +320,9 @@ async function claim(recipe, trigger, sessionId, currentDetail, resumed = false)
   const confirm = el('button', '获取配方', 'button');
   field.value = intent.input;
   if (confirmation) {
-    field.required = true; field.maxLength = 128; field.autocomplete = 'off'; field.placeholder = '输入分享码'; field.setAttribute('aria-label', '分享码');
+    field.required = true; field.maxLength = 128; field.autocomplete = 'off'; field.placeholder = '作者提供的分享码'; field.setAttribute('aria-label', '分享码');
     form.append(...(coded ? [field] : [el('p', '确认获取这个版本的配方？')]), error, group('actions', button('取消', () => {if (current()) dismissDialog();}, 'secondary'), confirm));
-    modal(coded ? '输入分享码' : '确认获取配方', form);
+    modal(coded ? '输入分享码' : '确认获取配方', group('claim-recipe', el('strong', recipe.public.name), el('span', versionLabel(recipe))), form);
   }
   const modalId = modalGeneration;
   const current = () => currentDetail() && (!confirmation || modalId === modalGeneration);
@@ -379,7 +401,7 @@ try {
     history.replaceState(history.state, '', url);
   }
 } catch (e) {
-  main.replaceChildren(link('← 社区', '/', 'back'), empty(e.status === 404 ? '找不到这份配方' : '暂时无法打开', null, button('重试', () => location.reload(), 'secondary')));
+  main.replaceChildren(detailBack(), empty(e.status === 404 ? '找不到这份配方' : '暂时无法打开', null, button('重试', () => location.reload(), 'secondary')));
 }
 let checkingSession = false;
 async function checkSession() {

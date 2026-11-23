@@ -4,7 +4,7 @@ import {ArrowRight, ArrowUpRight, Bot, Check, Copy, KeyRound} from 'lucide-react
 import type {RecipeConfig, RecipeDetail, RecipePublic, RecipeSummary} from '@vonvon/protocol';
 import {Button} from '../reference/components/ui';
 
-export const recipeSections = ['概览', '模型与权限', '能力', '沟通方式', '记忆', '任务', '使用前准备'] as const;
+export const recipeSections = ['概览', '模型与权限', '能力', '沟通方式', '记忆', '任务'] as const;
 type Section = typeof recipeSections[number];
 
 
@@ -50,7 +50,14 @@ export function RecipeConfiguration({config, section}: {config: RecipeConfig; se
   if (section === '沟通方式') return <div className="community-config"><h2>沟通方式</h2><p className="community-muted">未指定</p></div>;
   if (section === '记忆') return <div className="community-config"><h2>记忆</h2></div>;
   if (section === '任务') return <div className="community-config"><h2>任务</h2><p className="community-muted">没有任务</p></div>;
-  return <div className="community-config"><h2>使用前准备</h2>{config.setup?.steps.length ? <ol className="community-setup">{config.setup.steps.map((step, i) => <li key={i}><div><strong>{step.title || '未命名步骤'}</strong><span>{step.required ? '必需' : '可选'}</span></div><RecipeMarkdown text={step.instructions}/>{step.check && <p className="community-muted">检查方式：{step.check}</p>}</li>)}</ol> : <p className="community-muted">无需额外准备</p>}</div>;
+  return null;
+}
+
+export function RecipeOverview({recipe, draft}: {recipe: Pick<RecipeDetail, 'public' | 'revision' | 'creator' | 'config' | 'rich'>; draft?: boolean}) {
+  const notes = recipe.rich?.content.setup ?? recipe.config?.setup?.steps ?? [];
+  return <><RecipeMetadata meta={recipe.public} revision={recipe.revision} draft={draft} author={recipe.creator?.displayName}/><RecipeMarkdown text={recipe.public.overview ?? ''}/>
+    {notes.length > 0 && <details className="community-additional-notes"><summary>补充说明</summary>{notes.map((note, index) => <article key={index}><h3>{note.title || `说明 ${index + 1}`}</h3><RecipeMarkdown text={note.instructions}/>{note.check && <p>核对方式：{note.check}</p>}</article>)}</details>}
+  </>;
 }
 
 export function RecipeDetails({recipe, action, management, share, draft}: {draft?:boolean;recipe: RecipeDetail; action?: ReactNode; management?: ReactNode; share?: ReactNode}) {
@@ -59,17 +66,17 @@ export function RecipeDetails({recipe, action, management, share, draft}: {draft
   return <article className="community-detail">
     <header className="community-detail-heading"><RecipeMark name={recipe.public.name} logo={recipe.logo}/><div><h1>{recipe.public.name}</h1><p>{recipe.public.summary}</p></div><div className="community-actions">{share}{action}</div></header>
     <div className="community-detail-layout"><nav aria-label="配方详细信息">{recipeSections.filter(item => allowed || item === '概览').map(item => <button type="button" key={item} aria-current={section === item ? 'page' : undefined} onClick={() => setSection(item)}>{item}</button>)}</nav>
-      <div className="community-detail-content">{section === '概览' ? <><RecipeMetadata meta={recipe.public} revision={recipe.revision} draft={draft} author={recipe.creator?.displayName}/><RecipeMarkdown text={recipe.public.overview ?? ''}/>{!allowed && <p className="community-access-note">获取此版本后，可以查看完整配置。</p>}{management}</> : recipe.rich ? <RichConfiguration view={recipe.rich} section={section}/> : recipe.config && <RecipeConfiguration config={recipe.config} section={section}/>}</div></div>
+      <div className="community-detail-content">{section === '概览' ? <><RecipeOverview recipe={recipe} draft={draft}/>{!allowed && <p className="community-access-note">获取此版本后，可以查看完整配置。</p>}{management}</> : recipe.rich ? <RichConfiguration view={recipe.rich} section={section}/> : recipe.config && <RecipeConfiguration config={recipe.config} section={section}/>}</div></div>
   </article>;
 }
 
-export function RecipeCard({recipe, hero, heroKind, onOpen}: {recipe: RecipeSummary; hero?: boolean;heroKind?: 'featured'|'latest'|null; onOpen: () => void}) {
+export function RecipeCard({recipe, hero, heroKind, onOpen, context = 'catalog'}: {recipe: RecipeSummary; hero?: boolean;heroKind?: 'featured'|'latest'|null; context?: 'catalog' | 'library'; onOpen: () => void}) {
   if (hero) return <button type="button" className="community-card community-card--hero" aria-label={`${heroKind === 'featured' ? '场景精选' : '最新配方'}：${recipe.public.name}`} onClick={onOpen}>
     <div className="community-hero-copy"><h2>{recipe.public.name}</h2><p>{recipe.public.summary}</p><span className="community-hero-cta">查看「{recipe.public.name}」<ArrowRight size={15}/></span></div>
     <div className="community-recipe-cover" aria-hidden="true"><span className="community-recipe-stamp"><RecipeMark name={recipe.public.name} logo={recipe.logo}/></span><div className="community-recipe-paper"><strong>{recipe.public.name}</strong><div className="community-cover-meta"><span>{recipe.creator?.displayName}</span><span>{recipe.public.version}</span></div></div></div>
   </button>;
   return <button type="button" className="community-card" onClick={onOpen}>
-    <div className="community-card-top"><RecipeMark name={recipe.public.name} logo={recipe.logo}/>{recipe.public.access === 'coded' && <span className="community-card-access"><KeyRound size={13}/>需分享码</span>}</div>
+    <div className="community-card-top"><RecipeMark name={recipe.public.name} logo={recipe.logo}/>{context === 'catalog' && recipe.public.access === 'coded' && <span className="community-card-access"><KeyRound size={13}/>需分享码</span>}</div>
     <div className="community-card-copy"><h2>{recipe.public.name}</h2><p>{recipe.public.summary}</p></div><div className="community-card-footer"><small>{[recipe.creator?.displayName, recipe.public.version].filter(Boolean).join(' · ')}</small><ArrowUpRight size={15}/></div>
   </button>;
 }
