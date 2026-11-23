@@ -89,8 +89,8 @@ export class RecipeCreatorExecutor {
       const held=this.metadata.read(key);
       if(!held)return;
       const writer=this.journal.command(context.association.accountId,held.request.requestId);
-      if(writer&&(!isDeepStrictEqual(writer.association,context.association)||!isDeepStrictEqual(writer.request,held.request)||
-        writer.command.kind!=='metadata'||!isDeepStrictEqual(writer.command.work,work)))throw invalid();
+      if(writer&&(!sameCreatorSource(writer.association,context.association)||writer.association.scope!==context.association.scope||
+        !isDeepStrictEqual(writer.request,held.request)||writer.command.kind!=='metadata'||!isDeepStrictEqual(writer.command.work,work)))throw invalid();
       const receipt=held.receipt?verifyMetadataReceipt(held.request,held.receipt):await metadataReceipt(account,held.request);
       context.check();
       if(receipt&&!held.receipt)this.metadata.write(key,{...held,receipt});

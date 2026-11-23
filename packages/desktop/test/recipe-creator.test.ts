@@ -282,7 +282,7 @@ it('saves a legacy draft on its first private approval and notifies only after t
   expect(f.cloud.mock.calls.filter(([, ,init])=>init?.method==='PATCH')).toHaveLength(1);
 });
 
-it('reconciles historical App metadata by GET before full private preview, retaining unknown and stale evidence',async()=>{
+function richMetadataFixture(){
   const f=fixture(),requestId=newRichMetadataRequestId(),objectId=randomUUID();
   const work={draftId:f.draftId,source:{preparationId:f.preparationId,groupId:f.groupId,identity:f.identity}};
   f.authoring.history.remember(f.association,f.preparationId,f.identity,f.groupId);
@@ -294,10 +294,11 @@ it('reconciles historical App metadata by GET before full private preview, retai
     public:{name:'当前名称',summary:'',overview:'',version:'',access:'direct' as const},logo:{kind:'keep' as const}};
   const key=f.metadata.key(f.accountId,f.draftId);
   f.metadata.write(key,{request});
-  let revision=2,committed=false;
+  const cloudDraft={revision:3,committed:true};
   const receipt={requestId,draftId:f.draftId,revision:3,manifestSha256:hash};
   f.cloud.mockImplementation(async(id,path,init)=>{
     expect(id).toBe(f.accountId);expect(init?.method??'GET').toBe('GET');
+    const {revision,committed}=cloudDraft;
     if(path.startsWith('/v2/receipts/metadata/'+requestId+'?'))return Response.json(committed?{status:'committed',receipt}:{status:'unknown'});
     if(path==='/v2/drafts/'+f.draftId)return Response.json({format:'rich-v2',draftId:f.draftId,recipeId:null,revision,access:'direct',sourceIntentId:f.preparationId,
       manifest:{objectId,kind:'manifest',bytes:doc.canonicalUTF8.length,sha256:hash,mediaType:'application/json'},sourceManifest:null,logicalBytes:doc.logicalBytes,retainedCandidateBytes:0});
@@ -305,14 +306,83 @@ it('reconciles historical App metadata by GET before full private preview, retai
     if(path.includes('/creator-context?'))return Response.json({format:'rich-v2',draftId:f.draftId,revision,sourceIntentId:f.preparationId,parent:null});
     throw Error(path);
   });
+  const command={kind:'metadata' as const,work,revision:request.revision,baseSha256:request.baseManifestSha256,change:{field:'name' as const,value:'当前名称'}};
+  const writer={association:f.association,id:requestId,command,request,phase:'unknown' as const,grant:{approval:'a'.repeat(64),expiresAt:Date.now()+60000}};
   const read=()=>f.build().run(f.context,f.set({kind:'read',read:{kind:'draft',work}},'read'));
+  return {f,work,writer,read,key,request,receipt,cloudDraft};
+}
+
+it('reconciles historical App metadata by GET before full private preview, retaining unknown and stale evidence',async()=>{
+  const {f,key,request,receipt,read,cloudDraft}=richMetadataFixture();
+  cloudDraft.revision=2;
+  cloudDraft.committed=false;
   await read();expect(f.answers.at(-1)?.kind).toBe('rejected');expect(f.metadata.read(key)).toEqual({request});
-  committed=true;
+  cloudDraft.committed=true;
   await read();expect(f.answers.at(-1)?.kind).toBe('rejected');expect(f.metadata.read(key)).toEqual({request,receipt});
-  revision=3;
+  cloudDraft.revision=3;
   await read();expect(f.answers.at(-1)).toMatchObject({kind:'snapshot',snapshot:{revision:3}});
   expect(f.metadata.read(key)).toBeUndefined();
   expect(f.cloud.mock.calls.filter(([,path])=>path.startsWith('/v2/receipts/metadata/'))).toHaveLength(2);
+});
+
+it('previews the confirmed metadata revision after renewing only the Link binding',async()=>{
+  const {f,writer,work,read,key,request,receipt}=richMetadataFixture();
+  f.journal.save(writer);
+  const task={kind:'command' as const,command:writer.command,...writer.grant};
+  await f.build().run(f.context,f.set(task,'receipt',writer.id));
+  expect(f.answers.at(-1)).toEqual({kind:'saved',work,revision:3});
+  expect(f.metadata.read(key)).toEqual({request,receipt});
+
+  f.association.binding=randomUUID();
+  await read();
+  expect(f.answers.at(-1)).toMatchObject({kind:'snapshot',snapshot:{work,revision:3,contentSha256:receipt.manifestSha256}});
+  expect(f.metadata.read(key)).toBeUndefined();
+  expect(f.cloud.mock.calls.every(([, ,init])=>(init?.method??'GET')==='GET')).toBe(true);
+});
+
+it('keeps the original metadata grant bound to the old Link',async()=>{
+  const {f,writer}=richMetadataFixture();
+  f.journal.save({...writer,phase:'frozen'});
+  f.association.binding=randomUUID();
+  const job=f.set({kind:'command',command:writer.command,...writer.grant},'execute',writer.id);
+  await f.build().run(f.context,job);
+  expect(f.cloud).not.toHaveBeenCalled();
+  expect(f.answers.at(-1)).toEqual({kind:'unknown'});
+  expect(f.journal.command(f.accountId,writer.id)?.phase).toBe('frozen');
+});
+
+it.each([
+  ['account',{accountId:randomUUID()}],['device',{deviceId:randomUUID()}],
+  ['device key',{deviceKey:Buffer.alloc(32,9).toString('base64url')}],['Bot',{botId:agentIdSchema.parse('cli_other')}],
+] as const)('keeps confirmed metadata private when the %s changes',async(_,changed)=>{
+  const {f,writer,read,key,request,receipt}=richMetadataFixture();
+  f.journal.save(writer);
+  f.metadata.write(key,{request,receipt});
+  Object.assign(f.association,{binding:randomUUID()},changed);
+  await read();
+  expect(f.answers.at(-1)).toEqual({kind:'rejected',reason:'unavailable'});
+  expect(f.rpcs.filter(r=>r.type==='operationSourceIdentity'||r.type==='groupSourceIdentity')).toEqual([]);
+  expect(f.cloud).not.toHaveBeenCalled();
+  expect(f.metadata.read(key)).toEqual({request,receipt});
+});
+
+it.each(['view','scope','draft','group identity','request','manifest'] as const)('retains the receipt when the metadata %s differs after Link renewal',async mismatch=>{
+  const {f,writer,work,read,key,request,receipt}=richMetadataFixture();
+  const storedWork=structuredClone(work);
+  if(mismatch==='draft')storedWork.draftId=randomUUID();
+  if(mismatch==='group identity')storedWork.source.identity='e'.repeat(64);
+  const held={
+    request:mismatch==='request'?{...request,public:{...request.public,name:'另一请求'}}:request,
+    receipt:mismatch==='manifest'?{...receipt,manifestSha256:'f'.repeat(64)}:receipt,
+  };
+  f.journal.save({...writer,command:{...writer.command,work:storedWork}});
+  f.metadata.write(key,held);
+  f.association.binding=randomUUID();
+  if(mismatch==='scope')f.association.scope='a'.repeat(64);
+  if(mismatch==='view')f.association.viewId=randomUUID();
+  await read();
+  expect(f.answers.at(-1)).toEqual({kind:'rejected',reason:'unavailable'});
+  expect(f.metadata.read(key)).toEqual(held);
 });
 
 it('refuses version management from a replacement source before its cloud request',async()=>{
