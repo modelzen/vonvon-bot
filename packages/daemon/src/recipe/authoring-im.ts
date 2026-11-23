@@ -20,10 +20,19 @@ const action = (ref: string, verb: string, label: string, primary = false) => bu
 const authoringBody = (elements: CardElement[]) => card(elements, {header:{title:'配方草稿'},forward:false});
 export function candidateConfirmation(ref: string, details?: CandidateCardDetails) {
   if (!details) return;
-  const elements = [plain(copy.confirm), plain('第 '+details.revision+' 次修订。以下字段将替换为这些完整新值（JSON 文本，转义字符表示原值）。'),
-    ...details.fields.map(field => plain(field.label+' → '+field.valueJson.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu,
-      char => char.split('').map(unit => '\\u'+unit.charCodeAt(0).toString(16).padStart(4,'0')).join('')))),
-    plain('候选摘要 '+details.payloadDigest), action(ref,'confirm','保存到草稿',true), action(ref,'cancel','取消')];
+  const readable=(text:string)=>text.replace(/[⟦⟧\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu,
+    char=>char==='\n'?char:'⟦U+'+char.codePointAt(0)!.toString(16).toUpperCase().padStart(4,'0')+'⟧');
+  const fields=[];
+  for(const field of details.fields){
+    let text=field.text;
+    if(text===undefined){
+      try{const value:unknown=JSON.parse(field.valueJson);if(typeof value!=='string')return;text=value;}catch{return;}
+    }
+    fields.push(plain(readable(field.label)+' → '+readable(text)));
+  }
+  const elements = [plain(details.sourceCapture?'仅保存私人草稿。完整内容在 App 核对，发布前再次确认。':copy.confirm),
+    plain(details.sourceCapture?'本次保存你刚选中的本地内容快照。':'第 '+details.revision+' 次修订。请核对以下完整新值。'),
+    ...fields, action(ref,'confirm','保存到草稿',true), action(ref,'cancel','取消')];
   const body = authoringBody(elements), data = JSON.stringify(body);
   // CardKit recommends 30 KB. Budget both serialized request envelopes, including JSON escapes.
   const create = {type:'card_json',data};
@@ -33,7 +42,7 @@ export function candidateConfirmation(ref: string, details?: CandidateCardDetail
 }
 export function authoringCard(ref: string, mode: CardMode, details?: CandidateCardDetails, editing?:RichEditCardContext) {
   if (mode === 'confirm') return candidateConfirmation(ref,details) ?? authoringBody([
-    plain('本次改动无法在卡片完整、安全地展示，不能在这里确认。请发送更小的修改，或到 App 直接编辑该字段。'), action(ref,'cancel','取消'),
+    plain('本次改动无法在卡片完整、安全地展示，不能在这里确认。请取消后发送更小的修改；名称、简介、概览和版本也可以在 App 编辑。'), action(ref,'cancel','取消'),
   ]);
   const introduction=mode==='richEdit'&&editing ? '本次可修改：'+(editing.labels.join('、')||'已选内容')+'。\n'+copy.richEdit+
     (editing.example?'\n也可以发送 '+editing.example+'。':'') : copy[mode];
