@@ -30,7 +30,7 @@ const token = 'a'.repeat(64), newToken = 'b'.repeat(64);
 const name = '多语言配方🦉和很长的名字'.repeat(5);
 const setup = {steps: [{kind: 'config' as const, title: '准备账号', instructions: '阅读并手动准备，不自动执行。', required: true}]};
 const detail = {recipeId, versionId, revision: 1, public: {name, summary: '帮助 Bot 协作', overview: '说明', version: '1.0', access: 'direct' as const}, config: {role: '新职责', setup}, owned: false, acquired: true};
-const baseReview = {reviewToken: token, currentRole: '当前职责', baseRole: '上次职责', incomingRole: '新职责', currentSetup: setup, baseSetup: setup, incomingSetup: setup, roleChoiceRequired: false, setupChoiceRequired: false};
+const baseReview = {reviewToken: token, currentRole: '当前职责', baseRole: '上次职责', incomingRole: '新职责', roleChoiceRequired: false, setupChoiceRequired: false};
 const snapshot = desktopSnapshotSchema.parse({revision: 1, observedAt: 1, stale: false, host: {kind: 'connected', ownership: 'owned', version: 'test'},
   agents: [{id: botId, name: '原目标🦉机器人', enabled: true, running: true, connection: 'connected', activation: 'active'}], groups: [{id: groupId, name: '已连接的群'}], memberships: [],
   tools: [{tool: 'codex', installation: 'installed', authentication: 'signedIn', version: '1'}], jobs: [], application: {platform: 'macos', version: 'test', loginItem: false, dataPath: '/synthetic'}});
@@ -124,9 +124,11 @@ it('acquires into the real original join form, preserves its guards, and only re
   expect(join).toEqual({type: 'join', handle, input: {action: 'createProject', agentId: botId, name: 'Unicode 群🦉研发', folder: {kind: 'default'}, tool: 'codex', conversation: 'threads'}});
   expect(client.collaboration).not.toHaveBeenCalled();
   expect(document.body.textContent).not.toContain('配方已应用');
-  expect(document.body.textContent).toContain('获取或应用配方不会自动执行');
+  expect(document.querySelector('[aria-label="使用准备对比"]')).toBeNull();
   await click('确认应用到这个群');
   expect(document.body.textContent).toContain('已应用到目标群，云端已确认');
+  expect(document.body.textContent).not.toContain('使用设置');
+  expect(document.body.textContent).not.toContain('任务保持暂停');
   expect(requests.filter(request => request.type === 'confirm')).toEqual([{type: 'confirm', handle}]);
   await click('稍后继续'); expect(requests.some(request => request.type === 'finish')).toBe(false);
   await click('添加到群聊'); await click('完成');
@@ -152,26 +154,38 @@ it('sends original bind settings through the native handle rather than directly 
   expect(client.run.mock.calls.some(([request]) => request.type === 'bindGroup')).toBe(false);
 });
 
-it('requires fresh token-bound choices after a changed review, including Unicode length and setup choice', async () => {
+it('requires fresh token-bound choices after a changed review, including Unicode length without a setup choice', async () => {
   let resolves = 0;
   useReply = request => request.type === 'begin' ? {kind: 'choose', handle}
-    : request.type === 'join' ? {kind: 'review', handle, groupId, review: {...baseReview, roleChoiceRequired: true, setupChoiceRequired: true}}
-    : request.type === 'resolve' && resolves++ === 0 ? {kind: 'review', handle, groupId, review: {...baseReview, reviewToken: newToken, currentRole: '另一人刚修改', roleChoiceRequired: true, setupChoiceRequired: true}}
+    : request.type === 'join' ? {kind: 'review', handle, groupId, review: {...baseReview, roleChoiceRequired: true, setupChoiceRequired: false}}
+    : request.type === 'resolve' && resolves++ === 0 ? {kind: 'review', handle, groupId, review: {...baseReview, reviewToken: newToken, currentRole: '另一人刚修改', roleChoiceRequired: true, setupChoiceRequired: false}}
     : {kind: 'prepared', handle, groupId, review: {...baseReview, reviewToken: newToken}};
   await draw(); await openUse(); await createGroup();
   expect(button('预览所选内容').disabled).toBe(true);
   expect(document.body.textContent).toContain('上次职责');
+  expect(document.querySelector('input[name="recipe-setup"]')).toBeNull();
   await pick('input[name="recipe-role"][value="custom"]'); await fill('合并后的本群角色', '🦉'.repeat(5001));
   expect(document.body.textContent).toContain('本群角色最多 5000 字');
-  await fill('合并后的本群角色', '🦉'.repeat(5000)); await pick('input[name="recipe-setup"]');
+  await fill('合并后的本群角色', '🦉'.repeat(5000));
   await click('预览所选内容');
-  expect(requests.at(-1)).toEqual({type: 'resolve', handle, reviewToken: token, resolution: {role: {kind: 'custom', text: '🦉'.repeat(5000)}, setup: 'keep'}});
+  expect(requests.at(-1)).toEqual({type: 'resolve', handle, reviewToken: token, resolution: {role: {kind: 'custom', text: '🦉'.repeat(5000)}}});
   expect(button('预览所选内容').disabled).toBe(true);
   expect(document.querySelectorAll('input[name="recipe-role"]:checked')).toHaveLength(0);
   expect(document.body.textContent).toContain('另一人刚修改');
-  await pick('input[name="recipe-role"][value="replace"]'); await pick('input[name="recipe-setup"]'); await click('预览所选内容');
-  expect(requests.at(-1)).toEqual({type: 'resolve', handle, reviewToken: newToken, resolution: {role: {kind: 'replace'}, setup: 'keep'}});
+  await pick('input[name="recipe-role"][value="replace"]'); await click('预览所选内容');
+  expect(requests.at(-1)).toEqual({type: 'resolve', handle, reviewToken: newToken, resolution: {role: {kind: 'replace'}}});
   expect(button('确认应用到这个群')).toBeDefined();
+});
+
+it.each(['review','prepared'] as const)('requires a target update instead of confirming an old %s setup installation',async kind=>{
+  useReply=()=>({kind,handle,groupId,review:{...baseReview,incomingSetup:setup,setupChoiceRequired:kind==='review'}});
+  await draw();await openUse();
+  expect(document.body.textContent).toContain('请更新目标设备');
+  expect(document.querySelector('[aria-label="使用准备对比"]')).toBeNull();
+  expect(document.querySelector('input[name="recipe-setup"]')).toBeNull();
+  expect(button('确认应用到这个群')).toBeUndefined();
+  expect(button('预览所选内容')).toBeUndefined();
+  expect(requests.some(request=>request.type==='resolve'||request.type==='confirm')).toBe(false);
 });
 
 it('keeps the original handle after uncertain join, and cancellation that lost to commit stays pending', async () => {

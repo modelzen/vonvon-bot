@@ -21,7 +21,6 @@ import { applyNativeRecipeFields, localRecipeItems } from './rich-settings';
 import { canonicalLocal, releasedItemSources } from './rich-source-lineage';
 import { recipeAdmissions, recipeSlot } from './rich-admission';
 import { verifiedDocumentText } from './rich-source-files';
-import type { RichRecipeState } from './rich-state';
 
 type Req<K extends string> = Extract<RecipeInstallRequest, { type: K }>;
 export type RichRequest = Req<
@@ -291,11 +290,6 @@ export async function applyRich(bot: BotIdentity, input: Activation, schedules: 
       if (!sources[item.itemId]) throw new Error('配方条目来源不明');
     }
     const prev = row.richRecipe?.resolved ?? [];
-    const setup: RichRecipeState['setup'] = {};
-    for (const step of resolved.filter((i) => i.kind === 'setup')) {
-      const held = row.richRecipe?.setup[step.itemId];
-      if (held?.contract === hash(step.value)) setup[step.itemId] = held;
-    }
     if (!schedules.managed) throw new Error('本机调度器不支持配方任务');
     const now = Date.now();
     const definitions: ManagedTaskDefinition[] = resolved
@@ -354,7 +348,7 @@ export async function applyRich(bot: BotIdentity, input: Activation, schedules: 
               resolved,
               sources,
               choices: op.choices,
-              setup,
+              setup: {},
               installedAt: now,
               receipt: op.id,
             };

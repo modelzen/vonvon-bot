@@ -148,12 +148,15 @@ describe('durable role installation', () => {
     expect(await store().apply(botId, result.operationId, async () => {})).toMatchObject({status: 'applied'});
     expect((await row())?.supplement).toBe('旧的职责');
   });
-  it('commits role, base, setup and receipt together and retries after a new store instance', async () => {
+  it('commits the role and receipt without activating legacy setup metadata and retries after restart', async () => {
     const value = manifest({setup: {steps: [{kind: 'tool', title: '工具', instructions: '自行检查工具', required: true}]}});
     const result = await ready(value), membership = vi.fn(async () => {});
     expect(await store().apply(botId, result.operationId, membership)).toMatchObject({status: 'applied'});
     const raw = JSON.parse(await readFile(botPaths(botId).projectsFile, 'utf8'));
-    expect(raw.projects[0]).toMatchObject({supplement: value.role, recipeInstall: {base: {role: value.role, setup: value.setup}, setup: value.setup}});
+    expect(raw.projects[0]).toMatchObject({supplement: value.role, recipeInstall: {base: {role: value.role}}});
+    expect(raw.projects[0].recipeInstall.setup).toBeUndefined();expect(raw.projects[0].recipeInstall.base.setup).toBeUndefined();
+    expect(raw.recipeInstallOperations[result.operationId].setup).toBeUndefined();expect(raw.recipeInstallOperations[result.operationId].incoming).toEqual(value);
+    expect(raw.recipeInstallOperations[result.operationId].manifestSha256).toBe(encoded(value).manifestSha256);
     expect(raw.recipeInstallOperations[result.operationId]).toMatchObject({status: 'applied'});
     if (process.platform !== 'win32') expect((await stat(botPaths(botId).projectsFile)).mode & 0o777).toBe(0o600);
     await store().apply(botId, result.operationId, membership);
@@ -241,14 +244,21 @@ describe('durable role installation', () => {
     if (other.type !== 'prepare') throw new Error('fixture');
     await expect(store().prepare(other)).rejects.toThrow('另一份配方');
   });
-  it('never inherits setup completion by position when a version changes', async () => {
+  it('preserves existing legacy notes without requesting or applying setup choices on update', async () => {
     const setup = {steps: [{kind: 'config' as const, title: 'A', instructions: 'A', required: true}]};
     const first = manifest({setup}), result = await ready(first);
     await store().apply(botId, result.operationId, async () => {});
+    const localSetup={steps:[{...setup.steps[0]!,title:'本机旧说明',instructions:'保留原数据'}]};
+    await mutateProjectByChatId(groupId,value=>{value.recipeInstall!.setup=localSetup;value.recipeInstall!.base.setup=setup;},undefined,location(botId));
     const incoming = {...first, versionId: randomUUID(), revision: 2, setup: {steps: [{...setup.steps[0]!, title: 'B', instructions: 'B'}]}};
-    const update = await ready(incoming);
+    const preview=await prepared(incoming);expect(preview.setupChoiceRequired).toBe(false);
+    expect(preview).not.toHaveProperty('incomingSetup');expect(preview).not.toHaveProperty('currentSetup');
+    const update = await ready(incoming,{resolution:{setup:'replace'}});
     await store().apply(botId, update.operationId, async () => {});
-    expect((await row())?.recipeInstall?.setup).toEqual(incoming.setup);
+    expect((await row())?.recipeInstall?.setup).toEqual(localSetup);
+    expect((await row())?.recipeInstall?.base.setup).toEqual(setup);
+    expect((await store().get(botId,update.operationId)).incoming).toEqual(incoming);
+    expect((await store().get(botId,update.operationId)).setup).toBeUndefined();
   });
   it('binds every authorization field and refuses changed parameters on the same operation', async () => {
     const result = await prepared(), auth = authorization(result);
@@ -395,12 +405,13 @@ describe('bounded local preparations', () => {
     const value = await local.prepare(input); if (value.kind !== 'prepared') throw new Error('fixture');
     await local.authorize(botId, value.operationId, authorization(value));
     const prototype = await local.get(botId, value.operationId), records: Record<string, typeof prototype> = {};
-    for (let index = 0; index < (limit === 'entries' ? 512 : 128); index++) {
+    for (let index = 0; index < (limit === 'entries' ? 512 : 192); index++) {
       const id = randomUUID(), actor = randomUUID();
       records[id] = {...prototype, operationId: id, accountId: actor,
         authorization: {...prototype.authorization!, operationId: id, accountId: actor}};
     }
     const file = botPaths(botId).projectsFile, raw = JSON.parse(await readFile(file, 'utf8'));
+    if(limit==='bytes')expect(Buffer.byteLength(JSON.stringify(records))).toBeGreaterThan(8*1024*1024);
     raw.recipeInstallOperations = records; await writeFile(file, JSON.stringify(raw));
     now += 9 * 86400000;
     const next = prepare(); if (next.type !== 'prepare') throw new Error('fixture');

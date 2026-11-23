@@ -168,7 +168,7 @@ export class RecipeUseController {
     if ((reply.kind !== 'prepared' && reply.kind !== 'review') || reply.groupId !== groupId) throw invalid();
     if (
       reply.incomingRole !== h.preview.content.role ||
-      !isDeepStrictEqual(reply.incomingSetup, h.preview.content.setup)
+      reply.incomingSetup !== undefined && !isDeepStrictEqual(reply.incomingSetup, h.preview.content.setup)
     )
       throw invalid();
     const {

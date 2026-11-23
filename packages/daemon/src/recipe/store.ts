@@ -144,29 +144,22 @@ export class RecipeStore {
         const backfilled = row.bindingIncarnation === undefined || row.projectSettingsRevision === undefined;
         row.bindingIncarnation ??= randomUUID();
         row.projectSettingsRevision ??= 0;
-        const localRole = supplementOf(row), localSetup = existing?.setup;
+        const localRole = supplementOf(row);
         const roleConflict = !existing ? Boolean(localRole && localRole !== incoming.role) : localRole !== existing.base.role && localRole !== incoming.role && incoming.role !== existing.base.role;
-        const setupConflict = Boolean(existing && !same(localSetup, existing.base.setup) && !same(localSetup, incoming.setup) && !same(incoming.setup, existing.base.setup));
         const reviewToken = sha256(JSON.stringify([bot, row.bindingIncarnation, row.projectSettingsRevision,
           settingsHash(row), request.accountId, request.manifestSha256, this.options.targetPublicKey]));
         const review = {reviewToken, groupId: row.chatId, currentRole: localRole, incomingRole: incoming.role,
-          ...(existing ? {baseRole: existing.base.role} : {}), ...(localSetup ? {currentSetup: localSetup} : {}),
-          ...(incoming.setup ? {incomingSetup: incoming.setup} : {}), ...(existing?.base.setup ? {baseSetup: existing.base.setup} : {}),
-          roleChoiceRequired: roleConflict, setupChoiceRequired: setupConflict};
-        if ((request.resolution && request.reviewToken !== reviewToken) || (roleConflict && !request.resolution?.role)
-          || (setupConflict && !request.resolution?.setup)) return {changed: backfilled, value: {kind: 'review', ...review} as RecipeInstallReply};
+          ...(existing ? {baseRole: existing.base.role} : {}), roleChoiceRequired: roleConflict, setupChoiceRequired: false};
+        if ((request.resolution && request.reviewToken !== reviewToken) || (roleConflict && !request.resolution?.role)) return {changed: backfilled, value: {kind: 'review', ...review} as RecipeInstallReply};
         const roleChoice = request.resolution?.role;
         const role = roleChoice?.kind === 'keep' ? localRole : roleChoice?.kind === 'custom' ? roleChoice.text
           : roleChoice?.kind === 'replace' || !existing || localRole === existing.base.role ? incoming.role : localRole;
         if ([...role].length > 5000) throw new Error('补充职责最多 5000 字');
-        const setup = request.resolution?.setup === 'keep' ? localSetup
-          : request.resolution?.setup === 'replace' || !existing || same(localSetup, existing.base.setup) ? incoming.setup : localSetup;
         const now = this.now(), history = operations(stored), maintained = maintain(history, now);
-        const resolution = [request.resolution?.role?.kind ?? null, request.resolution?.role?.kind === 'custom' ? request.resolution.role.text : null,
-          request.resolution?.setup ?? null];
+        const resolution = [request.resolution?.role?.kind ?? null, request.resolution?.role?.kind === 'custom' ? request.resolution.role.text : null];
         const preparationSha256 = sha256(JSON.stringify([request.accountId, bot, row.chatId, row.bindingIncarnation,
           row.projectSettingsRevision, settingsHash(row), request.manifestSha256, request.manifest, resolution,
-          role, setup ?? null, this.options.targetPublicKey]));
+          role, this.options.targetPublicKey]));
         const reused = Object.values(history).find(operation => operation.status === 'prepared' && operation.issuerState === 'unissued' && !operation.authorization
           && operation.createdAt <= now && !unissuedExpired(operation, now) && operation.preparationSha256 === preparationSha256);
         if (reused) {
@@ -186,7 +179,7 @@ export class RecipeStore {
           operationId, accountId: request.accountId, bot, groupId: row.chatId,
           bindingIncarnation: row.bindingIncarnation, projectSettingsRevision: row.projectSettingsRevision,
           settingsSha256: settingsHash(row), manifest: request.manifest, manifestSha256: request.manifestSha256,
-          incoming, role, ...(setup ? {setup: copy(setup)} : {}), nonce: nonce.toString('base64url'),
+          incoming, role, nonce: nonce.toString('base64url'),
           nonceCommitment: Buffer.from(sha256(nonce), 'hex').toString('base64url'), targetPublicKey: this.options.targetPublicKey,
           createdAt: now, status: 'prepared', cloudCompletion: 'none', preparationSha256, issuerState: 'unissued',
         };
@@ -327,10 +320,11 @@ export class RecipeStore {
           history[operationId] = {...operation, status: 'rejected', reason, completedAt: this.now()};
         } else {
           const manifest: RecipeManifest = operation.incoming;
+          const legacy = row!.recipeInstall;
           row!.supplement = operation.role;
           row!.recipeInstall = {recipeId: manifest.recipeId, versionId: manifest.versionId, authorId: manifest.authorId,
             revision: manifest.revision, access: manifest.access, manifestSha256: operation.manifestSha256, installedAt: this.now(),
-            base: {role: manifest.role, ...(manifest.setup ? {setup: copy(manifest.setup)} : {})}, ...(operation.setup ? {setup: copy(operation.setup)} : {})};
+            base: {role: manifest.role, ...(legacy?.base.setup ? {setup: copy(legacy.base.setup)} : {})}, ...(legacy?.setup ? {setup: copy(legacy.setup)} : {})};
           history[operationId] = {...operation, status: 'applied', completedAt: this.now()};
         }
         stored.recipeInstallOperations = history;

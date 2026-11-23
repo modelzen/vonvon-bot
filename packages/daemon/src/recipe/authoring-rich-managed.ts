@@ -11,6 +11,7 @@ export function applyManagedInventory(content:RecipeRichContent,evidence:Map<str
   const blocks=new Map(managed.filter(m=>m.kind==='cardBlock').map(b=>[b.itemId,b]));
   for(const item of managed){
     const {kind,itemId,originId,parents}=item;
+    if(kind==='setup')continue;
     const from:SourceEvidence=!parents.length||item.access==='coded'&&item.authorId!==account?{kind:'unresolved'}:{kind:'managed',parents};
     evidence.set(itemId,from);
     if(kind==='cardBlock')continue;
