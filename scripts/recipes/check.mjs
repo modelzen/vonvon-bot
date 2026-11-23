@@ -1,0 +1,178 @@
+// Exercises the shipped SQL and HTTP code together. The only identity substitute
+// is a local asymmetric issuer. The suite never uses a cloud URL or an existing DB.
+import assert from 'node:assert/strict';
+import { randomBytes, randomUUID, generateKeyPairSync, sign } from 'node:crypto';
+import { mkdtempSync, readdirSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createServer } from 'node:http';
+import { execFileSync } from 'node:child_process';
+
+const root = fileURLToPath(new URL('../../', import.meta.url));
+const tmp = mkdtempSync(join(tmpdir(), 'vonvon-recipes-check-'));
+const bindir = process.env.PG_BINDIR || execFileSync('pg_config', ['--bindir'], {encoding:'utf8'}).trim();
+const pg = (bin, args, opts = {}) => execFileSync(join(bindir, bin), args, {encoding:'utf8', ...opts});
+const db = join(tmp, 'db'), sock = join(tmp, 's');
+const json = { 'content-type': 'application/json' };
+const port = 5432; // Unix socket lives in our unique 0700 directory; no TCP listener.
+const pgEnv = { ...process.env, PGHOST:sock, PGPORT:String(port), PGDATABASE:'postgres', PGUSER:'bootstrap_test', PGPASSWORD:'' };
+const sql = stmt => pg('psql', ['-XAtq','-v','ON_ERROR_STOP=1','-c',stmt], {env:pgEnv});
+const review=process.argv.includes('--review');
+let up=false, service, issuerServer,webServer;
+let reviewAuth=null;
+const closeServer = s => new Promise((resolve,reject)=>s.close(err => err ? reject(err) : resolve()));
+try {
+  mkdirSync(sock, {mode:0o700});
+  pg('initdb', ['-D',db,'-U','bootstrap_test','--encoding=UTF8','--locale=C','--auth=trust'], {stdio:'ignore'});
+  pg('pg_ctl', ['-D',db,'-w','-l',join(tmp,'pg.log'),'-o',`-k '${sock}' -p ${port} -c listen_addresses='' -c unix_socket_permissions=0700`,'start']);
+  up=true;
+  const migrations=join(root,'supabase/migrations');
+  for (const f of readdirSync(migrations).filter(f=>f.endsWith('.sql')).sort())
+    pg('psql',['-Xq','-1','-v','ON_ERROR_STOP=1','-f',join(migrations,f)],{env:pgEnv,stdio:['ignore','ignore','pipe']});
+  sql('create role recipe_check_login login noinherit; grant recipe_api to recipe_check_login');
+  const {publicKey, privateKey}=generateKeyPairSync('ec',{namedCurve:'P-256'});
+  const jwk={ ...publicKey.export({format:'jwk'}), kid:'local-fixture', alg:'ES256',use:'sig'};
+  issuerServer=createServer((req,res)=>{
+    if(req.url!=='/auth/v1/.well-known/jwks.json'){if(reviewAuth){reviewAuth(req,res).catch(()=>res.writeHead(400).end());return;}res.writeHead(404).end();return;}
+    res.writeHead(200,json).end(JSON.stringify({keys:[jwk]}));
+  });
+  await new Promise(resolve=>issuerServer.listen(0,'127.0.0.1',resolve));
+  const issuer=`http://127.0.0.1:${issuerServer.address().port}/auth/v1`;
+  const enc=o=>Buffer.from(JSON.stringify(o)).toString('base64url');
+  const jwt=(who, overrides={})=>{
+    const now=Math.floor(Date.now()/1000);
+    const signed=enc({alg:'ES256',kid:jwk.kid,typ:'JWT'})+'.'+enc({iss:issuer,aud:'authenticated',role:'authenticated',sub:who,iat:now,exp:now+120,...overrides});
+    return signed+'.'+sign('sha256',Buffer.from(signed),{key:privateKey,dsaEncoding:'ieee-p1363'}).toString('base64url');
+  };
+  // Set configuration before loading any server modules. The unix-socket URL
+  // cannot point at production even if a developer has unrelated PG settings.
+  const url=new URL('postgresql://recipe_check_login@localhost/postgres');
+  url.searchParams.set('host',sock);url.searchParams.set('port',String(port));
+  const env={...process.env,RECIPE_AUTH_ISSUER:issuer,RECIPE_DATABASE_URL:url.href,RECIPE_CODE_KEY:randomBytes(32).toString('hex'),PORT:'0'};
+  const { startLocalRecipeApi } = await import('./service-fixture.mjs');
+  service=await startLocalRecipeApi(root,env);
+  const { origin }=service;
+  async function request(path,{token,method='GET',body,revision,key,status=200}={}){
+    const headers={};if(token) headers.authorization='Bearer '+token;
+    if(method!=='GET'){Object.assign(headers,json);headers['idempotency-key']=key??randomUUID();}
+    if(revision!==undefined)headers['if-match']='"'+revision+'"';
+    const res=await fetch(origin+'/v1'+path,{method,headers,body:body===undefined?undefined:JSON.stringify(body)});
+    const data=await res.json();assert.equal(res.status,status,path+' '+res.status+' '+(data.error?.code||''));return data;
+  }
+  const [aid,rid,oid] = Array.from({length:3},()=>randomUUID());
+  const [author,reader,other]=[aid,rid,oid].map(s=>jwt(s));
+  if (review) {
+    const helpRecipe = JSON.parse(readFileSync(join(root, 'content/recipes/vonvon-help/recipe.json'), 'utf8'));
+    assert.equal(helpRecipe.public.access, 'direct');
+    const draft = await request('/drafts', {method: 'POST', token: author, body: helpRecipe});
+    const publish = {
+      method: 'POST', token: author, body: {}, revision: draft.revision, key: randomUUID(),
+    };
+    const route = '/drafts/' + draft.draftId + '/publish';
+    const version = await request(route, publish);
+    assert.equal((await request(route, publish)).versionId, version.versionId);
+    const catalog = await request('/community/recipes');
+    assert.equal(catalog.hero.versionId, version.versionId);
+    assert.deepEqual(catalog.items, []);
+    assert.deepEqual((await request('/recipes/' + version.recipeId + '/versions/' + version.versionId)).config, helpRecipe.config);
+
+    const { startReview } = await import('./web-review.mjs');
+    const running = await startReview({apiOrigin: origin, issuer, jwt, accounts: [aid, rid, oid]});
+    webServer = running.web;
+    reviewAuth = running.auth;
+    console.log('本机验收（合成账号）：' + running.webOrigin + '  · Ctrl-C 关闭并清理临时库');
+    await new Promise(resolve => { process.once('SIGINT', resolve); process.once('SIGTERM', resolve); });
+  } else {
+    const pub={name:'开发晨报',summary:'只看本周变化',overview:'## 介绍',version:'1.0',access:'coded'};
+    const trimSpace='\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff';
+    let blankDraft;
+    for (const field of ['name','summary','version']) {
+      const body={public:{...pub,[field]:trimSpace},config:{role:''}};
+      blankDraft=await request(blankDraft?'/drafts/'+blankDraft.draftId:'/drafts',{
+        method:blankDraft?'PATCH':'POST',token:author,revision:blankDraft?.revision,body});
+      await request('/drafts/'+blankDraft.draftId+'/publish',{
+        method:'POST',token:author,body:{},revision:blankDraft.revision,status:422});
+      assert.equal((await request('/drafts/'+blankDraft.draftId,{token:author})).public[field],trimSpace);
+    }
+    await request('/drafts/'+blankDraft.draftId,{method:'DELETE',token:author,body:{},revision:blankDraft.revision});
+    const setupStep={kind:'context',title:'准备代码',instructions:'PRIVATE-SETUP-SENTINEL',check:'能看到 README',required:true};
+    const config={role:'PRIVATE-CONFIG-SENTINEL',setup:{steps:[setupStep]}};
+    const unfinished={...config,setup:{steps:[{...setupStep,title:'\t\u3000'}]}};
+    const initial=await request('/drafts',{method:'POST',token:author,body:{public:pub,config:unfinished}});
+    const unfinishedPublish=await request('/drafts/'+initial.draftId+'/publish',{method:'POST',token:author,body:{},revision:initial.revision,status:422});
+    assert.equal(unfinishedPublish.error.code,'incomplete_setup');
+    assert.deepEqual((await request('/drafts/'+initial.draftId,{token:author})).config,unfinished);
+    const draft=await request('/drafts/'+initial.draftId,{method:'PATCH',token:author,revision:initial.revision,body:{public:pub,config}});
+    const pubKey=randomUUID(), options={method:'POST',token:author,body:{},revision:draft.revision,key:pubKey};
+    const v=await request('/drafts/'+draft.draftId+'/publish',options);
+    const replay=await request('/drafts/'+draft.draftId+'/publish',options);
+    assert.equal(v.versionId,replay.versionId);assert.ok(v.firstCode);
+    const detail='/recipes/'+v.recipeId+'/versions/'+v.versionId;
+    for (const token of [undefined,reader]) {
+      const preview=await request(detail,{token});assert.equal(preview.public.name,pub.name);assert.ok(!('config' in preview));
+      assert.ok(!JSON.stringify(preview).includes(setupStep.instructions));
+    }
+    const publicCatalog=JSON.stringify(await request('/community/recipes'));
+    assert.ok(!publicCatalog.includes(config.role)&&!publicCatalog.includes(setupStep.instructions));
+    assert.deepEqual((await request(detail,{token:author})).config,config);
+    await request('/me/recipes',{token:jwt(rid,{aud:'other'}),status:401});
+    const claim='/versions/'+v.versionId+'/redeem';
+    const key=randomUUID();
+    await request(claim,{method:'POST',token:reader,body:{code:v.firstCode},key});
+    await request(claim,{method:'POST',token:reader,body:{code:v.firstCode},key});
+    await request(claim,{method:'POST',token:reader,body:{code:'changed'},key,status:409});
+    assert.deepEqual((await request(detail,{token:reader})).config,config);
+    assert.equal((await request('/me/recipes',{token:reader})).items.length,1);
+    assert.equal((await request('/me/recipes',{token:other})).items.length,0);
+    const denied=await fetch(origin+'/v1'+claim,{method:'POST',headers:{...json,authorization:'Bearer '+other,'idempotency-key':randomUUID()},body:JSON.stringify({code:v.firstCode})});
+    assert.ok(denied.status>=400&&denied.status<500);
+    assert.ok(!(await denied.text()).includes(v.firstCode));
+    assert.ok(!('config' in await request(detail,{token:other})));
+    const codes=await request('/versions/'+v.versionId+'/codes',{token:author});
+    assert.equal(codes.items.filter(c=>c.status==='redeemed').length,1);
+    assert.ok(!JSON.stringify(codes).includes(v.firstCode));
+    // Changing the existing draft must invalidate an old publish confirmation.
+    const v2pub={...pub,name:'晨报更新',version:'2.0',access:'direct'};
+    const d2=await request('/drafts',{method:'POST',token:author,body:{public:v2pub,config,recipeId:v.recipeId,sourceVersionId:v.versionId}});
+    const updated=await request('/drafts/'+d2.draftId,{method:'PATCH',token:author,revision:d2.revision,body:{public:v2pub,config:{role:'更新后的公开角色'}}});
+    await request('/drafts/'+d2.draftId+'/publish',{method:'POST',token:author,body:{},revision:d2.revision,status:409});
+    const v2=await request('/drafts/'+d2.draftId+'/publish',{method:'POST',token:author,body:{},revision:updated.revision});
+    assert.deepEqual((await request('/recipes/'+v2.recipeId+'/versions/'+v2.versionId)).config,{role:'更新后的公开角色'});
+    assert.deepEqual((await request(detail,{token:reader})).config,config);
+    assert.ok(!('config' in await request(detail,{token:other})));
+    await request('/drafts',{method:'POST',token:author,body:{public:{...pub,version:'3'},config,recipeId:v.recipeId,sourceVersionId:v.versionId},status:409});
+    await request('/versions/'+v2.versionId+'/acquire',{method:'POST',token:other,body:{}});
+    assert.equal((await request('/me/recipes',{token:other})).items[0].versionId,v2.versionId);
+    const spare=await request('/versions/'+v.versionId+'/codes',{method:'POST',token:author,body:{count:2}});
+    for (const token of [author,other]) {
+      const noOpKey=randomUUID();
+      const noOp={method:'POST',token,body:{},key:noOpKey};
+      const acquired=await request('/versions/'+v2.versionId+'/acquire',noOp);
+      assert.deepEqual(await request('/versions/'+v2.versionId+'/acquire',noOp),acquired);
+      await request(claim,{method:'POST',token,body:{code:spare.items[0].code},key:noOpKey,status:409});
+    }
+    const alreadyGrantedKey=randomUUID();
+    const alreadyGranted={method:'POST',token:reader,body:{code:spare.items[0].code},key:alreadyGrantedKey};
+    await request(claim,alreadyGranted);
+    await request(claim,alreadyGranted);
+    await request(claim,{...alreadyGranted,body:{code:spare.items[1].code},status:409});
+    const unchanged=await request('/versions/'+v.versionId+'/codes',{token:author});
+    for (const code of spare.items) assert.equal(unchanged.items.find(c=>c.codeId===code.codeId).status,'available');
+    // Two different accounts submit the same still-valid code at the same time.
+    const issued=await request('/versions/'+v.versionId+'/codes',{method:'POST',token:author,body:{count:1}});
+    const competitors=[jwt(randomUUID()),jwt(randomUUID())];
+    const statuses=await Promise.all(competitors.map(token=>fetch(origin+'/v1'+claim,{method:'POST',headers:{...json,authorization:'Bearer '+token,'idempotency-key':randomUUID()},body:JSON.stringify({code:issued.items[0].code})}).then(r=>r.status)));
+    assert.equal(statuses.filter(s=>s===200).length,1);assert.ok(statuses.some(s=>s>=400&&s<500));
+    const bodies=await Promise.all(competitors.map(token=>request(detail,{token})));
+    assert.equal(bodies.filter(d=>d.config?.role===config.role).length,1);
+    console.log('PASS: real PostgreSQL + HTTP + signed identities: private draft, publish/replay, catalog, claim, version isolation, stale confirmation, old link, private library.');
+  }
+} finally {
+  try { if(webServer?.listening)await closeServer(webServer);await service?.close(); } finally {
+    try { if(issuerServer?.listening)await closeServer(issuerServer); } finally {
+      if(up)pg('pg_ctl',['-D',db,'-m','fast','-w','stop']);
+      rmSync(tmp,{recursive:true,force:true});
+    }
+  }
+}
