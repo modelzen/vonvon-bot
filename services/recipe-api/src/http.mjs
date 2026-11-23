@@ -3,6 +3,7 @@ import { identityFromRequest } from './auth.mjs';
 import { ApiError, badInput } from './errors.mjs';
 import { bodyJson, checkDraft, expectedRevision, objectKeys, queryParams, requestKey, uuid } from './input.mjs';
 import { codeAttempts } from './limiter.mjs';
+import { operationInput } from './operation-input.mjs';
 
 const endpoints = [
   ['GET', '/me', 'me'],
@@ -22,8 +23,13 @@ const endpoints = [
   ['GET', '/versions/:v/codes', 'listCodes'],
   ['POST', '/codes/:c/disable', 'disableCode'],
   ['POST', '/codes/:c/reveal', 'revealCode'],
+  ['GET', '/versions/:v/install-preview', 'installPreview'],
+  ['POST', '/operations/:o/authorize', 'authorizeOperation'],
+  ['POST', '/operations/:o/cancel', 'cancelOperation'],
+  ['POST', '/operations/:o/redeem', 'redeemOperation', 'possession'],
+  ['POST', '/operations/:o/complete', 'completeOperation', 'possession'],
 ].map(([method, path, action, isPublic = false]) => ({
-  method, action, isPublic, regex: new RegExp('^(?:/api)?/v1' + path.replace(/:[rvdc]/g, '([^/]+)') + '$'),
+  method, action, isPublic, regex: new RegExp('^(?:/api)?/v1' + path.replace(/:[rvdco]/g, '([^/]+)') + '$'),
 }));
 
 function identify(req, url) {
@@ -41,6 +47,7 @@ async function inputFor(req, url, {action, ids}) {
     if (action === 'listCodes' || action === 'library') return [action, [...ids, cursor]];
     return [action, ids];
   }
+  if (action.endsWith('Operation')) return [action, operationInput(action, ids[0], await bodyJson(req, 2048))];
   const key = requestKey(req);
   const body = await bodyJson(req);
   if (action === 'createDraft' || action === 'editDraft') {
@@ -109,7 +116,8 @@ export function createRecipeServer({ verify, execute, attempts = codeAttempts() 
         if (!req.url.startsWith('/') || req.url.startsWith('//')) throw badInput();
         const url = new URL(req.url, 'http://localhost');
         const route = identify(req, url);
-        const identity = await identityFromRequest(req, route.isPublic, verify);
+        if (route.isPublic === 'possession' && req.headersDistinct.authorization) throw badInput();
+        const identity = route.isPublic === 'possession' ? null : await identityFromRequest(req, route.isPublic, verify);
         const [operation, args] = await inputFor(req, url, route);
         if (route.action === 'redeem') finishAttempt = attempts.begin(identity.issuer + '\0' + identity.subject);
         const result = await execute(identity, operation, args);

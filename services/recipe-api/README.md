@@ -21,4 +21,8 @@ API 统一使用 /v1，亦支持以 /api/v1 转发。写操作携带 UUID 格式
 
 可选的 `config.setup.steps` 保存使用前准备，最多 8 项。每项包含 `kind`（config、tool 或 context）、`title`（最多 80 个 Unicode 码点）、`instructions`（最多 2048 UTF-8 字节）、`required`（布尔值），可附 `check`（最多 512 UTF-8 字节）。私人草稿可先存空标题和说明，发布时须完整；无步骤时省略 setup。凭码版本取得前不返回任何 setup 内容。这些字段只保存指引，不执行命令。
 
+已绑定群的文字角色安装使用 [在线安装操作契约](../../docs/design/accounts-recipes/install-operations.md)。`GET /v1/versions/:v/install-preview` 要求活跃账号拥有或已取得该版本，返回精确 manifest 字节与 SHA-256。`POST /v1/operations/:uuid/{authorize,cancel}` 要求 JWT，operation UUIDv7 本身作为幂等键，不要求 Idempotency-Key。`redeem` 和 `complete` 使用仅限该操作的 ticket、nonce 与 X25519 HMAC 证明，拒绝 Authorization 头。无需增加永久签名密钥。新迁移与新版 API 一起部署，原有分享码密钥配置保持不变。
+
+每账号最多三个待完成操作，每 UTC 日最多 60 个新 ID，包含提前取消。首次兑换须在服务端五分钟期限内，七天内可恢复或提交完成回执。已兑换状态不能显示为安装成功。完整端到端安装仍由 daemon 和 App 集成负责。
+
 进程级的试码计数按已验证账号计算，同时计入正在验证的请求，连续在同一十分钟窗口内提交十次无效码后返回 429。开发与小规模联调使用单进程；多实例运行时须共享限流计数或使用统一入口限流。首次部署应测托管项目真实签发的 JWT、远端 TLS 连接和实际回程。此服务当前接收文字角色、使用前准备与发布元数据，附件、群技能及飞书采集留待后续接入。

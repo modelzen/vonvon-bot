@@ -82,7 +82,7 @@ export function queryParams(url, allowed) {
   return { q, cursor: cursor === null ? null : uuid(cursor) };
 }
 
-export async function bodyJson(req) {
+export async function bodyJson(req, limit = BODY_LIMIT) {
   const contentType = req.headers['content-type'];
   if (contentType && !/^application\/json(?:\s*;\s*charset\s*=\s*utf-8)?$/i.test(contentType)) {
     throw new ApiError(415, 'unsupported_media_type');
@@ -90,13 +90,13 @@ export async function bodyJson(req) {
   if (req.headers['content-encoding'] && req.headers['content-encoding'] !== 'identity') {
     throw new ApiError(415, 'unsupported_media_type');
   }
-  if (Number(req.headers['content-length'] ?? 0) > BODY_LIMIT) throw new ApiError(413, 'payload_too_large');
+  if (Number(req.headers['content-length'] ?? 0) > limit) throw new ApiError(413, 'payload_too_large');
   const chunks = [];
   let length = 0;
   // Node's default async iterator destroys the socket on early return; allow the 413 response through.
   for await (const chunk of req.iterator({ destroyOnReturn: false })) {
     length += chunk.length;
-    if (length > BODY_LIMIT) throw new ApiError(413, 'payload_too_large');
+    if (length > limit) throw new ApiError(413, 'payload_too_large');
     chunks.push(chunk);
   }
   if (!length) return {};
