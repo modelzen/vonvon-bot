@@ -111,13 +111,13 @@ const channel = { send, rawClient: { im: { v1: {
 let cfg: AppConfig;
 let opened: ReturnType<typeof createOrchestrator>[] = [];
 let revoked: string[] = [];
-async function app(policy: 'steer' | 'queue' = 'queue', host?: Pick<HostApi, 'issueSessionToken'>) {
+async function app(policy: 'steer' | 'queue' = 'queue', host?: Pick<HostApi, 'issueSessionToken'>, authoring?: import('../src/recipe/authoring-service').AuthoringService) {
   cfg.preferences!.pendingPolicy = policy;
   await saveConfig(cfg);
-  const entries: AgentEntries = createAgentEntries({ appId: APP, isAdmin: id => (cfg.preferences?.access?.admins ?? []).includes(id), tools: [],
+  const entries: AgentEntries = createAgentEntries({ appId: APP, isAdmin: id => (cfg.preferences?.access?.admins ?? []).includes(id), tools: authoring?(await import('../src/agent/entry/resource-tools')).resourceTools((get,q)=>authoring.resources.tool(get,q)):[],
     sessions: { revoke: sessionId => { revoked.push(sessionId); } } });
   const issue = vi.spyOn(entries, 'issue');
-  const o = createOrchestrator(channel as never, cfg, paths.appDir, undefined, { entries, bot, droppedFile: DROPPED, ...(host ? { host } : {}) });
+  const o = createOrchestrator(channel as never, cfg, paths.appDir, undefined, { entries, bot, authoring, droppedFile: DROPPED, ...(host ? { host } : {}) });
   opened.push(o); await o.initialize?.();
   // These tests are about the turn, so every message runs: the judge in front of it is dm-smart.test.ts.
   await until(async () => expect(await dmProject()).toBeDefined());
@@ -590,4 +590,100 @@ describe('an administrator taken off the list', () => {
     expect(run.t.close).not.toHaveBeenCalled(); expect(revoked).toEqual([]);
     run.turns[0]!.resolve();
   });
+});
+
+it('delivers an exact resource through the native reader and gives only the real SDK private turn its Agent tools',async()=>{
+  const {randomUUID}=await import('node:crypto');
+  const {receive,throughBridgeChannel}=await import('./helpers/lark-events');
+  const {AuthoringService}=await import('../src/recipe/authoring-service');
+  const {recipeAuthoringRequestSchema,agentIdSchema}=await import('@vonvon/protocol');
+  const {startDynamicTools}=await import('../src/agent/codex-appserver/dynamic-tools');
+  const {RecipeCreatorExecutor}=await import(new URL('../../desktop/src/recipe-creator.ts',import.meta.url).href);
+  const {RecipeCreatorJournal}=await import(new URL('../../desktop/src/recipe-creator-journal.ts',import.meta.url).href);
+  const {AuthoringJournal}=await import(new URL('../../desktop/src/recipe-authoring-journal.ts',import.meta.url).href);
+  const {MetadataJournal}=await import(new URL('../../desktop/src/community-metadata-journal.ts',import.meta.url).href);
+  const accountId=randomUUID(),recipeId=randomUUID(),target={recipeId,versionId:randomUUID()},later={recipeId,versionId:randomUUID()};
+  const peer={id:randomUUID(),device:randomUUID()},lease=new AbortController();
+  const info={name:'测试配方',summary:'测试',overview:'介绍',version:'1.0',access:'direct'};
+  const guide=vi.fn(async()=>({code:0,data:{card_id:'card_resource'}}));
+  const dispatch=vi.fn(async()=>({code:0,data:{message_id:'om_resource_guide',chat_id:A}}));
+  const localChannel={...channel,rawClient:{...channel.rawClient,cardkit:{v1:{card:{create:guide}}},
+    im:{v1:{...channel.rawClient.im.v1,message:{...channel.rawClient.im.v1.message,create:dispatch}}}}};
+  const service=new AuthoringService({bot,cfg,channel:localChannel as never,root:paths.appDir,origin:'http://127.0.0.1:9',loopback:true,currentBot:async()=>{}});
+  const run=thread(),be=backend(run),{o}=await app('queue',undefined,service);
+  const event=async (text:string,id:string,quote?:string,sender=OWNER)=>receive({message_id:id,chat_id:A,chat_type:'p2p',message_type:'text',content:JSON.stringify({text}),
+    ...(quote&&{parent_id:quote}),create_time:String(Date.now())},{bot:{openId:'ou_bot',name:'fixture'},sender:{openId:sender}});
+  const rpc=(type:string,fields:object)=>service.request(peer,recipeAuthoringRequestSchema.parse({type,botId:APP,...fields}));
+  const history=new AuthoringJournal();
+  try{
+    const opened=await rpc('open',{accountId});if(opened.kind!=='session')throw Error('open');
+    const challenge=await rpc('beginLink',{session:opened.session});if(challenge.kind!=='challenge')throw Error('challenge');
+    await throughBridgeChannel(await event('/recipe link '+challenge.code,'om_resource_link'),m=>o.onMessage(m));
+    const seen=await rpc('inspectLink',{session:opened.session,challengeId:challenge.challengeId});if(seen.kind!=='link')throw Error('link');
+    await rpc('confirmLink',{session:opened.session,challengeId:challenge.challengeId,evidence:seen.evidence});
+    const found=await rpc('creatorDiscover',{accountId});if(found.kind!=='creatorBinding'||!found.association)throw Error('binding');
+    const {binding,scope}=found.association;
+    const openedCreator=await rpc('creatorOpen',{accountId,binding,scope,wakeId:null,resourceContext:true});
+    if(openedCreator.kind!=='creatorSession')throw Error('creator');
+    const session=openedCreator.session,requestId=randomUUID();
+    const association={accountId,viewId:'local',deviceId:peer.device,deviceKey:Buffer.alloc(32,7).toString('base64url'),botId:agentIdSchema.parse(APP),binding,scope};
+    const calls:string[]=[],postKeys:string[]=[];let acquired=false;
+    const account={lease:()=>lease.signal,status:()=>({kind:'signedIn',accountId,displayName:'test',provider:'github',persistence:'memory'}),onStatus:()=>()=>{},
+      request:async(id:string,path:string,init?:RequestInit,beforeSend?:()=>Promise<void>)=>{
+        expect(id).toBe(accountId);expect(beforeSend).toBeTypeOf('function');await beforeSend!();calls.push(path);
+        if(path.endsWith('/latest-install-version'))return Response.json({...later,revision:2,access:'direct',format:'role-v1',entitled:true,version:'2.0'});
+        if(path.startsWith('/v2/recipes/'))return Response.json({error:{code:'not_found'}},{status:404});
+        if(path.endsWith('/acquire')){
+          expect(init?.method).toBe('POST');postKeys.push(new Headers(init?.headers).get('idempotency-key')!);acquired=true;
+          return Response.json({...later,owned:false,acquired:true});
+        }
+        const second=path.endsWith(later.versionId);
+        return Response.json({...second?later:target,public:{...info,version:second?'2.0':'1.0'},config:{role:second?'VERSION-TWO-EXACT':'ROLE-ONLY-FROM-VERIFIED-SNAPSHOT'},revision:second?2:1,acquired:second?acquired:true,owned:false});
+      }};
+    const executor=new RecipeCreatorExecutor(account,new RecipeCreatorJournal(),new MetadataJournal(paths.appDir),history);
+    const context={association,session,check:()=>lease.signal.throwIfAborted(),rpc:(r:Parameters<typeof service.request>[1])=>service.request(peer,r),
+      settled:()=>{throw Error('resource should never use authoring draft settlement');}};
+    const pump=async()=>{
+      const reply=await rpc('creatorPoll',{session});if(reply.kind!=='creatorJobs')throw Error('poll');
+      for(const job of reply.jobs)await executor.run(context,job);
+    };
+    const handoff=()=>rpc('resourceHandoff',{session,requestId,target});
+    expect(await handoff()).toMatchObject({delivery:'pending'});
+    await pump();expect(await handoff()).toMatchObject({delivery:'sent'});
+    expect(guide).toHaveBeenCalledTimes(1);expect(dispatch).toHaveBeenCalledTimes(1);expect(run.turns).toHaveLength(0);
+    const raw=await readFile(join(paths.appDir,'recipe-authoring','journal.json'),'utf8');
+    expect(raw).not.toContain('ROLE-ONLY-FROM-VERIFIED-SNAPSHOT');
+    expect(await service.onMessage(await event('借用别人的卡','om_resource_foreign','om_resource_guide',ADMIN))).toBe(true);
+    const natural=await event('参考刚刚选的版本，告诉我它的角色','om_resource_human','om_resource_guide');
+    await throughBridgeChannel(natural,m=>o.onMessage(m));
+    await until(()=>expect(run.consumed).toHaveLength(1));
+    expect(run.consumed[0]?.text).toContain('recipe_resource_read');
+    await throughBridgeChannel(natural,m=>o.onMessage(m));expect(run.consumed).toHaveLength(1);
+    const opts=be.startThread.mock.calls[0][0] as StartThreadOptions;
+    expect(startDynamicTools(opts).dynamicTools?.[0]?.tools.map(t=>t.name)).toContain('recipe_resource_acquire');
+    const entry=opts.entry!;expect(entry.sessionId).not.toBe(run.t.sessionId);
+    entry.noteToolUse('actual-resource-turn');
+    const tool=async(name:string,args:unknown)=>{
+      const result=await entry.call(name,args,{toolUseId:'actual-resource-turn'});
+      if(!result.ok)throw Error(JSON.stringify(result));return result.result as Record<string,any>;
+    };
+    const count=calls.length;
+    const list=await tool('recipe_resource_read',{kind:'index'});
+    const role=list.page.entries.find((e:{kind:string})=>e.kind==='role');
+    expect(await tool('recipe_resource_read',{kind:'text',documentId:role.documentId})).toMatchObject({page:{text:'ROLE-ONLY-FROM-VERIFIED-SNAPSHOT'}});
+    expect(calls).toHaveLength(count);
+    expect(await tool('recipe_resource_read',{kind:'latest'})).toMatchObject({status:'pending'});await pump();
+    expect(await tool('recipe_resource_read',{kind:'latest'})).toMatchObject({status:'newer',target:later});
+    expect(await tool('recipe_resource_acquire',{versionId:later.versionId})).toMatchObject({status:'pending'});
+    run.turns[0]!.resolve();await settled();
+    await pump();expect(postKeys).toHaveLength(1);
+    expect(await entry.call('recipe_resource_acquire',{versionId:later.versionId},{toolUseId:'actual-resource-turn'})).toMatchObject({ok:false});
+    await throughBridgeChannel(await event('现在读取得的新版','om_resource_second'),m=>o.onMessage(m));
+    await until(()=>expect(run.consumed).toHaveLength(2));
+    entry.noteToolUse('second-resource-turn');
+    const read=(q:object)=>entry.call('recipe_resource_read',q,{toolUseId:'second-resource-turn'});
+    expect(await read({kind:'index'})).toMatchObject({ok:true,result:{status:'pending'}});await pump();
+    const newer=await read({kind:'index'});expect(newer).toMatchObject({ok:true,result:{status:'ready',target:later}});
+    expect(postKeys).toHaveLength(1);run.turns[1]!.resolve();
+  }finally{for(const t of run.turns)t.resolve();service.close();history.history.close();}
 });

@@ -1,3 +1,5 @@
+import {z} from 'zod';
+import {resourceToolNames} from '../entry/resource-tools';
 import { FEISHU_API, FEISHU_DOC_EDIT, feishuToolNames, feishuToolSpecs } from '../entry/feishu-tools';
 import { scheduleToolNames, scheduleToolSpecs } from '../entry/schedule-tools';
 import type { SessionProfile } from '../session-profile';
@@ -34,7 +36,13 @@ export function vonvonNamespace(tools: NonNullable<SessionProfile['tools']>): Dy
  */
 export function startDynamicTools(opts: Pick<StartThreadOptions, 'entry' | 'profile'>): Pick<ThreadStartWithTools, 'dynamicTools'> {
   const tools = opts.profile?.tools;
-  return opts.entry && (tools?.schedule || tools?.feishu) ? { dynamicTools: [vonvonNamespace(tools)] } : {};
+  if(!opts.entry||!tools||!tools.schedule&&!tools.feishu)return {};
+  const namespace=vonvonNamespace(tools);
+  if(tools.feishuApi){
+    for(const spec of opts.entry.tools().filter(s=>resourceToolNames.has(s.name)))
+      namespace.tools.push({type:'function',name:spec.name,description:spec.description,inputSchema:z.toJSONSchema(spec.input)});
+  }
+  return {dynamicTools:[namespace]};
 }
 
 /**
@@ -42,5 +50,5 @@ export function startDynamicTools(opts: Pick<StartThreadOptions, 'entry' | 'prof
  * thread older than feishu_doc_edit simply does not have it; one whose tier dropped since is refused by the tool itself.
  */
 export function offeredTool(namespace: string | null | undefined, tool: string): boolean {
-  return (namespace ?? 'vonvon_bot') === 'vonvon_bot' && (scheduleToolNames.has(tool) || feishuToolNames.has(tool) || tool === FEISHU_DOC_EDIT || tool === FEISHU_API);
+  return (namespace ?? 'vonvon_bot') === 'vonvon_bot' && (resourceToolNames.has(tool) || scheduleToolNames.has(tool) || feishuToolNames.has(tool) || tool === FEISHU_DOC_EDIT || tool === FEISHU_API);
 }

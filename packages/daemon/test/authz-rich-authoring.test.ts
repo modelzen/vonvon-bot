@@ -31,6 +31,7 @@ const payloads = [
 ].map(payload => recipeAuthoringRequestSchema.parse({ botId, session, ...payload })).concat([
   {type:'creatorDiscover',botId,accountId:draftId},
   {type:'creatorOpen',botId,accountId:draftId,binding:operationId,scope:digest,wakeId:null},
+  {type:'resourceHandoff',botId,session,requestId:operationId,target:{recipeId:draftId,versionId:operationId}},
   {type:'creatorContinue',botId,session,selection:{kind:'version',target:{recipeId:draftId,versionId:operationId},name:'示例',version:'1'}},
   {type:'creatorPoll',botId,session},
   {type:'creatorCheck',botId,session,id:operationId},
@@ -54,8 +55,8 @@ beforeEach(() => { handler.mockClear(); });
 afterAll(async () => { await owner?.close(); await fixture?.close(); });
 
 test('exercises every rich and creator authoring RPC through the socket permission matrix', () => {
-  const kinds = rpcKinds().filter(({ kind }) => /^recipeAuthoring\.(rich|creator)/.test(kind)).map(({ kind }) => kind).sort();
-  const covered = payloads.map(payload => `recipeAuthoring.${payload.type}`).filter(kind => /^recipeAuthoring\.(rich|creator)/.test(kind)).sort();
+  const kinds = rpcKinds().filter(({ kind }) => /^recipeAuthoring\.(rich|creator|resource)/.test(kind)).map(({ kind }) => kind).sort();
+  const covered = payloads.map(payload => `recipeAuthoring.${payload.type}`).filter(kind => /^recipeAuthoring\.(rich|creator|resource)/.test(kind)).sort();
   expect(covered).toEqual(kinds);
 });
 

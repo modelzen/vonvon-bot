@@ -1,3 +1,5 @@
+import {exactResourceVersionSchema} from './recipe-resource-context.js';
+import {resourceDeliverySchema} from './recipe-creator.js';
 import {recipeRichDraftChangeSchema} from './recipe-rich.js';
 import {richFreezeInputSchema,richPreparationSchema,richSourceOptionsSchema,richInventoryOptionsSchema,richLocalInventorySchema} from './recipe-rich-authoring.js';
 import { z } from 'zod';
@@ -15,6 +17,7 @@ const operation = { ...handle, operationId: uuid };
 const link = { ...handle, challengeId: uuid };
 const creatorSource = z.object({viewId:viewIdSchema,botId:agentIdSchema}).strict();
 export const desktopAuthoringRequestSchema = z.discriminatedUnion('type', [
+  creatorSource.extend({type:z.literal('resourceHandoff'),accountId:uuid,target:exactResourceVersionSchema,requestId:uuid}).strict(),
   z.object({type:z.literal('preparePublication'),accountId:uuid,draft:recipeDraftSchema}).strict(),
   z.object({type:z.literal('confirmPublication'),accountId:uuid,reviewId:uuid}).strict(),
   z.object({type:z.literal('recoverPublication'),accountId:uuid,draftId:uuid}).strict(),
@@ -118,6 +121,7 @@ const publicationRecoverySchema=z.object({kind:z.literal('publicationRecovery'),
 ])}).strict();
 export const creatorChatTargetSchema=creatorSource.extend({accountId:uuid,tenant:z.enum(['feishu','lark']),botName:name}).strict();
 export const desktopAuthoringReplySchema = z.discriminatedUnion('kind', [
+  creatorChatTargetSchema.extend({kind:z.literal('resourceHandoff'),target:exactResourceVersionSchema,requestId:uuid,delivery:resourceDeliverySchema}).strict(),
   publicationRecoverySchema,
   z.object({kind:z.literal('publicationReady'),reviewId:uuid,draftId:uuid,revision,public:recipePublicSchema}).strict(),
   z.object({kind:z.literal('publicationResult'),result:z.discriminatedUnion('kind',[

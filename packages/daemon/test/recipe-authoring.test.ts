@@ -3783,3 +3783,302 @@ it('NATIVE SDK PREVIEW delivers a fresh physical click after a daemon restart be
     await f.executor.run({...f.context,session},delivery!);expect(f.opened).toHaveBeenCalledOnce();
   }finally{await sdk.close();f.history.history.close();}
 });
+
+async function resourceTransport(){
+  await link();
+  const association=kind(await service.request(peer,recipeAuthoringRequestSchema.parse({type:'creatorDiscover',botId:appId,accountId:account})),'creatorBinding').association!;
+  const attach=async(source=peer,enabled=true)=>{
+    const result=kind(await service.request(source,recipeAuthoringRequestSchema.parse({type:'creatorOpen',botId:appId,accountId:account,binding:association.binding,
+      scope:association.scope,wakeId:null,...enabled&&{resourceContext:true}})),'creatorSession');
+    return (type:string,data:object={})=>service.request(source,recipeAuthoringRequestSchema.parse({type,botId:appId,session:result.session,...data}));
+  };
+  const ownerRpc=await attach(), recipeId=randomUUID();
+  const start=async()=>{
+    const target={recipeId,versionId:randomUUID()},requestId=randomUUID();
+    const handoff=()=>ownerRpc('resourceHandoff',{target,requestId});
+    expect(await handoff()).toMatchObject({delivery:'pending'});
+    const job=kind(await ownerRpc('creatorPoll'),'creatorJobs').jobs.find(j=>j.task.kind==='resourceRead'&&j.task.target.versionId===target.versionId)!;
+    const data={target,revision:1,public:{version:'1.0',access:'direct' as const,name:'资源',summary:'',overview:''},config:{role:'不得持久化的正文'+requestId}};
+    const {roleResourceDigest}=await import('@vonvon/protocol');
+    const snapshot={...data,format:'role-v1',contentSha256:await roleResourceDigest(data)};
+    const answer=()=>ownerRpc('creatorAnswer',{id:job.id,answer:{kind:'resourceSnapshot',snapshot}});
+    return {target,requestId,job,handoff,answer,snapshot};
+  };
+  return {start,attach,ownerRpc};
+}
+
+it('RESOURCE TRANSPORT binds each job to an eligible native peer and sender, retains unknown delivery, and recovers only the original card UUID',async()=>{
+  const f=await resourceTransport(),a=await f.start();
+  const legacy=await f.attach({...peer,id:randomUUID()},false);
+  expect(kind(await legacy('creatorPoll'),'creatorJobs').jobs).toHaveLength(0);
+  await expect(legacy('resourceHandoff',{target:a.target,requestId:a.requestId})).rejects.toThrow();
+  const second=await f.attach({...peer,id:randomUUID()});
+  expect(kind(await second('creatorPoll'),'creatorJobs').jobs).toHaveLength(0);
+  await expect(second('creatorCheck',{id:a.job.id})).rejects.toThrow();
+  loseSend=true;
+  await a.answer();expect(messages.size).toBe(1);expect(cards.size).toBe(1);
+  expect(await a.handoff()).toMatchObject({delivery:'unknown'});
+  const stored=[...messages.entries()][0]!;
+  loseSend=false;
+  expect(await a.handoff()).toMatchObject({delivery:'sent',target:a.target,requestId:a.requestId});
+  expect([...messages.entries()]).toEqual([stored]);expect(cards.size).toBe(1);
+  await a.answer();expect(messages.size).toBe(1);
+  const different={...a.snapshot,config:{role:'changed'}};
+  await expect(f.ownerRpc('creatorAnswer',{id:a.job.id,answer:{kind:'resourceSnapshot',snapshot:different}})).rejects.toThrow();
+  await expect(a.handoff()).resolves.toMatchObject({delivery:'sent'});
+  expect([...cards.values()][0]).not.toContain('button');
+  const db=JSON.parse(await readFile(join(root,'recipe-authoring/journal.json'),'utf8'));
+  expect(db.operations).toEqual({});expect(JSON.stringify(db)).not.toContain(a.snapshot.config.role);
+  expect(Object.values(db.resources)).toHaveLength(1);
+});
+
+it('RESOURCE TRANSPORT preserves a newer selection when an earlier reader finishes late, and keeps explicit creator quotes on the authoring route',async()=>{
+  const f=await resourceTransport(),a=await f.start(),b=await f.start();
+  await b.answer();const guideB=[...messages.values()].at(-1)!.message_id;
+  await a.answer();const guideA=[...messages.values()].at(-1)!.message_id;
+  const current=async()=>Object.values(JSON.parse(await readFile(join(root,'recipe-authoring/journal.json'),'utf8')).resources as Record<string,{focus:boolean;requestId:string}>).filter(r=>r.focus).map(r=>r.requestId);
+  expect(await current()).toEqual([b.requestId]);
+  expect(await service.onMessage(msg('使用当前配方','om_natural_resource'))).toBe(false);
+  const quoted=(text:string,id:string,replyToMessageId:string)=>{
+    const message=msg(text,id);
+    (message.raw as {message:{parent_id?:string}}).message.parent_id=replyToMessageId;
+    return {...message,replyToMessageId};
+  };
+  const quote=quoted('改用之前这份','om_switch_resource',guideA);
+  expect(await service.onMessage(quote)).toBe(false);expect(await current()).toEqual([a.requestId]);
+  expect(await service.onMessage({...msg('读这个',undefined,stranger),replyToMessageId:guideB})).toBe(true);
+  expect(await current()).toEqual([a.requestId]);
+  const malformed=msg('内容','om_malformed_resource');
+  (malformed.raw as {sender:{tenant_key:string}}).sender.tenant_key='other-tenant';
+  expect(await service.onMessage({...malformed,replyToMessageId:guideA})).toBe(true);
+  await f.ownerRpc('creatorContinue',{selection:{kind:'draft',work:{draftId:randomUUID(),source:null},name:'原创作草稿',version:'1'}});
+  const work=kind(await f.ownerRpc('creatorPoll'),'creatorJobs').jobs.find(j=>j.task.kind==='read');
+  expect(work?.task.kind).toBe('read');
+  expect(await current()).toEqual([]);
+  expect(await service.onMessage(quoted('仍使用原资源','om_back_resource',guideB))).toBe(false);
+  expect(await current()).toEqual([b.requestId]);
+});
+
+it('RESOURCE TRANSPORT keeps a newer resource selected when an earlier creatorContinue returns from its source check',async()=>{
+  const f=await resourceTransport();
+  const identity=kind(await f.ownerRpc('groupSourceIdentity',{groupId}),'groupSourceIdentity').identity;
+  const target={recipeId:randomUUID(),versionId:randomUUID()},requestId=randomUUID(),draftId=randomUUID();
+  let queued:Promise<boolean>|undefined;
+  onMembership=async()=>{
+    onMembership=undefined;
+    // This version selection enters the same creator queue before the resource, but runs after it.
+    queued=f.ownerRpc('creatorContinue',{selection:{kind:'version',target,name:'先前选择',version:'2'}}).then(()=>false,()=>true);
+    expect(await f.ownerRpc('resourceHandoff',{target,requestId})).toMatchObject({delivery:'pending'});
+  };
+  const older={kind:'draft',name:'原草稿',version:'1',work:{draftId,source:{groupId,identity,preparationId:randomUUID()}}};
+  await expect(f.ownerRpc('creatorContinue',{selection:older})).rejects.toThrow();
+  expect(await queued).toBe(true);
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  expect(await ledger.run(db=>db.resources?.[requestId]?.focus)).toBe(true);
+  expect(kind(await f.ownerRpc('creatorPoll'),'creatorJobs').jobs.map(j=>j.task.kind)).toEqual(['resourceRead']);
+  await f.ownerRpc('creatorContinue',{selection:older});
+  expect(await ledger.run(db=>db.resources?.[requestId]?.focus)).toBe(false);
+});
+
+it('RESOURCE TRANSPORT requests an exact entitlement read after an interrupted acquisition lease; a new peer cannot POST the old intent',async()=>{
+  const f=await resourceTransport(),a=await f.start();await a.answer();
+  const natural=msg('请查看新版','om_resource_lease_test');
+  expect(await service.onMessage(natural)).toBe(false);
+  const caller={sessionId:'ses_1234567812345678',openId:owner,chatId,messageId:natural.messageId};
+  expect(await service.resources.bind(caller)).toBe('selected');
+  const tool=(q:Parameters<typeof service.resources.tool>[1])=>service.resources.tool(()=>caller,q);
+  expect(await tool({kind:'latest'})).toMatchObject({status:'pending'});
+  const latest=kind(await f.ownerRpc('creatorPoll'),'creatorJobs').jobs[0]!;
+  const next={recipeId:a.target.recipeId,versionId:randomUUID()};
+  await f.ownerRpc('creatorAnswer',{id:latest.id,answer:{kind:'resourceLatest',latest:{status:'newer',target:next,format:'role-v1',version:'2.0',revision:2,access:'direct'}}});
+  expect(await tool({kind:'acquire',versionId:next.versionId})).toMatchObject({status:'pending'});
+  const claim=kind(await f.ownerRpc('creatorPoll'),'creatorJobs').jobs[0]!;
+  if(claim.task.kind!=='resourceAcquire')throw Error('claim');
+  await f.ownerRpc('creatorAnswer',{id:claim.id,answer:{kind:'resourceAcquired',outcome:{ok:false,error:{code:'unavailable'}}}});
+  expect(await tool({kind:'acquire',versionId:next.versionId})).toMatchObject({status:'pending'});
+  expect(kind(await f.ownerRpc('creatorPoll'),'creatorJobs').jobs).toContainEqual(claim);
+  service.disconnect(peer.id);
+  const recovered=await f.attach({...peer,id:randomUUID()});
+  expect(kind(await recovered('creatorPoll'),'creatorJobs').jobs).toHaveLength(0);
+  await expect(recovered('creatorCheck',{id:claim.id})).rejects.toThrow();
+  expect(await tool({kind:'acquire',versionId:next.versionId})).toMatchObject({status:'pending'});
+  const jobs=kind(await recovered('creatorPoll'),'creatorJobs').jobs;
+  expect(jobs).toHaveLength(1);
+  expect(jobs[0]!.task).toEqual({kind:'resourceRead',target:next});
+  const {roleResourceDigest}=await import('@vonvon/protocol');
+  const {format,...prior}=a.snapshot;
+  const data={target:next,revision:2,public:prior.public,config:{role:'NEW EXACT'}};
+  await recovered('creatorAnswer',{id:jobs[0]!.id,answer:{kind:'resourceSnapshot',snapshot:{...data,format,contentSha256:await roleResourceDigest(data)}}});
+  expect(await tool({kind:'index'})).toMatchObject({status:'ready',target:next});
+  expect(kind(await recovered('creatorPoll'),'creatorJobs').jobs).toHaveLength(0);
+});
+
+it.each(['invalid_code','rate_limited'] as const)('RESOURCE TRANSPORT rechecks exact App entitlement after %s on a later human message, with no new Agent POST',async failure=>{
+  const f=await resourceTransport(),a=await f.start();await a.answer();
+  let native=f.ownerRpc;
+  const next={recipeId:a.target.recipeId,versionId:randomUUID()},access=failure==='invalid_code'?'coded':'direct';
+  const query={kind:'acquire' as const,versionId:next.versionId};
+  const human=async()=>{
+    const msgId='om_'+randomUUID(),caller={sessionId:'ses_1234567812345678',openId:owner,chatId,messageId:msgId};
+    expect(await service.onMessage(msg('核对刚才那个准确版本',msgId))).toBe(false);
+    expect(await service.resources.bind(caller)).toBe('selected');
+    return (q:Parameters<typeof service.resources.tool>[1])=>service.resources.tool(()=>caller,q);
+  };
+  const jobs=async()=>kind(await native('creatorPoll'),'creatorJobs').jobs;
+  const tool=await human();
+  expect(await tool({kind:'latest'})).toEqual({status:'pending'});
+  const [latest]=await jobs();
+  await native('creatorAnswer',{id:latest!.id,answer:{kind:'resourceLatest',latest:{status:'newer',target:next,format:'role-v1',version:'2',revision:2,access}}});
+  expect(await tool(query)).toEqual({status:'pending'});
+  const [claim]=await jobs();if(claim?.task.kind!=='resourceAcquire')throw Error('missing exact claim');
+
+  const {recipeResourceReader}=await import(new URL('../../desktop/src/recipe-resource.ts',import.meta.url).href);
+  const {communityRequest}=await import(new URL('../../desktop/src/community-api.ts',import.meta.url).href);
+  const {newAcquisitionKey}=await import('@vonvon/protocol');
+  const signal=new AbortController().signal;
+  let acquired=false,app=false;
+  const writes:{app:boolean;key:string|null;path:string}[]=[];
+  const accountClient={lease:()=>signal,status:()=>({kind:'signedIn',accountId:account}),onStatus:()=>()=>{},
+    async request(id:string,path:string,init?:RequestInit,beforeSend?:()=>Promise<void>){
+      expect(id).toBe(account);await beforeSend?.();
+      if(init?.method==='POST'){
+        writes.push({app,key:new Headers(init.headers).get('idempotency-key'),path});
+        if(!app)return Response.json({error:{code:'rate_limited'}},{status:429,headers:{'Retry-After':'1'}});
+        acquired=true;return Response.json({...next,owned:false,acquired});
+      }
+      expect(path).toContain(next.versionId);
+      if(path.startsWith('/v2/recipes/'))return Response.json({error:{code:'not_found'}},{status:404});
+      return Response.json({...next,revision:2,public:{...a.snapshot.public,version:'2',access},owned:false,acquired,...((access==='direct'||acquired)&&{config:{role:'第二版'}})});
+    }};
+  const reader=recipeResourceReader(accountClient);
+  const answer=await reader.acquireExact(account,next,claim.task.requestId,()=>{});
+  expect(answer).toMatchObject({ok:false,error:{code:failure}});
+  await native('creatorAnswer',{id:claim.id,answer:{kind:'resourceAcquired',outcome:answer}});
+  expect(await tool(query)).toEqual({status:failure==='invalid_code'?'needsCode':failure});
+  expect(await jobs()).toEqual([]);
+  // A later human message can observe an App redemption immediately. The still-live rate-limited turn may read after Retry-After, too.
+  if(failure==='rate_limited')clock+=1001;
+  const follow=failure==='rate_limited'?tool:await human();
+  expect(await follow(query)).toEqual({status:'pending'});
+  const [negative]=await jobs();expect(negative?.task).toEqual({kind:'resourceRead',target:next});
+  await expect(reader.readExact(account,next,()=>{})).rejects.toMatchObject({code:'not_acquired'});
+  await native('creatorAnswer',{id:negative!.id,answer:{kind:'rejected',reason:'unavailable'}});
+  expect(await follow(query)).toEqual({status:'unknown'});expect(await jobs()).toEqual([]);
+
+  // The existing App path now grants the version. A coded release consumes its code here, once.
+  app=true;
+  await communityRequest(accountClient,{type:'acquire',accountId:account,versionId:next.versionId,requestId:newAcquisitionKey(clock),
+    ...(access==='coded'&&{code:'app-test-code'})});
+  app=false;
+  if(failure==='rate_limited'){clock+=11*60_000;service.disconnect(peer.id);native=await f.attach({...peer,id:randomUUID()});}
+  const retry=await human();
+  expect(await retry(query)).toEqual({status:'pending'});
+  const queued=await jobs();expect(queued.map(j=>j.task)).toEqual([{kind:'resourceRead',target:next}]);
+  const snapshot=await reader.readExact(account,next,()=>{});
+  await native('creatorAnswer',{id:queued[0]!.id,answer:{kind:'resourceSnapshot',snapshot}});
+  expect(await retry(query)).toEqual({status:'acquired'});
+  expect(await retry({kind:'index'})).toMatchObject({status:'ready',target:next});
+  expect(await jobs()).toEqual([]);
+  expect(writes.filter(w=>!w.app).map(w=>w.key)).toEqual(access==='coded'?[]:[claim.task.requestId]);
+  expect(writes.filter(w=>w.app).map(w=>w.path)).toEqual(['/v2/versions/'+next.versionId+'/'+(access==='coded'?'redeem':'acquire')]);
+  const ledger=JSON.parse(await readFile(join(root,'recipe-authoring/journal.json'),'utf8'));
+  const original=Object.values(ledger.resources[a.requestId].jobs).filter((j:any)=>j.task.kind==='resourceAcquire');
+  expect(original).toMatchObject([{id:claim.id,task:claim.task,failure,entitlementVerified:true}]);
+});
+
+it('RESOURCE TRANSPORT opens a real native link session, resumes the original resource selection and checks the exact account lease before each cloud read',async()=>{
+  const {RecipeCreatorSupervisor}=await import(new URL('../../desktop/src/recipe-creator-supervisor.ts',import.meta.url).href);
+  const {RecipeCreatorExecutor}=await import(new URL('../../desktop/src/recipe-creator.ts',import.meta.url).href);
+  const {RecipeCreatorJournal}=await import(new URL('../../desktop/src/recipe-creator-journal.ts',import.meta.url).href);
+  const {RecipeAuthoringController}=await import(new URL('../../desktop/src/recipe-authoring.ts',import.meta.url).href);
+  const {MetadataJournal}=await import(new URL('../../desktop/src/community-metadata-journal.ts',import.meta.url).href);
+  const {AuthoringJournal:NativeHistory}=await import(new URL('../../desktop/src/recipe-authoring-journal.ts',import.meta.url).href);
+  const target={recipeId:randomUUID(),versionId:randomUUID()},input={type:'resourceHandoff',accountId:account,viewId:'local',botId:appId,target,requestId:randomUUID()};
+  const history=new NativeHistory(),journal=new RecipeCreatorJournal(),deviceKey=Buffer.alloc(32,9).toString('base64url');
+  let lease=new AbortController();
+  const connection=new AbortController(),remotePeer={id:randomUUID(),device:randomUUID()};
+  const rpcs:RecipeAuthoringRequest[]=[],getTrace:number[]=[];
+  const client=(sourcePeer:typeof peer)=>({supportsResourceContext:true,recipeAuthoring:(req:RecipeAuthoringRequest)=>{rpcs.push(req);return service.request(sourcePeer,req);},
+    device:async()=>({kind:'deviceStatus',status:{device:{id:sourcePeer.device,name:'fixture',publicKey:deviceKey},remote:{addresses:[],port:3000},clients:{active:1,total:1}}}),
+    snapshot:async()=>({host:{kind:'connected'},stale:false,agents:[{id:appId,name:'已核验 Bot',running:true,connection:'connected',tenant:'feishu'}],groups:[],memberships:[]})});
+  const state={kind:'signedIn',accountId:account,displayName:'本人',provider:'google',persistence:'memory'};
+  const native={status:()=>state,lease:(id:string)=>id===account?lease.signal:undefined,onStatus:()=>()=>{},request:async(id:string,path:string,_init?:RequestInit,before?:()=>Promise<void>)=>{
+    expect(id).toBe(account);const beforeCount=rpcs.filter(r=>r.type==='creatorCheck').length;await before?.();
+    if(path==='/v1/me')return Response.json({accountId:account});
+    getTrace.push(rpcs.filter(r=>r.type==='creatorCheck').length-beforeCount);
+    if(path.startsWith('/v2/recipes/'))return Response.json({error:{code:'not_found'}},{status:404});
+    expect(path).toBe('/v1/recipes/'+target.recipeId+'/versions/'+target.versionId);
+    return Response.json({...target,public:{version:'1',access:'direct',name:'资源',summary:'',overview:''},config:{role:'测试角色'},revision:1,acquired:true,owned:false});
+  }};
+  const source=(viewId:string)=>({viewId,pairedKey:deviceKey,client:client(viewId==='local'?peer:remotePeer),release(){},
+    check:()=>connection.signal.throwIfAborted(),signal:connection.signal});
+  const authoring=new RecipeAuthoringController(native,source,history),executor=new RecipeCreatorExecutor(native,journal,new MetadataJournal(),history);
+  const supervisor=new RecipeCreatorSupervisor(native,async(viewId:string)=>source(viewId),()=>[],journal,history,authoring,executor);
+  try{
+    const older={...input,requestId:randomUUID(),target:{recipeId:randomUUID(),versionId:randomUUID()}};
+    const sourceSession=await supervisor.resourceHandoff({...older,viewId:remotePeer.device});
+    const oldLease=await supervisor.resourceHandoff(older);
+    expect(oldLease.session.handle).not.toBe(sourceSession.session.handle);
+    await authoring.request({type:'detach',handle:sourceSession.session.handle});
+    lease.abort();lease=new AbortController();
+    const oldWindow=await supervisor.resourceHandoff(older);
+    expect(oldWindow.session.handle).not.toBe(oldLease.session.handle);
+    const oldChallenge=await authoring.request({type:'beginLink',handle:oldWindow.session.handle});
+    const first=await supervisor.resourceHandoff(input);expect(first.kind).toBe('handoffLinkRequired');
+    const handle=first.session.handle;
+    expect(handle).not.toBe(oldWindow.session.handle);
+    const challenge=await authoring.request({type:'beginLink',handle});expect(challenge.kind).toBe('challenge');
+    expect(challenge.challengeId).not.toBe(oldChallenge.challengeId);
+    await expect(authoring.request({type:'detach',handle:oldWindow.session.handle})).rejects.toThrow();
+    expect(await supervisor.resourceHandoff(input)).toMatchObject({kind:'handoffLinkRequired',session:{handle}});
+    expect(rpcs.filter(r=>r.type==='beginLink')).toHaveLength(2);
+    await orch.onMessage(msg('/recipe link '+challenge.code));
+    const evidence=await authoring.request({type:'inspectLink',handle,challengeId:challenge.challengeId});
+    await authoring.request({type:'confirmLink',handle,challengeId:challenge.challengeId,evidence:evidence.evidence});
+    const original=await supervisor.resourceHandoff(input);expect(original).toMatchObject({kind:'resourceHandoff',requestId:input.requestId,tenant:'feishu',botName:'已核验 Bot',delivery:'pending'});
+    await vi.waitFor(async()=>expect(await supervisor.resourceHandoff(input)).toMatchObject({delivery:'sent'}),{timeout:6000,interval:30});
+    expect(getTrace).toEqual([1,1]);expect(messages.size).toBe(1);
+    expect(rpcs.filter(r=>r.type==='resourceHandoff').every(r=>r.requestId===input.requestId)).toBe(true);
+    expect(rpcs.some(r=>['prepare','richPrepare','creatorContinue','creatorAppConfirm'].includes(r.type))).toBe(false);
+    expect(JSON.parse(await readFile(join(root,'recipe-authoring/journal.json'),'utf8')).operations).toEqual({});
+  }finally{supervisor.dispose();authoring.closeAll();}
+});
+
+it('RESOURCE TRANSPORT restores only a compact grant after restart; replaying a completed answer cannot repopulate the cache',async()=>{
+  const f=await resourceTransport(),a=await f.start();await a.answer();
+  const guide=[...messages.values()].at(-1)!.message_id;
+  restart();const active=await f.attach();
+  await active('creatorAnswer',{id:a.job.id,answer:{kind:'resourceSnapshot',snapshot:a.snapshot}});
+  const m=msg('再读一次','om_after_resource_restart');
+  (m.raw as {message:{parent_id?:string}}).message.parent_id=guide;
+  expect(await service.onMessage({...m,replyToMessageId:guide})).toBe(false);
+  const caller={sessionId:'ses_1222222222222222',chatId,openId:owner,messageId:m.messageId};
+  expect(await service.resources.bind(caller)).toBe('selected');
+  const read=()=>service.resources.tool(()=>caller,{kind:'index'});
+  expect(await read()).toMatchObject({status:'pending'});
+  const [reload]=kind(await active('creatorPoll'),'creatorJobs').jobs;
+  expect(reload!.task).toEqual({kind:'resourceRead',target:a.target});expect(reload!.id).not.toBe(a.job.id);
+  await active('creatorAnswer',{id:reload!.id,answer:{kind:'resourceSnapshot',snapshot:a.snapshot}});
+  expect(await read()).toMatchObject({status:'ready',target:a.target});
+  expect(messages.size).toBe(1);expect(cards.size).toBe(1);
+});
+
+it('RESOURCE TRANSPORT checks the admin and binding again before a queued read or its card delivery',async()=>{
+  const f=await resourceTransport(),a=await f.start();
+  cfg.preferences!.access!.admins=[stranger];
+  await expect(f.ownerRpc('creatorCheck',{id:a.job.id})).rejects.toThrow();
+  await expect(a.answer()).rejects.toThrow();
+  expect(messages.size).toBe(0);
+  cfg.preferences!.access!.admins=[owner,stranger];
+  // The same account deliberately verifies a different recipient before the original native answer returns.
+  await open();
+  const challenge=kind(await rpc('beginLink'),'challenge');
+  await orch.onMessage(msg('/recipe link '+challenge.code,undefined,stranger,'oc_new_private'));
+  const seen=kind(await rpc('inspectLink',{challengeId:challenge.challengeId}),'link');
+  await rpc('confirmLink',{challengeId:challenge.challengeId,evidence:seen.evidence});
+  await expect(a.answer()).rejects.toThrow();expect(messages.size).toBe(0);
+  const newLink=kind(await service.request(peer,recipeAuthoringRequestSchema.parse({type:'creatorDiscover',botId:appId,accountId:account})),'creatorBinding').association!;
+  const rebound=kind(await service.request(peer,recipeAuthoringRequestSchema.parse({type:'creatorOpen',botId:appId,accountId:account,binding:newLink.binding,scope:newLink.scope,wakeId:null,resourceContext:true})),'creatorSession');
+  expect(kind(await service.request(peer,recipeAuthoringRequestSchema.parse({type:'creatorPoll',botId:appId,session:rebound.session})),'creatorJobs').jobs).toEqual([]);
+});

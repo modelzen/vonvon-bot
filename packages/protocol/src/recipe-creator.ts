@@ -1,3 +1,4 @@
+import {resourceReadTaskSchema,resourceAcquireTaskSchema,verifiedResourceSnapshotSchema,resourceLatestSchema,acquisitionOutcomeSchema,exactResourceVersionSchema} from './recipe-resource-context.js';
 import {z} from 'zod';
 import {agentIdSchema, groupIdSchema} from './domain.js';
 import {recipePublicSchema} from './desktop-community.js';
@@ -71,7 +72,10 @@ export const creatorConfirmationSchema=z.discriminatedUnion('kind',[
   z.object({kind:z.literal('feishu-card')}).strict(),
   z.object({kind:z.literal('app'),confirmationId:uuid}).strict(),
 ]);
+export const RESOURCE_CONTEXT_CAPABILITY = 'recipe.resource-context.v1';
+export const resourceDeliverySchema=z.enum(['sent','pending','unknown','unavailable']);
 const task = z.discriminatedUnion('kind', [
+  ...resourceReadTaskSchema.options, resourceAcquireTaskSchema,
   z.object({kind:z.literal('read'),read}).strict(),
   z.object({kind:z.literal('command'),command:creatorCommandSchema,expiresAt:z.number().int().safe().nonnegative(),approval:digest,confirmation:creatorConfirmationSchema.optional()}).strict(),
   z.object({kind:z.literal('deliverCodes'),target:version,codeIds}).strict(),
@@ -79,7 +83,10 @@ const task = z.discriminatedUnion('kind', [
 const job = z.object({id:uuid,binding:uuid,scope:digest,task}).strict();
 export type CreatorJob = z.infer<typeof job>;
 const states = z.enum(['available','redeemed','disabled']);
-const answer = z.discriminatedUnion('kind', [
+export const creatorAnswerSchema = z.discriminatedUnion('kind', [
+  z.object({kind:z.literal('resourceSnapshot'),snapshot:verifiedResourceSnapshotSchema}).strict(),
+  z.object({kind:z.literal('resourceLatest'),latest:resourceLatestSchema}).strict(),
+  z.object({kind:z.literal('resourceAcquired'),outcome:acquisitionOutcomeSchema}).strict(),
   z.object({kind:z.literal('works'),items:selection.array().max(16),nextOffset:ordinal.nullable()}).strict(),
   z.object({kind:z.literal('snapshot'),snapshot:creatorSnapshotSchema}).strict(),
   z.object({kind:z.literal('previewOpened'),work:creatorWorkSchema,snapshotDigest:digest,revision:positive}).strict(),
@@ -97,6 +104,7 @@ const answer = z.discriminatedUnion('kind', [
   z.object({kind:z.literal('unknown')}).strict(),
   z.object({kind:z.literal('rejected'),reason:z.enum(['changed','unavailable','forbidden','invalid'])}).strict(),
 ]);
+const answer=creatorAnswerSchema;
 export type CreatorAnswer = z.infer<typeof answer>;
 const secretItem = z.discriminatedUnion('status', [
   z.object({codeId:uuid,status:z.literal('available'),code:z.string().regex(/^[A-F0-9-]{32,40}$/i)}).strict(),
@@ -107,7 +115,7 @@ const bot = {botId:agentIdSchema};
 const session = {...bot,session:uuid};
 export const creatorRequests = [
   z.object({type:z.literal('creatorDiscover'),...bot,accountId:uuid}).strict(),
-  z.object({type:z.literal('creatorOpen'),...bot,accountId:uuid,binding:uuid,scope:digest,wakeId:uuid.nullable(),nativePreview:z.literal(true).optional()}).strict(),
+  z.object({type:z.literal('creatorOpen'),...bot,accountId:uuid,binding:uuid,scope:digest,wakeId:uuid.nullable(),nativePreview:z.literal(true).optional(),resourceContext:z.literal(true).optional()}).strict(),
   z.object({type:z.literal('creatorContinue'),...session,selection}).strict(),
   z.object({type:z.literal('creatorPoll'),...session}).strict(),
   z.object({type:z.literal('creatorCheck'),...session,id:uuid}).strict(),
@@ -116,15 +124,17 @@ export const creatorRequests = [
   z.object({type:z.literal('creatorDeliver'),...session,id:uuid,items:secretItem.array().min(1).max(100)}).strict(),
   z.object({type:z.literal('creatorPreview'),...session,work:creatorWorkSchema,revision:positive}).strict(),
   z.object({type:z.literal('creatorAppConfirm'),...session,id:uuid,snapshotDigest:digest,confirmationId:uuid}).strict(),
+  z.object({type:z.literal('resourceHandoff'),...session,target:exactResourceVersionSchema,requestId:uuid}).strict(),
 ] as const;
 export type CreatorRequest = z.infer<(typeof creatorRequests)[number]>;
 export const creatorReplies = [
   z.object({kind:z.literal('creatorBinding'),association:z.object({binding:uuid,scope:digest,recipient}).strict().nullable(),wakeId:uuid.nullable()}).strict(),
-  z.object({kind:z.literal('creatorSession'),session:uuid,binding:uuid,scope:digest,leaseMs:positive}).strict(),
+  z.object({kind:z.literal('creatorSession'),session:uuid,binding:uuid,scope:digest,leaseMs:positive,resourceContext:z.literal(true).optional()}).strict(),
   z.object({kind:z.literal('creatorJobs'),jobs:job.array().max(16)}).strict(),
   z.object({kind:z.literal('creatorChecked'),job,mode:z.enum(['read','preview','execute','receipt','delivery'])}).strict(),
   z.object({kind:z.literal('creatorLogoBytes'),base64:z.string().min(4).max(2796204).regex(/^[A-Za-z0-9+/]+={0,2}$/),sha256:digest}).strict(),
   z.object({kind:z.literal('creatorAck')}).strict(),
   z.object({kind:z.literal('creatorPreview'),job,state:z.enum(['preparing','offer','active','unknown','finished']),result:answer.optional()}).strict(),
+  z.object({kind:z.literal('resourceHandoff'),target:exactResourceVersionSchema,requestId:uuid,delivery:resourceDeliverySchema}).strict(),
 ] as const;
 export type CreatorReply = z.infer<(typeof creatorReplies)[number]>;
