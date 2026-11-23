@@ -57,9 +57,9 @@ export function checkDraft(body, isNew) {
   }
 }
 
-export function requestKey(req) {
+export function requestKey(req, acquisition = false) {
   const values = req.headersDistinct['idempotency-key'];
-  if (values?.length !== 1 || !UUID.test(values[0])) throw new ApiError(400, 'invalid_request_id');
+  if (values?.length !== 1 || !(UUID.test(values[0]) || acquisition && /^a2\.[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(values[0]))) throw new ApiError(400, 'invalid_request_id');
   return values[0].toLowerCase();
 }
 
