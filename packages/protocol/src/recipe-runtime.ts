@@ -15,6 +15,7 @@ export const richRuntimeRequests = [
   z
     .object({
       type: z.literal('richPrepare'),
+      memoryPolicy: z.literal('exclude').optional(),
       authority:z.enum(['exactVersion','directUpdate']).optional(),
       ...target,
       preview: recipeRichInstallPreviewSchema,
@@ -27,12 +28,13 @@ export const richRuntimeRequests = [
   z
     .object({
       type: z.literal('richCommit'),
+      memoryPolicy: z.literal('exclude').optional(),
       botId: agentIdSchema,
       operationId: uuid,
       authorization: recipeRichInstallAuthorizationSchema.optional(),
     })
     .strict(),
-  z.object({ type: z.literal('richIssuing'), botId: agentIdSchema, operationId: uuid }).strict(),
+  z.object({ type: z.literal('richIssuing'), memoryPolicy: z.literal('exclude').optional(), botId: agentIdSchema, operationId: uuid }).strict(),
   z.object({ type: z.literal('richCancel'), botId: agentIdSchema, operationId: uuid }).strict(),
   z.object({ type: z.literal('richReconcile'), botId: agentIdSchema, operationId: uuid }).strict(),
 

@@ -64,7 +64,7 @@ export async function nativeRichSourceItems(row: Project, botDataRoot: string, s
       if(text===undefined)return [];
       if(item.value.text!==text)throw new Error('配方文件来源已改变');
     }
-    if(item.kind==='memories'&&!selection.includeBotMemories||item.kind==='tasks'&&!selection.includeTasks)return [];
+    if(item.kind==='memories'||item.kind==='tasks'&&!selection.includeTasks)return [];
     return [item];
   }) : metadata;
   return items.map((item) => {
