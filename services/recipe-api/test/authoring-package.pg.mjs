@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {randomBytes,randomUUID} from 'node:crypto';
+import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {mkdirSync,mkdtempSync,readdirSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -152,6 +152,85 @@ try {
     await rejectNew(limited,count===60?'rate_limited':'object_capacity');
   }
   console.log('PASS: cap, ownership, retired drafts, active account, aggregate bytes, open package count and daily quota guards');
+
+  const owner=await account(),other=await account(),draftId=randomUUID();
+  const id=operationId(),original=operationId(),baseManifest=randomUUID();
+  const emptyHash='00'.repeat(32),changedHash='11'.repeat(32);
+  const digest=value=>createHash('sha256').update(value).digest('hex');
+  const publicItems=Object.fromEntries(['name','summary','overview','version'].map(field=>
+    [field,{itemId:randomUUID(),originId:randomUUID(),value:field}]));
+  const canonical=Buffer.from(JSON.stringify({format:'rich-v2',schemaVersion:2,public:publicItems,parts:[]}));
+  const manifestHash=digest(canonical);
+  const items=Object.entries(publicItems).map(([field,item])=>({field,kind:'publicText',itemId:item.itemId,
+    originId:item.originId,baselineSha256:emptyHash,contentFingerprint:emptyHash}));
+  const binding={revision:1,baseManifestSha256:manifestHash,transformVersion:1,inputSha256:emptyHash};
+  const runAs=(actor,call,args)=>roleCall(api,'recipe_api',actor,'select recipe_api.'+call+' as result',args);
+  const metadataReserve=(request,bound=binding,actor=owner)=>runAs(actor,'reserve_metadata_package($1,$2,$3,$4)',[request,draftId,1024,bound]);
+  const probe=(request,bound=binding,wire=null)=>runAs(owner,'rich_metadata_context($1,$2,$3,$4)',[request,draftId,bound,wire]);
+  const close=(request,bound=binding)=>runAs(owner,'rich_close_metadata($1,$2,$3)',[request,draftId,bound]);
+  const readyManifest=(request,object)=>admin.query(`insert into recipe_private.object_attempts
+    (id,package_id,ordinal,kind,input_bytes,input_hash,final_cap,final_bytes,final_hash,ingress,state,temp_state,final_state)
+    values($1,$2,65,'manifest',$3,$4,$3,$3,$4,false,'ready','gone','present')`,[object,request,canonical.byteLength,manifestHash]);
+
+  await admin.query(`insert into recipe_private.drafts(id,owner_id,recipe_id,base_revision,revision,public_info,config,bytes)
+    values($1,$2,$1,0,1,'{"access":"direct"}','{}',$3)`,[draftId,owner,canonical.byteLength]);
+  await admin.query(`insert into recipe_private.object_packages(id,actor,draft_id,cap,state)
+    values($1,$2,$3,1024,'attached')`,[original,owner,draftId]);
+  await readyManifest(original,baseManifest);
+  await admin.query('insert into recipe_private.object_draft_refs values($1,$2)',[draftId,baseManifest]);
+  await admin.query('insert into recipe_private.rich_drafts(id,manifest_id,items) values($1,$2,$3)',[draftId,baseManifest,JSON.stringify(items)]);
+  for(const item of items)await admin.query(`insert into recipe_private.rich_origins(id,account_id,kind,intent,candidate,baseline)
+    values($1,$2,'publicText',$3,$4,$5)`,[item.originId,owner,original,item.itemId,emptyHash]);
+
+  assert.deepEqual(await probe(id),{pending:true});
+  const neverReserved=operationId();
+  assert.deepEqual(await close(neverReserved),{closed:true});
+  await expect(metadataReserve(neverReserved),'operation_expired');
+  await expect(metadataReserve(id,binding,other),'not_found');
+  assert.equal((await metadataReserve(id)).state,'open');
+  await expect(metadataReserve(id,{...binding,inputSha256:changedHash}),'conflict');
+  await expect(reserve({id,actor:owner,draft:draftId}),'conflict');
+  await expect(metadataReserve(original),'conflict');
+  assert.deepEqual(await close(id),{closed:true});
+  assert.equal((await packageRow(id)).state,'closed');
+  await expect(metadataReserve(id),'operation_expired');
+  await expect(probe(id),'operation_expired');
+  await expect(probe(operationId(Date.now()-10*60*1000)),'operation_expired');
+
+  const staged=operationId(),nextManifest=randomUUID();
+  const save=(request,object,wire=emptyHash)=>runAs(owner,'rich_save_metadata($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+    [request,draftId,binding,wire,canonical,object,'coded',JSON.stringify(items),null]);
+  await metadataReserve(staged);
+  await expect(save(staged,baseManifest),'object_unavailable');
+  await readyManifest(staged,nextManifest);
+  const receipt=await save(staged,nextManifest);
+  assert.deepEqual(receipt,{requestId:staged,draftId,revision:2,manifestSha256:manifestHash});
+  assert.deepEqual(await close(staged),{receipt});
+  assert.deepEqual(await probe(staged),{receipt});
+  await expect(probe(staged,{...binding,inputSha256:changedHash}),'conflict');
+  await expect(probe(staged,binding,changedHash),'conflict');
+  const row=(await admin.query('select bytes,revision,public_info from recipe_private.drafts where id=$1',[draftId])).rows[0];
+  assert.equal(row.bytes,canonical.byteLength);assert.equal(row.public_info.access,'coded');assert.equal(row.revision,2);
+  assert.equal((await packageRow(staged)).state,'attached');
+
+  await admin.query("update recipe_private.receipts set created_at=clock_timestamp()-interval '8 days' where request_id=$1",[staged]);
+  const next=operationId(),newerManifest=randomUUID(),nextBinding={...binding,revision:2};
+  await metadataReserve(next,nextBinding);await readyManifest(next,newerManifest);
+  await runAs(owner,'rich_save_metadata($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+    [next,draftId,nextBinding,changedHash,canonical,newerManifest,'direct',JSON.stringify(items),null]);
+  assert.deepEqual(await probe(staged),{receipt});
+  assert.deepEqual(await save(staged,nextManifest),receipt);
+  const sameIntent=await seedIntent({actor:owner,age:0,state:'cancelled'});
+  const metadataOrigin=randomUUID(),authoringOrigin=randomUUID();
+  for(const [origin,provenance] of [[metadataOrigin,'metadata'],[authoringOrigin,'authoring']]){
+    await admin.query(`insert into recipe_private.rich_origins(id,account_id,kind,intent,candidate,baseline,provenance)
+      values($1,$2,'finalLogo',$3,$4,$5,$6)`,[origin,owner,sameIntent.id,randomUUID(),emptyHash,provenance]);
+  }
+  await admin.query('delete from recipe_private.authoring_operations where id=$1',[sameIntent.id]);
+  assert.deepEqual((await admin.query('select id from recipe_private.rich_origins where intent=$1',[sameIntent.id])).rows,[{id:metadataOrigin}]);
+  assert.deepEqual((await admin.query(`select has_function_privilege('recipe_api',
+    'recipe_private.rich_write_refs(uuid,uuid,uuid,uuid,text,bytea,jsonb)','EXECUTE') as exposed`)).rows,[{exposed:false}]);
+  console.log('PASS: metadata package purpose, close, ordinal-65 access-only commit, exact receipt and provenance cleanup isolation');
 } finally {
   await Promise.all([api,verifier,admin].filter(Boolean).map(p=>p.end()));
   if(started) run('pg_ctl',['-D',db,'-m','fast','-w','stop']);

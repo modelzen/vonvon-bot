@@ -30,3 +30,21 @@ it('retains the existing confirmation flow for other settings forms', () => {
   const {guard} = render(); guard.register('settings', {title: '设置', save: vi.fn(), discard: vi.fn()});
   guard.navigate(vi.fn()); expect(render().modal.props.open).toBe(true);
 });
+it('checks live discard eligibility even when a previously enabled handler is invoked', () => {
+  let unresolved = false;
+  const discard = vi.fn(); const action = vi.fn(); const {guard} = render();
+  guard.register('metadata', {title: '发布信息', save: async () => false, discard, discardEligibility: () => unresolved ? {kind: 'blocked', reason: '保存尚未核对'} : {kind: 'allowed'}});
+  guard.navigate(action);
+  const leave = render().modal.props.footer.props.children[1];
+  expect(leave.props.disabled).toBe(false);
+  unresolved = true;
+  leave.props.onClick();
+  expect(discard).not.toHaveBeenCalled(); expect(action).not.toHaveBeenCalled();
+  expect(render().modal.props.footer.props.children[1].props.disabled).toBe(true);
+});
+it('keeps ordinary settings discard available', () => {
+  const {guard} = render(); const discard = vi.fn(); const action = vi.fn();
+  guard.register('settings', {title: '设置', save: async () => true, discard}); guard.navigate(action);
+  render().modal.props.footer.props.children[1].props.onClick();
+  expect(discard).toHaveBeenCalledOnce(); expect(action).toHaveBeenCalledOnce();
+});

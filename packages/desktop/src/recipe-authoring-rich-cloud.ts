@@ -17,11 +17,12 @@ export function richTerminal(raw:unknown){
   return authoringReceiptSchema.parse(data);
 }
 const fail=()=>new Error('云端配方资料与本次请求不一致。');
-export function richAuthoringCloud(account:AccountTransport,accountId:string,signal:AbortSignal,check:()=>void){
+export function richAuthoringCloud(account:AccountTransport,accountId:string,signal:AbortSignal,check:()=>void,onHttpError?:(response:Response)=>Promise<never>){
   async function bounded(path:string,init:RequestInit,cap:number){
     const active=init.signal?AbortSignal.any([signal,init.signal]):signal;
     check();signal.throwIfAborted();
     const response=await account.request(accountId,path,{...init,signal:active},check);
+    if(!response.ok && onHttpError)await onHttpError(response);
     if(!response.ok||!response.body){await response.body?.cancel();if(response.status===404)throw new MissingRichOperation();if(response.status===403)throw new ForbiddenRichResource();throw fail();}
     const reader=response.body.getReader(), chunks:Uint8Array[]=[];
     let bytes=0;

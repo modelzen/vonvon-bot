@@ -1,4 +1,6 @@
+import {applyRichMetadata,richMetadataInputDigest} from '../../../packages/protocol/dist/index.js';
 import {createHash} from 'node:crypto';
+import {credentialField} from './credential-shapes.mjs';
 import {ApiError,badInput} from './errors.mjs';
 import {objectKeys,uuid} from './input.mjs';
 import {richInstallMaterial} from './rich-install-proof.mjs';
@@ -16,9 +18,39 @@ const calls={
   richDispatch:'rich_dispatch($1,$2,$3,$4)',richAccept:'rich_accept($1,$2,$3,$4,$5,$6,$7,$8)',
   richReserve:'reserve_object_package($1,$2,$3)',richCancelPackage:'cancel_object_package($1)',richCapacity:'object_capacity()',
 };
+async function metadataBinding(revision,input){
+  return {revision,baseManifestSha256:input.baseManifestSha256,transformVersion:input.transformVersion,inputSha256:await richMetadataInputDigest(input)};
+}
 export async function richExecute(client,op,args) {
   const call=async(expr,params)=>(await client.query('select recipe_api.'+expr+' as result',params)).rows[0].result;
   if(Object.hasOwn(calls,op))return call(calls[op],args);
+  if(op==='richReserveMetadata'){
+    const [requestId,draftId,cap,revision,input]=args;
+    if(credentialField({public:input.public}))throw new ApiError(422,'credential_detected');
+    return call('reserve_metadata_package($1,$2,$3,$4)',[requestId,draftId,cap,await metadataBinding(revision,input)]);
+  }
+  if(op==='richMetadata'){
+    const [requestId,draftId,revision,body]=args;
+    const binding=await metadataBinding(revision,body.input);
+    if(body.close){
+      const result=await call('rich_close_metadata($1,$2,$3)',[requestId,draftId,binding]);
+      return result.receipt?{status:'committed',receipt:result.receipt}:{status:result.closed?'closed':'pending'};
+    }
+    const wireHash=body.baseCanonical ? richDigest(body) : null;
+    const ctx=await call('rich_metadata_context($1,$2,$3,$4)',[requestId,draftId,binding,wireHash]);
+    if(ctx.receipt) return {status:'committed',receipt:ctx.receipt};
+    if(ctx.pending || !wireHash) return {status:ctx.pending?'pending':'open'};
+    const base=readDocument(body.baseCanonical);
+    if(sha(base.canonicalUTF8)!==ctx.manifest.sha256)throw new ApiError(409,'conflict');
+    let transformed;
+    try {transformed=await applyRichMetadata(base.content,ctx.accountId,requestId,body.input,body.logoDescriptor);}
+    catch {throw badInput();}
+    const doc=document(transformed.content);
+    const evidence=body.logoDescriptor?{packageId:requestId,inputSha256:body.input.logo.inputSha256,descriptor:body.logoDescriptor}:null;
+    const receipt=await call('rich_save_metadata($1,$2,$3,$4,$5,$6,$7,$8,$9)',[requestId,draftId,binding,wireHash,
+      Buffer.from(doc.canonicalUTF8),body.manifestId,body.input.public.access,JSON.stringify(inventory(doc.content)),evidence]);
+    return {status:'committed',receipt};
+  }
   if(op==='richInstallAuthorize'){
     const ctx=await call('operation_context()',[]),[id,req]=args;
     const m=richInstallMaterial({...req,...ctx,operationId:id});
