@@ -50,6 +50,6 @@ function GroupShareSession({botId, groupId, accountId}: {botId: AgentId; groupId
     <div className="community-actions"><Button variant="primary" onClick={()=>{setHistory(false);setPrepare(true);}}>从本群准备配方</Button>
       {accountId&&shell?.recipeAuthoring&&<Button onClick={()=>setHistory(v=>!v)}>{history?'收起分享历史':'本群分享历史'}</Button>}</div>
     {history&&accountId&&shell?.recipeAuthoring&&<GroupShareHistory shell={shell.recipeAuthoring} accountId={accountId} viewId={device.id} botId={botId} groupId={groupId}/>}
-    {prepare&&<RecipeAuthoringPage source={{botId,groupId}} onBack={()=>setPrepare(false)} onSaved={draftId=>{setPrepare(false);community?.open({kind:'draft',draftId});}}/>}
+    {prepare&&<RecipeAuthoringPage source={{botId,groupId}} onBack={()=>setPrepare(false)} onWorkspace={()=>{setPrepare(false);community?.open({kind:'workspace'});}} onSaved={draftId=>{setPrepare(false);community?.open({kind:'draft',draftId});}}/>}
   </div>;
 }

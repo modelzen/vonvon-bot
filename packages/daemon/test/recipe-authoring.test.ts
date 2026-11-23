@@ -1507,3 +1507,65 @@ it.each(['original','draft','baseRevision','purpose','instruction','originalGrou
   }else await expect(restore()).rejects.toThrow();
   expect(cards.size).toBe(1);expect(messages.size).toBe(1);
 });
+
+
+async function editHandoff(){
+  const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
+  const field=(value:string)=>({itemId:randomUUID(),originId:randomUUID(),value});
+  const canonical=Buffer.from(canonicalizeRichRecipeContent({format:'rich-v2',schemaVersion:2,
+    public:{name:field('周报'),summary:field(''),overview:field(''),version:field('1')},
+    settings:[],files:[],skills:[],tasks:[],memories:[],rules:[],setup:[],parts:[]}).canonicalUTF8).toString('base64url');
+  const identity=kind(await rpc('groupSourceIdentity',{groupId}),'groupSourceIdentity').identity;
+  const arg={...beginInput(),draftId:randomUUID(),baseRevision:4,identity,canonical,source:{sourceIntentId:randomUUID(),canonical}};
+  await rpc('beginDraftHandoff',arg);
+  return arg;
+}
+
+it.each(['cancelled','expired'] as const)('retains exact base revision evidence for a %s edit and refuses unproven historical rows',async terminal=>{
+  await link();const arg=await editHandoff();
+  if(terminal==='cancelled')await rpc('cancelHandoff',{retryId:arg.retryId});
+  else {clock+=31*60_000;await open();}
+  const expected={kind:'draft',groupId,draftId:arg.draftId,baseRevision:arg.baseRevision};
+  expect(await rpc('restoreHandoff',{retryId:arg.retryId,expected})).toMatchObject({kind:'handoff',handoff:{state:terminal}});
+  await expect(rpc('restoreHandoff',{retryId:arg.retryId,expected:{...expected,baseRevision:5}})).rejects.toThrow();
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  await new AuthoringJournal(root,()=>clock).run(db=>{Reflect.deleteProperty(db.handoffs![arg.retryId]!,'baseRevision');});
+  expect(await rpc('restoreHandoff',{retryId:arg.retryId,expected})).toEqual({kind:'handoffUnavailable',retryId:arg.retryId,reason:'notFound'});
+  expect(cards.size).toBe(1);expect(messages.size).toBe(1);expect(cloud).toEqual([]);
+});
+
+it('returns unavailable when normal maintenance has pruned the prepared receipt before its handoff',async()=>{
+  await link();const arg=beginInput();await rpc('beginHandoff',arg);
+  await tap(privateChoice('群角色'));await tap(privateChoice('确认所选来源'));
+  const request=kind(await rpc('workflow'),'workflow').handoff!;
+  const h=kind(await rpc('answerHandoff',{request,attestations:[]}),'handoff').handoff;
+  const id=h.operationId!;
+  clock+=60_000;await open();
+  await rpc('settle',{operationId:id,receipt:{operationId:id,status:'accepted',stateRevision:3,draftId:randomUUID(),revision:1}});
+  clock+=7*86400000+60_000;await open();
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  expect(await ledger.run(db=>db.operations[id])).toBeUndefined();
+  expect(await ledger.run(db=>db.handoffs?.[arg.retryId])).toBeDefined();
+  const before=bodies.length;
+  for(let i=0;i<2;i++)expect(await rpc('restoreHandoff',{retryId:arg.retryId,expected:{kind:'source',groupId}}))
+    .toEqual({kind:'handoffUnavailable',retryId:arg.retryId,reason:'notFound'});
+  expect(cards.size).toBe(1);expect(messages.size).toBe(1);expect(cloud).toEqual([]);
+  expect(bodies.slice(before).filter(b=>b.path.includes('/cards')||b.path.includes('/messages?'))).toEqual([]);
+});
+
+it('scopes status before mutating unrelated operations and supports linked-only reads',async()=>{
+  await link();const arg=beginInput();await rpc('beginHandoff',arg);
+  await tap(privateChoice('群角色'));await tap(privateChoice('确认所选来源'));
+  const request=kind(await rpc('workflow'),'workflow').handoff!;
+  const h=kind(await rpc('answerHandoff',{request,attestations:[]}),'handoff').handoff;
+  const id=h.operationId!,otherId=randomUUID();
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  await ledger.run(db=>{const other=structuredClone(db.operations[id]!);other.view.operationId=otherId;other.binding=randomUUID();db.operations[otherId]=other;});
+  expect(kind(await rpc('status',{operationId:null}),'status')).toMatchObject({linked:true,operations:[],reconciliation:[]});
+  expect(kind(await rpc('status',{operationId:id}),'status').operations.map(op=>op.operationId)).toEqual([id]);
+  expect(kind(await rpc('status',{operationId:randomUUID()}),'status')).toMatchObject({operations:[],reconciliation:[]});
+  expect(await ledger.run(db=>db.operations[otherId]!.revoked)).toBeUndefined();
+  expect(await ledger.run(db=>db.operations[otherId]!.view.state)).toBe('pendingMain');
+});

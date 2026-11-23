@@ -30,7 +30,7 @@ import { AuthoringJournal } from './recipe-authoring-journal.js';
 
 type Open = Extract<DesktopAuthoringRequest, { type: 'open' }>;
 type Restore = Extract<DesktopAuthoringRequest, {type:'restoreHandoff'}>;
-type Intent = {kind:'initial'} | {kind:'restore';retryId:string};
+type Intent = {kind:'initial'} | {kind:'restore';retryId:string;operationId?:string};
 type SessionReply = Extract<DesktopAuthoringReply,{kind:'session'}>;
 type DraftSourceOpen = Extract<DesktopAuthoringRequest, {type:'openDraftSource'}>;
 type DraftSource = Pick<DraftSourceOpen, 'draftId' | 'baseRevision'> & {
@@ -242,7 +242,7 @@ export class RecipeAuthoringController {
       throw new AuthoringError('当前连接与原来源设备不符，请在设备菜单检查原设备。');
     let {groupId,identity} = source;
     if (!groupId || !identity) {
-      const status = expectKind(await this.daemon(h,{type:'status'}),'status');
+      const status = expectKind(await this.daemon(h,{type:'status',operationId:source.operationId}),'status');
       const op = status.operations.find(op => op.operationId === source.operationId && op.format === 'rich-v2' &&
         op.purpose === 'prepareDraft' && op.receipt?.status === 'accepted' && op.receipt.draftId === source.draftId);
       if (op?.groupId) {
@@ -383,7 +383,7 @@ export class RecipeAuthoringController {
       h.attesting = this.attestHandoff(h,info.handoff).catch(() => this.invalidateStale()).finally(() => {delete h.attesting;});
     }
     const request = info.field;
-    if (!request) return;
+    if (!request || h.intent.kind==='restore'&&h.intent.operationId!==request.operationId) return;
     const op = h.operations.get(request.operationId);
     const saved = op?.receipt?.status === 'accepted' ? op.receipt : undefined;
     let value: string | null = null;
@@ -402,7 +402,7 @@ export class RecipeAuthoringController {
     }
     this.checkIdle(h);
     const pending = expectKind(await this.daemon(h,{type:'workflow'}),'workflow').field;
-    if (pending?.requestId !== request.requestId) return;
+    if (pending?.requestId !== request.requestId || h.intent.kind==='restore'&&h.intent.operationId!==request.operationId) return;
     await this.checkGroup(h);
     this.checkIdle(h);
     expectKind(await this.daemon(h,{type:'answerField',request,value}),'fieldAnswered');
@@ -437,6 +437,7 @@ export class RecipeAuthoringController {
       const reply = expectKind(await this.daemon(h,{type:'answerHandoff',request,
         attestations:unavailable?[]:attestations,...(unavailable && {unavailable:true as const})}),'handoff');
       this.verifyHandoff(h.handoff,reply);
+      this.trackRestoredOperation(h,reply.handoff);
       delete h.attestationRetry;
     } catch {
       this.check(h);
@@ -488,6 +489,7 @@ export class RecipeAuthoringController {
     else if (!terminal(op)) throw recheck();
   }
   private visible(h: Handle, op: DesktopAuthoringOperation) {
+    if(h.intent.kind==='restore')return op.operationId===h.intent.operationId;
     if (h.draftSource) return op.purpose === 'editDraft' && op.draftId === h.draftSource.draftId;
     return !h.open.groupId || op.groupId === h.open.groupId &&
       this.journal.history.source(this.binding(h), op.operationId) === h.groupIdentity;
@@ -509,7 +511,12 @@ export class RecipeAuthoringController {
     return { ...summary, ...(h.pausedContexts.has(op.operationId) && {contextPaused:true}), ...(syncMessage && {syncMessage}), target: h.target, ...(op.groupId && { groupName: h.groups.get(op.groupId) || op.groupId }) };
   }
   private async status(h: Handle) {
-    const status = expectKind(await this.daemon(h, { type: 'status' }), 'status');
+    const result = expectKind(await this.daemon(h, { type: 'status',
+      ...(h.intent.kind==='restore'&&{operationId:h.intent.operationId??null}),
+    }), 'status');
+    const id=h.intent.kind==='restore'?h.intent.operationId:undefined;
+    const status=h.intent.kind==='restore'?{...result,operations:result.operations.filter(op=>op.operationId===id),
+      reconciliation:result.reconciliation.filter(op=>op.operationId===id)}:result;
     this.check(h);
     const current = new Set(status.operations.map(op => op.operationId));
     for (const id of h.operations.keys()) if (!current.has(id)) h.operations.delete(id);
@@ -790,7 +797,6 @@ export class RecipeAuthoringController {
   }
   private async action(h: Handle, r: Exclude<Action, { type: 'close' | 'detach' }>): Promise<DesktopAuthoringReply> {
     await this.present(h, r.type !== 'status');
-    if(h.intent.kind==='restore'&&(r.type==='beginHandoff'||r.type==='beginDraftHandoff'))throw recheck();
     if (h.draftSource && !['beginLink','inspectLink','confirmLink','beginDraftHandoff','handoffStatus','cancelHandoff',
       'status','cancel','resume','resend'].includes(r.type)) throw recheck();
     if (h.open.groupId && r.type !== 'status' && r.type !== 'sourceHistory') {
@@ -833,7 +839,9 @@ export class RecipeAuthoringController {
         const scope = {retryId:r.retryId,groupId,draftId:h.draftSource?.draftId};
         if (r.type === 'cancelHandoff' && h.handoff?.retryId !== r.retryId)
           this.verifyHandoff(scope,expectKind(await this.daemon(h,{type:'handoffStatus',retryId:r.retryId}),'handoff'));
-        return this.verifyHandoff(scope,expectKind(await this.daemon(h,{type:r.type,retryId:r.retryId}),'handoff'));
+        const reply=this.verifyHandoff(scope,expectKind(await this.daemon(h,{type:r.type,retryId:r.retryId}),'handoff'));
+        this.trackRestoredOperation(h,reply.handoff);
+        return reply;
       }
       case 'sourceHistory': {
         if (r.groupId !== h.open.groupId || !h.groupIdentity) throw recheck();
@@ -957,6 +965,16 @@ export class RecipeAuthoringController {
       }
     }
   }
+  private trackRestoredOperation(h:Handle,handoff:Extract<RecipeAuthoringReply,{kind:'handoff'}>['handoff']){
+    if(h.intent.kind!=='restore')return;
+    if(handoff.retryId!==h.intent.retryId||h.intent.operationId&&handoff.operationId!==h.intent.operationId)throw recheck();
+    if(handoff.operationId)h.intent.operationId=handoff.operationId;
+  }
+  private checkRestoreAction(h:Handle,r:Action){
+    if(h.intent.kind!=='restore')return;
+    if(!['status','beginLink','inspectLink','confirmLink','handoffStatus','cancelHandoff','cancel','resume','resend'].includes(r.type)||
+      'retryId' in r&&r.retryId!==h.intent.retryId||'operationId' in r&&r.operationId!==h.intent.operationId)throw recheck();
+  }
   private async restoreHandoff(r:Restore):Promise<DesktopAuthoringReply> {
     const actor=this.account.status();
     if(actor.kind!=='signedIn'||actor.accountId!==r.accountId||!this.account.lease?.(r.accountId))throw changed();
@@ -969,6 +987,7 @@ export class RecipeAuthoringController {
         previous.handoff&&previous.handoff.retryId!==r.retryId||previous.intent.kind==='restore'&&previous.intent.retryId!==r.retryId)throw recheck();
       return this.enqueue(previous,()=>this.restoreExisting(previous,r));
     }
+    const owners=new Set(this.handles.keys());
     let source:DraftSource|undefined;
     let open:Open;
     if(r.target.kind==='draft'){
@@ -980,6 +999,7 @@ export class RecipeAuthoringController {
       source=original.source;
       open={type:'open',accountId:r.accountId,viewId:r.viewId,botId:original.botId};
     }else open={type:'open',accountId:r.accountId,viewId:r.viewId,botId:r.target.botId,groupId:r.target.groupId};
+    if([...this.handles.values()].some(h=>h.open.viewId===open.viewId&&h.open.botId===open.botId&&!owners.has(h.id)))throw changed();
     const key=open.viewId+'/'+open.botId;
     if(this.opening.has(key))throw new AuthoringError('正在连接这个 Bot，请稍后继续。');
     this.opening.add(key);
@@ -996,12 +1016,14 @@ export class RecipeAuthoringController {
     finally {this.opening.delete(key);}
   }
   private async restoreExisting(h:Handle,r:Restore):Promise<DesktopAuthoringReply>{
+    await this.present(h,true);
+    const operationId=h.intent.kind==='restore'?h.intent.operationId:undefined;
+    h.intent={kind:'restore',retryId:r.retryId,operationId};
     await this.identity(h);
     await this.names(h);
     await this.checkGroup(h);
-    const status=await this.status(h);
-    h.intent={kind:'restore',retryId:r.retryId};
-    if(!status.linked)return {kind:'handoffLinkRequired',session:await this.refresh(h)};
+    const status=expectKind(await this.daemon(h,{type:'status',operationId:null}),'status');
+    if(!status.linked)return {kind:'handoffLinkRequired',session:this.sessionView(h,false,[])};
     const target=r.target;
     const groupId=target.kind==='source'?target.groupId:h.draftSource?.groupId;
     if(!groupId)throw recheck();
@@ -1012,11 +1034,14 @@ export class RecipeAuthoringController {
     const reply=await this.daemon(h,{type:'restoreHandoff',retryId:r.retryId,expected});
     if(reply.kind==='handoffUnavailable'){
       if(reply.retryId!==r.retryId)throw invalidAuthoring();
+      h.intent={kind:'restore',retryId:r.retryId};
+      h.operations.clear();
       return reply;
     }
     const scope={retryId:r.retryId,groupId,...(target.kind==='draft'&&{draftId:target.draftId})};
     const restored=this.verifyHandoff(scope,expectKind(reply,'handoff')).handoff;
     h.handoff=scope;
+    this.trackRestoredOperation(h,restored);
     if(restored.operationId)h.retry.delete(restored.operationId);
     const session=await this.refresh(h);
     if(restored.operationId){
@@ -1062,6 +1087,7 @@ export class RecipeAuthoringController {
     }
     if(r.type==='cancel'&&h.transfer?.operationId===r.operationId)h.transfer.cancel.abort();
     return this.enqueue(h,async()=>{
+      this.checkRestoreAction(h,r);
       await this.workflow(h);
       if(!h.attached)throw changed();
       return this.action(h,r);

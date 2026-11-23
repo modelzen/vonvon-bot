@@ -697,3 +697,112 @@ it.each(['close','device','account'] as const)('detaches a late restored handle 
   expect(dialog('准备配方')?.textContent).toBe(currentText);
   expect(sessions.has(lateHandle!)).toBe(false);
 });
+
+
+it('keeps polling after a successful restore that reuses the same handle',async()=>{
+  vi.useFakeTimers();linked=true;await draw();await chooseSource();await click('确认');
+  const initial=calls.find(r=>r.type==='beginHandoff')!;
+  const original=sessions.get(initial.handle)!;
+  let fail=true;
+  authoring=async request=>{if(request.type==='handoffStatus'&&fail)throw new Error('临时读取失败');return defaultAuthoring(request);};
+  await act(async()=>vi.advanceTimersByTimeAsync(2000));
+  fail=false;await click('重试本次准备');
+  expect(sessions.has(initial.handle)).toBe(true);
+  operations=[{...op(original,'completed'),receipt:{status:'accepted',operationId,draftId,revision:1,stateRevision:3}}];
+  currentHandoff={...currentHandoff!,state:'prepared',operationId};
+  await act(async()=>vi.advanceTimersByTimeAsync(12000));
+  expect(dialog('准备配方')?.textContent).toContain('私人草稿已保存');
+  await click('查看草稿');
+  expect(calls.filter(r=>r.type==='beginHandoff')).toHaveLength(1);
+  expect(cloudCalls.filter(r=>r.type==='draft')).toEqual([{type:'draft',accountId:accountA,draftId}]);
+});
+
+
+function useRichDraft(){
+  const content=JSON.parse(readFileSync(resolve(process.cwd(),'../protocol/test/fixtures/recipe-rich-v2.content.json'),'utf8'));
+  content.parts=[];content.memories=[];delete content.finalLogo;
+  for(const field of ['name','summary','overview','version'])content.public[field].value=Reflect.get(draft.public,field);
+  const doc=canonicalizeRichRecipeContent(content);
+  draft=recipeRichDraftSchema.parse({draftId,recipeId:null,revision:1,public:draft.public,format:'rich-v2',sourceIntentId:operationId,
+    rich:{content:doc.content,texts:{},canonical:Buffer.from(doc.canonicalUTF8).toString('base64url')}});
+}
+
+it.each([false,true])('finds the original unresolved edit pointer after the draft advances (restart App %s)',async restart=>{
+  useRichDraft();linked=true;await draw();await click('社区');await click('创作中心');await click('查看草稿');await click('在飞书私聊中修改');
+  const initial=calls.find(r=>r.type==='beginDraftHandoff')!;
+  const original=sessions.get(initial.handle)!;
+  const key=Object.keys(localStorage).find(key=>key.startsWith('recipe-private-handoff:'))!;
+  await click('关闭');
+  draft={...draft,revision:2};
+  if(restart){
+    await act(async()=>root.unmount());root=createRoot(document.getElementById('root')!);
+    await draw();await click('社区');await click('创作中心');await click('查看草稿');
+  }else await act(async()=>emit({type:'authoringSaved',value:{accountId:accountA,draftId,revision:2}}));
+  operations=[{...op(original,'completed'),purpose:'editDraft',groupId:undefined,draftId,baseRevision:1,
+    receipt:{status:'accepted',operationId,draftId,revision:2,stateRevision:3}}];
+  currentHandoff={...currentHandoff!,state:'prepared',operationId};
+  await click('在飞书私聊中修改');
+  expect(calls.filter(r=>r.type==='restoreHandoff')).toEqual([expect.objectContaining({retryId:initial.retryId,target:{kind:'draft',draftId,baseRevision:1}})]);
+  expect(calls.filter(r=>r.type==='beginDraftHandoff')).toHaveLength(1);
+  expect(dialog('在飞书私聊中修改')?.textContent).toContain('私人草稿已保存');
+  expect(localStorage.getItem(key)).not.toBeNull();
+  await click('查看草稿');expect(localStorage.getItem(key)).toBeNull();
+});
+
+it('keeps ambiguous legacy edit pointers until an explicit new preparation',async()=>{
+  useRichDraft();linked=true;draft={...draft,revision:3};
+  const prefix='recipe-private-handoff:';
+  const keys=[1,2].map(revision=>prefix+JSON.stringify([accountA,A,draftId,revision,null,null,null,null]));
+  for(const key of keys)localStorage.setItem(key,JSON.stringify({retryId:crypto.randomUUID()}));
+  await draw();await click('社区');await click('创作中心');await click('查看草稿');await click('在飞书私聊中修改');
+  expect(dialog('在飞书私聊中修改')?.textContent).toContain('确认是否已有草稿');
+  expect(calls).toEqual([]);expect(keys.every(key=>localStorage.getItem(key)!==null)).toBe(true);
+  await click('查看创作中心');
+  expect(document.querySelector('.community-studio-heading h2')?.textContent).toBe('创作中心');
+  expect(keys.every(key=>localStorage.getItem(key)!==null)).toBe(true);
+  await click('查看草稿');await click('在飞书私聊中修改');await click('重新准备');
+  expect(keys.every(key=>localStorage.getItem(key)===null)).toBe(true);
+  await click('在飞书私聊中修改');
+  expect(calls.filter(r=>r.type==='beginDraftHandoff')).toEqual([expect.objectContaining({draftId,baseRevision:3})]);
+});
+
+it('ignores unresolved draft pointers from another account, view or draft',async()=>{
+  useRichDraft();linked=true;
+  for(const [account,view,id] of [[accountB,A,draftId],[accountA,B,draftId],[accountA,A,challengeId]]){
+    localStorage.setItem('recipe-private-handoff:'+JSON.stringify([account,view,id,1,null,null,null,null]),JSON.stringify({retryId:crypto.randomUUID()}));
+  }
+  await draw();await click('社区');await click('创作中心');await click('查看草稿');await click('在飞书私聊中修改');
+  expect(calls.filter(r=>r.type==='restoreHandoff')).toEqual([]);
+  expect(calls.filter(r=>r.type==='beginDraftHandoff')).toHaveLength(1);
+});
+
+it('navigates from a group recovery failure to the creation center and retains its pointer',async()=>{
+  linked=true;await draw();await click('群组');
+  await act(async()=>document.querySelector<HTMLButtonElement>('.group-directory-identity')!.click());
+  await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="设置 群聊 A 中的 Bot A"]')!.click());
+  await click('分享');await click('从本群准备配方');await click('确认');await click('关闭');currentHandoff=undefined;
+  const key=Object.keys(localStorage).find(key=>key.startsWith('recipe-private-handoff:'))!;
+  const pointer=localStorage.getItem(key);
+  await click('从本群准备配方');await click('查看创作中心');
+  expect(document.querySelector('.community-studio-heading h2')?.textContent).toBe('创作中心');
+  expect(localStorage.getItem(key)).toBe(pointer);expect(calls.filter(r=>r.type==='beginHandoff')).toHaveLength(1);
+});
+
+it('navigates from a published-version recovery failure to the creation center',async()=>{
+  useRichDraft();linked=true;
+  const rich=draft.format==='rich-v2'?draft.rich:undefined;
+  const originalCloud=cloud;
+  const publication={recipeId:A,versionId:B,revision:1,public:draft.public,format:'rich-v2' as const};
+  cloud=async request=>{
+    if(request.type==='publications')return {items:[publication]};
+    if(request.type==='detail')return {...publication,owned:true,acquired:false,state:'listed',rich};
+    if(request.type==='shareLink')return {url:'https://community.example/recipes/'+A+'/versions/'+B};
+    return originalCloud(request);
+  };
+  await draw();await click('社区');await click('创作中心');await click('管理此版本');await click('准备新版');await click('确认');await click('关闭');
+  currentHandoff=undefined;
+  await click('准备新版');await click('查看创作中心');
+  expect(document.querySelector('.community-studio-heading h2')?.textContent).toBe('创作中心');
+  expect(calls.filter(r=>r.type==='beginHandoff')).toHaveLength(1);
+  expect(calls.find(r=>r.type==='restoreHandoff')).toMatchObject({target:{kind:'source',parent:{recipeId:A,versionId:B}}});
+});

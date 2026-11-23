@@ -1,4 +1,5 @@
 import {useEffect, useRef, useState, type ReactNode, type RefObject} from 'react';
+import {z} from 'zod';
 import {
   agentIdSchema,
   groupIdSchema,
@@ -34,6 +35,7 @@ type Props = {
   draft?: Draft;
   parent?: {recipeId: string; versionId: string};
   onBack: () => void;
+  onWorkspace: () => void;
   onSaved: (draftId: string, revision: number) => void;
 };
 const progress: Record<DesktopAuthoringOperation['state'], string> = {
@@ -88,6 +90,30 @@ function storedHandoff(key: string): StoredHandoff | undefined {
   } catch {
     return;
   }
+}
+
+type RetainedHandoff = {kind:'none'} | {kind:'ambiguous';scopes:string[]} |
+  {kind:'source';scope:string;record:StoredHandoff} | {kind:'draft';scope:string;record:StoredHandoff;revision:number};
+const draftScopeSchema=z.tuple([z.string().uuid(),z.string(),z.string().uuid(),z.number().int().positive(),z.null(),z.null(),z.null(),z.null()]);
+function retainedHandoff(scope:string,accountId:string,viewId:ViewId,draft?:Draft):RetainedHandoff {
+  if(!draft){
+    const record=storedHandoff(scope);
+    return record?{kind:'source',scope,record}:{kind:'none'};
+  }
+  const entries:Array<{scope:string;revision:number;record:StoredHandoff|undefined}>=[];
+  for(const key of Object.keys(localStorage)){
+    if(!key.startsWith('recipe-private-handoff:'))continue;
+    try{
+      const parsed=draftScopeSchema.safeParse(JSON.parse(key.slice('recipe-private-handoff:'.length)));
+      if(!parsed.success)continue;
+      const [account,view,id,revision]=parsed.data;
+      if(account===accountId&&view===viewId&&id===draft.draftId)entries.push({scope:key,revision,record:storedHandoff(key)});
+    }catch{continue;}
+  }
+  const entry=entries[0];
+  if(entries.length===0)return {kind:'none'};
+  if(entries.length!==1||!entry?.record)return {kind:'ambiguous',scopes:entries.map(entry=>entry.scope)};
+  return {kind:'draft',scope:entry.scope,record:entry.record,revision:entry.revision};
 }
 
 function SourceDialog({
@@ -172,7 +198,8 @@ function SourcePicker(
 ) {
   const {scope, source, draft, snapshot, onBack, title} = props;
   const botInput = useRef<HTMLSelectElement>(null);
-  const [stored, setStored] = useState(() => storedHandoff(scope));
+  const [retained, setRetained] = useState(() => retainedHandoff(scope,props.accountId,props.viewId,draft));
+  const stored = 'record' in retained ? retained.record : undefined;
   const [botId, setBot] = useState<AgentId | undefined>(source?.botId ?? stored?.botId);
   const [groupId, setGroup] = useState<GroupId | undefined>(source?.groupId ?? stored?.groupId);
   const [confirmed, setConfirmed] = useState<Target | undefined>(draft ? {draft} : undefined);
@@ -213,11 +240,13 @@ function SourcePicker(
     return (
       <PrivateFlow
         {...props}
-        target={target}
+        scope={'scope' in retained?retained.scope:scope}
+        ambiguous={retained.kind==='ambiguous'}
+        target={'draft' in target&&retained.kind==='draft'?{draft:{...target.draft,revision:retained.revision}}:target}
         agent={snapshot?.agents.find((b) => 'source' in target && b.id === target.source.botId)}
         onRestart={() => {
-          localStorage.removeItem(scope);
-          setStored(undefined);
+          for(const key of retained.kind==='ambiguous'?retained.scopes:['scope' in retained?retained.scope:scope])localStorage.removeItem(key);
+          setRetained({kind:'none'});
           setConfirmed(undefined);
           if (draft) onBack();
         }}
@@ -228,7 +257,7 @@ function SourcePicker(
   const destination = bots.length && !unavailableBot ? 'groups' : 'agents';
   function resetSelection() {
     localStorage.removeItem(scope);
-    setStored(undefined);
+    setRetained({kind:'none'});
     setConfirmed(undefined);
     setBot(source?.botId);
     setGroup(source?.groupId);
@@ -355,7 +384,9 @@ function PrivateFlow({
   parent,
   onRestart,
   onBack,
+  onWorkspace,
   onSaved,
+  ambiguous,
 }: Props & {
   target: Target;
   shell: RecipeAuthoringShell;
@@ -366,6 +397,7 @@ function PrivateFlow({
   agent?: Agent;
   snapshot?: DesktopSnapshot;
   onRestart: () => void;
+  ambiguous: boolean;
 }) {
   const capabilities = useShellCapabilities();
   const [session, setSession] = useState<Session>();
@@ -471,13 +503,14 @@ function PrivateFlow({
     const next=reply.session;
     if(next.target.accountId!==accountId||next.target.viewId!==viewId||botId&&next.target.botId!==botId)throw new Error('请求来源已变化，请重新核对。');
     const restored=reply.kind==='handoffRestored'?adopt({kind:'handoff',handoff:reply.handoff},id):undefined;
-    owner.current=next;
+    const owned=previous?.handle===next.handle?previous:next;
+    owner.current=owned;
     setSession(next);
     setUnavailable(false);
     setError(undefined);
-    if(reply.kind==='handoffLinkRequired')await newLink(next);
+    if(reply.kind==='handoffLinkRequired')await newLink(owned);
     else if(!draftId&&restored?.state==='cancelled')onRestart();
-    return next;
+    return owned;
   }
   async function newLink(s: Session) {
     setLink(undefined);
@@ -502,6 +535,7 @@ function PrivateFlow({
     setUnavailable(false);
     setBusy(true);
     void (async () => {
+      if(ambiguous){setUnavailable(true);return;}
       const record=storedHandoff(scope);
       if(record){
         retry.current=record.retryId;
@@ -629,7 +663,7 @@ function PrivateFlow({
       footer={
         <>
           {unavailable ? (
-            <><Button onClick={onBack}>查看创作中心</Button><Button onClick={onRestart}>重新准备</Button></>
+            <><Button onClick={onWorkspace}>查看创作中心</Button><Button onClick={onRestart}>重新准备</Button></>
           ) : accepted ? (
             <GlowButton
               variant="dark"

@@ -90,7 +90,7 @@ export const recipeAuthoringRequestSchema = z.discriminatedUnion('type', [
     accepted:z.object({frozen:richFrozenResponseSchema,manifestId:uuid,packageId:uuid}).strict().optional()}).strict(),
   z.object({type: z.literal('open'), ...target, accountId: uuid}).strict(),
   z.object({type: z.literal('close'), ...session}).strict(),
-  z.object({type: z.literal('status'), ...session}).strict(),
+  z.object({type: z.literal('status'), ...session, operationId:uuid.nullable().optional()}).strict(),
   z.object({type: z.literal('workflow'), ...session}).strict(),
   z.object({type: z.literal('answerField'), ...session, request:fieldRequest, value:z.string().max(4000).nullable()}).strict(),
   z.object({type: z.literal('resumeContext'), ...operation}).strict(),

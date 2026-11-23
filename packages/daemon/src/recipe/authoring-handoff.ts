@@ -108,36 +108,43 @@ export class PrivateHandoffs {
         (edit?op.view.draftId===edit.draftId:op.view.groupId===r.groupId)))throw new Error('这份配方已有进行中的私聊，请先在原卡片完成或取消。');
       return slots[r.retryId]={account:p.account,scope:p.scope,groupId:r.groupId,groupName:r.groupName,identity,binding:link.binding,recipient:link.recipient,
         ref:randomUUID(),generation:1,sendUuid:randomUUID(),session:p.session,retryId:r.retryId,expiresAt:this.now()+30*60_000,selection:emptySelection(),phase:{state:'selecting'},
-        ...(edit&&{edit,draftId:edit.draftId}),...(r.type==='beginHandoff'&&r.sourceVersionId&&{sourceVersionId:r.sourceVersionId,inherited:structuredClone(r.inherited)})} satisfies PrivateHandoff;
+        ...(edit&&{edit,draftId:edit.draftId,baseRevision:edit.baseRevision}),...(r.type==='beginHandoff'&&r.sourceVersionId&&{sourceVersionId:r.sourceVersionId,inherited:structuredClone(r.inherited)})} satisfies PrivateHandoff;
     });
     return this.resumeExisting(p,link,h);
   }
   async restore(p:Presence,link:Link,r:Restore):Promise<Extract<RecipeAuthoringReply,{kind:'handoff'|'handoffUnavailable'}>>{
-    const h=await this.ledger.run(db=>{
+    const found=await this.ledger.run(db=>{
       this.live(p);
       const row=db.handoffs?.[r.retryId];
       if(!row)return;
       const expected=r.expected;
       if(!bound(row,p,link)||row.groupId!==expected.groupId||row.draftId!==(expected.kind==='draft'?expected.draftId:undefined))throw changed();
+      const op=row.phase.state==='prepared'?db.operations[row.phase.operationId]:undefined;
       if(expected.kind==='source'){
         if(row.sourceVersionId!==expected.sourceVersionId||wireDigest(row.inherited??null)!==wireDigest(expected.inherited??null))throw changed();
-      }else if(row.edit&&row.edit.baseRevision!==expected.baseRevision)throw changed();
+      }else{
+        const revision=row.baseRevision??row.edit?.baseRevision??op?.view.baseRevision;
+        if(revision===undefined)return {row,available:false};
+        if(revision!==expected.baseRevision)throw changed();
+      }
       if(row.phase.state==='prepared'){
-        const op=db.operations[row.phase.operationId];
-        if(!op||op.accountId!==p.account||op.scope!==p.scope||op.bot!==link.bot||op.binding!==link.binding||!sameRecipient(op.recipient,link.recipient)||
+        if(!op)return {row,available:false};
+        if(op.accountId!==p.account||op.scope!==p.scope||op.bot!==link.bot||op.binding!==link.binding||!sameRecipient(op.recipient,link.recipient)||
           op.revoked||op.view.format!=='rich-v2'||op.instructionId!==row.retryId||
           op.originalGroup?.groupId!==row.groupId||op.originalGroup.identity!==row.identity||
           op.view.purpose!==(expected.kind==='draft'?'editDraft':'prepareDraft')||
           (expected.kind==='draft'?(op.view.draftId!==expected.draftId||op.view.baseRevision!==expected.baseRevision):op.view.groupId!==row.groupId))throw changed();
       }
-      return row;
+      return {row,available:true};
     });
-    if(!h)return {kind:'handoffUnavailable',retryId:r.retryId,reason:'notFound'};
+    const unavailable={kind:'handoffUnavailable',retryId:r.retryId,reason:'notFound'} as const;
+    if(!found)return unavailable;
     try{
-      await this.identity(p,h);
-      return {kind:'handoff',handoff:await this.resumeExisting(p,link,h)};
+      await this.identity(p,found.row);
+      if(!found.available)return unavailable;
+      return {kind:'handoff',handoff:await this.resumeExisting(p,link,found.row)};
     }catch(error){
-      if(!await this.ledger.run(db=>Boolean(db.handoffs?.[r.retryId])))return {kind:'handoffUnavailable',retryId:r.retryId,reason:'notFound'};
+      if(!await this.ledger.run(db=>Boolean(db.handoffs?.[r.retryId])))return unavailable;
       throw error;
     }
   }
