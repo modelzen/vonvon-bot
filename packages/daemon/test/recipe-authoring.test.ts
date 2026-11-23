@@ -15,6 +15,7 @@ const root = await realpath(await mkdtemp(join(tmpdir(),'vonvon-authoring-')));
 vi.stubEnv('VONVON_HOME',root);
 vi.stubEnv('HOME',root);
 const { AuthoringService } = await import('../src/recipe/authoring-service');
+const cardActions = vi.spyOn(AuthoringService.prototype,'onAction');
 const { blankPublic, digest, dispatchDigest, freezePayload, makeAuthoringProof } = await import('../src/recipe/authoring-wire');
 const { createOrchestrator } = await import('../src/bot/handle-message');
 const { useBotDir, botPaths } = await import('../src/config/paths');
@@ -67,6 +68,7 @@ function restart(parser: ConstructorParameters<typeof AuthoringService>[0]['pars
     }});
 }
 beforeEach(async () => {
+  cardActions.mockClear();
   proposeRich.mockReset();
   propose.mockReset().mockRejectedValue(new Error('offline')); readDraftField.mockReset();
   updateFault=undefined;updateKeys.clear();
@@ -184,9 +186,17 @@ function ref(messageId?: string) {
   const card: {body:{elements:{behaviors?:{value:{ref:string}}[]}[]}} = JSON.parse(cards.get(m.card_id)!);
   return {messageId:m.message_id,ref:card.body.elements.find(e=>e.behaviors)?.behaviors?.[0]?.value.ref ?? ''};
 }
+async function dispatchAuthoring(evt: Parameters<typeof service.onAction>[0]) {
+  await orch.dispatcher.handle(evt);
+  await vi.waitFor(() => expect(cardActions.mock.calls.some(([action]) => action === evt)).toBe(true), {interval:10,timeout:5000});
+  const index = cardActions.mock.calls.findIndex(([action]) => action === evt);
+  const result = cardActions.mock.results[index];
+  if (!result || result.type !== 'return') throw new Error('Authoring callback did not start');
+  await result.value;
+}
 async function act(action: ReturnType<typeof ref>, more: {by?:string;chat?:string;tenant?:string;messageId?:string;verb?:string} = {}) {
   const by = more.by ?? owner;
-  await orch.dispatcher.handle({messageId:more.messageId ?? action.messageId,chatId:more.chat ?? chatId,operator:{openId:by},
+  await dispatchAuthoring({messageId:more.messageId ?? action.messageId,chatId:more.chat ?? chatId,operator:{openId:by},
     raw:{operator:{open_id:by,tenant_key:more.tenant ?? tenant}},action:{tag:'button',value:{a:'recipe.authoring',ref:action.ref,verb:more.verb ?? 'confirm'}}});
 }
 
@@ -281,6 +291,19 @@ it('keeps dirty cards scoped to the original live peer and registration; after 1
   expect(done).toMatchObject({state:'completed',receipt,cardUpdate:'unavailable'});
   await rpc('updateCard',{operationId}); expect(puts()).toHaveLength(n);
   expect(messages.size).toBe(1);
+});
+
+it('does not send another card update when the Bot closes after ACK and before authoring execution',async()=>{
+  await link();
+  await advance(await prepare(),'dispatch');
+  const action=ref(), snapshot=[...cards], updates=puts().length, requests=cloud.length;
+  await orch.dispatcher.handle({messageId:action.messageId,chatId,operator:{openId:owner},
+    raw:{operator:{open_id:owner,tenant_key:tenant}},action:{tag:'button',value:{a:'recipe.authoring',ref:action.ref,verb:'confirm'}}});
+  service.close();
+  await orch.shutdown();
+  expect(puts()).toHaveLength(updates);
+  expect([...cards]).toEqual(snapshot);
+  expect(cloud).toHaveLength(requests);
 });
 
 it('does not repair a dirty card after a removed admin or a new binding to the same recipient',async()=>{
@@ -387,7 +410,7 @@ async function closePreparation(group = groupId) {
   await rpc('settle',{operationId,receipt:{operationId,status:'cancelled',stateRevision:1}});
 }
 async function chooseSource(action: ReturnType<typeof ref>, index: number, messageId = action.messageId) {
-  await orch.dispatcher.handle({messageId,chatId,operator:{openId:owner},raw:{operator:{open_id:owner,tenant_key:tenant}},
+  await dispatchAuthoring({messageId,chatId,operator:{openId:owner},raw:{operator:{open_id:owner,tenant_key:tenant}},
     action:{tag:'button',value:{a:'recipe.authoring',ref:action.ref,verb:'source',index}}});
 }
 it('consumes unlinked, ambiguous and source-free draft requests before opening an Agent',async()=>{
@@ -1151,7 +1174,7 @@ function privateChoice(label:string){
   return {messageId:m.message_id,value:button.behaviors![0]!.value};
 }
 async function tap(button:ReturnType<typeof privateChoice>,by=owner,chat=chatId,org=tenant){
-  await orch.dispatcher.handle({operator:{openId:by},raw:{operator:{open_id:by,tenant_key:org}},
+  await dispatchAuthoring({operator:{openId:by},raw:{operator:{open_id:by,tenant_key:org}},
     chatId:chat,messageId:button.messageId,action:{tag:'button',value:button.value}});
 }
 const beginInput=()=>({retryId:randomUUID(),groupId,groupName:'周报群'});

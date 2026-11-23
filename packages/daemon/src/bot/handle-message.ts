@@ -5198,7 +5198,19 @@ export function createOrchestrator(
     }
   }(channel, cfg);
   if (options?.feedback) dispatcher.on(FEEDBACK_ACTION, ({evt}) => options.feedback!.onAction(evt));
-  if (options?.authoring) dispatcher.on('recipe.authoring', ({evt}) => options.authoring!.onAction(evt));
+  const authoring = options?.authoring;
+  if (authoring) dispatcher.on('recipe.authoring', ({evt}) => {
+    // ACK before authoring can update its card, outside Feishu's interaction window.
+    void trackTask((async () => {
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        await orStop(new Promise<void>(resolve => { timer = setTimeout(resolve, CARD_SETTLE_MS); }), undefined);
+      } finally {
+        clearTimeout(timer);
+      }
+      if (!shuttingDown) await authoring.onAction(evt);
+    })());
+  });
   const asks = new AskCoordinator(channel, cfg, names);
   dispatcher.on('ask_submit', ({ evt, value, formValue }) => {
     const result = asks.submit({ messageId: evt.messageId, chatId: evt.chatId, operatorOpenId: evt.operator?.openId, value, formValue });
