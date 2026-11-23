@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rmdir, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import {communityRequest} from '../src/community-api.js';
 import { accountDeployment, type AccountCredential } from '../src/account-auth.js';
 import { createAccountSession, type NativeAccount } from '../src/account-session.js';
 import { accountStore, type AccountStore } from '../src/account-store.js';
@@ -428,4 +429,21 @@ describe('native desktop account', () => {
     expect(await c.logout()).toEqual({ kind: 'signedOut' });
     await rmdir(dir);
   });
+});
+
+it('invalidates a fully buffered private community response immediately when logout begins, before secure storage acknowledges it', async () => {
+  const f = fixture(); const a = f.create();
+  await a.login(); await waitFor(() => expect(a.status().kind).toBe('signedIn'));
+  const cleared = deferred<void>();
+  f.store.clear.mockImplementationOnce(() => cleared.promise);
+  const base = f.transport.getMockImplementation()!;
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  f.transport.mockImplementation((url, init) => String(url).includes('/v1/me/drafts')
+    ? Promise.resolve(new Response(new ReadableStream<Uint8Array>({start(value) {controller = value;}}))) : base(url, init));
+  const pending = communityRequest(a, {type: 'drafts', accountId: business});
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+  const loggingOut = a.logout();
+  controller.enqueue(new TextEncoder().encode(JSON.stringify({items: []}))); controller.close();
+  const result = pending.then(() => 'leaked', () => 'rejected');
+  try {expect(await result).toBe('rejected');} finally {cleared.resolve(); await loggingOut;}
 });

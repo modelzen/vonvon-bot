@@ -1,7 +1,7 @@
 import { createContext, useContext, type ReactNode } from "react";
 import type { VonvonClient } from "@vonvon/client/browser";
 import type {
-  AccountShell, AddDeviceRequest, AddDeviceResult, DesktopUpdate, DeviceEventPayload, DevicesState, LinkPreview, MachineReply, RemoveDeviceResult,
+  AccountShell, CommunityShell, AddDeviceRequest, AddDeviceResult, DesktopUpdate, DeviceEventPayload, DevicesState, LinkPreview, MachineReply, RemoveDeviceResult,
 } from "@vonvon/protocol";
 
 /** devices-ui-1a 4.7: the desktop's devices, through its shell. U2–U4 use the hooks below, not this directly. */
@@ -22,6 +22,7 @@ export type DevicesShell = {
 
 export type ShellCapabilities = {
   account?: AccountShell;
+  community?: CommunityShell;
   openExternal?: (url: string) => Promise<void>;
   chooseExecutablePath?: () => Promise<string | null>;
   chooseDirectoryPaths?: (multiple: boolean) => Promise<string[] | null>;

@@ -3,12 +3,13 @@ import { pathToFileURL } from 'node:url';
 import { shell, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron';
 import { ConnectionError, RpcError, type VonvonClient } from '@vonvon/client/browser';
 import {
-  accountStatusSchema, adminRequestSchema, agentIdSchema, collaborationRequestSchema, commandSchema, scheduleRequestSchema,
+  communityRequestSchema, accountStatusSchema, adminRequestSchema, agentIdSchema, collaborationRequestSchema, commandSchema, scheduleRequestSchema,
   directoryRequestSchema, environmentRequestSchema, libraryRequestSchema, machineRequestSchema, memoryRequestSchema, contextPreviewRequestSchema, deviceRequestSchema,
   settingsRequestSchema, machineReplySchema, addDeviceRequestSchema, viewIdSchema, LOCAL_VIEW,
   type DesktopSnapshot, type DesktopUpdate, type MachineReply, type ViewId,
 } from '@vonvon/protocol';
 import { DeviceConnectionsError, type DeviceConnections, type ViewChange, type ViewSession } from './connections.js';
+import { communityRequest, CommunityError } from './community-api.js';
 import type { NativeAccount } from './account-session.js';
 import { RegistryError } from './device-registry.js';
 import { allowedExternalUrl, type ExternalUrlKind } from '../../ui/src/url-actions.js';
@@ -119,6 +120,7 @@ function safeFailure(error: unknown): SafeFailure {
     const code = safeErrorCode(error.code);
     return { kind: 'rpc', message: sanitizeDaemonMessage(error.message), ...(code ? { code } : {}) };
   }
+  if (error instanceof CommunityError) return {kind: 'validation', message: error.message};
   if (error instanceof ConnectionError) return { kind: 'connection', message: '和后台的连接断开了。' };
   if (error instanceof DeviceUnavailable) return { kind: 'connection', code: 'device_unavailable', message: error.message };
   if (error instanceof DeviceSwitched) return { kind: 'connection', code: 'device_switched', message: error.message };
@@ -532,6 +534,7 @@ export function installBridge(
     register(desktopChannels.hide, 0, noArg, async () => { actions.hide(); });
     register(desktopChannels.quit, 0, noArg, () => actions.confirmQuit());
     register(desktopChannels.quitKeepsDaemon, 0, () => { localOnly(); }, () => actions.quitKeepsDaemon());
+    register(desktopChannels.community, 1, value => communityRequestSchema.parse(value), value => communityRequest(account, value));
     register(desktopChannels.accountStatus, 0, noArg, async () => accountStatusSchema.parse(account.status()));
     register(desktopChannels.accountLogin, 0, noArg, async () => accountStatusSchema.parse(await account.login()));
     register(desktopChannels.accountCancel, 0, noArg, async () => accountStatusSchema.parse(await account.cancelLogin()));
