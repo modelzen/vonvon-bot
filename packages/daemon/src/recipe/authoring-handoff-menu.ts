@@ -18,7 +18,7 @@ export type HandoffSelection = {
 };
 export interface PrivateHandoff {
   retryId:string;groupId:AuthoringHandoff['groupId'];groupName:string;identity:string;account:string;scope:string;binding:string;recipient:Recipient;
-  session:string;expiresAt:number;sourceVersionId?:string;edit?:Pick<Edit,'draftId'|'baseRevision'|'canonical'|'source'>;
+  session:string;expiresAt:number;sourceVersionId?:string;inherited?:Extract<RecipeAuthoringRequest,{type:'beginHandoff'}>['inherited'];edit?:Pick<Edit,'draftId'|'baseRevision'|'canonical'|'source'>;
   draftId?:string;ref:string;generation:number;cardId?:string;messageId?:string;sendUuid:string;sentAt?:number;cardDirty?:true;
   selection:HandoffSelection;
   phase:{state:'selecting'|'cancelled'|'expired'|'needsReview'|'deliveryUnknown'}|
@@ -150,6 +150,7 @@ export function handoffCard(h:PrivateHandoff){
   const plain=(content:string)=>({tag:'div',text:{tag:'plain_text',content}});
   const add=(label:string,action:Click['action'],index?:number,primary=false)=>elements.push(button(label,{a:'recipe.authoring',verb:'handoff',ref:h.ref,generation:h.generation,action,...(index!==undefined&&{index})},primary?'primary':'default'));
   elements.push(plain(h.groupName));
+  if(h.inherited)elements.push(plain('沿用本人已发布版本的名称、简介、概览、Logo 和获取方式；请为新版填写新的显示版本。群配置只包含本次勾选内容。'));
   if(h.phase.state==='selecting'||h.phase.state==='deliveryUnknown'){
     elements.push(plain(h.edit?'选择这次要修改的草稿内容，然后告诉我想怎么改。':'勾选你有权分享的内容。技能文件、Bot 记忆和任务由你单独选择。'));
     for(const [i,c] of s.choices.entries())add((c.action==='skill'?'› ':c.checked?'☑ ':'☐ ')+c.label.slice(0,100),'choice',i);

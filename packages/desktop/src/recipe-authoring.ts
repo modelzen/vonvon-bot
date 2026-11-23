@@ -1,3 +1,4 @@
+import {inheritedPublication} from './recipe-publication-inheritance.js';
 import {uploadRichMembers} from './recipe-authoring-upload.js';
 import {richAuthoringCloud,richTerminal,UnavailableSourceItems} from './recipe-authoring-rich-cloud.js';
 import {safeDraftModelText, safeEditValue} from '../../../services/recipe-api/src/draft-model-text.mjs';
@@ -791,10 +792,10 @@ export class RecipeAuthoringController {
         await this.names(h);
         const groupName = h.groups.get(r.groupId);
         if (!groupName) throw recheck();
-        if (r.sourceVersionId && (await this.richCloud(h).sourceItems(r.sourceVersionId)).authorId !== h.open.accountId) throw recheck();
+        const inherited=r.source?await inheritedPublication(this.account,h.open.accountId,r.source.recipeId,r.source.versionId,()=>this.check(h)):undefined;
         await this.checkGroup(h);
         const scope = {retryId:r.retryId,groupId:r.groupId};
-        return this.beginHandoff(h,scope,{type:r.type,...scope,groupName,sourceVersionId:r.sourceVersionId});
+        return this.beginHandoff(h,scope,{type:r.type,...scope,groupName,sourceVersionId:r.source?.versionId,...(inherited&&{inherited})});
       }
       case 'beginDraftHandoff': {
         const source = h.draftSource;

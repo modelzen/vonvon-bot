@@ -114,6 +114,22 @@ function taskFields(task:RecipeRichContent['tasks'][number]):Field[]{
     ...(task.timeZone.kind==='recommended'?[field('建议时区',task.timeZone.iana)]:[]),
     field('发布位置',task.placement==='follow'?'当前话题':'新话题')];
 }
+export function sourceOmissionFields(content:RecipeRichContent,kept:ReadonlySet<string>):Field[]{
+  const fields:Field[]=[];
+  const add=(item:{itemId:string},label:string)=>{if(!kept.has(item.itemId))fields.push(field('本次排除',label));};
+  if(content.role)add(content.role,'群角色');
+  for(const setting of content.settings){
+    add(setting,'设置 · '+labels[setting.field]);
+    if(setting.field==='presentation.cardDisplay'&&setting.value)for(const block of setting.value.blocks)
+      add(block,'消息展示 · '+position(setting.value.blocks,block.itemId)+' · '+block.name);
+  }
+  for(const rule of content.rules)add(rule,'规则 · '+position(content.rules,rule.itemId)+' · '+purposes[rule.purpose]);
+  for(const skill of content.skills)add(skill,'技能 · '+position(content.skills,skill.itemId)+' · '+skill.name);
+  for(const file of content.files)add(file,'文件 · '+position(content.files,file.itemId)+' · '+file.name);
+  for(const task of content.tasks)add(task,'任务 · '+position(content.tasks,task.itemId)+' · '+task.name);
+  for(const memory of content.memories)add(memory,'记忆 · '+position(content.memories,memory.itemId));
+  return fields;
+}
 function sourceFields(content:RecipeRichContent):Field[]{
   const fields:Field[]=[];
   if(content.role)fields.push(field('角色','已选本地角色 · '+Buffer.byteLength(text(content.role.text))+' 字节'));
@@ -165,8 +181,17 @@ function itemFields(content:RecipeRichContent,summary:boolean):Field[]{
   if(content.finalLogo)throw new Error('Logo 需要图片核对');
   return fields;
 }
-export function contentReviewFields(content:RecipeRichContent,summary:boolean){
-  return [...Object.entries(content.public).filter(([,v])=>!summary||v.value!=='').map(([key,v])=>field(fieldLabels[key as keyof typeof fieldLabels],v.value)),...itemFields(content,summary)];
+export function contentReviewFields(content:RecipeRichContent,summary:boolean,inheritedVersionId?:string,newFields:readonly string[]=[]){
+  const unchanged=(key:keyof RecipeRichContent['public'])=>!newFields.includes(content.public[key].itemId);
+  const inheritedText=(['summary','overview'] as const).filter(unchanged).map(key=>
+    fieldLabels[key]+' '+Buffer.byteLength(content.public[key].value)+' 字节').join(' · ');
+  const publicFields=inheritedVersionId?[field('继承来源版本',inheritedVersionId),
+    ...(unchanged('name')?[field('配方名称',content.public.name.value)]:[]),
+    ...(inheritedText?[field('已继承发布文案',inheritedText+'。完整发布信息在 App 核对。')]:[])]:
+    Object.entries(content.public).filter(([,v])=>!summary||v.value!=='').map(([key,v])=>field(fieldLabels[key as keyof typeof fieldLabels],v.value));
+  const changed=inheritedVersionId?Object.entries(content.public).filter(([,item])=>newFields.includes(item.itemId))
+    .map(([key,item])=>field(fieldLabels[key as keyof typeof fieldLabels],item.value)):[];
+  return [...publicFields,...changed,...itemFields(content,summary)];
 }
 function selectedItemReview(content:RecipeRichContent,itemId:string,kind:ItemKind,positions:Positions):Field[]{
   const subset:RecipeRichContent={...content,role:undefined,skills:[],files:[],settings:[],rules:[],tasks:[],memories:[],setup:[],finalLogo:undefined};

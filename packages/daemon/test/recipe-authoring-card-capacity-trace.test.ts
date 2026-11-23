@@ -1,11 +1,14 @@
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
+import {mkdtemp,readFile,realpath,stat} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {expect,it} from 'vitest';
 import {canonicalizeRichRecipeContent,recipeAuthoringRequestSchema,type RecipeRichContent,type RecipeRichDraftChange} from '@vonvon/protocol';
 import {applyChanges} from '../../../services/recipe-api/src/rich-document.mjs';
 import {candidateConfirmation} from '../src/recipe/authoring-im';
-import {chatRichProposal,preparedRich,richCardReview,typedRichEdit,type RichLocalDraft} from '../src/recipe/authoring-rich-flow';
+import {chatRichProposal,preparedRich,richCardReview,richReviewDigest,typedRichEdit,type RichLocalDraft} from '../src/recipe/authoring-rich-flow';
 import {itemsOf} from '../src/recipe/authoring-rich-snapshot';
-import {newCarrier,type LocalOperation} from '../src/recipe/authoring-journal';
+import {AuthoringJournal,discardAuthoringMaterial,newCarrier,type LocalOperation} from '../src/recipe/authoring-journal';
 
 const identity=()=>({itemId:randomUUID(),originId:randomUUID()});
 const canonical=(content:RecipeRichContent)=>Buffer.from(canonicalizeRichRecipeContent(content).canonicalUTF8).toString('base64url');
@@ -26,12 +29,12 @@ function display(content:RecipeRichContent){
   content.settings=[setting];
   return setting;
 }
-function capture(content:RecipeRichContent,selected=itemsOf(content).map(item=>item.itemId)){
+function capture(content:RecipeRichContent,selected=itemsOf(content).map(item=>item.itemId),logo?:string){
   const options={skills:content.skills.map(skill=>({skill:skill.name,files:content.files.filter(file=>skill.fileIds.includes(file.itemId)).map(file=>file.name)})),
     includeTasks:false,includeBotMemories:false};
   const inventory={content,lease:'a'.repeat(64),files:{},evidence:new Map(itemsOf(content).map(item=>[item.itemId,{kind:'native' as const}]))};
   const request=recipeAuthoringRequestSchema.parse({type:'richPrepare',botId:'cli_reviewtest',session:randomUUID(),groupId:'oc_reviewtest',
-    selection:{options,selected,reviewToken:inventory.lease,sourceAttested:true,public:{name:'',summary:'',overview:'',version:''},access:'direct',setup:[]},attestations:[]});
+    selection:{options,selected,...(logo&&{logo}),reviewToken:inventory.lease,sourceAttested:true,public:{name:'',summary:'',overview:'',version:''},access:'direct',setup:[]},attestations:[]});
   if(request.type!=='richPrepare')throw new Error('missing preparation');
   const rich=preparedRich(request,inventory,randomUUID());rich.privateSelection=true;
   return rich;
@@ -134,4 +137,87 @@ it('previews a valid whole-batch file path swap while retaining each complete ch
     expect(elements).toContainEqual({tag:'div',text:{tag:'plain_text',content:file.name}});
     expect(elements).toContainEqual({tag:'div',text:{tag:'plain_text',content:file.text.kind==='inline'?file.text.value:''}});
   }
+});
+
+it('proves cumulative source omissions and public edits while retaining the initial snapshot',async()=>{
+  const content=fixture(2);content.role={...identity(),text:{kind:'inline',value:'original role'}};
+  const setting=display(content),rich=capture(content),initial=structuredClone(rich);
+  const op={view:{operationId:randomUUID()},rich} as LocalOperation;
+  const apply=async(instruction:string,kind?:'role'|'skill'|'cardBlock')=>{
+    const result=await chatRichProposal(op,instruction,new AbortController().signal,kind?{proposeRich:async input=>({kind:'proposal',commands:[
+      {action:'omit',target:'T'+(input.selected.findIndex(item=>item.kind===kind)+1),valueJson:'null'},
+    ]})}:undefined);
+    if(result.kind!=='proposal')throw Error('missing proposal');
+    rich.request=result.request;
+    if('newFields'in result)rich.newFields=result.newFields;
+    if(result.sourcePublicValues)rich.sourcePublicValues=result.sourcePublicValues;
+    if('richSourceOriginal'in result){op.richSourceOriginal=result.richSourceOriginal;rich.sourceOmitted=result.sourceOmitted;}
+    if(rich.request&&'content'in rich.request){const kept=new Set(rich.request.content.files.map(f=>f.itemId));rich.members=rich.members?.filter(m=>m.kind==='finalLogo'||kept.has(m.itemId));}
+    expect(richCardReview(op)?.sourceCapture).toBe(true);
+    expect(candidateConfirmation('ref',richCardReview(op))).toBeDefined();
+  };
+  await apply('/recipe version 2.0');await apply('排除角色','role');
+  const original=structuredClone(op.richSourceOriginal);
+  await apply('/recipe version 3.0');await apply('排除消息展示第一项','cardBlock');
+  await apply('排除技能','skill');await apply('/recipe summary 新简介');
+  expect(op.richSourceOriginal).toEqual(original);
+  expect(initial.request&&'content'in initial.request&&initial.request.content.role?.text).toEqual(content.role.text);
+  expect(initial.request&&'content'in initial.request&&initial.request.content.skills).toHaveLength(1);
+  expect(rich.sourceOmitted).toEqual([content.role.itemId,setting.value.blocks[0]!.itemId,content.skills[0]!.itemId]);
+  const card=JSON.stringify(candidateConfirmation('ref',richCardReview(op)));
+  expect(card).toContain('本次排除');expect(card).toContain('整理反馈');expect(card).toContain('SKILL.md');expect(card).toContain('执行耗时');
+  const mutations:((bad:RichLocalDraft)=>void)[]=[
+    bad=>{delete bad.sourceCaptureDigest;},bad=>{delete bad.privateSelection;},
+    bad=>{bad.sourceOmitted!.push(randomUUID());},bad=>{bad.sourceOmitted!.push(content.public.name.itemId);},
+    bad=>{bad.newFields!.push(randomUUID());},
+    bad=>{if(bad.request&&'content'in bad.request)bad.request.sourceVersionId=randomUUID();},
+    bad=>{if(bad.request&&'content'in bad.request)bad.request.access='coded';},
+    bad=>{if(bad.request&&'content'in bad.request)bad.request.content.role=content.role;},
+    bad=>{if(bad.request&&'content'in bad.request)bad.request.content.skills=content.skills;},
+    bad=>{if(bad.request&&'content'in bad.request)Object.assign(bad.request.content.public.name,{unknown:'hidden'});},
+    bad=>{if(bad.request&&'content'in bad.request)bad.request.content.public.name.value='unauthorized';},
+    bad=>{if(bad.request&&'content'in bad.request)bad.request.origins[0]!.source={kind:'releaseItem',versionId:randomUUID(),itemId:randomUUID(),baselineSha256:'a'.repeat(64)};},
+    bad=>{if(bad.request&&'content'in bad.request&&bad.request.content.settings[0]?.field==='presentation.cardDisplay'&&bad.request.content.settings[0].value)bad.request.content.settings[0].value.reply!.streamText=false;},
+  ];
+  expect(richCardReview({...op,richSourceOriginal:undefined})).toBeUndefined();
+  const forged=structuredClone(op.richSourceOriginal!);
+  if(forged.request&&'content'in forged.request)forged.request.content.public.name.value='forged snapshot';
+  expect(richCardReview({...op,richSourceOriginal:forged})).toBeUndefined();
+  for(const mutate of mutations){const bad=structuredClone(rich);mutate(bad);expect(richCardReview({...op,rich:bad})).toBeUndefined();}
+});
+
+it('persists the largest content and source Logo input with the omission proof in a separate verified blob',async()=>{
+  const content=fixture(8);content.role={...identity(),text:{kind:'inline',value:'role'}};
+  const overhead=canonicalizeRichRecipeContent(content).canonicalUTF8.length;
+  for(const file of content.files.slice(0,7))file.text={kind:'inline',value:'x'.repeat(131072)};
+  content.files[7]!.text={kind:'inline',value:'x'.repeat(1048576-overhead-7*131072+8)};
+  expect(canonicalizeRichRecipeContent(content).canonicalUTF8.length).toBe(1048576);
+  const logo=Buffer.alloc(2097152);logo.write('RIFF');logo.writeUInt32LE(logo.length-8,4);logo.write('WEBPVP8L',8);logo.writeUInt32LE(logo.length-20,16);
+  const rich=capture(content,itemsOf(content).map(item=>item.itemId),logo.toString('base64url'));
+  const op={view:{operationId:randomUUID(),createdAt:1000,state:'candidate'},rich} as LocalOperation;
+  const result=await chatRichProposal(op,'排除角色',new AbortController().signal,{proposeRich:async input=>({kind:'proposal',commands:[
+    {action:'omit',target:'T'+(input.selected.findIndex(item=>item.kind==='role')+1),valueJson:'null'},
+  ]})});
+  if(result.kind!=='proposal'||!('richSourceOriginal'in result))throw Error('missing proof');
+  rich.request=result.request;rich.newFields=result.newFields;rich.sourcePublicValues=result.sourcePublicValues;rich.sourceOmitted=result.sourceOmitted;
+  op.richSourceOriginal=result.richSourceOriginal;
+  for(const kind of ['text','finalLogo']){
+    const changed=structuredClone(rich),member=changed.members!.find(m=>m.kind===kind)!;
+    const bytes=Buffer.from(member.bytes,'base64url');bytes.writeUInt8(bytes.readUInt8(bytes.length-1)^1,bytes.length-1);
+    member.bytes=bytes.toString('base64url');member.sha256=createHash('sha256').update(bytes).digest('hex');
+    expect(richCardReview({...op,rich:changed})).toBeUndefined();
+  }
+  const originalDigest=richReviewDigest(op.richSourceOriginal!);
+  const root=await realpath(await mkdtemp(join(tmpdir(),'recipe-omit-blob-'))),journal=new AuthoringJournal(root,()=>1000);
+  await journal.run(db=>{db.operations[op.view.operationId]=op;});
+  const disk=JSON.parse(await readFile(join(root,'recipe-authoring/journal.json'),'utf8')).operations[op.view.operationId];
+  expect(disk.richSourceOriginalBlob).toMatch(/^[a-f0-9]{64}$/);expect(disk.richBlob).not.toBe(disk.richSourceOriginalBlob);
+  for(const hash of [disk.richBlob,disk.richSourceOriginalBlob])expect((await stat(join(root,'recipe-authoring/rich-'+hash+'.json'))).size).toBeLessThan(12*1024*1024);
+  await journal.run(db=>{
+    const restored=db.operations[op.view.operationId]!;
+    expect(richCardReview(restored)?.sourceCapture).toBe(true);expect(richReviewDigest(restored.richSourceOriginal!)).toBe(originalDigest);
+    expect(restored.rich!.members!.find(m=>m.kind==='finalLogo')!.bytes).toBe(logo.toString('base64url'));
+  });
+  await journal.run(db=>{discardAuthoringMaterial(db.operations[op.view.operationId]!);});
+  await expect(stat(join(root,'recipe-authoring/rich-'+disk.richSourceOriginalBlob+'.json'))).rejects.toMatchObject({code:'ENOENT'});
 });
