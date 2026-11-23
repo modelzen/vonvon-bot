@@ -1521,6 +1521,59 @@ async function editHandoff(){
   return arg;
 }
 
+it('restores a legacy private selection without memory text and reviews cleanup alone in the same chat',async()=>{
+  await link();
+  const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const identity=()=>({itemId:randomUUID(),originId:randomUUID()}),field=(value:string)=>({...identity(),value});
+  const memory={...identity(),text:{kind:'inline' as const,value:'OLD_PRIVATE_RECIPE_MEMORY_SENTINEL'}};
+  const content={format:'rich-v2' as const,schemaVersion:2 as const,public:{name:field('周报'),summary:field(''),overview:field(''),version:field('1')},
+    settings:[],files:[],skills:[],tasks:[],memories:[memory],rules:[],setup:[],parts:[]};
+  const canonical=Buffer.from(canonicalizeRichRecipeContent(content).canonicalUTF8).toString('base64url');
+  const sourceIdentity=kind(await rpc('groupSourceIdentity',{groupId}),'groupSourceIdentity').identity;
+  const arg={...beginInput(),draftId:randomUUID(),baseRevision:4,identity:sourceIdentity,canonical,source:{sourceIntentId:randomUUID(),canonical}};
+  await rpc('beginDraftHandoff',arg);
+  expect(lastCard()).not.toMatch(/OLD_PRIVATE_RECIPE_MEMORY_SENTINEL|查看可分享的 Bot 记忆/);
+  await new AuthoringJournal(root,()=>clock).run(db=>{
+    const handoff=db.handoffs![arg.retryId]!;
+    handoff.selection.options.includeBotMemories=true;
+    handoff.selection.selected=[memory.itemId];
+    handoff.selection.choices=[{action:'item',id:memory.itemId,label:memory.text.value,checked:true}];
+  });
+  await orch.shutdown();restart();await open();orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});
+  await rpc('restoreHandoff',{retryId:arg.retryId,expected:{kind:'draft',groupId,draftId:arg.draftId,baseRevision:4}});
+  expect(lastCard()).not.toMatch(/OLD_PRIVATE_RECIPE_MEMORY_SENTINEL|查看可分享的 Bot 记忆/);
+  await tap(privateChoice('确认本次修改范围'));
+  const handoff=kind(await rpc('handoffStatus',{retryId:arg.retryId}),'handoff').handoff,op=await status(handoff.operationId!);
+  await rpc('richAdvance',{operationId:op.operationId,destinationDraftId:arg.draftId,authorization:{...await auth(op,'dispatch'),format:'rich-v2'}});
+  expect(lastCard()).toContain('本次修订排除旧配方中的记忆');
+  expect(lastCard()).not.toContain(memory.text.value);expect(lastCard()).not.toContain(memory.itemId);
+  const preview=kind(await rpc('richInspect',{operationId:op.operationId,preview:true}),'richCandidate');
+  if(!('payload'in preview.request))throw Error('missing cleanup candidate');
+  expect(preview.request.payload.changes).toEqual([{op:'removeLegacyMemories'}]);
+  expect(preview.request.baseCanonical).toBe(canonical);expect(proposeRich).not.toHaveBeenCalled();
+});
+
+it('explains cleanup-first retry for a full private restore without allocating or changing the draft',async()=>{
+  await link();
+  const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol'),{AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const identity=()=>({itemId:randomUUID(),originId:randomUUID()}),field=(value:string)=>({...identity(),value});
+  const content={format:'rich-v2' as const,schemaVersion:2 as const,public:{name:field('周报'),summary:field(''),overview:field(''),version:field('1')},
+    settings:[],files:[],skills:[],tasks:[],memories:[{...identity(),text:{kind:'inline' as const,value:'PRIVATE_MEMORY_SENTINEL'}}],rules:[],setup:[],parts:[]};
+  const canonical=Buffer.from(canonicalizeRichRecipeContent(content).canonicalUTF8).toString('base64url');
+  const rules=Array.from({length:16},(_,i)=>({...identity(),purpose:'work' as const,text:{kind:'inline' as const,value:'规则 '+i}}));
+  const source={sourceIntentId:randomUUID(),canonical:Buffer.from(canonicalizeRichRecipeContent({...content,rules}).canonicalUTF8).toString('base64url')};
+  const sourceIdentity=kind(await rpc('groupSourceIdentity',{groupId}),'groupSourceIdentity').identity;
+  const arg={...beginInput(),draftId:randomUUID(),baseRevision:4,identity:sourceIdentity,canonical,source};
+  await rpc('beginDraftHandoff',arg);
+  const ledger=new AuthoringJournal(root,()=>clock);
+  await ledger.run(db=>{db.handoffs![arg.retryId]!.selection.candidates=rules.map(rule=>rule.itemId);});
+  await tap(privateChoice('确认本次修改范围'));
+  expect(replies()).toContain('请先单独确认排除这份配方的旧记忆，再重新提交原修改');
+  expect(kind(await rpc('status'),'status').operations).toEqual([]);expect(cloud).toEqual([]);
+  expect((await ledger.run(db=>db.handoffs![arg.retryId]!.edit!.canonical))).toBe(canonical);
+});
+
 it.each(['cancelled','expired'] as const)('retains exact base revision evidence for a %s edit and refuses unproven historical rows',async terminal=>{
   await link();const arg=await editHandoff();
   if(terminal==='cancelled')await rpc('cancelHandoff',{retryId:arg.retryId});

@@ -307,7 +307,7 @@ export async function applyRich(bot: BotIdentity, input: Activation, schedules: 
             item.value,
             op.group,
             op.bot,
-            resolved.filter((i) => ['rules', 'skills', 'files', 'memories', 'role', 'settings'].includes(i.kind)),
+            resolved.filter((i) => ['rules', 'skills', 'files', 'role', 'settings'].includes(i.kind)),
           ]),
           task: {
             id: managedId(op.install, item.itemId),

@@ -32,6 +32,7 @@ export function checkedRichInput(input:RichModelInput){
   checkModelText(input.instruction);
   if(input.selected.length>32 || new Set(input.selected.map(i=>i.itemId)).size!==input.selected.length)throw new Error('请缩小所选上下文。');
   const selected=input.selected.map((item,index)=>{
+    if(item.kind==='memory')throw new Error('配方不包含记忆，请重新选择内容。');
     const value=wireJson(item.value);
     if(!safeEditValue(item.value)||Buffer.byteLength(value)>8000)throw new Error('请在 App 核对所选内容。');
     return {target:'T'+(index+1),kind:item.kind,...(item.field&&{field:item.field}),value:item.value};

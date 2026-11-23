@@ -3,7 +3,7 @@ import {groupBackendId} from '../config/execution';
 import {staticLogoFormat} from '../../../../services/recipe-api/src/logo-format.mjs';
 import {createHash,randomUUID} from 'node:crypto';
 import type {LarkChannel} from '@larksuiteoapi/node-sdk';
-import {canonicalizeRichRecipeContent,decodeRichRecipeContent,richFreezeInputSchema,recipeRichDraftChangeSchema,type RecipeAuthoringRequest,type RecipeRichContent,type ScheduledTaskView, type RichFreezeInput} from '@vonvon/protocol';
+import {canonicalizeRichRecipeContent,validateWritableRichRecipeContent,decodeRichRecipeContent,richFreezeInputSchema,recipeRichDraftChangeSchema,type RecipeAuthoringRequest,type RecipeRichContent,type ScheduledTaskView, type RichFreezeInput} from '@vonvon/protocol';
 import {botPaths} from '../config/paths';
 import type {BotIdentity} from '../config/bots';
 import {applyManagedInventory,type ManagedSourceItem,type ManagedSourceSelection} from './authoring-rich-managed';
@@ -59,7 +59,7 @@ function selectManagedSources(managed:ManagedSourceItem[],options:InventoryOptio
   }
   return managed.flatMap(item=>item.kind==='skills'?(skills.has(item.itemId)?[skills.get(item.itemId)!]:[]):
     item.kind==='files'?(files.has(item.itemId)?[item]:[]):
-    item.kind==='setup'||item.kind==='memories'&&!options.includeBotMemories||item.kind==='tasks'&&!options.includeTasks?[]:[item]);
+    item.kind==='setup'||item.kind==='memories'||item.kind==='tasks'&&!options.includeTasks?[]:[item]);
 }
 export async function richSkillOptions(native:RichNativeOptions,group:string){
   const row=await atSource(native.channel,native.bot,group,r=>structuredClone(r));
@@ -77,7 +77,7 @@ export async function readRichSource(native:RichNativeOptions,scope:string,accou
   if(row.richRecipe&&!metadata)throw new Error('需要核对当前已安装配方的来源。');
   const selected=selectManagedSources(metadata??[],options);
   const managed=row.richRecipe?await native.managedSources?.(row,botPaths(native.bot.appId).dir,{
-    fileIds:selected.filter(item=>item.kind==='files').map(item=>item.itemId),includeBotMemories:options.includeBotMemories,includeTasks:options.includeTasks,
+    fileIds:selected.filter(item=>item.kind==='files').map(item=>item.itemId),includeBotMemories:false,includeTasks:options.includeTasks,
   }):[];
   if(row.richRecipe&&!managed)throw new Error('需要核对当前已安装配方的来源。');
   const handles=new Set(managedSkillChoices(metadata??[]).map(skill=>skill.name));
@@ -183,11 +183,15 @@ export function richMemberCap(rich:RichLocalDraft){
 export function typedRichEdit(req:Extract<RecipeAuthoringRequest,{type:'richEdit'}>):RichLocalDraft{
   const base={canonical:req.canonical,selected:req.selected};
   const content=verifyEditBase(req.canonical,req.selected);
-  if(!req.changes&&!req.logo&&!req.access)return {base};
+  if(content.memories.some(item=>req.selected.includes(item.itemId)))throw new Error('配方不包含记忆，请重新选择内容。');
+  if(!req.changes&&!req.logo&&!req.access&&!content.memories.length)return {base};
   const allowed=new Set(req.selected);
   const changes=[...(req.changes??[])];
   if(req.access&&!changes.length&&!req.logo)changes.push({op:'setAccess',value:req.access});
   for(const change of changes){
+    if(change.op==='removeLegacyMemories')throw new Error('历史记忆由继续编辑流程统一排除。');
+    if(change.op==='copyItem'&&change.source.kind==='memory'||change.op==='includeCandidate'&&change.value.kind==='memory')
+      throw new Error('配方不包含记忆，不能复制或恢复记忆。');
     if(change.op==='setAccess'){if(req.access!==change.value)throw new Error('获取方式不一致。');continue;}
     if(change.op==='setFinalLogo')throw new Error('请选择原始 Logo 文件。');
     if(!safeEditValue(change))throw new Error('所选编辑含敏感内容。');
@@ -212,12 +216,31 @@ export function typedRichEdit(req:Extract<RecipeAuthoringRequest,{type:'richEdit
     changes.push({op:'setFinalLogo',...(content.finalLogo&&{itemId:content.finalLogo.itemId}),objectId});
     members.push({itemId:objectId,kind:'finalLogo',bytes:req.logo,sha256:createHash('sha256').update(bytes).digest('hex')});
   }
-  canonicalizeRichRecipeContent(content);
-  return {base,members,selectionDigest:wireDigest({draftId:req.draftId,revision:req.baseRevision,selected:req.selected,changes:req.changes??[],access:req.access??null,logo:members[0]?.sha256??null}),request:{format:'rich-v2',...(req.access&&{access:req.access}),baseCanonical:req.canonical,...(req.source&&{candidates:[req.source]}),payload:{
-    format:'rich-v2',purpose:'editDraft',draftId:req.draftId,baseRevision:req.baseRevision,requestId:randomUUID(),schemaVersion:2,changes}}};
+  if(content.memories.length){
+    if(changes.length>=16)throw new Error('本次选择的修改已用满 16 项。请先单独确认排除这份配方的旧记忆，再重新提交原修改；原草稿尚未改变。');
+    changes.unshift({op:'removeLegacyMemories'});
+  }
+  const request=richFreezeInputSchema.parse({format:'rich-v2',...(req.access&&{access:req.access}),baseCanonical:req.canonical,...(req.source&&{candidates:[req.source]}),payload:{
+    format:'rich-v2',purpose:'editDraft',draftId:req.draftId,baseRevision:req.baseRevision,requestId:randomUUID(),schemaVersion:2,changes}});
+  validateRichProposal(request);
+  return {base,members,selectionDigest:wireDigest({draftId:req.draftId,revision:req.baseRevision,selected:req.selected,changes:req.changes??[],access:req.access??null,logo:members[0]?.sha256??null}),request};
+}
+export function validateRichProposal(request:RichFreezeInput){
+  if('content'in request){validateWritableRichRecipeContent(request.content);return;}
+  if(request.payload.changes.some(change=>change.op==='copyItem'&&change.source.kind==='memory'||change.op==='includeCandidate'&&change.value.kind==='memory'))
+    throw new Error('配方不包含记忆，不能复制或恢复记忆。');
+  const base=decodeRichRecipeContent(Buffer.from(request.baseCanonical,'base64url')).content;
+  const resolve=(ref:{sourceIntentId:string;candidateId:string})=>{
+    const donor=request.candidates?.find(src=>src.sourceIntentId===ref.sourceIntentId);
+    if(!donor)throw new Error('缺少恢复来源。');
+    return {content:decodeRichRecipeContent(Buffer.from(donor.canonical,'base64url')).content,itemId:ref.candidateId};
+  };
+  const changes=request.newParts?request.payload.changes:request.payload.changes.filter(change=>change.op!=='setFinalLogo');
+  const final=applyChanges(base,changes,resolve,Buffer.alloc(32),request.newParts).doc.content;
+  validateWritableRichRecipeContent(final);
 }
 export function richEditTargets(content:RecipeRichContent,selected:readonly string[]):RichModelItem[]{
-  const legacy=new Set(content.setup.map(item=>item.itemId));
+  const legacy=new Set([...content.setup,...content.memories].map(item=>item.itemId));
   selected=selected.filter(id=>!legacy.has(id));
   const items:RichModelItem[]=[];
   const add=(item: {itemId:string;originId:string}&Record<string,unknown>,kind:RichModelItem['kind'],field?:string)=>{
@@ -237,7 +260,7 @@ export function richEditTargets(content:RecipeRichContent,selected:readonly stri
       for(const block of item.value.blocks)add(block,'cardBlock');
     }else add(item,'setting',item.field);
   }
-  for(const [key,kind] of [['rules','rule'],['skills','skill'],['tasks','task'],['files','file'],['memories','memory']] as const)
+  for(const [key,kind] of [['rules','rule'],['skills','skill'],['tasks','task'],['files','file']] as const)
     for(const item of content[key])add(item,kind);
   if(content.finalLogo)add(content.finalLogo,'finalLogo');
   if(items.length!==selected.length)throw new Error('选择的草稿条目不存在。');
@@ -262,6 +285,7 @@ export function richCardReview(op:{rich?:RichLocalDraft;richSourceOriginal?:Sour
   if(!rich?.request)return;
   try{
     const request=richFreezeInputSchema.parse(rich.request),payloadDigest=richReviewDigest(rich);
+    validateRichProposal(request);
     const captured:SourceCapture=structuredClone(op.richSourceOriginal??rich);
     if(captured.request&&'content'in captured.request&&!op.richSourceOriginal)for(const [key,value] of Object.entries(rich.sourcePublicValues??{})){
       if(!['name','summary','overview','version'].includes(key)||typeof value!=='string')return;
@@ -331,12 +355,16 @@ function richChatSnapshot(op:LocalOperation){
   const rich=op.rich;
   if(!rich)throw new Error('找不到当前草稿。');
   const base=rich.base, original=rich.request&&'content' in rich.request?rich.request:undefined;
-  const selected=base?.selected??(original?[...new Set([...Object.values(original.content.public).map(i=>i.itemId),
+  let selected=base?.selected??(original?[...new Set([...Object.values(original.content.public).map(i=>i.itemId),
     ...(rich.source?.selected??[])])]:[]);
   const content=base?verifyEditBase(base.canonical,selected):original?.content;
   if(!content)throw new Error('缺少本次草稿快照。');
-  const presentIds=new Set(itemsOf(content).map(i=>i.itemId));
-  const targets=richEditTargets(content,selected.filter(id=>presentIds.has(id)));
+  const captured=op.richSourceOriginal?.request;
+  if(original&&captured&&'content'in captured){
+    const omitted=new Set(itemsOf(captured.content).filter(item=>rich.sourceOmitted?.includes(item.itemId)).map(item=>item.itemId));
+    selected=selected.filter(id=>!omitted.has(id));
+  }
+  const targets=richEditTargets(content,selected);
   return {rich,base,original,content,targets};
 }
 export function richEditCardContext(op:LocalOperation){
@@ -404,12 +432,13 @@ export async function chatRichProposal(op:LocalOperation,instruction:string,sign
       sourcePublicValues[change.field]??=request.content.public[change.field].value;
       request.content.public[change.field].value=change.value;
     }
-    canonicalizeRichRecipeContent(request.content);
+    validateRichProposal(request);
     const newFields=[...new Set([...(rich.newFields??[]),...parsed.changes.flatMap(c=>'itemId' in c&&c.itemId?[c.itemId]:[])])];
     return {kind:'proposal',request,newFields,...(rich.privateSelection&&rich.source&&rich.sourceCaptureDigest&&{sourcePublicValues,...(sourceOriginal&&{richSourceOriginal:sourceOriginal,sourceOmitted})})} as const;
   }
   if(!op.view.draftId||!op.view.baseRevision||!base)throw new Error('缺少当前草稿修订。');
   const request:RichFreezeInput={format:'rich-v2',baseCanonical:base.canonical,payload:{format:'rich-v2',purpose:'editDraft',draftId:op.view.draftId,
-    baseRevision:op.view.baseRevision,requestId:randomUUID(),schemaVersion:2,changes:parsed.changes}};
+    baseRevision:op.view.baseRevision,requestId:randomUUID(),schemaVersion:2,changes:[...(content.memories.length?[{op:'removeLegacyMemories'} as const]:[]),...parsed.changes]}};
+  validateRichProposal(request);
   return {kind:'proposal',request,newFields:undefined,sourcePublicValues:undefined} as const;
 }

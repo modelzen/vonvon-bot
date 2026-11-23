@@ -65,7 +65,9 @@ export function selectRichSnapshot(args:{
   const {inventory,selected}=args;
   const wanted=new Set(selected);
   if(wanted.size!==selected.length)throw new Error('所选内容重复。');
+  if(inventory.memories.some(item=>wanted.has(item.itemId)))throw new Error('配方不包含记忆，请重新选择内容。');
   const content=structuredClone(inventory);
+  content.memories=[];
   if(content.role&&!wanted.has(content.role.itemId))delete content.role;
   if(content.finalLogo&&!wanted.has(content.finalLogo.itemId))delete content.finalLogo;
   function keep<K extends RichCollection>(key:K) {

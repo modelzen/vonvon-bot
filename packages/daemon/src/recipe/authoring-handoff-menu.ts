@@ -8,7 +8,7 @@ import type {HandoffAttestation} from '@vonvon/protocol';
 type Edit = Extract<RecipeAuthoringRequest,{type:'beginDraftHandoff'}>;
 type SourceInventory = Awaited<ReturnType<typeof readRichSource>>;
 type Options = Extract<RecipeAuthoringRequest,{type:'richInventory'}>['options'];
-type TargetKind = 'publicText'|'role'|'setting'|'cardBlock'|'rule'|'skill'|'file'|'task'|'memory'|'finalLogo';
+type TargetKind = 'publicText'|'role'|'setting'|'cardBlock'|'rule'|'skill'|'file'|'task'|'finalLogo';
 type Item = {kind:TargetKind;id:string;label:string;parent?:string};
 type Page = 'content'|'skills'|'files'|'saved';
 type Choice = {action:'item'|'saved'|'skill'|'file';id:string;label:string;checked:boolean};
@@ -54,11 +54,18 @@ export function contentItems(content:RecipeRichContent):Item[]{
     for(const f of content.files.filter(f=>s.fileIds.includes(f.itemId)))items.push({kind:'file',id:f.itemId,label:s.name+' / '+f.name,parent:s.itemId});
   }
   for(const t of content.tasks)items.push({kind:'task',id:t.itemId,label:'任务 · '+t.name});
-  for(const [i,m] of content.memories.entries())items.push({kind:'memory',id:m.itemId,label:'记忆 · '+(m.text.kind==='inline'?m.text.value.slice(0,40):String(i+1))});
   if(content.finalLogo)items.push({kind:'finalLogo',id:content.finalLogo.itemId,label:'配方 Logo'});
   return items;
 }
 const decode=(canonical:string)=>decodeRichRecipeContent(Buffer.from(canonical,'base64url')).content;
+const memoryIds=(edit:NonNullable<PrivateHandoff['edit']>)=>new Set(
+  [decode(edit.canonical),decode(edit.source.canonical)].flatMap(content=>content.memories.map(item=>item.itemId)));
+export function hasLegacyMemoryChoices(h:PrivateHandoff){
+  if(h.selection.options.includeBotMemories)return true;
+  if(!h.edit)return false;
+  const memories=memoryIds(h.edit);
+  return [...h.selection.selected,...h.selection.candidates,...h.selection.choices.map(choice=>choice.id)].some(id=>memories.has(id));
+}
 function savedItems(edit:NonNullable<PrivateHandoff['edit']>){
   const current=decode(edit.canonical),source=decode(edit.source.canonical),present=new Set(contentItems(current).map(i=>i.id));
   return contentItems(source).filter(i=>i.kind!=='publicText'&&!present.has(i.id)&&(!i.parent||present.has(i.parent))&&
@@ -82,6 +89,12 @@ export function candidateChanges(h:PrivateHandoff):RecipeRichDraftChange[]{
 }
 export function setChoices(h:PrivateHandoff,inventory?:SourceInventory,skills?:{name:string;files:string[]}[]){
   const s=h.selection;
+  s.options.includeBotMemories=false;
+  if(h.edit){
+    const memories=memoryIds(h.edit);
+    s.selected=s.selected.filter(id=>!memories.has(id));
+    s.candidates=s.candidates.filter(id=>!memories.has(id));
+  }
   let choices:Choice[];
   if(s.page==='skills')choices=(skills??[]).map(k=>({action:'skill',id:k.name,label:k.name.replace(/ · [a-f0-9-]{36}$/i,''),checked:s.options.skills.some(x=>x.skill===k.name)}));
   else if(s.page==='files'){
@@ -100,10 +113,10 @@ export function setChoices(h:PrivateHandoff,inventory?:SourceInventory,skills?:{
 }
 export function toggleChoice(h:PrivateHandoff,click:Click){
   const s=h.selection;
-  if(click.action==='memories'||click.action==='tasks'){
+  if(click.action==='memories')throw new Error('请选择当前卡片中的内容，配方不包含记忆。');
+  if(click.action==='tasks'){
     if(h.edit)throw new Error('草稿没有新的来源读取授权。');
-    const flag=click.action==='memories'?'includeBotMemories':'includeTasks';
-    s.options[flag]=!s.options[flag];s.page='content';s.offset=0;
+    s.options.includeTasks=!s.options.includeTasks;s.page='content';s.offset=0;
   }else if(click.action==='next'||click.action==='prev')s.offset+=(click.action==='next'?1:-1)*PAGE;
   else if(click.action==='content'||click.action==='skills'||click.action==='saved'){
     if(click.action==='skills'&&h.edit||click.action==='saved'&&!h.edit)throw new Error('请选择当前卡片中的内容。');
@@ -111,6 +124,8 @@ export function toggleChoice(h:PrivateHandoff,click:Click){
   }else if(click.action==='choice'){
     const choice=s.choices[click.index??-1];
     if(!choice)throw new Error('请选择当前卡片中的内容。');
+    if(h.edit&&memoryIds(h.edit).has(choice.id))
+      throw new Error('请选择当前卡片中的内容，配方不包含记忆。');
     if(choice.action==='skill'){s.page='files';s.skill=choice.id;s.offset=0;return;}
     if(choice.action==='file'){
       const name=s.skill!,group=s.options.skills.find(k=>k.skill===name);
@@ -152,7 +167,7 @@ export function handoffCard(h:PrivateHandoff){
   elements.push(plain(h.groupName));
   if(h.inherited)elements.push(plain('沿用本人已发布版本的名称、简介、概览、Logo 和获取方式；请为新版填写新的显示版本。群配置只包含本次勾选内容。'));
   if(h.phase.state==='selecting'||h.phase.state==='deliveryUnknown'){
-    elements.push(plain(h.edit?'选择这次要修改的草稿内容，然后告诉我想怎么改。':'勾选你有权分享的内容。技能文件、Bot 记忆和任务由你单独选择。'));
+    elements.push(plain(h.edit?'选择这次要修改的草稿内容，然后告诉我想怎么改。':'勾选你有权分享的内容。技能文件和任务由你单独选择。'));
     for(const [i,c] of s.choices.entries())add((c.action==='skill'?'› ':c.checked?'☑ ':'☐ ')+c.label.slice(0,100),'choice',i);
     if(!s.choices.length)elements.push(plain('这里暂时没有可选内容。'));
     if(s.offset>0)add('上一页','prev');
@@ -162,7 +177,6 @@ export function handoffCard(h:PrivateHandoff){
     if(!h.edit){
       if(s.page!=='skills')add('选择技能和文件','skills');
       if(s.page==='content'){
-        add(s.options.includeBotMemories?'收起并排除 Bot 记忆':'查看可分享的 Bot 记忆','memories');
         add(s.options.includeTasks?'收起并排除任务':'查看可分享的群任务','tasks');
       }
     }
