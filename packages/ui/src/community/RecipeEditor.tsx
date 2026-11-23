@@ -9,7 +9,7 @@ import {useShellCapabilities} from '../client-context';
 import {Dialog} from '../reference/components/ui/Dialog';
 import {useDraft, useDraftGuard} from '../settings/DraftGuard';
 import {RecipeAuthoringPage} from './authoring/RecipeAuthoring';
-import {RecipeConfiguration, RecipeDetails, RecipeMarkdown, RecipeMetadata} from './RecipeContent';
+import {RecipeConfiguration, RecipeDetails, RecipeOverview} from './RecipeContent';
 
 const blank: {public: RecipePublic; config: RecipeConfig} = {public: {name: '', summary: '', overview: '', version: '1.0', access: 'direct'}, config: {role: ''}};
 type DraftContents = Pick<RecipeRoleDraft, 'public' | 'config'>;
@@ -22,6 +22,7 @@ type DraftAction =
   | {type: 'loaded'; draft: RecipeRoleDraft}
   | {type: 'public'; patch: Partial<RecipePublic>}
   | {type: 'config'; patch: Partial<RecipeConfig>}
+  | {type: 'removeLegacyNotes'}
   | {type: 'error'; message?: string}
   | {type: 'discard'}
   | {type: 'saveBase'; draft: RecipeRoleDraft}
@@ -37,6 +38,10 @@ function editorDraft(state: EditorDraft, action: DraftAction): EditorDraft {
     case 'loaded': return {...state, model: action.draft, contents: {public: action.draft.public, config: action.draft.config}, bufferRevision: state.bufferRevision + 1};
     case 'public': return {...state, contents: {...state.contents, public: {...state.contents.public, ...action.patch}}, bufferRevision: state.bufferRevision + 1, dirty: true, saved: false, review: undefined};
     case 'config': return {...state, contents: {...state.contents, config: {...state.contents.config, ...action.patch}}, bufferRevision: state.bufferRevision + 1, dirty: true, saved: false, review: undefined};
+    case 'removeLegacyNotes': {
+      const {setup: _setup, ...config} = state.contents.config;
+      return {...state, contents: {...state.contents, config}, bufferRevision: state.bufferRevision + 1, dirty: true, saved: false, review: undefined};
+    }
     case 'error': return {...state, error: action.message};
     case 'discard': return {...state, dirty: false, bufferRevision: state.bufferRevision + 1};
     case 'saveBase': case 'saved': {
@@ -175,30 +180,26 @@ function RoleRecipeEditor({shell, accountId, draftId, source, onBack, onPublishe
   if (loading) return <p role="status">正在读取私人草稿…</p>;
   if (draftId && !model) return <><InlineNotice title="草稿读取未完成" tone="warning">{error}</InlineNotice><BackButton onClick={onBack} label="返回创作中心"/></>;
   if (!editing && model) return <div className="community-page"><div className="community-actions"><BackButton onClick={onBack} label="返回创作中心"/><GlowButton variant="dark" onClick={() => setEditing(true)}>编辑草稿</GlowButton></div><p className="community-muted">私人草稿 · 仅自己可见</p><RecipeDetails draft recipe={{recipeId: model.recipeId ?? model.draftId, versionId: model.draftId, revision: model.revision, public: model.public, config: model.config, owned: true, acquired: false}}/>{chat}</div>;
-  const steps = contents.config.setup?.steps ?? [];
-  const updateStep = (i: number, patch: Partial<NonNullable<RecipeConfig['setup']>['steps'][number]>) => changeConfig({setup: {steps: steps.map((step, at) => at === i ? {...step, ...patch} : step)}});
   return <div className="community-page"><div className="community-heading"><div><h1>{contents.public.name || '新建私人草稿'}</h1><p>先审核配置，再填写发布信息。保存草稿不会公开。</p></div><div className="community-actions"><BackButton label="返回创作中心" onClick={() => navigate(onBack)}/>{model && <Button disabled={busy} onClick={() => setDeleting(true)}>删除草稿</Button>}</div></div>
     {error && <InlineNotice title="操作未完成" tone="warning" actions={model && <Button disabled={busy} onClick={() => void readDraft(model.draftId, model.revision, 'conflict')}>读取最新草稿</Button>}>{error}</InlineNotice>}{saved && <p role="status" className="community-muted">私人草稿已保存 · 修订 {model?.revision}</p>}
     {source && <InlineNotice title="基于已有配方准备新草稿">来源：{source.public.name} · {source.public.version}。来源关系会保留；请核对你拥有分享权的内容。{!sourceAllowed && '其他作者的受限内容不能重新发布。'}</InlineNotice>}
     <form className="community-editor" onSubmit={event => {event.preventDefault(); void run(async () => {await save();});}}>
       <fieldset disabled={busy}><legend>发布信息</legend><label>名称<input aria-label="配方名称" value={contents.public.name} onChange={event => changePublic({name: event.target.value})}/></label><label>公开简介<textarea aria-label="公开简介" value={contents.public.summary} rows={3} onChange={event => changePublic({summary: event.target.value})}/></label>
         <div className="community-editor-grid"><label>版本<input aria-label="版本" value={contents.public.version} onChange={event => changePublic({version: event.target.value})}/></label><label>获取方式<select aria-label="获取方式" value={contents.public.access} onChange={event => changePublic({access: event.target.value as RecipePublic['access']})}><option value="direct">直接获取</option><option value="coded">凭分享码获取</option></select></label></div>
-        <label>公开概览 · Markdown<textarea aria-label="公开概览" value={contents.public.overview} maxLength={32768} onChange={event => changePublic({overview: event.target.value})}/></label>
+        <label>公开概览 · Markdown<textarea aria-label="公开概览" value={contents.public.overview} maxLength={32768} onChange={event => changePublic({overview: event.target.value})}/><small className="community-muted">有依赖或需要先运行的技能时，请在介绍中说明。</small></label>
       </fieldset>
       <fieldset disabled={busy}><legend>角色与规则</legend><p className="community-muted">{contents.public.access === 'coded' ? '仅作者与已获取此版本的人可见。' : '这些配置将在社区公开展示。'}请移除凭据、主机路径和私人内容。</p><label>角色与规则<textarea aria-label="角色与规则" value={contents.config.role} maxLength={16384} onChange={event => changeConfig({role: event.target.value})}/></label></fieldset>
-      <fieldset disabled={busy}><legend>使用前准备</legend>{!steps.length && <p className="community-muted">不需要准备时可直接发布。步骤只作为说明，不会自动执行命令。</p>}
-        {steps.map((step, i) => <fieldset key={i}><legend>步骤 {i + 1}</legend><div className="community-editor-grid"><label>名称<input value={step.title} onChange={event => updateStep(i, {title: event.target.value})}/></label><label>类型<select value={step.kind} onChange={event => updateStep(i, {kind: event.target.value as typeof step.kind})}><option value="config">配置</option><option value="tool">工具</option><option value="context">上下文</option></select></label></div><label>操作说明<textarea value={step.instructions} maxLength={2048} onChange={event => updateStep(i, {instructions: event.target.value})}/></label><label>检查方式<input value={step.check ?? ''} maxLength={512} onChange={event => updateStep(i, {check: event.target.value})}/></label><label className="community-checkbox"><input type="checkbox" checked={step.required} onChange={event => updateStep(i, {required: event.target.checked})}/>必需步骤</label><Button type="button" onClick={() => {const next = steps.filter((_, at) => at !== i); changeConfig({setup: next.length ? {steps: next} : undefined});}}>移除此步骤</Button></fieldset>)}
-        <Button type="button" disabled={steps.length >= 8} onClick={() => changeConfig({setup: {steps: [...steps, {kind: 'config', title: '', instructions: '', required: false}]}})}>添加准备步骤</Button>
-      </fieldset>
+      {Boolean(contents.config.setup?.steps.length) && <details className="community-additional-notes"><summary>补充说明</summary>{contents.config.setup!.steps.map((note, index) => <article key={index}><h3>{note.title || `说明 ${index + 1}`}</h3><p>{note.instructions}</p>{note.check && <p>核对方式：{note.check}</p>}</article>)}<Button type="button" disabled={busy} onClick={() => dispatch({type: 'removeLegacyNotes'})}>移除旧补充说明</Button><p className="community-muted">保存后生效，已发布版本不受影响。</p></details>}
+
       <div className="community-actions"><Button type="submit" disabled={busy || !sourceAllowed}>保存私人草稿</Button><GlowButton type="button" variant="dark" disabled={busy || !sourceAllowed} onClick={() => void run(preparePublish)}>预览发布</GlowButton></div>
     </form>
     {chat}
     <Dialog open={Boolean(latest)} title="核对最新草稿" size="lg" onClose={() => dispatch({type: 'latest'})} footer={<><Button onClick={() => dispatch({type: 'latest'})}>继续核对</Button><GlowButton variant="dark" onClick={() => {pendingSave.current = undefined; dispatch({type: 'rebase'});}}>保留当前输入，使用此修订继续编辑</GlowButton></>}>
-      <p>下面是云端最新保存的内容。你的未保存输入仍保留。确认后，再点击保存才会更新这份草稿。</p>{latest && <><h2>{latest.public.name}</h2><p>{latest.public.summary}</p><RecipeMetadata meta={latest.public}/><RecipeMarkdown text={latest.public.overview}/><RecipeConfiguration config={latest.config} section="能力"/><RecipeConfiguration config={latest.config} section="使用前准备"/></>}
+      <p>下面是云端最新保存的内容。你的未保存输入仍保留。确认后，再点击保存才会更新这份草稿。</p>{latest && <><h2>{latest.public.name}</h2><p>{latest.public.summary}</p><RecipeOverview recipe={latest}/><RecipeConfiguration config={latest.config} section="能力"/></>}
     </Dialog>
     <Dialog open={Boolean(review)} title="确认发布到社区" size="lg" onClose={busy ? undefined : () => dispatch({type: 'review'})} footer={<><Button disabled={busy} onClick={() => dispatch({type: 'review'})}>继续编辑</Button><GlowButton variant="dark" disabled={busy} onClick={() => void run(publish)}>发布到社区</GlowButton></>}>
       {error && <InlineNotice title="发布未完成" tone="warning">{error}</InlineNotice>}
-      {review && <><h2>{review.public.name}</h2><p>{review.public.summary}</p><RecipeMetadata meta={review.public}/><RecipeMarkdown text={review.public.overview}/><RecipeConfiguration config={review.config} section="能力"/><RecipeConfiguration config={review.config} section="使用前准备"/></>}
+      {review && <><h2>{review.public.name}</h2><p>{review.public.summary}</p><RecipeOverview recipe={review}/><RecipeConfiguration config={review.config} section="能力"/></>}
     </Dialog>
     <Dialog open={deleting} title="删除私人草稿" onClose={busy ? undefined : () => setDeleting(false)} footer={<><Button onClick={() => setDeleting(false)} disabled={busy}>保留草稿</Button><Button disabled={busy} onClick={() => void run(async () => {if (!model) return; await shell.request({type: 'deleteDraft', accountId, draftId: model.draftId, revision: model.revision, requestId: key(`delete:${model.draftId}:${model.revision}`)}); if (live.current) {dispatch({type: 'discard'}); onBack();}})}>删除草稿</Button></>}><p>删除后无法恢复。已发布版本仍会保留。</p>{error && <InlineNotice title="删除未完成" tone="warning">{error}</InlineNotice>}</Dialog>
   </div>;

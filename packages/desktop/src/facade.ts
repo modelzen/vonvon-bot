@@ -339,7 +339,7 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
   };
 
   const shell: DesktopShell = {
-    openExternal: url => callShell(desktopChannels.external, url),
+    openExternal: (url, kind) => callShell(desktopChannels.external, kind ? {url, kind} : url),
     chooseExecutablePath: () => transport.invoke(desktopChannels.chooseExecutablePath)
       .then(value => readResult(value, parseExecutablePath), error => {
         throw error instanceof Error ? new Error(error.message) : new Error('桌面端操作没有成功，请重试。');

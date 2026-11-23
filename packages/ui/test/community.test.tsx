@@ -1,5 +1,6 @@
 import {expect, it} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
+import {readFileSync} from 'node:fs';
 import {recipeDetailSchema, type RecipeDetail} from '@vonvon/protocol';
 import {RecipeCard, RecipeDetails, RecipeConfiguration, RecipeMarkdown} from '../src/community/RecipeContent';
 import {uniqueRecipes} from '../src/community/CommunityPage';
@@ -21,7 +22,9 @@ it('places community second and keeps Bot and group navigation, including before
 });
 it('keeps public details as a reading surface and exposes the full configuration navigation for direct versions', () => {
   const html = renderToStaticMarkup(<RecipeDetails recipe={recipe}/>);
-  for (const label of ['概览', '模型与权限', '能力', '沟通方式', '记忆', '任务', '使用前准备', '第 1 次发布']) expect(html).toContain(label);
+  for (const label of ['概览', '模型与权限', '能力', '沟通方式', '记忆', '任务', '第 1 次发布']) expect(html).toContain(label);
+  expect(html).not.toContain('使用前准备');
+  expect(html.match(/<nav aria-label="配方详细信息">([\s\S]*?)<\/nav>/)?.[1].match(/<button /g)).toHaveLength(6);
   for (const label of ['管理发布', '准备新版', '分享码管理', '编辑草稿']) expect(html).not.toContain(label);
   expect(html).toContain('<h2>使用方法</h2>');
 });
@@ -37,15 +40,38 @@ it('uses factual metadata without invented artwork, counts, categories, free bad
   expect(html).toContain('最新配方'); expect(html).toContain('排错助手'); expect(html).toContain('解释用法与排查问题');
   for (const invented of ['精选', '免费', '人使用', '热门', '<img', '作者']) expect(html).not.toContain(invented);
 });
+it('does not ask an acquired-library visitor for another code', () => {
+  const coded={...recipe,public:{...recipe.public,access:'coded' as const}};
+  expect(renderToStaticMarkup(<RecipeCard recipe={coded} onOpen={()=>{}}/>)).toContain('需分享码');
+  expect(renderToStaticMarkup(<RecipeCard recipe={coded} context="library" onOpen={()=>{}}/>)).not.toContain('需分享码');
+});
 it('shows missing config honestly and keeps imported setup as readable text without executing HTML', () => {
   const model = renderToStaticMarkup(<RecipeConfiguration config={recipe.config!} section="模型与权限"/>);
   expect(model.match(/未指定/g)).toHaveLength(2);
-  const setup = renderToStaticMarkup(<RecipeConfiguration config={recipe.config!} section="使用前准备"/>);
-  expect(setup).toContain('检查配置'); expect(setup).toContain('必需'); expect(setup).toContain('打开设置核对。');
+  const legacy = {...recipe,config:{...recipe.config!,setup:{steps:[{...recipe.config!.setup!.steps[0]!,check:'确认设置已保存'}]}}};
+  const setup = renderToStaticMarkup(<RecipeDetails recipe={legacy}/>);
+  expect(setup).toContain('<summary>补充说明</summary>');
+  expect(setup).toContain('检查配置'); expect(setup).toContain('打开设置核对。'); expect(setup).toContain('确认设置已保存');
+  expect(setup).not.toContain('使用前准备'); expect(setup).not.toContain('必需');
   const html = renderToStaticMarkup(<RecipeMarkdown text={'<script>danger()</script>\n**强调**\n```sh\nrm -rf example\n```'}/>);
   expect(html).not.toContain('<script>'); expect(html).toContain('&lt;script&gt;'); expect(html).toContain('<strong>强调</strong>'); expect(html).toContain('<pre><code>rm -rf example</code></pre>');
 });
 it('appends paginated results without duplicate versions or changing the loaded order', () => {
   const other = {...recipe, versionId: '33333333-3333-4333-8333-333333333333'};
   expect(uniqueRecipes([recipe], [recipe, other, other])).toEqual([recipe, other]);
+});
+it('renders the launch recipe feedback and troubleshooting links as real safe links', () => {
+  const help=JSON.parse(readFileSync(new URL('../../../content/recipes/vonvon-help/recipe.json',import.meta.url),'utf8'));
+  const html=renderToStaticMarkup(<RecipeMarkdown text={help.public.overview}/>);
+  expect(html).toContain('<a href="https://my.feishu.cn/share/base/ExampleReference6" target="_blank" rel="noopener noreferrer">官方问题反馈表单</a>');
+  expect(html).toContain('<a href="https://vonvon.cc/docs/troubleshooting/" target="_blank" rel="noopener noreferrer">官方排错指南</a>');
+  expect(html).not.toContain('[官方问题反馈表单]');
+});
+it('keeps unsafe Markdown destinations and links inside code as literal text', () => {
+  const unsafe=['javascript:alert(1)','data:text/html;base64,PHNjcmlwdD4=','file:///tmp/private','//example.com/path','https://user:pass@example.com/path'];
+  const text=unsafe.map(url=>`[链接](${url})`).join('\n')+'\n`[代码](https://example.com)`\n```md\n[围栏](https://example.com)\n```';
+  const html=renderToStaticMarkup(<RecipeMarkdown text={text}/>);
+  expect(html).not.toContain('<a ');
+  for(const url of unsafe)expect(html).toContain(url);
+  expect(html).toContain('<code>[代码](https://example.com)</code>');
 });

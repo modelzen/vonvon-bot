@@ -1,14 +1,12 @@
-import {setupEditor, setupList} from './setup.mjs';
 import {credentialField} from '/credential-shapes.mjs';
 const $ = id => document.getElementById(id);
 const editor=$('editor'), fields=editor.elements, confirmDialog=$('confirm');
 let generation=null;
-let model=null, reviewing=null, managing=null, cursor=null, loading=false, changed=false;
+let model=null, reviewing=null, managing=null, cursor=null, loading=false, changed=false, notesRemoved=false;
 const keys=new Map();
-const setup=setupEditor($('setup-steps'),$('add-setup'),()=>{changed=true;});
 const text=(id,v)=>$(id).textContent=v;
 const show=(id,on)=>$(id).hidden=!on;
-const errorMessages={login_required:'请先登录。',conflict:'草稿已在其他地方变更。你的输入仍在这里；请先重新打开最新草稿，再决定如何修改。',quota_exceeded:'已达到账号或版本的限额，请检查草稿或稍后再试。',rate_limited:'操作过于频繁，请稍后再试。',auth_required:'登录已过期，请重新登录。',invalid_input:'请检查输入长度、版本和获取方式。',incomplete_setup:'发布前请补全准备步骤的名称和操作说明。',forbidden:'当前账号不能进行这项操作。',not_found:'没有找到这份草稿或版本。'};
+const errorMessages={login_required:'请先登录。',conflict:'草稿已在其他地方变更。你的输入仍在这里；请先重新打开最新草稿，再决定如何修改。',quota_exceeded:'已达到账号或版本的限额，请检查草稿或稍后再试。',rate_limited:'操作过于频繁，请稍后再试。',auth_required:'登录已过期，请重新登录。',invalid_input:'请检查输入长度、版本和获取方式。',incomplete_setup:'这份旧草稿的补充说明尚未完整。请核对并移除旧补充说明，保存后再发布。',forbidden:'当前账号不能进行这项操作。',not_found:'没有找到这份草稿或版本。'};
 async function api(path,{method='GET',body,rev,logical,version=1}={}){
   const headers={};if(method!=='GET'){
     headers['content-type']='application/json';
@@ -38,19 +36,28 @@ const metaLabels={'public.name':'名称','public.summary':'简介','public.overv
 function setupMatch(path){return /^config\.setup\.steps\.(\d+)\.(title|instructions|check)$/.exec(path);}
 function credentialMessage(field){
   const match=setupMatch(field);
-  const label=match?'准备步骤 '+(Number(match[1])+1):metaLabels[field]||'配方文字';
+  const label=match?'补充说明 '+(Number(match[1])+1):metaLabels[field]||'配方文字';
   return label+'中似乎有密钥或令牌。请移除后再保存。';
 }
-function contents(){
-  const preparation=setup.read();
-  return {public:{name:fields.name.value,summary:fields.summary.value,overview:fields.overview.value,version:fields.version.value,access:fields.access.value},config:{role:fields.role.value,...(preparation?{setup:preparation}:{})}};
+function renderNotes(host,notes=[]){
+  host.replaceChildren();
+  for(const note of notes){
+    const title=document.createElement('h3'),body=document.createElement('p');
+    title.textContent=note.title||'说明';body.textContent=note.instructions;host.append(title,body);
+    if(note.check){const check=document.createElement('p');check.textContent='核对方式：'+note.check;host.append(check);}
+  }
 }
-function scopeLabel(){text('scope-label',fields.access.value==='coded'?'角色说明和准备步骤仅自己和已获取此版本的人可见。':'角色说明和准备步骤在社区公开展示。');}
+function contents(){
+  const config={...model.config,role:fields.role.value};if(notesRemoved)delete config.setup;
+  return {public:{name:fields.name.value,summary:fields.summary.value,overview:fields.overview.value,version:fields.version.value,access:fields.access.value},config};
+}
+function scopeLabel(){text('scope-label',fields.access.value==='coded'?'配方配置仅自己和已获取此版本的人可见。':'配方配置在社区公开展示。');}
 fields.access.addEventListener('change',scopeLabel);
 function fill(d){
+  notesRemoved=false;
   model=d??{draftId:null,revision:0,recipeId:null,public:{name:'',summary:'',overview:'',version:'1.0',access:'direct'},config:{role:''}};
   for(const [k,v] of Object.entries(model.public))if(fields[k])fields[k].value=v;
-  fields.role.value=model.config?.role||'';setup.load(model.config?.setup?.steps);scopeLabel();changed=false;show('editor',true);show('result',false);text('notice','');
+  fields.role.value=model.config?.role||'';renderNotes($('additional-notes-body'),model.config?.setup?.steps);show('additional-notes',Boolean(model.config?.setup?.steps.length));scopeLabel();changed=false;show('editor',true);show('result',false);text('notice','');
 }
 function discardOK(){return !changed||window.confirm('离开会放弃尚未保存的修改。继续吗？');}
 async function loadDrafts(){
@@ -68,12 +75,12 @@ async function save(){
   if(model.draftId&&!changed)return model;
   const body=contents();const suspicious=credentialField(body);if(suspicious){
     const error=new Error(credentialMessage(suspicious)),match=setupMatch(suspicious);
-    error.control=match?setup.control(Number(match[1]),match[2]):fields[suspicious.split('.')[1]];
+    error.control=match?$('additional-notes'):fields[suspicious.split('.')[1]];
     throw error;
   }if(!model.draftId&&model.recipeId){body.recipeId=model.recipeId;body.sourceVersionId=model.versionId;}
   const tag='save:'+model.draftId+':'+model.revision+':'+JSON.stringify(body);
   const res=await api('/drafts'+(model.draftId?'/'+model.draftId:''),{method:model.draftId?'PATCH':'POST',body,rev:model.draftId?model.revision:undefined,logical:tag});
-  model=res;changed=false;await loadDrafts();return res;
+  model=res;changed=false;notesRemoved=false;await loadDrafts();return res;
 }
 async function history(){
   const result=await api('/me/publications',{version:2});$('history').replaceChildren();
@@ -106,11 +113,11 @@ async function listCodes(append){
   }
 }
 $('new').onclick=()=>{if(discardOK())fill(null);};
+$('remove-legacy-notes').onclick=()=>{notesRemoved=true;changed=true;reviewing=null;$('additional-notes-body').replaceChildren();show('additional-notes',false);text('notice','旧补充说明已从当前编辑内容移除，保存后生效。');};
 editor.oninput=()=>{changed=true;};
 editor.onsubmit=e=>{e.preventDefault();run(async()=>{await save();text('notice','私人草稿已保存。');});};
 $('review').onclick=()=>run(async()=>{
   if(!fields.name.value.trim()||!fields.summary.value.trim()||!fields.version.value.trim()){text('notice','先填写配方名称、简介和版本，再预览发布。');return;}
-  setup.read(true);
   const d=await save();reviewing={id:d.draftId,rev:d.revision};
   $('preview').replaceChildren();
   for(const [k,v] of Object.entries({'名称':d.public.name,'简介':d.public.summary,'公开概览':d.public.overview,'版本':d.public.version,'获取方式':d.public.access==='coded'?'凭分享码获取':'直接获取',[d.public.access==='coded'?'仅获取者和作者可见 · 角色说明':'公开 · 角色说明']:d.config.role})){
@@ -118,8 +125,8 @@ $('review').onclick=()=>run(async()=>{
   }
   if(d.config.setup?.steps.length){
     const label=document.createElement('dt'),body=document.createElement('dd');
-    label.textContent=d.public.access==='coded'?'仅获取者和作者可见 · 使用前准备':'公开 · 使用前准备';
-    body.append(setupList(d.config.setup.steps));$('preview').append(label,body);
+    label.textContent=d.public.access==='coded'?'仅获取者和作者可见 · 补充说明':'公开 · 补充说明';
+    renderNotes(body,d.config.setup.steps);$('preview').append(label,body);
   }
   confirmDialog.showModal();
 });
@@ -137,7 +144,7 @@ run(async()=>{const s=await fetch('/auth/session',{cache:'no-store'}).then(r=>r.
 
 window.addEventListener('pageshow',event=>{if(event.persisted)location.reload();});
 
-function forget(){changed=false;model=null;reviewing=null;managing=null;generation=null;keys.clear();editor.reset();setup.load();confirmDialog.close();for(const id of ['drafts','history','code-list','initial-code','newcodes','preview','code-for'])$(id).replaceChildren();show('workspace',false);}
+function forget(){changed=false;notesRemoved=false;model=null;reviewing=null;managing=null;generation=null;keys.clear();editor.reset();$('additional-notes-body').replaceChildren();show('additional-notes',false);confirmDialog.close();for(const id of ['drafts','history','code-list','initial-code','newcodes','preview','code-for'])$(id).replaceChildren();show('workspace',false);}
 async function checkSession(){
   if(!generation||document.hidden)return;
   try {

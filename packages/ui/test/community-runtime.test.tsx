@@ -2,7 +2,7 @@
 import {act} from 'react';
 import {createRoot, type Root} from 'react-dom/client';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
-import {communityRequestSchema, type AccountShell, type CommunityRequest, type RecipeDetail} from '@vonvon/protocol';
+import {communityRequestSchema, type AccountShell, type CommunityRequest, type RecipeDetail, type RecipeRoleDraft} from '@vonvon/protocol';
 import {createDesktopFacades} from '../../desktop/src/facade';
 import {desktopChannels} from '../../desktop/src/ipc-contract';
 import {DesktopRootView} from '../src/devices/DesktopRoot';
@@ -22,7 +22,7 @@ const status = {kind: 'signedIn' as const, accountId, displayName: 'Fixture', pr
 const account: AccountShell = {status: async () => status, onStatus: listener => {listener(status); return () => {};}, login: async () => status, cancelLogin: async () => status, logout: async () => ({kind: 'signedOut'})};
 function Host() {
   const community = useCommunity()!;
-  return <DraftGuardProvider><button onClick={() => community.open({kind: 'detail', recipe: {recipeId: A, versionId: B}, privateView: true})}>打开已发布版本</button><button onClick={() => community.open({kind: 'draft'})}>打开私人草稿</button><CommunityPage/></DraftGuardProvider>;
+  return <DraftGuardProvider><button onClick={() => community.open({kind: 'detail', recipe: {recipeId: A, versionId: B}, privateView: true})}>打开已发布版本</button><button onClick={() => community.open({kind: 'draft'})}>打开私人草稿</button><button onClick={() => community.open({kind: 'draft',draftId})}>打开旧私人草稿</button><CommunityPage/></DraftGuardProvider>;
 }
 const client = newClient();
 let shell: ReturnType<typeof fakeShell>;
@@ -85,6 +85,59 @@ it('uses only immutable IDs when opening a just-published receipt', async () => 
   const catalogs=calls.filter(request=>request.type==='catalog').length;
   await click('返回 Bot 配方');
   expect(calls.filter(request=>request.type==='catalog')).toHaveLength(catalogs+1);
+});
+it('edits an older draft without a setup editor or dropping its existing notes', async () => {
+  const legacySetup={steps:[{kind:'tool' as const,title:'旧说明',instructions:'LEGACY_NOTES_KEEP',check:'核对已有工具',required:true}]};
+  const saved={draftId,recipeId:null,revision:1,public:recipe.public,config:{role:'原角色',setup:legacySetup}};
+  const normal=handle;
+  handle=async request=>request.type==='draft'?saved:normal(request);
+  await draw();await click('打开旧私人草稿');
+  expect(document.querySelector('.community-additional-notes')?.textContent).toContain('LEGACY_NOTES_KEEP');
+  await click('编辑草稿');
+  expect(document.querySelector('.community-additional-notes')?.textContent).toContain('核对已有工具');
+  expect(document.querySelector('.community-editor')?.textContent).not.toContain('添加准备步骤');
+  expect(document.querySelector('.community-editor')?.textContent).not.toContain('必需步骤');
+  await fill('配方名称','修改后的名称');await click('保存私人草稿');
+  expect(calls.filter(request=>request.type==='saveDraft').at(-1)).toMatchObject({public:{name:'修改后的名称'},config:{setup:legacySetup}});
+});
+it('removes incomplete old notes explicitly and publishes the same private draft without changing its overview',async()=>{
+  let stored:RecipeRoleDraft={draftId,recipeId:null,revision:1,public:recipe.public,config:{role:'原角色',setup:{steps:[{kind:'tool',title:'',instructions:'',required:true}]}}};
+  const normal=handle;
+  handle=async request=>{
+    if(request.type==='draft')return stored;
+    if(request.type==='saveDraft'){
+      expect(request.target).toEqual({kind:'existing',draftId,revision:1});
+      expect(request.config).toEqual({role:'原角色'});
+      expect(request.public.overview).toBe(recipe.public.overview);
+      return stored={...stored,revision:2,public:request.public,config:request.config};
+    }
+    if(request.type==='publishDraft')expect(request).toMatchObject({draftId,revision:2});
+    return normal(request);
+  };
+  await draw();await click('打开旧私人草稿');
+  expect([...document.querySelectorAll('button')].some(button=>button.textContent==='移除旧补充说明')).toBe(false);
+  await click('编辑草稿');await click('移除旧补充说明');
+  expect(calls.some(request=>request.type==='saveDraft')).toBe(false);
+  expect(document.querySelector('.community-additional-notes')).toBeNull();
+  await click('保存私人草稿');await click('预览发布');await click('发布到社区');
+  expect(calls.filter(request=>request.type==='saveDraft')).toHaveLength(1);
+  expect(calls.filter(request=>request.type==='publishDraft')).toHaveLength(1);
+});
+it('opens both launch recipe links using the explicit App external-document bridge',async()=>{
+  const {readFileSync}=await import('node:fs');const {resolve}=await import('node:path');
+  const help=JSON.parse(readFileSync(resolve(process.cwd(),'../../content/recipes/vonvon-help/recipe.json'),'utf8'));
+  const normal=handle;handle=async request=>request.type==='detail'?{...recipe,public:help.public}:normal(request);
+  shell={...shell,openExternal:vi.fn(async()=>{})};
+  await draw();await click('打开已发布版本');
+  for(const label of ['官方问题反馈表单','官方排错指南']) {
+    const link=[...document.querySelectorAll<HTMLAnchorElement>('.community-markdown a')].find(link=>link.textContent===label)!;
+    expect(link).toBeDefined();
+    const event=new MouseEvent('click',{bubbles:true,cancelable:true});
+    await act(async()=>{link.dispatchEvent(event);});
+    expect(event.defaultPrevented).toBe(true);
+    expect(shell.openExternal).toHaveBeenLastCalledWith(link.href,'recipe-document');
+  }
+  expect(shell.openExternal).toHaveBeenCalledTimes(2);
 });
 it('keeps the actual editor DOM, caret, unsaved text and uncertain request key across reconnects and device switches', async () => {
   let attempts = 0;
@@ -349,6 +402,10 @@ it('renders complete rich configuration through the strict facade and hides ever
   const {readFileSync}=await import('node:fs');const {resolve}=await import('node:path');
   const content=JSON.parse(readFileSync(resolve(process.cwd(),'../protocol/test/fixtures/recipe-rich-v2.content.json'),'utf8'));
   content.parts=[];content.memories=[];delete content.finalLogo;
+  const identity=(n:number)=>({itemId:`70000000-0000-4000-8000-${String(n).padStart(12,'0')}`,originId:`80000000-0000-4000-8000-${String(n).padStart(12,'0')}`});
+  const file={...identity(1),name:'SKILL.md',use:'skillDescription',text:{kind:'inline',value:'SETUP_SKILL_BODY'}};
+  content.files=[file];content.skills=[{...identity(2),name:'setup',entryFileId:file.itemId,fileIds:[file.itemId]}];
+  content.setup=[{...identity(3),kind:'tool',title:'旧说明',instructions:'OLD_SETUP_PRIVATE',check:'OLD_SETUP_CHECK',required:true,action:{kind:'manual'}}];
   const doc=canonicalizeRichRecipeContent(content);
   const normal=handle;let acquired=false;
   handle=async request=>{
@@ -359,12 +416,19 @@ it('renders complete rich configuration through the strict facade and hides ever
   await draw();await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());
   expect(document.querySelector('[aria-label="配方详细信息"]')?.textContent).toBe('概览');
   expect(document.querySelector('.community-detail')?.textContent).not.toContain(content.role.text.value);
+  expect(document.querySelector('.community-detail')?.textContent).not.toContain('OLD_SETUP_PRIVATE');
+  expect(document.querySelector('.community-detail')?.textContent).not.toContain('SETUP_SKILL_BODY');
   await fill('分享码','VALID');await click('获取配方');
-  for(const section of ['模型与权限','能力','沟通方式','记忆','任务','使用前准备']){
+  expect([...document.querySelectorAll('[aria-label="配方详细信息"] button')].map(button=>button.textContent)).toEqual(['概览','模型与权限','能力','沟通方式','记忆','任务']);
+  expect(document.querySelector('.community-additional-notes')?.textContent).toContain('OLD_SETUP_PRIVATE');
+  expect(document.querySelector('.community-additional-notes')?.textContent).toContain('OLD_SETUP_CHECK');
+  for(const section of ['模型与权限','能力','沟通方式','记忆','任务']){
     await click(section);expect(document.querySelector('.community-detail-content h2')?.textContent).toBe(section==='能力'?'角色':section);
   }
   await click('记忆');expect(document.querySelector('.community-config')?.textContent).toBe('记忆');
   await click('能力');expect(document.querySelector('.community-detail-content')?.textContent).toContain(content.role.text.value);
+  expect(document.querySelector('.community-detail-content')?.textContent).toContain('setup');
+  expect(document.querySelector('.community-detail-content')?.textContent).toContain('SETUP_SKILL_BODY');
 });
 
 it('opens coded acquisition in a focused dialog and keeps an uncertain retry bound to the same request', async () => {
