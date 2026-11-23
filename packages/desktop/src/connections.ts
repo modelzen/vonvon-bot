@@ -9,7 +9,6 @@ import {
 import { MAX_DEVICES, RegistryError, type DeviceRegistry, type SecretBox, type StoredDevice, type StoredProblem } from './device-registry.js';
 import { RemoteConnectError, type RemoteConnectCode, type RemoteConnector, type RemoteLink } from './remote-transport.js';
 
-/** The desktop's paired devices, selected view, and independently retained source peers. */
 export type DeviceLogEvent = 'device-opened' | 'device-closed' | 'device-failed' | 'device-added' | 'device-removed'
   | 'device-route-failed' | 'device-add-failed';
 export interface DeviceConnectionsDeps {
@@ -102,7 +101,7 @@ type Phase = ActiveDeviceState['phase'];
 type Failure = NonNullable<ActiveDeviceState['failure']>;
 type Notice = NonNullable<ActiveDeviceState['notice']>;
 type Cause = Extract<ViewChange, { kind: 'remote' }>['cause'];
-interface Session { id: string; link: RemoteLink; info: ServerInfo; mode: ViewMode; pid?: number; startedAt?: number; view: ViewSession; cause: Cause }
+interface Session { device: StoredDevice; link: RemoteLink; info: ServerInfo; mode: ViewMode; pid?: number; startedAt?: number; view: ViewSession; cause: Cause }
 interface SourceReference { abort: AbortController; detach(): void }
 interface SourcePeer {
   device: StoredDevice;
@@ -191,7 +190,7 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
   /** Opens, adds and problem writes still running: dispose waits for them, two seconds at most. */
   const inflight = new Set<Promise<unknown>>();
   const sources = new Map<string, SourcePeer>();
-  const sourceChanges = new Map<string, 'removed' | 'identity_changed'>();
+  const sourceChanges = new Set<{ id: string; code: 'removed' | 'identity_changed' }>();
 
   const track = <T>(work: Promise<T>): Promise<T> => {
     inflight.add(work);
@@ -296,15 +295,24 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     if (expected) timers.clearTimeout(expected.timer);
     expected = undefined;
   }
-  function persistProblem(id: string, problem: StoredProblem, identity = registry.get(id)): void {
+  function readPairing(id: string): StoredDevice | undefined {
+    const device = registry.get(id);
+    return device && { ...device, clientKey: { ...device.clientKey } };
+  }
+  function forgetProblem(identity: StoredDevice): void {
+    const remembered = problems.get(identity.deviceId);
+    if (remembered && sameSourceIdentity(identity, remembered.device)) problems.delete(identity.deviceId);
+  }
+  function persistProblem(identity: StoredDevice, problem: StoredProblem): void {
+    const id = identity.deviceId;
     const current = registry.get(id);
-    if (!identity || !current || !sameSourceIdentity(identity, current)) return;
-    const snapshot = { ...identity, clientKey: { ...identity.clientKey } };
-    problems.set(id, { code: problem, device: snapshot });
-    invalidateSourceDevice(id, new SourceConnectionError(problem));
+    if (!current || !sameSourceIdentity(identity, current)) return;
+    problems.set(id, { code: problem, device: identity });
     const at = now();
-    void track(registry.update(id, device => sameSourceIdentity(snapshot, device) ? { ...device, problem: { code: problem, at } } : device)
+    void track(registry.update(id, device => sameSourceIdentity(identity, device) ? { ...device, problem: { code: problem, at } } : device)
       .catch(() => log('device-failed', { id: short(id), code: 'problem_not_saved' })));
+    const peer = sources.get(id);
+    if (peer) invalidateStaleSource(peer);
   }
   function schedule(myGen: number, delay: number): void {
     clearRetry();
@@ -338,13 +346,23 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     return a.deviceId === b.deviceId && a.pk === b.pk && a.clientId === b.clientId
       && a.clientKey.publicKey === b.clientKey.publicKey && a.clientKey.secretKeySealed === b.clientKey.secretKeySealed;
   }
+  function beginSourceChange(id: string, code: 'removed' | 'identity_changed'): () => void {
+    const change = { id, code };
+    sourceChanges.add(change);
+    const peer = sources.get(id);
+    if (peer) invalidateSource(peer, new SourceConnectionError(code));
+    return () => { sourceChanges.delete(change); };
+  }
+  function pendingSourceChange(id: string): 'removed' | 'identity_changed' | undefined {
+    for (const change of sourceChanges) if (change.id === id) return change.code;
+  }
   function sourceIdentityError(peer: SourcePeer): SourceConnectionError | undefined {
     if (peer.state.kind === 'closed') return peer.state.error;
     if (disposed) return new SourceConnectionError('disposed');
     const id = peer.device.deviceId;
     const current = registry.get(id);
     if (!current) return new SourceConnectionError('removed');
-    const changing = sourceChanges.get(id);
+    const changing = pendingSourceChange(id);
     if (changing) return new SourceConnectionError(changing);
     if (!sameSourceIdentity(peer.device, current)) return new SourceConnectionError('identity_changed');
     const problem = problemOf(id);
@@ -356,21 +374,23 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     const previous = peer.state;
     peer.state = { kind: 'closed', error };
     if (sources.get(peer.device.deviceId) === peer) sources.delete(peer.device.deviceId);
-    peer.abort.abort(error);
+    const references = [...peer.references];
+    peer.references.clear();
     if (previous.kind === 'ready') previous.link.close();
-    for (const reference of peer.references) {
+    peer.abort.abort(error);
+    for (const reference of references) {
       reference.detach();
       reference.abort.abort(error);
     }
-    peer.references.clear();
   }
-  function invalidateSourceDevice(id: string, error: SourceConnectionError): void {
-    const peer = sources.get(id);
-    if (peer) invalidateSource(peer, error);
+  function invalidateStaleSource(peer: SourcePeer): SourceConnectionError | undefined {
+    const error = sourceIdentityError(peer);
+    if (error) invalidateSource(peer, error);
+    return error;
   }
   function checkSourceIdentity(peer: SourcePeer): void {
-    const error = sourceIdentityError(peer);
-    if (error) { invalidateSource(peer, error); throw error; }
+    const error = invalidateStaleSource(peer);
+    if (error) throw error;
   }
   async function openSource(peer: SourcePeer): Promise<ViewSession> {
     checkSourceIdentity(peer);
@@ -392,7 +412,7 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
         const failed = error instanceof RemoteConnectError ? error : new RemoteConnectError('closed', 'socket');
         routeFailure(peer.device.deviceId, route, failed, started, true);
         if (failed.code === 'client_revoked' || failed.code === 'unknown_client') {
-          persistProblem(peer.device.deviceId, failed.code === 'client_revoked' ? 'revoked' : 'unknown_client', peer.device);
+          persistProblem(peer.device, failed.code === 'client_revoked' ? 'revoked' : 'unknown_client');
           throw new SourceConnectionError(failed.code === 'client_revoked' ? 'revoked' : 'unknown_client');
         }
         if (failed.code === 'aborted') throw new SourceConnectionError('aborted');
@@ -411,11 +431,9 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
       };
       peer.state = { kind: 'ready', link };
       void link.closed.then(closed => {
-        if (peer.state.kind === 'closed') return;
-        const stale = sourceIdentityError(peer);
-        if (stale) { invalidateSource(peer, stale); return; }
+        if (invalidateStaleSource(peer)) return;
         if (closed.code === 'client_revoked' || closed.code === 'unknown_client') {
-          persistProblem(peer.device.deviceId, closed.code === 'client_revoked' ? 'revoked' : 'unknown_client', peer.device);
+          persistProblem(peer.device, closed.code === 'client_revoked' ? 'revoked' : 'unknown_client');
         } else invalidateSource(peer, new SourceConnectionError(closed.code));
       });
       return view;
@@ -425,21 +443,18 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
   async function retainSource(id: string, options: { signal?: AbortSignal } = {}): Promise<RetainedSourceLease> {
     if (disposed) throw new DeviceConnectionsError('disposed');
     if (id === LOCAL_VIEW) throw new DeviceConnectionsError('local_device');
-    const device = registry.get(id);
+    let peer = sources.get(id);
+    if (peer && invalidateStaleSource(peer)) return retainSource(id, options);
+    const device = readPairing(id);
     if (!device) throw new DeviceConnectionsError('unknown_device');
     if (options.signal?.aborted) throw new SourceConnectionError('aborted');
-    const changing = sourceChanges.get(id);
-    if (changing) throw new SourceConnectionError(changing);
-    const problem = problemOf(id);
-    if (problem) { invalidateSourceDevice(id, new SourceConnectionError(problem)); throw new SourceConnectionError(problem); }
-    let peer = sources.get(id);
-    if (peer) {
-      const stale = sourceIdentityError(peer);
-      if (stale) { invalidateSource(peer, stale); peer = undefined; }
-    }
     if (!peer) {
+      const changing = pendingSourceChange(id);
+      if (changing) throw new SourceConnectionError(changing);
+      const problem = problemOf(id);
+      if (problem) throw new SourceConnectionError(problem);
       const opening: SourcePeer = {
-        device: { ...device, clientKey: { ...device.clientKey } },
+        device,
         abort: new AbortController(), references: new Set(), state: { kind: 'connecting' },
         opened: Promise.resolve().then(() => openSource(opening)),
       };
@@ -454,11 +469,11 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     const cancel = (): void => release('aborted');
     const reference: SourceReference = { abort, detach: () => options.signal?.removeEventListener('abort', cancel) };
     const release = (code: 'aborted' | 'released'): void => {
-      if (abort.signal.aborted) return;
+      if (!retained.references.delete(reference)) return;
       reference.detach();
-      retained.references.delete(reference);
-      abort.abort(new SourceConnectionError(code));
-      if (retained.references.size === 0) invalidateSource(retained, new SourceConnectionError(code));
+      const error = new SourceConnectionError(code);
+      if (retained.references.size === 0) invalidateSource(retained, error);
+      abort.abort(error);
     };
     retained.references.add(reference);
     options.signal?.addEventListener('abort', cancel, { once: true });
@@ -498,11 +513,11 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
   async function attemptOpen(myGen: number, mySeq: number, abort: AbortController): Promise<void> {
     const current = (): boolean => !disposed && gen === myGen && seq === mySeq;
     const id = viewId;
-    const device = registry.get(id);
+    const device = readPairing(id);
     if (!device || !current()) return;
     let key;
     try { key = registry.openKey(device); }
-    catch { onFailure(myGen, mySeq, 'key_unreadable', []); return; }
+    catch { onFailure(myGen, mySeq, device, 'key_unreadable', []); return; }
     const attempts: RouteFailure[] = [];
     let opened: { link: RemoteLink; route: DeviceRoute } | undefined;
     for (const route of routeOrder(device)) {
@@ -522,14 +537,14 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
       }
     }
     if (!current()) { opened?.link.close(); return; }
-    if (!opened) { onFailure(myGen, mySeq, deviceCode(attempts), attempts); return; }
+    if (!opened) { onFailure(myGen, mySeq, device, deviceCode(attempts), attempts); return; }
     const { link, route } = opened;
     // A switch or a retry from here on closes it at once, not after the status read below (Codex 审查 236-2).
     const closeOnAbort = (): void => link.close();
     abort.signal.addEventListener('abort', closeOnAbort, { once: true });
     const info = link.serverInfo;
     // The channel checked the key already; this is a data directory copied to another machine.
-    if (info.machineId !== device.deviceId) { link.close(); onFailure(myGen, mySeq, 'identity_changed', attempts); return; }
+    if (info.machineId !== device.deviceId) { link.close(); onFailure(myGen, mySeq, device, 'identity_changed', attempts); return; }
     const mode: ViewMode = info.protocolVersion === deps.client.protocolVersion ? 'full' : 'maintenance';
     const reply = await withTimeout(link.client.admin({ type: 'daemonStatus' }), STATUS_TIMEOUT_MS).catch(() => undefined);
     if (!current()) { link.close(); return; }
@@ -544,9 +559,9 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     else if (cause === 'restarted' && !expected) notice = { kind: 'restarted', at };
     clearExpected();
     await registry.update(id, stored => {
-      const { problem: _cleared, ...rest } = stored;
+      if (!sameSourceIdentity(device, stored)) return stored;
       return {
-        ...rest, lastRoute: route, lastConnectedAt: at,
+        ...stored, lastRoute: route, lastConnectedAt: at,
         lastKnown: { version: info.version, protocolVersion: info.protocolVersion, ...(info.platform ? { platform: info.platform } : {}),
           ...(info.deviceName ? { deviceName: info.deviceName } : {}), at },
       };
@@ -555,7 +570,7 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     abort.signal.removeEventListener('abort', closeOnAbort);
     const view: ViewSession = { id, client: link.client, serverInfo: info, mode };
     const opening: Session = {
-      id, link, info, mode, view, cause,
+      device, link, info, mode, view, cause,
       ...(status?.pid === undefined ? {} : { pid: status.pid }), ...(status ? { startedAt: status.startedAt } : {}),
     };
     session = opening;
@@ -566,7 +581,6 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     disabledAt = undefined;
     lastMode = mode;
     lastInfo = info;
-    problems.delete(id);
     lastFailure.delete(id);
     lastIdentity.set(id, { ...(opening.pid === undefined ? {} : { pid: opening.pid }), ...(opening.startedAt === undefined ? {} : { startedAt: opening.startedAt }), version: info.version });
     void link.closed.then(closed => onClosed(myGen, opening, closed));
@@ -579,7 +593,7 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
 
   function onClosed(myGen: number, closing: Session, closed: { code: string; closeCode?: number }): void {
     if (disposed || gen !== myGen || closing !== session) return;
-    const id = closing.id;
+    const id = closing.device.deviceId;
     log('device-closed', { id: short(id), code: closed.code, ...(closed.closeCode === undefined ? {} : { close: closed.closeCode }) });
     lastIdentity.set(id, { ...(closing.pid === undefined ? {} : { pid: closing.pid }), ...(closing.startedAt === undefined ? {} : { startedAt: closing.startedAt }), version: closing.info.version });
     session = undefined;
@@ -587,7 +601,7 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     const ownRemoval = removing === id;
     if ((closed.code === 'client_revoked' && !ownRemoval) || closed.code === 'unknown_client') {
       // In this callback, before anything else can run: no reconnect is ever scheduled for a revoked key.
-      persistProblem(id, closed.code === 'client_revoked' ? 'revoked' : 'unknown_client');
+      persistProblem(closing.device, closed.code === 'client_revoked' ? 'revoked' : 'unknown_client');
       lastFailure.set(id, closed.code);
       phase = 'failed';
       clearRetry();
@@ -603,7 +617,7 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     emitState();
   }
 
-  function onFailure(myGen: number, mySeq: number, code: string, attempts: readonly RouteFailure[]): void {
+  function onFailure(myGen: number, mySeq: number, device: StoredDevice, code: string, attempts: readonly RouteFailure[]): void {
     if (disposed || gen !== myGen || seq !== mySeq) return;
     const id = viewId;
     lastFailure.set(id, code);
@@ -614,7 +628,7 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
       phase = 'failed';
       clearRetry();
       // Revoked and an unknown key are written down; the rest is this attempt's result (RETRYABLE).
-      if (terminal === 'revoked' || terminal === 'unknown_client') persistProblem(id, terminal);
+      if (terminal === 'revoked' || terminal === 'unknown_client') persistProblem(device, terminal);
       emitState();
       return;
     }
@@ -633,7 +647,6 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
   }
   /** After a repair: the new key, whatever the problem was (retry() leaves revoked and the like alone). */
   function reconnectNow(id: string): void {
-    problems.delete(id);
     lastFailure.delete(id);
     failure = undefined;
     disabledAt = undefined;
@@ -715,7 +728,7 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     const name = link.device.name;
     if (link.invite.expiresAt <= now()) return { preview: { ok: false, code: 'link_expired', deviceId, name } };
     if (local.serverInfo && deviceId === local.serverInfo.machineId) return { preview: { ok: false, code: 'own_link', deviceId, name } };
-    const existing = registry.get(deviceId);
+    const existing = readPairing(deviceId);
     if (existing) {
       const repairable = problemOf(deviceId) !== undefined || RETRYABLE.has(lastFailure.get(deviceId) ?? '') || keyUnreadable(existing);
       if (!repairable) {
@@ -792,6 +805,7 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     if (info.machineId !== link.device.id || !clientId) { linked.close(); return failed(info.machineId !== link.device.id ? 'identity_changed' : 'pairing_interrupted'); }
     const at = now();
     const alias = name ?? existing?.name ?? cleanName(link.device.name, '未命名设备');
+    let finishChange: (() => void) | undefined;
     try {
       if (abort.signal.aborted) throw new Error('aborted');
       const stored: StoredDevice = {
@@ -801,8 +815,7 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
         lastKnown: { version: info.version, protocolVersion: info.protocolVersion, ...(info.platform ? { platform: info.platform } : {}),
           ...(info.deviceName ? { deviceName: info.deviceName } : {}), at },
       };
-      sourceChanges.set(stored.deviceId, 'identity_changed');
-      invalidateSourceDevice(stored.deviceId, new SourceConnectionError('identity_changed'));
+      finishChange = beginSourceChange(stored.deviceId, 'identity_changed');
       await registry.put(stored);
       // Cancelled while it was saved (Codex 审查 236-3): put back what was there; below takes the key back off its list.
       if (abort.signal.aborted) {
@@ -815,11 +828,11 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
       linked.close();
       return failed(abort.signal.aborted ? 'aborted' : 'registry_write_failed');
     } finally {
-      if (sourceChanges.get(link.device.id) === 'identity_changed') sourceChanges.delete(link.device.id);
+      finishChange?.();
     }
     linked.close();
     const id = link.device.id;
-    problems.delete(id);
+    if (existing) forgetProblem(existing);
     lastFailure.delete(id);
     lastIdentity.delete(id);
     log('device-added', { id: short(id), repaired: existing ? 1 : 0 });
@@ -904,10 +917,9 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
   async function remove(id: string): Promise<RemoveDeviceResult> {
     if (disposed) throw new DeviceConnectionsError('disposed');
     if (id === LOCAL_VIEW) throw new DeviceConnectionsError('local_device');
-    const device = registry.get(id);
+    const device = readPairing(id);
     if (!device) throw new DeviceConnectionsError('unknown_device');
-    sourceChanges.set(id, 'removed');
-    invalidateSourceDevice(id, new SourceConnectionError('removed'));
+    const finishChange = beginSourceChange(id, 'removed');
     try {
       let revokedRemotely = false;
       const current = session;
@@ -920,13 +932,13 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
         if (viewId === id && !disposed) await switchTo(LOCAL_VIEW);
       } finally { removing = undefined; }
       await registry.remove(id);
-      problems.delete(id);
+      forgetProblem(device);
       lastIdentity.delete(id);
       lastFailure.delete(id);
       log('device-removed', { id: short(id), revoked: revokedRemotely ? 1 : 0 });
       emitState();
       return { revokedRemotely };
-    } finally { sourceChanges.delete(id); }
+    } finally { finishChange(); }
   }
 
   return {

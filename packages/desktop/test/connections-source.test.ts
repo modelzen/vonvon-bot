@@ -56,6 +56,28 @@ async function harness() {
   return { devices, registry, box, calls, add };
 }
 
+async function openSource(h: Awaited<ReturnType<typeof harness>>, id: string) {
+  const retaining = h.devices.retainSource(id);
+  await flush();
+  const link = fakeLink(id);
+  h.calls.at(-1)!.resolve(link);
+  return { lease: await retaining, link };
+}
+
+function gate() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+function pairingLink(id: string) {
+  return encodePairingLink({
+    v: 1, device: { id, pk: generateStaticKey().publicKeyBase64url, name: 'Source' },
+    addresses: [route], relay: null, account: null,
+    invite: { id: 'inv_0123456789abcdef', secret: 'dGVzdA', expiresAt: Date.now() + 60_000 },
+  });
+}
+
 afterEach(async () => {
   await Promise.all(managers.splice(0).map(manager => manager.dispose()));
   await Promise.all(temporary.splice(0).map(path => rm(path, { recursive: true, force: true })));
@@ -312,6 +334,159 @@ describe('retained remote source connections', () => {
     expect(h.calls).toHaveLength(2);
   });
 
+  it.each(['open failure', 'close'] as const)('ignores an old selected pairing reporting revocation on %s', async event => {
+    const h = await harness();
+    const { deviceId: id } = await h.add();
+    await h.devices.switchTo(id);
+    const oldAttempt = h.calls[0]!;
+    const selected = fakeLink(id);
+    if (event === 'close') {
+      oldAttempt.resolve(selected);
+      await expect.poll(() => h.devices.view().kind).toBe('remote');
+    }
+    h.registry.get(id)!.clientId = 'cl_repaired';
+    await h.devices.rename(id, 'Repaired');
+    const { lease, link } = await openSource(h, id);
+    if (event === 'close') selected.end('client_revoked');
+    else oldAttempt.reject(new RemoteConnectError('unknown_client', 'handshake'));
+    await flush();
+    await h.devices.rename(id, 'After callback');
+    expect(lease.signal.aborted).toBe(false);
+    lease.check();
+    expect(link.close).not.toHaveBeenCalled();
+    expect(h.registry.get(id)?.problem).toBeUndefined();
+    lease.release();
+  });
+
+  it.each(['retain', 'selected close'] as const)('reports identity change to the old peer when the new pairing is revoked on %s', async observation => {
+    const h = await harness();
+    const { deviceId: id } = await h.add();
+    const { lease, link } = await openSource(h, id);
+    await h.registry.update(id, stored => ({ ...stored, clientId: 'cl_repaired' }));
+    if (observation === 'selected close') {
+      await h.devices.switchTo(id);
+      const selected = fakeLink(id);
+      h.calls[1]!.resolve(selected);
+      await expect.poll(() => h.devices.view().kind).toBe('remote');
+      selected.end('client_revoked');
+      await flush();
+    } else {
+      await h.registry.update(id, stored => ({ ...stored, problem: { code: 'revoked', at: 1 } }));
+    }
+    await expect(h.devices.retainSource(id)).rejects.toMatchObject({ code: 'revoked' });
+    expect(lease.signal.reason).toMatchObject({ code: 'identity_changed' });
+    expect(link.close).toHaveBeenCalledOnce();
+  });
+
+  it.each(['saved', 'write failed'] as const)('preserves source revocation (%s) when an earlier selected open finishes its status read', async persistence => {
+    const h = await harness();
+    const { deviceId: id } = await h.add();
+    const { link, lease } = await openSource(h, id);
+    await h.devices.switchTo(id);
+    const selected = fakeLink(id);
+    const status = gate();
+    const admin = selected.client.admin;
+    selected.client.admin = vi.fn(async request => { await status.promise; return admin(request); });
+    h.calls[1]!.resolve(selected);
+    await flush();
+    expect(selected.client.admin).toHaveBeenCalledOnce();
+    if (persistence === 'write failed') vi.spyOn(h.registry, 'update').mockRejectedValueOnce(new Error('fixture write failure'));
+    link.end('client_revoked');
+    await flush();
+    expect(lease.signal.aborted).toBe(true);
+    if (persistence === 'saved') await expect.poll(() => h.registry.get(id)?.problem?.code).toBe('revoked');
+    status.resolve();
+    await expect.poll(() => h.devices.state().active.phase).not.toBe('connecting');
+    expect(h.registry.get(id)?.problem?.code).toBe(persistence === 'saved' ? 'revoked' : undefined);
+    const retry = h.devices.retainSource(id);
+    const outcome = retry.then(lease => { lease.release(); return 'opened'; }, error => error.code);
+    await flush();
+    h.calls[2]?.resolve(fakeLink(id));
+    expect(await outcome).toBe('revoked');
+    expect(h.calls.length).toBe(2);
+  });
+
+  it('retires a retained peer when acquisition observes a missing registry entry', async () => {
+    const h = await harness();
+    const { deviceId: id } = await h.add();
+    const { lease, link } = await openSource(h, id);
+    await h.registry.remove(id);
+    await expect(h.devices.retainSource(id)).rejects.toMatchObject({ code: 'unknown_device' });
+    expect(lease.signal.aborted).toBe(true);
+    expect(lease.signal.reason).toMatchObject({ code: 'removed' });
+    expect(link.close).toHaveBeenCalledOnce();
+  });
+
+  it('retires the last socket before its release listener reacquires', async () => {
+    const h = await harness();
+    const { deviceId: id } = await h.add();
+    const { lease, link } = await openSource(h, id);
+    let next!: ReturnType<DeviceConnections['retainSource']>;
+    let retired = false;
+    lease.signal.addEventListener('abort', () => {
+      retired = link.close.mock.calls.length === 1;
+      next = h.devices.retainSource(id);
+    });
+    lease.release();
+    await flush();
+    h.calls[1]?.resolve(fakeLink(id));
+    const fresh = await next;
+    expect(retired).toBe(true);
+    expect(fresh.client === lease.client).toBe(false);
+    fresh.check();
+    fresh.release();
+  });
+
+  it('shares the replacement acquired by the stale lease abort listener and disposes it', async () => {
+    const h = await harness();
+    const { deviceId: id } = await h.add();
+    const { lease, link } = await openSource(h, id);
+    let inner!: ReturnType<DeviceConnections['retainSource']>;
+    lease.signal.addEventListener('abort', () => { inner = h.devices.retainSource(id); });
+    await h.registry.update(id, stored => ({ ...stored, clientId: 'cl_repaired' }));
+    const outer = h.devices.retainSource(id);
+    await flush();
+    const links = h.calls.slice(1).map(call => {
+      const next = fakeLink(id);
+      call.resolve(next);
+      return next;
+    });
+    const [a, b] = await Promise.all([outer, inner]);
+    await h.devices.dispose();
+    expect(a.client === b.client).toBe(true);
+    expect(a.signal.aborted && b.signal.aborted).toBe(true);
+    expect(links).toHaveLength(1);
+    for (const retired of [link, ...links]) expect(retired.close).toHaveBeenCalledOnce();
+  });
+
+  it('keeps removal authoritative when a concurrent repair saves the new pairing', async () => {
+    const h = await harness();
+    const { deviceId: id } = await h.add();
+    await h.devices.switchTo(id);
+    const selected = fakeLink(id);
+    h.calls[0]!.resolve(selected);
+    await expect.poll(() => h.devices.view().kind).toBe('remote');
+    await h.registry.update(id, stored => ({ ...stored, problem: { code: 'revoked', at: 1 } }));
+    const adding = h.devices.add({ link: pairingLink(id) });
+    const revoke = gate();
+    const device = selected.client.device;
+    selected.client.device = vi.fn(async request => { await revoke.promise; return device(request); });
+    const removing = h.devices.remove(id);
+    expect(selected.client.device).toHaveBeenCalledOnce();
+    h.calls[1]!.resolve({ ...fakeLink(id), pairResult: { type: 'pairResult', clientId: 'cl_repaired', deviceName: 'Source' } });
+    await expect(adding).resolves.toMatchObject({ kind: 'added', repaired: true });
+    const acquisition = h.devices.retainSource(id);
+    const outcome = acquisition.then(lease => { lease.release(); return 'opened'; }, error => error.code);
+    await flush();
+    h.calls[2]?.resolve(fakeLink(id));
+    const code = await outcome;
+    revoke.resolve();
+    await removing;
+    expect(code).toBe('removed');
+    expect(h.calls.length).toBe(2);
+    expect(h.registry.get(id) === undefined).toBe(true);
+  });
+
   it('blocks reacquisition during removal even before the registry write finishes', async () => {
     const h = await harness();
     const device = await h.add();
@@ -339,11 +514,7 @@ describe('retained remote source connections', () => {
     const gate = new Promise<void>(resolve => { finish = resolve; });
     const put = h.registry.put;
     h.registry.put = async stored => { await gate; return put(stored); };
-    const adding = h.devices.add({ link: encodePairingLink({
-      v: 1, device: { id: device.deviceId, pk: generateStaticKey().publicKeyBase64url, name: 'Source' },
-      addresses: [route], relay: null, account: null,
-      invite: { id: 'inv_0123456789abcdef', secret: 'dGVzdA', expiresAt: Date.now() + 60_000 },
-    }) });
+    const adding = h.devices.add({ link: pairingLink(device.deviceId) });
     const paired = { ...fakeLink(device.deviceId), pairResult: { type: 'pairResult' as const, clientId: 'cl_repaired', deviceName: 'Source' } };
     h.calls[1]!.resolve(paired);
     await flush();
