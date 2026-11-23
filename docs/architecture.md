@@ -279,7 +279,7 @@ vonvon-platform 只有约 1170 行，数据存在一个 JSON 文件里，只能�
 
 ### 服务端独立安装和升级
 
-0.9.0 起，Linux 能一条命令只装服务端、`vonvon` 命令和后台服务（[product.md](product.md) 3.10"只装服务端"，[devices.md](plans/devices.md) 第 7 节）。Mac、Windows 不做只装服务端，只用桌面端安装包（owner 2026-11-01，devices.md 第 19 节）；`install.sh`、`uninstall.sh` 在 macOS 上只打印去 https://vonvon.bot/get/ 下载安装包、退出非零，什么都不碰。
+0.9.0 起，Linux 能一条命令只装服务端、`vonvon` 命令和后台服务（[product.md](product.md) 3.10"只装服务端"，[devices.md](plans/devices.md) 第 7 节）。Mac、Windows 不做只装服务端，只用桌面端安装包（owner 2026-11-01，devices.md 第 19 节）；`install.sh`、`uninstall.sh` 在 macOS 上只打印去 https://vonvon.cc/get/ 下载安装包、退出非零，什么都不碰。
 - 新发行种类 `standalone`，靠安装根里的 `standalone.json` 识别，先于 `.git` 祖先检查。包里是 `app/`（`package.json`、`bin/vonvon.mjs`、压缩后的 `dist/cli.js`、`ui/dist/`、第三方 `node_modules/`）和官方 Node 24 LTS 二进制；不带 source map、TypeScript 源码和 `.d.ts`。`stageDaemon` 的这些改动对桌面端自带的 daemon 同样生效。只发两个包：`linux-x64`、`linux-arm64`（只支持 glibc，`.tar.gz`），包里不能有符号链接。I1 的打包脚本原来还能打 darwin、win 四个目标（`.zip`、Windows 的 Node 和 npm 布局、260 字符预算），launchd 也接受 `standalone`；这些已由清理片 I6 删掉，launchd 只装桌面端自带的和 npm 装的服务端。
 - 安装根是 `~/.local/share/vonvon-bot/server/`，版本放在 `releases/<version>/`。当前版本是原子替换的符号链接 `current`（原来给 Windows 的指针文件 `current.txt` 不做）。命令和服务定义都指向安装根里固定的启动器，exec `app/bin/vonvon.mjs`；服务定义对 `standalone` 不解析 realpath，升级只换 `current`。托管安装用的可信 npm 从 `process.execPath` 推出同一版本里 Node 自带的那份，不靠环境变量。
 - 升级：清单 `bot/server/stable/manifest.json` 用单独的 Ed25519 密钥签名，签名内容含 `product`、`channel`、`version`、`linux-x64` 和 `linux-arm64` 两个包的 URL 和 sha512；只接受比当前和历史最高都新的版本，`publishedAt` 不倒退。`machine.applyCoreUpdate` 在 `update.lock` 里下载、核对、改名到 `releases/<v>/`，**先原子切 `current` 再请求重启**（排空、退 75、管理器拉起的就是新版本）；重启助手核对新进程的 `serverInfo.version`，不对或超时就切回上一版。`vonvon update` 发同一个 RPC，并在 daemon 重启的那一刻改读本机 `update-status.json`。

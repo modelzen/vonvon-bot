@@ -48,7 +48,7 @@ function openChatUrl(chatId: string): string {
  * 官网，和诊断卡里的"反馈"：闭源产品没有公开仓库和 issue 页，求助走这两个入口。
  * 反馈指向官网首页的交流群一节，不把飞书群邀请链接写进发布出去的包：群换了或链接重置，改官网就行，不用等发版本。
  */
-const SITE_URL = 'https://vonvon.bot';
+const SITE_URL = 'https://vonvon.cc';
 const FEEDBACK_URL = `${SITE_URL}/#community`;
 
 /** Fixed widths for the menu's two action rows, chosen so both rows span the

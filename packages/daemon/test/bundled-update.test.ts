@@ -89,7 +89,7 @@ it('passes on what the updater says when it cannot update', async () => {
   const shell = shellPeer();
   const { update, report } = harness([shell]);
   const checking = update.check('「笔记本」', true);
-  report(shell, 'unavailable', { message: '这个安装包没有可用的签名更新源，请到官网下载新版本：https://vonvon.bot/get/' });
+  report(shell, 'unavailable', { message: '这个安装包没有可用的签名更新源，请到官网下载新版本：https://vonvon.cc/get/' });
   expect(await checking).toEqual({ current: '0.9.0', latest: null, hasUpdate: false, desktopShell: true, message: expect.stringContaining('没有可用的签名更新源') });
 });
 

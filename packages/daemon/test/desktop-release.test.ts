@@ -7,9 +7,9 @@ describe('desktop download guidance', () => {
     const fetcher = vi.fn();
     vi.stubGlobal('fetch', fetcher);
     try {
-      expect(DESKTOP_DOWNLOAD_PAGE).toBe('https://vonvon.bot/get/');
-      expect(desktopDownloadForHost('darwin')).toBe('https://vonvon.bot/get/');
-      expect(desktopDownloadNoticeForHost('darwin')).toContain('https://vonvon.bot/get/');
+      expect(DESKTOP_DOWNLOAD_PAGE).toBe('https://vonvon.cc/get/');
+      expect(desktopDownloadForHost('darwin')).toBe('https://vonvon.cc/get/');
+      expect(desktopDownloadNoticeForHost('darwin')).toContain('https://vonvon.cc/get/');
       expect(fetcher).not.toHaveBeenCalled();
     } finally { vi.unstubAllGlobals(); }
   });
@@ -25,7 +25,7 @@ describe('desktop download guidance', () => {
     const menu = JSON.stringify(buildDmMenuCard());
     expect(menu).not.toMatch(/桌面版|Windows|bot\.vonvon\.cc|github\.com/);
     const update = JSON.stringify(buildForegroundUpdateCard({ current: '0.7.0', desktopDownload: DESKTOP_DOWNLOAD_PAGE }));
-    expect(update).toContain('https://vonvon.bot/get/');
+    expect(update).toContain('https://vonvon.cc/get/');
     expect(update).toContain('打开下载页');
     expect(update).not.toMatch(/Windows|github\.com/);
     expect(JSON.stringify(buildForegroundUpdateCard({ current: '0.7.0' }))).not.toContain('下载页');

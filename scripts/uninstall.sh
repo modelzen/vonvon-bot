@@ -238,7 +238,7 @@ main() {
   system=$(uname -s 2>/dev/null || true)
   case "$system" in
     Linux) ;;
-    Darwin) fail 2 "这个脚本只卸载 Linux 上的服务端。Mac 上的 Vonvon Bot 是桌面端安装包装的，说明见 https://vonvon.bot/get/" ;;
+    Darwin) fail 2 "这个脚本只卸载 Linux 上的服务端。Mac 上的 Vonvon Bot 是桌面端安装包装的，说明见 https://vonvon.cc/get/" ;;
     *) fail 2 "这个脚本只卸载 Linux 上的服务端（这台是 ${system:-认不出的系统}），什么都没动。" ;;
   esac
   checked_home

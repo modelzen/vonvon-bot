@@ -11,8 +11,8 @@ it("accepts each old main process destination for its own action", () => {
   expect(allowedExternalUrl("https://open.feishu.cn/app/cli_1", "app-console")).toBe("https://open.feishu.cn/app/cli_1");
   expect(allowedExternalUrl("https://open.larksuite.com/app/cli_1/auth?q=im%3Aresource&op_from=openapi", "app-console"))
     .toBe("https://open.larksuite.com/app/cli_1/auth?q=im%3Aresource&op_from=openapi");
-  expect(allowedExternalUrl("https://vonvon.bot/changelog/", "releases")).toBe("https://vonvon.bot/changelog/");
-  expect(allowedExternalUrl("https://vonvon.bot/get/", "download")).toBe("https://vonvon.bot/get/");
+  expect(allowedExternalUrl("https://vonvon.cc/changelog/", "releases")).toBe("https://vonvon.cc/changelog/");
+  expect(allowedExternalUrl("https://vonvon.cc/get/", "download")).toBe("https://vonvon.cc/get/");
   expect(groupUrl("oc_a/b", "omt_topic"))
     .toBe("https://applink.feishu.cn/client/thread/open?open_chat_id=oc_a%2Fb&open_thread_id=omt_topic&thread_position=0");
   expect(groupUrl("oc_a/b", "invalid"))
@@ -47,14 +47,12 @@ it("rejects non-HTTPS, credentials, ports, host confusion, and unrelated GitHub 
   ]) expect(allowedExternalUrl(value, "authorization")).toBeNull();
   expect(allowedExternalUrl("https://auth.openai.com/authorize", "registration")).toBeNull();
   expect(allowedExternalUrl("https://github.com/modelzen/vonvon-bot/releases", "releases")).toBeNull();
-  expect(allowedExternalUrl("https://vonvon.bot/get/", "releases")).toBeNull();
-  expect(allowedExternalUrl("https://vonvon.bot/changelog/", "download")).toBeNull();
-  expect(allowedExternalUrl("https://vonvon.bot.evil.test/get/", "download")).toBeNull();
-  expect(allowedExternalUrl("http://vonvon.bot/get/", "download")).toBeNull();
-  for (const value of [
-    "https://vonvon.cc/get/", "https://bot.vonvon.cc/get/",
-    "https://www.vonvon.bot/get/", "https://vonvon.bot:443/get/",
-  ]) {
+  expect(allowedExternalUrl("https://vonvon.cc/get/", "releases")).toBeNull();
+  expect(allowedExternalUrl("https://vonvon.cc/changelog/", "download")).toBeNull();
+  expect(allowedExternalUrl("https://vonvon.cc.evil.test/get/", "download")).toBeNull();
+  expect(allowedExternalUrl("http://vonvon.cc/get/", "download")).toBeNull();
+  // 0.7.0 包里写的旧官网 bot.vonvon.cc 由服务器 301 到 vonvon.cc；新版本只放行 vonvon.cc 本身，子域名一律拒绝。
+  for (const value of ["https://bot.vonvon.cc/get/", "https://www.vonvon.cc/get/", "https://evil.vonvon.cc/changelog/"]) {
     expect(allowedExternalUrl(value, "download")).toBeNull();
     expect(allowedExternalUrl(value, "releases")).toBeNull();
   }
