@@ -18,6 +18,7 @@ const avatarAttemptLimit = avatarRetryDelays.length + 1;
 const uuidSegment = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const publicDetail = new RegExp('^/v[12]/recipes/' + uuidSegment + '/versions/' + uuidSegment + '$');
 const publicVersionObject = new RegExp('^/v2/versions/' + uuidSegment + '/(?:display-logo|objects/' + uuidSegment + ')$');
+const privateObjectMember = new RegExp('^/v2/objects/' + uuidSegment + '/members/(?:[0-9]|[1-5][0-9]|6[0-5])$');
 function apiUrl(path: string, origin: string, publicRead = false) {
   const pathname = path.split('?', 1)[0]!;
   if (!/^\/v[12]\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+$/.test(pathname) || path.includes('#') || /[\r\n\t]/.test(path))
@@ -294,7 +295,9 @@ export function createAccountSession(options: {
       headers.set('Authorization', 'Bearer ' + access.token);
       const signals = init.signal ? AbortSignal.any([signal, init.signal]) : signal;
       beforeSend?.();
-      const response = await transport(url, { ...init, headers, credentials: 'omit', redirect: 'error', cache: 'no-store', signal: requestSignal(signals) });
+      // Member writes must outlast the edge's 15-second upstream response deadline.
+      const timeout = init.method === 'PUT' && privateObjectMember.test(path) ? 20_000 : undefined;
+      const response = await transport(url, { ...init, headers, credentials: 'omit', redirect: 'error', cache: 'no-store', signal: requestSignal(signals, timeout) });
       signal.throwIfAborted();
       return response;
     },

@@ -114,6 +114,29 @@ it('retains the exact pending command and UUID after an uncertain save', async (
   expect(button('预览发布').disabled).toBe(false);
 });
 
+it('keeps expired metadata input editable and explains how to save it again', async () => {
+  let attempt = 0;
+  send = async request => {
+    if (request.type === 'draft') return draft;
+    if (request.type === 'saveRichDraftMetadata') {
+      if (++attempt === 1) return {status: 'uncertain'};
+      if (attempt === 2) return {status: 'rejected', code: 'operation_expired'};
+      return committed(request);
+    }
+    throw new Error('Unexpected command');
+  };
+  await draw(); await vi.waitFor(() => expect(button('编辑发布信息').disabled, document.body.textContent ?? '').toBe(false));
+  await click('编辑发布信息'); await fill('配方名称', '过期后仍保留'); await click('保存'); await click('重试保存');
+  const message = document.querySelector('.ui-inline-notice--warning p')?.textContent;
+  expect(message).toBe('本次保存已过期，修改仍保留，请重新保存');
+  expect(document.querySelector<HTMLInputElement>('[aria-label="配方名称"]')?.value).toBe('过期后仍保留');
+  expect(document.querySelector<HTMLInputElement>('[aria-label="配方名称"]')?.matches(':disabled')).toBe(false);
+  await click('保存');
+  const saves = requests.filter(item => item.type === 'saveRichDraftMetadata');
+  expect(saves[1]).toEqual(saves[0]); expect(saves[2]?.requestId).not.toBe(saves[0]?.requestId);
+  expect(document.body.textContent).toContain('发布信息已保存');
+});
+
 it('preserves the pending input when a committed receipt belongs to a different request', async () => {
   send = async request => {if (request.type === 'draft') return draft; if (request.type === 'saveRichDraftMetadata') {const result = committed(request); return {...result, receipt: {...result.receipt, requestId: '019a8000-0000-7000-8000-000000000099'}};} throw new Error('Unexpected command');};
   await draw(); await click('编辑发布信息'); await fill('配方名称', '仍待确认的输入'); await click('保存');

@@ -23,6 +23,9 @@ type SaveOutcome = 'none' | 'current' | 'earlier';
 type EditorOperation = 'idle' | 'save' | 'action';
 type DraftRefresh = {revision: number; manifestSha256?: string};
 type DeleteConfirmation = {kind: 'closed'} | {kind: 'confirming'; draft: RecipeRichDraft; readSequence: number};
+const metadataFailureMessage = (code: keyof typeof communityFailureMessages) => code === 'operation_expired'
+  ? '本次保存已过期，修改仍保留，请重新保存'
+  : communityFailureMessages[code];
 async function manifestSha256(canonical: string) {
   const binary = atob(canonical.replaceAll('-', '+').replaceAll('_', '/'));
   const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
@@ -125,7 +128,7 @@ function RichRecipeEditorSession({shell, accountId, draft: initial, initialRecov
       if (!live.current) return false;
       if (!fresh) {setRecovery('uncertain'); return false;}
       setRecovery('ready');
-      if (result.status === 'rejected') setError(communityFailureMessages[result.code]);
+      if (result.status === 'rejected') setError(metadataFailureMessage(result.code));
       return true;
     } catch (cause) {
       if (live.current) {setRecovery('uncertain'); setError(cause instanceof Error ? cause.message : '草稿尚未核对完成，请重试。');}
@@ -160,7 +163,7 @@ function RichRecipeEditorSession({shell, accountId, draft: initial, initialRecov
       const result = await shell.request(pending);
       if (!live.current) return false;
       if (result.status === 'uncertain') {setUncertain(true); setError('保存结果尚未确认。修改仍保留，请重试核对同一次保存。'); return false;}
-      if (result.status === 'rejected') {pendingSave.current = undefined; updateBuffer(rejectMetadataSave(bufferRef.current)); setUncertain(false); setError(communityFailureMessages[result.code]); return false;}
+      if (result.status === 'rejected') {pendingSave.current = undefined; updateBuffer(rejectMetadataSave(bufferRef.current)); setUncertain(false); setError(metadataFailureMessage(result.code)); return false;}
       if (result.receipt.requestId !== pending.requestId || result.receipt.draftId !== pending.draftId || result.receipt.revision !== pending.revision + 1) {setUncertain(true); setError('保存回执尚未与本次修改匹配。输入仍保留，请重试核对。'); return false;}
       pendingSave.current = undefined; setUncertain(false);
       updateBuffer(acceptMetadataSave(bufferRef.current, result.receipt.revision >= draftRef.current.revision ? pending.public : draftRef.current.public));
