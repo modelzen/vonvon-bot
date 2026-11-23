@@ -1,6 +1,6 @@
 import {z} from 'zod';
 import {
-  acquisitionFailureSchema, acquisitionKeySchema, communityResponseSchemas, recipeConfigSchema, recipePublicSchema,
+  acquisitionFailureSchema, acquisitionKeySchema, communityResponseSchemas, recipeConfigSchema, recipePublicSchema, recipeResourceLatestSchema,
 } from './desktop-community.js';
 import {
   RECIPE_RICH_LIMITS, recipeRichReleaseSchema, recipeRichTextSchema, type RecipeRichText,
@@ -10,7 +10,6 @@ import {verifyRichRecipeRelease} from './recipe-rich-codec.js';
 const id = z.string().uuid();
 const revision = z.number().int().positive().max(2147483647);
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
-const format = z.enum(['rich-v2', 'role-v1']);
 export const exactResourceVersionSchema = z.object({recipeId: id, versionId: id}).strict();
 export type ExactResourceVersion = z.infer<typeof exactResourceVersionSchema>;
 const target = exactResourceVersionSchema;
@@ -21,11 +20,7 @@ export const resourceReadTaskSchema = z.discriminatedUnion('kind', [
 export type ResourceReadTask = z.infer<typeof resourceReadTaskSchema>;
 export const resourceAcquireTaskSchema = z.object({kind: z.literal('resourceAcquire'), target, requestId: acquisitionKeySchema}).strict();
 export type ResourceAcquireTask = z.infer<typeof resourceAcquireTaskSchema>;
-export const resourceLatestSchema = z.union([
-  z.object({status: z.enum(['current', 'newer']), target, revision, version: recipePublicSchema.shape.version, format,
-    access: recipePublicSchema.shape.access}).strict(),
-  z.object({status: z.literal('unknown')}).strict(),
-]);
+export const resourceLatestSchema = recipeResourceLatestSchema;
 export type ResourceLatest = z.infer<typeof resourceLatestSchema>;
 export const acquisitionOutcomeSchema = z.discriminatedUnion('ok', [
   z.object({ok: z.literal(true), value: communityResponseSchemas.acquire}).strict(),

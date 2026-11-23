@@ -18,7 +18,7 @@ export interface SessionProfile {
    * comment's session, whose Feishu tools are the document column only (7.4). `feishuApi` adds feishu_api, a private
    * chat's only (7.6). `acrossBots`: a private chat's, whose read tools take a `bot` (7.3).
    */
-  tools?: { schedule: boolean; feishu?: boolean; feishuEdit?: boolean; feishuApi?: boolean; documentsOnly?: boolean; acrossBots?: boolean };
+  tools?: { schedule: boolean; feedback?: boolean; feishu?: boolean; feishuEdit?: boolean; feishuApi?: boolean; documentsOnly?: boolean; acrossBots?: boolean };
 }
 
 export interface SessionProfileCapabilities {

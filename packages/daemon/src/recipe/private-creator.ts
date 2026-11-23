@@ -2,7 +2,7 @@ import {z} from 'zod';
 import {randomUUID} from 'node:crypto';
 import type {CardActionEvent, NormalizedMessage} from '@larksuiteoapi/node-sdk';
 import {agentIdSchema, creatorCommandSchema, creatorSnapshotSchema, groupIdSchema,
-  type CreatorAnswer, type CreatorCommand, type CreatorJob, type CreatorRead, type CreatorReply, type CreatorRequest,
+  type CreatorAnswer, type CreatorCommand, type CreatorJob as WireJob, type CreatorRead, type CreatorReply, type CreatorRequest,
   type CreatorSelection, type CreatorSnapshot, type CreatorVersion, type CreatorWork, type InheritedPublication, type RecipeAuthoringRequest} from '@vonvon/protocol';
 import {safeEditValue} from '../../../../services/recipe-api/src/draft-model-text.mjs';
 import {PRIVATE_RECIPE_CODES_TITLE} from '../bot/card-content';
@@ -38,6 +38,7 @@ function directImage(msg:NormalizedMessage){
   if(content?.[resource.type==='image'?'image_key':'file_key']!==resource.fileKey)throw denied();
   return {type:raw.message_type,key:resource.fileKey};
 }
+type CreatorJob=Omit<WireJob,'task'>&{task:Extract<WireJob['task'],{kind:'read'|'command'|'deliverCodes'}>};
 export type JobRecord={
   job:CreatorJob;state:'offer'|'active'|'unknown'|'finished';created:number;expiresAt:number;messageId?:string;originalCardId?:string;approvalGeneration?:number;
   workName?:string;botName?:string;groupName?:string;version?:VersionSelection;codeLabel?:string;
@@ -458,7 +459,7 @@ export class PrivateCreator{
   }
   private selectionState(db:AuthoringLedger,actual:Link){
     return JSON.stringify({
-      chosen:Object.entries(db.links).filter(([,l])=>l.bot===this.botKey&&sameRecipient(l.recipient,actual.recipient)).map(([key,l])=>[key,l.binding,l.creator?.chosenUntil,l.wake?.id]),
+      chosen:Object.entries(db.links).filter(([,l])=>l.bot===this.botKey&&sameRecipient(l.recipient,actual.recipient)).map(([key,l])=>[key,l.binding,l.selectionOrder,l.creator?.chosenUntil,l.wake?.id]),
       focus:[actual.creator?.focusDraft,actual.creator?.focusUntil,actual.creator?.current],
     });
   }
@@ -486,13 +487,13 @@ export class PrivateCreator{
           if(!select&&(!row.contextOpen||(row.contextUntil??0)<=this.now()))throw denied();
         }else this.noPendingSave(db,p,link,selection.work);
         commit(s,actual,db);delete s.current;s.focusDraft=selection.work.draftId;s.focusUntil=this.now()+ttl;
-        if(rows.length)return {id:rows[0]!.view.operationId,focusUntil:s.focusUntil,
+        if(rows.length)return {id:rows[0]!.view.operationId,focusUntil:s.focusUntil,selectionState:this.selectionState(db,actual),
           route:{key:linkKey(p.scope,p.account),binding:link.binding,kind:'chosen' as const,chosenUntil:s.chosenUntil!}};
       });
       if(editing){
         if(select)await this.hooks.resumeEdit(p,editing.id,(db,actual)=>{
           const s=state(actual),rows=edits(db),known=s.sources?.[selection.work.draftId];
-          if(!matchesAuthoringRoute(db,actual,editing.route,this.now())||s.focusDraft!==selection.work.draftId||s.focusUntil!==editing.focusUntil||
+          if(this.selectionState(db,actual)!==editing.selectionState||!matchesAuthoringRoute(db,actual,editing.route,this.now())||s.focusDraft!==selection.work.draftId||s.focusUntil!==editing.focusUntil||
             s.current||rows.length!==1||rows[0]!.view.operationId!==editing.id||known!==undefined&&!same(known,selection.work.source))throw new CreatorSelectionChanged();
           if(selection.work.source)(s.sources??={})[selection.work.draftId]=selection.work.source;
         });
@@ -968,7 +969,7 @@ export class PrivateCreator{
       return;
     }
     const checked=await this.allowedJob(p,link,id),task=checked.job.task;
-    if(task.kind==='deliverCodes')throw denied();
+    if(task.kind!=='read'&&task.kind!=='command')throw denied();
     if(task.kind==='read'&&task.read.kind==='edit'&&a.kind==='edit'){
       const q=task.read,src=a.work.source;
       if(!same(q.work,a.work)||q.revision!==a.revision||!src)throw denied();

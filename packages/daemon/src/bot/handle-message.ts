@@ -236,13 +236,9 @@ import { serviceStdoutPath, serviceStderrPath } from '../service/common';
 import { bridgeVersion } from '../core/version';
 import { desktopDownloadForHost } from '../service/desktop-release';
 import { runtimeDistribution } from '../service/distribution';
-import {recipeSmartRules} from '../recipe/rich-settings';
-import {applyRich,readRichJournal} from '../recipe/rich-runtime';
-import {richSetup} from '../recipe/rich-setup';
-import {recipeAdmissions,recipeSlot} from '../recipe/rich-admission';
-import {guardRecipeThread,managedThreadOwner,recipeHistoryId,isRecipeSession,recipeResumeId,rememberRecipeThread} from '../recipe/rich-thread';
-import {openRichRecipeGeneration} from '../recipe/rich-generation';
-import {join as joinRecipePath} from 'node:path';
+import { join } from 'node:path';
+import { recipeSlot } from '../recipe/rich-admission';
+import { isRecipeSession, managedThreadOwner, recipeHistoryId } from '../recipe/rich-thread';
 import { botPaths, paths } from '../config/paths';
 import { claudeReadScope } from '../config/read-scope';
 import { resolveProjectsRootDir } from '../config/directories';
@@ -745,7 +741,20 @@ function runFailureMessage(err: unknown, dropped: number, sessionNotice?: string
 }
 
 /** Why a location's stored session couldn't be continued (see resolveThread). */
-export type RecreateReason = 'resume-failed' | 'cwd-changed' | 'provider-changed';
+type ToolRefresh = 'feedback-tool' | 'resource-tools';
+export type RecreateReason = 'resume-failed' | 'cwd-changed' | 'provider-changed' | ToolRefresh;
+
+function requiredCodexTools(extra?: TurnExtra): ToolRefresh | undefined {
+  if (extra?.resourceSelected) return 'resource-tools';
+  if (extra?.feedback) return 'feedback-tool';
+}
+
+function missingCodexTools(required: ToolRefresh | undefined, rec?: SessionRecord, live?: AgentThread): boolean {
+  if (!required || rec?.backend !== 'codex-appserver') return false;
+  return required === 'resource-tools'
+    ? !live?.startedWithResourceTools && rec.resourceToolSessionId !== rec.sessionId
+    : !live?.startedWithFeedbackTool && rec.feedbackToolSessionId !== rec.sessionId;
+}
 
 interface ResolvedThread { thread: AgentThread | undefined; recreated: boolean; reason?: RecreateReason }
 
@@ -753,6 +762,8 @@ interface ResolvedThread { thread: AgentThread | undefined; recreated: boolean; 
  * silently (product.md 3.5). A topic re-weaves its recent messages into the new
  * session; the main area has nothing to re-weave. */
 export function sessionChangeNotice(reason: RecreateReason, topic: boolean): string {
+  if (reason === 'resource-tools') return '本轮已启用配方资料工具。原 Codex 会话保留在历史记录中。';
+  if (reason === 'feedback-tool') return '本轮已启用群反馈工具。原 Codex 会话保留在历史记录中。';
   const why = reason === 'cwd-changed' ? '本群的工作目录改了' : reason === 'provider-changed' ? 'Provider 换了' : '原来的会话接不上了（恢复失败）';
   const carried = topic ? '，话题里最近的消息已重新带上' : '';
   return `⚠️ ${why}，这一轮起换了一条新会话，之前的对话记不得${carried}。`;
@@ -811,6 +822,8 @@ interface ActiveState {
   idlePause?: IdlePause;
   /** A run loop drains this state's queue and {@link compactAfter} (startReservedRun, launchRun). */
   runLoop?: true;
+  /** A request requiring new native tools waits for an old native session's current run before changing its tools. */
+  settled?: Promise<void>;
   /** A /compact sent while this run was busy: done right after the current turn (product.md 3.5). */
   compactAfter?: { msg: NormalizedMessage; inThread: boolean };
   /** A compaction runs on this session now (an idle /compact, or a queued one between turns). */
@@ -868,6 +881,8 @@ interface AttentionAcceptance {
 
 /** Inputs a synthetic turn (🔁 重试) carries that a real message would not. */
 interface TurnExtra {
+  /** The ordinary DM router verified a delivered resource for this SDK message. */
+  resourceSelected?: true;
   feedback?: FeedbackSource;
   /** A smart judgement's one-use acknowledgement of actual session intake. */
   attentionAcceptance?: AttentionAcceptance;
@@ -989,7 +1004,6 @@ export interface RecallEvent {
 }
 
 export interface Orchestrator {
-  richRecipe?:(op:import('../recipe/rich-installer').RichBotOp,bot:import('../config/bots').BotIdentity,member:(chat:string)=>Promise<void>)=>Promise<unknown>;
   /** Called by the production bridge before event intake; never runs in unit harnesses implicitly. */
   initialize?(): Promise<void>;
   collaboration: (request: CollaborationRequest) => Promise<unknown>;
@@ -1196,7 +1210,7 @@ export function createOrchestrator(
   /** `droppedFile`: where a shutdown keeps the queued messages it drops (s18c). No default: without it, nothing is
    * kept or answered (tests, and every caller but `daemon run`). */
   // Only daemon run supplies judgeUsageFile; tests that omit it do not persist usage.
-  options?: { feedback?: FeedbackHost; authoring?: Pick<import('../recipe/authoring-service').AuthoringService, 'onMessage' | 'onAction' | 'adminRemoved'>; entries?: AgentEntries; memory?: MemoryWriter; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention;
+  options?: { feedback?: FeedbackHost; authoring?: Pick<import('../recipe/authoring-service').AuthoringService, 'onMessage' | 'onAction' | 'adminRemoved'> & Partial<Pick<import('../recipe/authoring-service').AuthoringService,'resources'>>; entries?: AgentEntries; memory?: MemoryWriter; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention;
     /** devices-4a 4.3: where each new session's token comes from (the host, over IPC). Without it a session gets none (tests). */
     host?: Pick<HostApi, 'issueSessionToken'>;
     /** The launcher this Bot wrote for its sessions (agent/session-cli.ts); without one a session's PATH stays as it was. */
@@ -1254,9 +1268,13 @@ export function createOrchestrator(
   const openings = new WeakMap<object, SessionContext>();
   /** What each live thread has been handed; a resumed thread reads its record on its first turn. */
   const contextDelivered = new WeakMap<AgentThread, SessionContext>();
-  const contextField = (thread: AgentThread): { context: SessionContext } | Record<string, never> => {
+  const sessionFields = (thread: AgentThread): Pick<SessionRecord, 'context' | 'feedbackToolSessionId' | 'resourceToolSessionId'> => {
     const context = contextDelivered.get(thread);
-    return context ? { context } : {};
+    return {
+      ...(context ? {context} : {}),
+      ...(thread.startedWithFeedbackTool ? {feedbackToolSessionId: thread.sessionId} : {}),
+      ...(thread.startedWithResourceTools ? {resourceToolSessionId: thread.sessionId} : {}),
+    };
   };
   async function profileOf(project: Project | undefined, cwd: string, backend: AgentBackend, permission?: PermissionMode, place?: 'comment', commentedFile?: string) {
     const execution = execOf(project);
@@ -1273,20 +1291,12 @@ export function createOrchestrator(
     // The generic tool is a private chat's alone: a group cannot reach other groups or write to Feishu through it (7.6).
     const feishuApi = schedule && Boolean(project?.dm);
     // The task skill goes with the tools (T4b); a package that cannot be written leaves the last whole one, or none.
-    let capabilityPackages = schedule && backend.profileCapabilities?.capabilityPackages ? await builtinPackage(project?.chatId, project?.dm ? 'dm' : 'group') : [];
-    if (project?.richRecipe) {
-      const {pointer} = project.richRecipe;
-      const pkg = await openRichRecipeGeneration({botDataRoot:joinRecipePath(paths.appDir,'bots',cfg.accounts.app.id),installationId:pointer.installationId,generationId:pointer.generationId,expected:pointer});
-      if (pkg.nativePackage) {
-        if (!backend.profileCapabilities?.capabilityPackages) throw new Error('此 Provider 不支持本群配方的技能');
-        capabilityPackages = [...capabilityPackages,pkg.nativePackage];
-      }
-    }
+    const capabilityPackages = schedule && backend.profileCapabilities?.capabilityPackages ? await builtinPackage(project?.chatId, project?.dm ? 'dm' : 'group') : [];
     // What the Feishu tools download must be readable outside full access too.
     const downloads = schedule && project ? inboundChatDir(project.chatId) : undefined;
     if (downloads) await prepareInboundDir(downloads);
     const profile = assembled || skills ? { instructions: assembled ? openingInstructions(assembled, nonce, { hiddenBlocks: Boolean(project) && hiddenBlocksFor(backend.id) }) : '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: downloads ? [{ path: downloads, access: 'read' as const }] : [], capabilityPackages, mcpServers: [],
-      tools: { schedule, feishu: schedule || comment, ...(feishuEdit ? { feishuEdit } : {}), ...(feishuApi ? { feishuApi } : {}), ...(comment ? { documentsOnly: true } : {}), ...(project?.dm ? { acrossBots: true } : {}) }, ...(skills ? { skills } : {}) } : undefined;
+      tools: { schedule, ...(schedule && !project?.dm && options?.feedback ? {feedback: true} : {}), feishu: schedule || comment, ...(feishuEdit ? { feishuEdit } : {}), ...(feishuApi ? { feishuApi } : {}), ...(comment ? { documentsOnly: true } : {}), ...(project?.dm ? { acrossBots: true } : {}) }, ...(skills ? { skills } : {}) } : undefined;
     const built = await executionSessionProfile({ execution: { ...execution, permission: permission ?? execution.permission }, cwd, backend: backend.id, scope: project ? 'group' : 'ungrouped', profile });
     if (assembled && built) openings.set(built, contextOf(assembled, nonce));
     return built;
@@ -1560,7 +1570,6 @@ export function createOrchestrator(
   /** The profile a thread was actually started with: a permission save can swap in a rebuilt one (and its opening). */
   const profileUsed = new WeakMap<AgentThread, object>();
   /** A save can finish while a provider is starting, before eviction can see its thread. */
-  const deferredEntries=new WeakMap<AgentThread,NonNullable<StartThreadOptions['entry']>>();
   async function createWithPermission<T extends StartThreadOptions>(be: AgentBackend, original: T, place: AgentPlace, create: (opts: T) => Promise<AgentThread>): Promise<AgentThread> {
     for (let attempt = 0; attempt < 2; attempt++) {
       let opts = original;
@@ -1579,8 +1588,7 @@ export function createOrchestrator(
         // Every session finds `vonvon`, whichever Provider and place (dm-agent 9): on the PATH it inherits, or by this.
         const env = { ...(sessionCli ? { [SESSION_CLI_ENV]: sessionCli } : {}), ...session };
         thread = await create({...opts, ...(entry ? {entry} : {}), ...(Object.keys(env).length ? {profile: withSessionEnv(opts.profile, env)} : {})});
-        if(place.kind!=='group'||!place.chatId)entry?.attach(thread);
-        else if(entry) deferredEntries.set(thread,entry);
+        entry?.attach(thread);
       }
       catch (error) { entry?.revoke('start-failed'); throw error; }
       if (opts.profile) profileUsed.set(thread, opts.profile);
@@ -1603,50 +1611,38 @@ export function createOrchestrator(
   /** M-3 空闲 reaper 的轮次时钟：每次进 LIVE 缓存（trackSession）/ 每轮收尾
    * （touchSession）打点；空闲时长 = now − 最后打点。 */
   const sessionTouchedAt = new Map<string, number>();
-  /** sessions.set + 打点 —— 所有放进 LIVE 缓存的会话一律走这里。 */
-  function epochOf(project: Project | undefined):string|undefined {
-    if (!project?.richRecipe) return;
-    // Provider tool schemas are fixed when the group thread opens. A newly
-    // configured feedback installation needs a fresh schema on the next turn.
-    return JSON.stringify([project.bindingIncarnation, project.richRecipe.pointer.resolvedSha256, project.richRecipe.pointer.generationId,
-      project.cwd, project.directories, project.skills, project.modelAccess, permissionFingerprint(turnPerm(project)),
-      ...(project.feedback ? [project.feedback.revision] : [])]);
+  const historicalSessionsRoot = () => join(paths.appDir, 'bots', cfg.accounts.app.id);
+  async function scopedThreads(be: AgentBackend, chatId: string, cwd: string, limit?: number) {
+    const threads = await be.listThreads(cwd, limit);
+    const scoped = await Promise.all(threads.map(async thread => {
+      const owner = await managedThreadOwner(historicalSessionsRoot(), thread.sessionId);
+      if (!owner) return thread;
+      if (owner.slot === recipeSlot(cfg.accounts.app.id, chatId)) return {...thread, sessionId: owner.alias};
+    }));
+    return scoped.filter(thread => thread !== undefined);
   }
-  async function openGroupThread(be:AgentBackend, opts:StartThreadOptions, place:AgentPlace, previous?:string):Promise<AgentThread> {
-    const create = (options:StartThreadOptions,id?:string) => createWithPermission(be,options,place,actual=> id ? be.resumeThread({...actual,sessionId:id}) : be.startThread(actual));
-    if (place.kind !== 'group' || !place.chatId) return create(opts,previous);
-    const chatId=place.chatId, root=joinRecipePath(paths.appDir,'bots',cfg.accounts.app.id), slot=recipeSlot(cfg.accounts.app.id,chatId), release=recipeAdmissions.acquire(slot);
-    try {
-      const project=await getProjectByChatId(chatId), epoch=epochOf(project);
-      const assertEpoch=()=>{if(epochOf(getProjectByChatIdSync(chatId))!==epoch) throw new ThreadPermissionChanged('本群配方已更新，请重新打开会话。');};
-      if(previous&&!isRecipeSession(previous)&&await managedThreadOwner(root,previous))throw new ThreadPermissionChanged('请使用本群配方会话记录');
-      const id=previous && epoch ? await recipeResumeId(root,previous,slot,epoch) : previous && !isRecipeSession(previous) ? previous : undefined;
-      const options=epoch ? {...opts,profile:await profileOf(project,opts.cwd,be,opts.mode)} : opts;
-      const native=await create(options,id);
-      try {
-        assertEpoch();
-        const alias=epoch ? (id ? previous : await rememberRecipeThread(root,slot,epoch,native.sessionId)) : undefined;
-        const guarded=guardRecipeThread(native,slot,assertEpoch,alias);deferredEntries.get(native)?.attach(guarded);
-        const fingerprint=threadPermissions.get(native); if(fingerprint)threadPermissions.set(guarded,fingerprint);
-        const profile=profileUsed.get(native); if(profile)profileUsed.set(guarded,profile);
-        return guarded;
-      } catch(error) {await native.close();throw error;}
-    } finally {release();}
+  async function scopedHistory(be: AgentBackend, chatId: string, cwd: string, id: string) {
+    const nativeId = await recipeHistoryId(historicalSessionsRoot(), id, recipeSlot(cfg.accounts.app.id, chatId));
+    return be.readHistory(cwd, nativeId);
   }
-  async function scopedThreads(be: AgentBackend, chatId:string, cwd:string,limit?:number){
-    const threads=await be.listThreads(cwd,limit);
-    return (await Promise.all(threads.map(async thread=>{const owner=await managedThreadOwner(joinRecipePath(paths.appDir,'bots',cfg.accounts.app.id),thread.sessionId);return !owner?thread:owner.slot===recipeSlot(cfg.accounts.app.id,chatId)?{...thread,sessionId:owner.alias}:undefined;}))).filter((t):t is NonNullable<typeof t>=>!!t);
-  }
-  async function scopedHistory(be:AgentBackend,chatId:string,cwd:string,id:string){return be.readHistory(cwd,await recipeHistoryId(joinRecipePath(paths.appDir,'bots',cfg.accounts.app.id),id,recipeSlot(cfg.accounts.app.id,chatId)));}
   async function startWith(be: AgentBackend, opts: StartThreadOptions, place: AgentPlace): Promise<AgentThread> {
-    const thread = await openGroupThread(be,opts,place);
+    const thread = await createWithPermission(be, opts, place, actual => be.startThread(actual));
     const used = profileUsed.get(thread);
     const opening = used ? openings.get(used) : undefined;
     if (opening) contextDelivered.set(thread, opening);
     return thread;
   }
   async function resumeWith(be: AgentBackend, opts: ResumeThreadOptions, place: AgentPlace): Promise<AgentThread> {
-    return openGroupThread(be,opts,place,opts.sessionId);
+    if (place.kind === 'group') {
+      // Experimental sessions retain their original capability roots. Their topic gets a fresh ordinary session.
+      if (isRecipeSession(opts.sessionId)) {
+        const {sessionId: _old, ...fresh} = opts;
+        return startWith(be, fresh, place);
+      }
+      if (await managedThreadOwner(historicalSessionsRoot(), opts.sessionId))
+        throw new ThreadPermissionChanged('请使用本群的历史会话入口。');
+    }
+    return createWithPermission(be, opts, place, actual => be.resumeThread(actual));
   }
 
   /**
@@ -2657,7 +2653,7 @@ export function createOrchestrator(
       persona: judged.role, memory: judged.memory,
       ...(facts ? { facts } : {}),
       variant: item.variant, appId: cfg.accounts.app.id, botName: channel.botIdentity?.name ?? '',
-      group: { chatId: project.chatId, name: project.dm ? `和 ${name} 的私聊` : project.name, backend: project.backend, judge: project.judge, smartRules: recipeSmartRules(project) ?? (project.dm ? DEFAULT_DM_SMART_RULES : undefined) },
+      group: { chatId: project.chatId, name: project.dm ? `和 ${name} 的私聊` : project.name, backend: project.backend, judge: project.judge, smartRules: project.smartRules ?? (project.dm ? DEFAULT_DM_SMART_RULES : undefined) },
       botJudge: cfg.preferences?.judge, ...(title ? { topicTitle: title } : {}),
       context, message: look?.glance ? { ...line, fresh: true as const } : line,
       ...(why ? { why } : {}),
@@ -2966,6 +2962,7 @@ export function createOrchestrator(
     if (!ingested || await intakeStoppedBeforeText(msg, owner)) return undefined;
     return voiceMessages.remember(msg, ingested);
   }
+  const resourceMessages = new WeakSet<NormalizedMessage>();
   const feedbackSources = new WeakMap<NormalizedMessage, FeedbackSource>();
   const directFeedback = (msg: NormalizedMessage): Pick<TurnExtra, 'feedback'> => ({feedback: feedbackSources.get(msg)});
   const handleMessage = async (msg: NormalizedMessage, intakeOwner?: IntakeStatus): Promise<void> => {
@@ -3007,6 +3004,8 @@ export function createOrchestrator(
       }
       if (askAnswered(msg)) return;
       if (options?.authoring && await options.authoring.onMessage(msg)) return;
+      // route() only records a trigger after matching the trusted DM and the delivered account selection.
+      if (options?.authoring?.resources?.hasTrigger(msg.messageId)) resourceMessages.add(msg);
       if (isMenuCommand(msg)) { await handleDmConsole(channel, cfg, msg); return; }
       const dm = await openDmChat(msg);
       if (!dm) {
@@ -3731,11 +3730,28 @@ export function createOrchestrator(
     // tier, which backends read as full access. Messages stop earlier; this
     // also covers the card-originated turns (👍 继续, 🔁 重试).
     if (refusedTurn(project, msg.chatId, extra) || dmShut(project, msg, extra)) return Promise.resolve();
+    const source = extra?.burst ? burstTrigger(extra.burst) : msg;
+    if (project?.dm && source.messageId === msg.messageId && resourceMessages.has(source) &&
+      !extra?.initiative && !extra?.wake && !extra?.scheduled && !extra?.retry && extra?.replayText === undefined) {
+      // A selection belongs to a real new turn. Steering text into somebody's existing tool scope cannot bind it.
+      extra = {...extra, resourceSelected: true, queueOnly: true};
+    }
+    const required = requiredCodexTools(extra);
     const owner = active.get(sessionKey);
     return orderTurns(sessionKey, async () => {
       if (staleRetry(extra)) return;
-      if (owner?.intakeCancelled) {
-        if (dropScheduled(extra, intakeStopped(owner)) || dropBotMessage(msg, 'intake-cancelled', '会话被停下了')) return;
+      const running = active.get(sessionKey);
+      if (required && running?.settled && !running.isGoal && missingCodexTools(required, await getSession(sessionKey), running.thread)) {
+        await running.settled;
+        if (shuttingDown) {
+          const origin = originFor(msg, flat);
+          if (origin) keepForResend(origin);
+          return;
+        }
+      }
+      const cancelled = [owner, running].find(state => state?.intakeCancelled);
+      if (cancelled) {
+        if (dropScheduled(extra, intakeStopped(cancelled)) || dropBotMessage(msg, 'intake-cancelled', '会话被停下了')) return;
         await channel.send(msg.chatId, { markdown: '排队期间会话已停止，请重发本条消息。' }, { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined);
         return;
       }
@@ -4004,7 +4020,7 @@ export function createOrchestrator(
     active.set(sessionKey, reserved);
     dropRetries(sessionKey);
     extra?.retry?.accepted();
-    void trackTask(withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
+    reserved.settled = trackTask(withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
       // Goal runs use the OKR reaction (added at dispatch) as their only receipt,
       // not the ⏳/🫳 run-reaction lifecycle.
       const reaction = goal || extra?.scheduled ? undefined : runReaction(msg.messageId, !sema.hasFree());
@@ -4034,7 +4050,7 @@ export function createOrchestrator(
         const resolveP = (moved ? Promise.resolve<ResolvedThread>({ thread: undefined, recreated: true, reason: 'provider-changed' }) : resolveThread(sessionKey, msg.chatId, {
           mode: perm.mode,
           network: perm.network, native: perm.native, readScope: perm.readScope,
-        })).then((r) => {
+        }, requiredCodexTools(extra))).then((r) => {
           tResolveDone = Date.now();
           return r;
         });
@@ -4248,7 +4264,7 @@ export function createOrchestrator(
             summary: stripFileTokens(summaryText ?? text).slice(0, 80),
             // Nothing reached it yet; the trigger is marked once the turn starts.
             ...nothingSeen(),
-            ...contextField(thread),
+            ...sessionFields(thread),
             createdAt: Date.now(),
             updatedAt: Date.now(),
           });
@@ -4266,7 +4282,7 @@ export function createOrchestrator(
               ...prior,
               // A new native session: the old watermark does not cover it.
               ...nothingSeen(),
-              ...contextField(thread),
+              ...sessionFields(thread),
               model,
               effort,
               modelCustom,
@@ -4449,6 +4465,7 @@ export function createOrchestrator(
     threadId: string,
     chatId: string,
     perm: TurnPerm,
+    required?: ToolRefresh,
   ): Promise<ResolvedThread> {
     let project: Project | undefined;
     const live = sessions.get(threadId);
@@ -4458,18 +4475,21 @@ export function createOrchestrator(
         const prior = elsewhere ? undefined : await getSession(threadId).catch(() => undefined);
         project = await getProjectByChatId(chatId);
         if (project) perm = turnPerm(project);
-        const currentEpoch=epochOf(project);
-        const epochChanged=currentEpoch ? !(await recipeResumeId(joinRecipePath(paths.appDir,'bots',cfg.accounts.app.id),live.sessionId,recipeSlot(cfg.accounts.app.id,chatId),currentEpoch)) : isRecipeSession(live.sessionId);
-        const permissionChanged = epochChanged || threadPermissions.get(live) !== permissionFingerprint(perm);
+        const permissionChanged = threadPermissions.get(live) !== permissionFingerprint(perm);
         // Evicted while it looked (a tier change, the reaper): resume below like any other.
         if (sessions.get(threadId) === live && live.isAlive()) {
-          if (!elsewhere && !permissionChanged) {
+          if (!elsewhere && !permissionChanged && !missingCodexTools(required, prior, live)) {
             noteCompaction(threadId, chatId, live, prior);
             return { thread: live, recreated: false };
           }
           // Someone else wrote the session (a terminal turn or /compact, s15b): this
           // process never rereads it, so reconnect from the file below.
           sessions.delete(threadId);
+          if (required && missingCodexTools(required, prior, live)) {
+            await closeForPermission(live);
+            lastUsage.delete(threadId);
+            return {thread: undefined, recreated: true, reason: required};
+          }
           if (permissionChanged) await closeForPermission(live);
           else void trackTask(live.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
         }
@@ -4514,9 +4534,15 @@ export function createOrchestrator(
         const freshProfile=profileUsed.get(resumed);
         const opening=freshProfile && openings.get(freshProfile);
         if (opening) contextDelivered.set(resumed,opening);
-        await patchSession(threadId,{sessionId:resumed.sessionId,context:opening,usage:undefined});
+        await patchSession(threadId,{sessionId:resumed.sessionId,context:opening,...sessionFields(resumed),usage:undefined});
         trackSession(threadId,resumed);lastUsage.delete(threadId);
         return {thread:resumed,recreated:false};
+      }
+      if (required && missingCodexTools(required, rec)) {
+        // Resume first so an active native writer can still refuse. A new thread gets recent Feishu history via the ordinary recreation path.
+        await closeForPermission(resumed);
+        lastUsage.delete(threadId);
+        return {thread: undefined, recreated: true, reason: required};
       }
       trackSession(threadId, resumed);
       // The opening handed to a resumed session carries a new mark. Claude takes its system append again on resume, so that
@@ -4556,7 +4582,7 @@ export function createOrchestrator(
       lastUsage.delete(threadId);
       // The resumed codex thread is gone — repoint the persisted record at the
       // new thread id so a later restart doesn't keep resuming the dead one.
-      await patchSession(threadId, { sessionId: fresh.sessionId, ...contextField(fresh) }).catch(() => undefined);
+      await patchSession(threadId, { sessionId: fresh.sessionId, ...sessionFields(fresh) }).catch(() => undefined);
       // 自愈观测：resume 失败已重建全新线程（codex 历史为空，调用方会回灌话题上文）。
       log.info('agent', 'resume-recreate', { threadId, sessionId: fresh.sessionId, backend: be.id });
       return { thread: fresh, recreated: true, reason: 'resume-failed' };
@@ -5153,7 +5179,7 @@ export function createOrchestrator(
           // when it is rebuilt before its first turn (from).
           lastSeenAt: msg.createTime || Date.now(),
           from: (msg.createTime || Date.now()) + 1,
-          ...contextField(fresh),
+          ...sessionFields(fresh),
           createdAt: Date.now(),
           updatedAt: Date.now(),
         });
@@ -7459,7 +7485,7 @@ export function createOrchestrator(
         // is the main-area session, which no back-fill reads until s14 (it must
         // then allow for clock skew, or use the newest createTime it has).
         const now = Date.now();
-        try { await upsertSession({ ...record, serviceTier: savedSpeed, ...contextField(fresh), sessionId: fresh.sessionId, summary: '(新会话)', lastSeenAt: now, seen: undefined, from: now, recalls: undefined, createdAt: now, updatedAt: now }); }
+        try { await upsertSession({ ...record, serviceTier: savedSpeed, ...sessionFields(fresh), sessionId: fresh.sessionId, summary: '(新会话)', lastSeenAt: now, seen: undefined, from: now, recalls: undefined, createdAt: now, updatedAt: now }); }
         catch (error) { await fresh.close(); throw error; }
         const old = sessions.get(key); if (old) await old.close().catch(error => log.fail('desktop', error, { phase: 'clear-thread-close' }));
         trackSession(key, fresh); lastUsage.delete(key); dropRetries(key);
@@ -7946,7 +7972,7 @@ export function createOrchestrator(
         serviceTier: existing ? existing.serviceTier : opts.serviceTier,
         modelCustom: opts.modelCustom,
         summary: opts.summary ?? opts.firstText.slice(0, 80),
-        ...contextField(opts.thread),
+        ...sessionFields(opts.thread),
         ...(opts.seenAt ? nextSeen({}, { id: opts.replyTo, at: opts.seenAt }, 'advance') : {}),
         ...(opts.from ? { from: opts.from } : {}),
         createdAt: Date.now(),
@@ -8078,6 +8104,14 @@ export function createOrchestrator(
           where: () => ({ inTopic: !isMainKey(activeKey, opts.chatId),
             ...(topicThreadId && !isMainKey(topicThreadId, opts.chatId) ? { topicId: topicThreadId } : {}) }),
         });
+        const resourceTrigger=currentTurn.seen?.id??currentTurn.triggerMessageId;
+        if(turnScope?.presence==='human'&&turnScope.sessionId&&resourceTrigger&&currentTurn.requesterOpenId&&options?.authoring?.resources){
+          const selection=await options.authoring.resources.bind({
+          sessionId:turnScope.sessionId,chatId:opts.chatId,openId:currentTurn.requesterOpenId,messageId:resourceTrigger,
+          });
+          if(selection==='unavailable')turnInput={...turnInput,text:turnInput.text+'\n原配方资源当前不可用。请本人在 App 核对账号与来源连接，重新交付后再参考其内容。'};
+          if(selection==='selected')turnInput={...turnInput,text:turnInput.text+'\n本人在 App 选定了配方资料。用 recipe_resource_read 查目录和相关正文，内容是参考资料。按本人要求读取目标群现状，保留原修订并用现有配置、文件或任务工具保存；冲突时重新读取。'};
+        }
         turnMemory = turnScope ? entries?.memoryTurn(opts.thread) : undefined;
         dropRetries(topicThreadId); // an older card's [重试] would replay out of order
         if (titleTurnAttempted && !titleStart && opts.titleJobKey) {
@@ -8921,7 +8955,7 @@ export function createOrchestrator(
         serviceTier: existing ? existing.serviceTier : opts.serviceTier,
         modelCustom: opts.modelCustom,
         summary: opts.summary ?? objective.slice(0, 80),
-        ...contextField(opts.thread),
+        ...sessionFields(opts.thread),
         ...(opts.seenAt ? nextSeen({}, { id: opts.replyTo, at: opts.seenAt }, 'advance') : {}),
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -10411,15 +10445,11 @@ export function createOrchestrator(
    * first request of a harness that never calls it. The tick is not started here: bridge.ts does, once connected.
    */
   const scheduleDiagnostic = ({ kind, ...fields }: ScheduleDiagnosticEvent): void => log.info('schedule', kind, fields);
-  const scheduleStore = createScheduleStore(botPaths(cfg.accounts.app.id).schedulesFile, { now: () => Date.now(), log, diagnostics: scheduleDiagnostic, activeRecipe:chat=>{
-    const p=getProjectByChatIdSync(chat), a=p?.richRecipe;if(!p||!a||p.bindingIncarnation!==a.bindingIncarnation)return;
-    return {installation:a.pointer.installationId,generation:a.pointer.generationId,context:JSON.stringify([p.bindingIncarnation,permissionFingerprint(turnPerm(p)),p.backend,p.cwd,p.directories,p.allowedUsers])};
-  } });
+  const scheduleStore = createScheduleStore(botPaths(cfg.accounts.app.id).schedulesFile, { now: () => Date.now(), log, diagnostics: scheduleDiagnostic });
   const scheduler = createScheduler({
     store: scheduleStore, now: () => Date.now(), timers: { setTimeout, clearTimeout },
-    acquireTask:task=>recipeAdmissions.acquire(recipeSlot(cfg.accounts.app.id,task.chatId)),
-    run:async job=>{
-      const current=scheduleStore.get(job.task.id);if(!current||current.revision!==job.task.revision || (scheduleStore.managed?.review(current.id) && current.state!=='active'))return SCHEDULE_UPDATING;
+    run: async job => {
+      if (scheduleStore.get(job.task.id)?.revision !== job.task.revision) return SCHEDULE_UPDATING;
       return runScheduled(job);
     },
     gate: scheduleGate, notifyAutoPause, notifyGateFailure,
@@ -10486,11 +10516,6 @@ export function createOrchestrator(
     writePreferences,
     libraryExecute: admit(libraryExecute),
     settings: { read: admit(settings.read), save: admit(settings.save), models: admit(settings.models), act: admit(settings.act) },
-    richRecipe:async(op,bot,member)=>{
-      await loadStore();if(shuttingDown||bot.appId!==cfg.accounts.app.id)throw new Error('Bot 已停止');
-      if(op.kind==='richSetup'){if(op.request.botId!==bot.appId)throw new Error('配方所属 Bot 不符');await member(op.request.groupId);return richSetup(op.request,scheduleStore,settings,id=>isAdmin(cfg,id),primaryAdmin(cfg));}
-      const journal=await readRichJournal(bot.appId,op.activation.operationId);return applyRich(bot,op.activation,scheduleStore,()=>member(journal.group));
-    },
     scheduleAs: admittedScheduleAs,
     permissionOf: async chatId => {
       const project = await getProjectByChatId(chatId);

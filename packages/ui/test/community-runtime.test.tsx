@@ -199,7 +199,7 @@ it('ignores a native late successful attempt after route A-B-A and leaves the ne
   await click('获取配方');
   await click('返回 Bot 配方');await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());
   await act(async()=>{finish({recipeId:A,versionId:B,owned:false,acquired:true});});
-  expect(document.body.textContent).not.toContain('已获取，已保存在你的账号中');
+  expect(document.body.textContent).not.toContain('已保存在「我的配方」');
   expect([...document.querySelectorAll('button')].find(button=>button.textContent==='获取配方')?.disabled).toBe(false);
   expect(calls.filter(request=>request.type==='acquire')).toHaveLength(1);
 });
@@ -216,7 +216,7 @@ it('ignores a native old-account receipt after another account opens the same ve
   await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());
   const before=calls.filter(request=>request.type==='detail').length;
   await act(async()=>{finish({recipeId:A,versionId:B,owned:false,acquired:true});});
-  expect(document.body.textContent).not.toContain('已获取，已保存在你的账号中');
+  expect(document.body.textContent).not.toContain('已保存在「我的配方」');
   expect(calls.filter(request=>request.type==='detail')).toHaveLength(before);
   expect([...document.querySelectorAll('button')].find(button=>button.textContent==='获取配方')?.disabled).toBe(false);
 });
@@ -245,7 +245,7 @@ it('recovers a clock-rejected native attempt only after a checked explicit retry
     clock=now;await click('获取配方');
     const attempts=calls.filter(request=>request.type==='acquire');expect(attempts).toHaveLength(2);
     expect(attempts[1]!.requestId).not.toBe(attempts[0]!.requestId);expect(attempts[1]).toMatchObject({code:'Ab-CD'});
-    expect(document.body.textContent).toContain('已获取，已保存在你的账号中');
+    expect(document.body.textContent).toContain('已保存在「我的配方」');
   } finally {vi.restoreAllMocks();}
 });
 
@@ -263,7 +263,7 @@ it('keeps a native clock-rejected raw/key until an online exact-version read con
   expect(document.querySelector<HTMLInputElement>('[aria-label="分享码"]')?.value).toBe('Ab-CD');
   offline=false;acquired=true;await click('获取配方');
   const attempts=calls.filter(request=>request.type==='acquire');expect(attempts).toHaveLength(2);expect(attempts[1]).toEqual(attempts[0]);
-  expect(document.body.textContent).toContain('已获取，已保存在你的账号中');
+  expect(document.body.textContent).toContain('已保存在「我的配方」');
 });
 
 it('keeps a clock-rejected native key when reconciliation returns another version',async()=>{
@@ -288,7 +288,7 @@ it('ignores a native clock reconciliation after route A-B-A and preserves the cu
   await draw();await click('打开已发布版本');await click('获取配方');expect(finish).toBeTypeOf('function');
   await click('返回 Bot 配方');await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());
   await act(async()=>{finish({...recipe,acquired:true});});
-  expect(document.body.textContent).not.toContain('已获取，已保存在你的账号中');
+  expect(document.body.textContent).not.toContain('已保存在「我的配方」');
   await click('获取配方');const attempts=calls.filter(request=>request.type==='acquire');expect(attempts).toHaveLength(2);expect(attempts[1]).toEqual(attempts[0]);
 });
 
@@ -308,7 +308,7 @@ it('ignores native clock reconciliation after an account change and preserves th
   await act(async()=>{current={...status,accountId:draftId};listeners.forEach(listener=>listener(current));});
   await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());await fill('分享码','NEW-CODE');
   await act(async()=>{finish({...recipe,acquired:true});});
-  expect(document.body.textContent).not.toContain('已获取，已保存在你的账号中');
+  expect(document.body.textContent).not.toContain('已保存在「我的配方」');
   expect(document.querySelector<HTMLInputElement>('[aria-label="分享码"]')?.value).toBe('NEW-CODE');
   expect([...document.querySelectorAll('button')].find(button=>button.textContent==='获取配方')?.disabled).toBe(false);
 });
@@ -393,7 +393,7 @@ it('opens coded acquisition in a focused dialog and keeps an uncertain retry bou
   await click('获取配方');
   const requests = calls.filter(request => request.type === 'acquire');
   expect(requests).toHaveLength(2); expect(requests[1]).toEqual(requests[0]);
-  expect(document.body.textContent).toContain('已获取，已保存在你的账号中');
+  expect(document.body.textContent).toContain('已保存在「我的配方」');
 });
 
 

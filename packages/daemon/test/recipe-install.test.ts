@@ -705,8 +705,7 @@ describe('wire and security boundaries', () => {
     for (const place of ['dm', 'group', 'comment'] as const) {
       const principal = {kind: 'bot-session' as const, sessionId: 's', appId: botId, place, chatId: groupId};
       expect(await authorize({principal, protocolVersion: 2, negotiated: true, scope: null}, request, {})).toMatchObject({ok: false});
-      await expect(recipeInstallRpc(undefined, principal, request.payload)).rejects.toThrow('主人');
-      await expect(recipeInstallRpc(undefined,principal,recipeInstallRequestSchema.parse({type:'richSetup',botId,groupId,action:{kind:'read'}}))).rejects.toThrow('主人');
+      expect(() => recipeInstallRpc(principal)).toThrow('主人');
     }
     const owner = {principal: {kind: 'owner' as const, via: 'local' as const}, protocolVersion: 2, negotiated: true};
     expect(await authorize({...owner, scope: {bot: 'cli_other_fixture'}}, request, {})).toMatchObject({ok: false});

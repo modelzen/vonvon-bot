@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({state: [] as unknown[], refs: [] as Array<{current:
 }));
 vi.mock('react', async original => ({...await original<typeof import('react')>(),
   useState: (initial: unknown) => {const i = h.si++; if (!(i in h.state)) h.state[i] = typeof initial === 'function' ? (initial as () => unknown)() : initial; return [h.state[i], (next: unknown) => {h.state[i] = typeof next === 'function' ? (next as (old: unknown) => unknown)(h.state[i]) : next;}];},
+  useLayoutEffect: () => {},
   useRef: (initial: unknown) => {const i = h.ri++; return h.refs[i] ??= {current: initial};},
   useEffect: (effect: () => (() => void) | void, deps?: unknown[]) => {const i = h.ei++; const old = h.effects[i]; if (old?.deps && deps && deps.every((value, at) => Object.is(value, old.deps![at]))) return; h.pending.push(() => {old?.cleanup?.(); h.effects[i] = {deps, cleanup: effect() || undefined};});},
 }));
@@ -57,8 +58,8 @@ it('retries an uncertain code acquisition with one request key and reports accou
   expect(requests).toHaveLength(2); expect(requests[0].requestId).toBe(requests[1].requestId);
   expect(requests[0]).toMatchObject({accountId: h.accountId, versionId: recipe.versionId, code: 'ABCD-1234'});
   const details = all.find(node => node.type === RecipeDetails)!;
-  expect(details.props.action.props.children).toBe('添加到群聊'); expect(details.props.action.props.disabled).toBe(true);
-  expect(all.some(node => typeof node.props.children === 'string' && node.props.children.includes('已获取，已保存在你的账号中'))).toBe(true);
+  expect(details.props.action.props.children).toBe('交给 Bot'); expect(details.props.action.props.disabled).toBe(true);
+  expect(all.some(node => typeof node.props.children === 'string' && node.props.children.includes('已保存在「我的配方」'))).toBe(true);
   expect(all.some(node => node.props.children === '已安装')).toBe(false);
 });
 it('opens login without sending an acquisition while signed out and retains the immutable public route', async () => {
@@ -77,7 +78,7 @@ it('does not use a late acquisition receipt to replace the page after navigating
   h.route = {kind: 'catalog'}; render(); await flush();
   finish({acquired: true}); await flush(); all = render();
   expect(all.some(node => node.type === RecipeDetails)).toBe(false);
-  expect(all.some(node => typeof node.props.children === 'string' && node.props.children.includes('已获取，已保存在你的账号中'))).toBe(false);
+  expect(all.some(node => typeof node.props.children === 'string' && node.props.children.includes('已保存在「我的配方」'))).toBe(false);
 });
 
 it('confirms author withdrawal, reads uncertain outcomes without resubmitting, and hides management on public routes', async () => {

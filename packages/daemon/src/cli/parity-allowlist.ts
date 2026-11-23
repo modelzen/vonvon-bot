@@ -20,18 +20,12 @@ const pending = (slice: ParitySlice, note: string): ParityEntry => ({ reason: 'p
 const dead = (slice: ParitySlice, note = 'the daemon answers unsupported'): ParityEntry => ({ reason: 'dead', slice, note });
 
 export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
-  ...Object.fromEntries(['richCancel','richIssuing','richReconcile','richPrepare','richCommit','richStatus','richSetup'].map(type=>['recipeInstall.'+type,{reason:'desktop-only' as const,note:'the account owner reviews and applies this installation on the selected device'}])),
-  'recipeInstall.source': {reason:'desktop-only',note:'group settings show the exact local installation source'},
-  'recipeInstall.ignoreVersion': {reason:'desktop-only',note:'group settings ignore a reviewed update for one binding'},
-  'recipeInstall.createdGroup': {reason:'desktop-only',note:'the desktop looks up the original creation after a lost response'},
-  ...Object.fromEntries('creatorAnswer creatorAppConfirm creatorCheck creatorContinue creatorDeliver creatorDiscover creatorLogo creatorOpen creatorPoll creatorPreview beginHandoff beginDraftHandoff restoreHandoff handoffStatus cancelHandoff answerHandoff richSourceOptions richInventory richPrepare richEdit richReadMember richMembers richBindMembers richInspect richAdvance'.split(' ').map(type => ['recipeAuthoring.' + type, {reason: 'desktop-only' as const, note: 'the signed-in desktop owns the private authoring session'}])),
+  ...Object.fromEntries([
+    'source', 'ignoreVersion', 'createdGroup', 'prepare', 'commit', 'status', 'cancel', 'issuing', 'reconcile',
+    'richCancel', 'richIssuing', 'richReconcile', 'richPrepare', 'richCommit', 'richStatus', 'richSetup',
+  ].map(type => ['recipeInstall.' + type, {reason: 'superseded' as const, note: 'group installation has retired; the daemon answers unsupported'}])),
+  ...Object.fromEntries('resourceHandoff creatorAnswer creatorAppConfirm creatorCheck creatorContinue creatorDeliver creatorDiscover creatorLogo creatorOpen creatorPoll creatorPreview beginHandoff beginDraftHandoff restoreHandoff handoffStatus cancelHandoff answerHandoff richSourceOptions richInventory richPrepare richEdit richReadMember richMembers richBindMembers richInspect richAdvance'.split(' ').map(type => ['recipeAuthoring.' + type, {reason: 'desktop-only' as const, note: 'the signed-in desktop owns the private authoring session'}])),
   ...Object.fromEntries('open close status beginLink inspectLink confirmLink reviewSource prepare edit inspectCandidate advance deliver resend cancel settle reconcile updateCard groupSourceIdentity operationSourceIdentity workflow answerField resumeContext'.split(' ').map(type => ['recipeAuthoring.' + type, {reason: 'desktop-only' as const, note: 'the signed-in desktop owns the private authoring session'}])),
-  'recipeInstall.prepare': {reason: 'desktop-only', note: 'the signed-in desktop prepares an existing Bot/group role installation'},
-  'recipeInstall.commit': {reason: 'desktop-only', note: 'the desktop hands over a scoped cloud operation ticket'},
-  'recipeInstall.status': {reason: 'desktop-only', note: 'the desktop recovers the durable installation receipt'},
-  'recipeInstall.cancel': {reason: 'desktop-only', note: 'the desktop cancels its prepared installation'},
-  'recipeInstall.issuing': {reason: 'desktop-only', note: 'the desktop durably marks authorization dispatch before contacting the account API'},
-  'recipeInstall.reconcile': {reason: 'desktop-only', note: 'the daemon verifies a negative cloud outcome before closing an uncertain dispatch'},
   'command.setAgentBadgeNumber': { reason: 'client-only', note: 'the printed employee number on the home page badge' },
   'command.setResponse': { reason: 'superseded', note: 'settings.save.project response (settings set)' },
   'command.setPermission': { reason: 'superseded', note: 'settings.save.project permission (settings set)' },

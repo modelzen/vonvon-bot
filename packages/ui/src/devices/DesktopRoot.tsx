@@ -12,7 +12,6 @@ import {CommunityWindow} from '../community/CommunityWindow';
 import {CommunityProvider, useCommunity} from '../community/community-context';
 import {AccountProvider} from '../account-context';
 import {AccountPageProvider} from '../accounts/account-page';
-import {RecipeUseProvider, useRecipeUse} from '../recipes/recipe-use-context';
 import {DraftGuardProvider} from '../settings/DraftGuard';
 import './devices.css';
 
@@ -41,17 +40,16 @@ function DesktopDeviceView({state, fallback, shell, renderApp}: {state?: Devices
   // Kept while the same device stays remote or local, so subscriptions to the shell are not renewed on every state.
   const deviceShell = useMemo(() => shellForDevice(shell, device), [shell, device.isRemote]);
   return <ClientProvider client={client} shell={deviceShell} device={device} devices={state}>
-    <DraftGuardProvider><RecipeUseProvider><DesktopCommunityProvider shell={shell}>
+    <DraftGuardProvider><DesktopCommunityProvider shell={shell}>
       <DesktopDeviceContent deviceId={device.id} state={state} renderApp={renderApp} hasDevices={Boolean(devicesShell)}/>
-    </DesktopCommunityProvider></RecipeUseProvider></DraftGuardProvider>
+    </DesktopCommunityProvider></DraftGuardProvider>
     {/* devices-ui-3 4.5: beside the gate, so a pairing with this computer shows whichever device is looked at */}
     <PairedToasts shell={shell} local={!device.isRemote}/>
   </ClientProvider>;
 }
 
 function DesktopCommunityProvider({shell, children}: {shell?: ShellCapabilities; children: ReactNode}) {
-  const useRecipe = useRecipeUse();
-  return <CommunityProvider shell={shell?.community} onUse={useRecipe?.available ? (recipe, target) => useRecipe.start(recipe, target) : undefined}>{children}</CommunityProvider>;
+  return <CommunityProvider shell={shell?.community}>{children}</CommunityProvider>;
 }
 function DesktopDeviceContent({deviceId, state, renderApp, hasDevices}: {deviceId: string; state?: DevicesState; renderApp: () => ReactNode; hasDevices: boolean}) {
   const community = useCommunity();

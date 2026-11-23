@@ -1,12 +1,17 @@
+import { legacyWorkRules } from './helpers/work-rules-fixture';
+import { createInitiator, createResponder, decodeFrame, encodeFrame, FRAME, generateStaticKey } from '@vonvon/protocol/secure-channel';
+import { spawn } from 'node:child_process';
+import { build } from 'esbuild';
+import { WebSocket, WebSocketServer } from 'ws';
 import { buildAdminsCard, DM } from '../src/card/dm-cards';
 import * as appRoles from '../src/config/app-roles';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { botPaths, paths } from '../src/config/paths';
 import { saveConfig, loadConfig } from '../src/config/store';
 import { createAppPreferencesWriter, createAdminWriteExecutor } from '../src/admin/ops';
-import { createSettingsOwner, type SettingsOwnerDeps } from '../src/admin/settings';
+import { createSettingsOwner, PROJECT_SETTINGS_MAX_JSON_BYTES, type SettingsOwnerDeps } from '../src/admin/settings';
 import { parseSettingsEdit, parseSettingsAction, parseModelQuery } from '../src/admin/settings-parse';
 import type { AgentSettingsView, ProjectSettingsView, SessionSettingsView } from '../src/admin/settings-types';
 import { addDmProject, addProject, dmChatId, dmProject, DM_PROJECT_NAME, getProjectByChatId, getProjectByName, rememberDmChat, updateProject } from '../src/project/registry';
@@ -16,7 +21,7 @@ import type { AppConfig } from '../src/config/schema';
 import type { AgentBackend } from '../src/agent/types';
 import { offlineModelCatalog, rememberModelCatalog } from '../src/admin/model-catalog';
 import { permissionTable, permissionTiers } from '../src/agent/permission';
-import { DEFAULT_DM_SMART_RULES, FULL_ACCESS_WARNING, defaultCardDisplay } from '@vonvon/protocol';
+import { DEFAULT_DM_SMART_RULES, FULL_ACCESS_WARNING, defaultCardDisplay, responseSchema, projectViewSchema, WORK_RULES_MAX_BYTES, desktopSnapshotSchema, requestSchema, PROTOCOL_VERSION } from '@vonvon/protocol';
 
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
@@ -904,4 +909,286 @@ describe('model catalog availability', () => {
     expect(await owner.models(query)).toMatchObject({ state: 'unavailable', models: [] });
     expect(listModels).not.toHaveBeenCalled();
   });
+});
+
+
+describe('ordinary work rules role settings', () => {
+  const roleOf = async (owner: Awaited<ReturnType<typeof fixture>>['owner']) => {
+    const view = await owner.read(project);
+    if (view.scope.kind !== 'project') throw new Error('project view missing');
+    const role = (view as ProjectSettingsView).sections.role;
+    if (!role) throw new Error('project role missing');
+    return role;
+  };
+
+  it('patches only the named field, preserves work rules for old callers, and clears explicitly', async () => {
+    await updateProject('demo', { supplement: '职责', workRules: '工作' });
+    const { owner } = await fixture();
+    let role = await roleOf(owner);
+    expect(role.stored).toEqual({ supplement: '职责', workRules: '工作' });
+    expect(await owner.save({ scope: project, section: 'role', revision: role.revision, patch: { supplement: '新职责' } })).toMatchObject({ kind: 'saved' });
+    expect(await getProjectByName('demo')).toMatchObject({ supplement: '新职责', workRules: '工作' });
+    expect(await owner.save({ scope: project, section: 'role', revision: role.revision, patch: { workRules: '过期' } })).toMatchObject({ kind: 'conflict' });
+    role = await roleOf(owner);
+    expect(await owner.save({ scope: project, section: 'role', revision: role.revision, patch: { workRules: '' } })).toMatchObject({ kind: 'saved' });
+    expect(await getProjectByName('demo')).toMatchObject({ supplement: '新职责', workRules: '' });
+  });
+
+  it('reads no experimental recipe rules and keeps their records unchanged when ordinary rules are saved', async () => {
+    const richRecipe = legacyWorkRules('汉'.repeat(20000), '字'.repeat(20000));
+    await updateProject('demo', { richRecipe });
+    const { owner } = await fixture();
+    const role = await roleOf(owner);
+    expect(role.stored.workRules).toBe('');
+    richRecipe.resolved[0]!.value.text = '变化';
+    await updateProject('demo', { richRecipe });
+    expect((await roleOf(owner)).revision).toBe(role.revision);
+    expect(await owner.save({ scope: project, section: 'role', revision: role.revision, patch: { workRules: '普通规则' } })).toMatchObject({ kind: 'saved' });
+    expect((await roleOf(owner)).stored.workRules).toBe('普通规则');
+    expect((await getProjectByName('demo'))?.richRecipe).toEqual(richRecipe);
+  });
+
+  it('does not freeze legacy supplement fallback when only work rules are patched', async () => {
+    await updateProject('demo', { profile: { persona: '旧职责', memory: '', inheritMemory: true, inheritPersona: true } });
+    const { owner } = await fixture();
+    const role = await roleOf(owner);
+    expect(await owner.save({ scope: project, section: 'role', revision: role.revision, patch: { workRules: '执行' } })).toMatchObject({ kind: 'saved' });
+    const row = await getProjectByName('demo');
+    expect(row?.supplement).toBeUndefined();
+    expect(row?.workRules).toBe('执行');
+    expect((await roleOf(owner)).stored.supplement).toBe('旧职责');
+  });
+
+  it('checks beforeCommit and rejects an oversized UTF-8 patch without changing either field', async () => {
+    await updateProject('demo', { supplement: '职责', workRules: '原规则' });
+    const { owner } = await fixture();
+    const role = await roleOf(owner);
+    const before = await readFile(paths.projectsFile, 'utf8');
+    let checked = false;
+    expect(await owner.save({ scope: project, section: 'role', revision: role.revision, patch: { workRules: '新规则' } }, {
+      beforeCommit: () => { checked = true; throw new Error('permission changed'); },
+    })).toMatchObject({ kind: 'rejected' });
+    expect(checked).toBe(true);
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(before);
+    await expect(owner.save({ scope: project, section: 'role', revision: role.revision, patch: { workRules: '汉'.repeat(5462) } })).rejects.toThrow('范围无效');
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(before);
+    const large = '汉'.repeat(5461) + 'a';
+    expect(Buffer.byteLength(large)).toBe(16384);
+    expect(await owner.save({ scope: project, section: 'role', revision: role.revision, patch: { workRules: large } })).toMatchObject({ kind: 'saved' });
+    expect((await roleOf(owner)).stored.workRules).toBe(large);
+  });
+});
+
+
+it.each([
+  { kind: 'control', character: '\u0000' },
+  { kind: 'quote', character: '"' },
+  { kind: 'backslash', character: '\\' },
+])('saves, reloads and frames $kind work rules at the ordinary UTF-8 limit, rejecting overflow without a write', async ({ kind, character }) => {
+  const text = character.repeat(WORK_RULES_MAX_BYTES);
+  const { owner } = await fixture();
+  const beforeSkills = await owner.read(project) as ProjectSettingsView;
+  const disabledPaths = Array.from({ length: 400 }, (_, index) => '/workspace/' + index + '/' + 'skill'.repeat(409));
+  expect(await owner.save({ scope: project, section: 'skills', revision: beforeSkills.sections.skills!.revision, patch: { disabledPaths } })).toMatchObject({ kind: 'saved' });
+  const first = await owner.read(project) as ProjectSettingsView;
+  expect(await owner.save({ scope: project, section: 'role', revision: first.sections.role!.revision, patch: { workRules: text } })).toMatchObject({ kind: 'saved' });
+  expect((await getProjectByName('demo'))?.workRules).toBe(text);
+  const reloaded = (await fixture()).owner;
+  const view = await reloaded.read(project);
+  const frame = responseSchema.parse({ type: 'response', id: 'work-rules-frame', method: 'settings', payload: { kind: 'view', view } });
+  const occurrences: string[] = [];
+  function find(value: unknown, path: string) {
+    if (value === text) occurrences.push(path);
+    else if (value && typeof value === 'object') for (const [key, child] of Object.entries(value)) find(child, path + '.' + key);
+  }
+  find(frame, 'frame');
+  expect(occurrences).toEqual(['frame.payload.view.sections.role.stored.workRules', 'frame.payload.view.sections.role.effective.workRules']);
+  const body = Buffer.from(JSON.stringify(frame));
+  const device = generateStaticKey().key;
+  const client = createInitiator(generateStaticKey().key, device.publicKey);
+  const server = createResponder(device);
+  server.readMessage1(client.message1());
+  const accepted = server.message2();
+  const receiver = client.finish(accepted.bytes).channel;
+  const encrypted = accepted.channel.encrypt(encodeFrame(FRAME.json, body));
+  expect(encrypted.length).toBe(body.length + 25);
+  expect(encrypted.length).toBeLessThan(2_500_000);
+  const transported = await websocketRoundTrip(encrypted);
+  const plain = decodeFrame(receiver.decrypt(transported));
+  expect(plain.type).toBe(FRAME.json);
+  const received = responseSchema.parse(JSON.parse(plain.body.toString()));
+  if (received.method !== 'settings' || received.payload.kind !== 'view') throw new Error('settings view missing');
+  const loaded = projectViewSchema.parse(received.payload.view);
+  expect(loaded.sections.role?.stored.workRules).toBe(text);
+  expect(loaded.sections.role?.effective.workRules).toBe(text);
+  const before = await readFile(paths.projectsFile, 'utf8');
+  await expect(reloaded.save({ scope: project, section: 'role', revision: loaded.sections.role!.revision, patch: { workRules: text + character } })).rejects.toThrow('范围无效');
+  expect(await readFile(paths.projectsFile, 'utf8')).toBe(before);
+  process.stdout.write(JSON.stringify({ kind, copies: occurrences.length, rawBytes: Buffer.byteLength(text), encodedStringBytes: Buffer.byteLength(JSON.stringify(text)), jsonFrameBytes: body.length, secureFrameBytes: encrypted.length }) + '\n');
+});
+
+
+async function websocketRoundTrip(frame: Buffer): Promise<Buffer> {
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0, perMessageDeflate: false });
+  await new Promise<void>(resolve => server.once('listening', resolve));
+  const address = server.address();
+  if (typeof address === 'string' || !address) throw new Error('missing WS address');
+  server.once('connection', peer => peer.send(frame));
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}`, { maxPayload: 4_000_000, perMessageDeflate: false });
+  try {
+    return await new Promise<Buffer>((resolve, reject) => {
+      socket.once('error', reject);
+      socket.once('message', (bytes, binary) => {
+        if (!binary || !Buffer.isBuffer(bytes)) return reject(new Error('expected binary secure frame'));
+        resolve(bytes);
+      });
+    });
+  } finally {
+    socket.terminate();
+    for (const peer of server.clients) peer.terminate();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+}
+
+it('keeps the complete secure settings reply readable when skills are saved after the maximum work rules', async () => {
+  const { owner } = await fixture();
+  let view = await owner.read(project) as ProjectSettingsView;
+  const workRules = '\u0000'.repeat(WORK_RULES_MAX_BYTES);
+  expect(await owner.save({ scope: project, section: 'role', revision: view.sections.role!.revision, patch: { workRules } })).toMatchObject({ kind: 'saved' });
+  view = await owner.read(project) as ProjectSettingsView;
+  const disabledPaths = Array.from({ length: 400 }, (_, index) => '/workspace/' + index + '/' + 'skill'.repeat(409));
+  expect(await owner.save({ scope: project, section: 'skills', revision: view.sections.skills!.revision, patch: { disabledPaths } })).toMatchObject({ kind: 'saved' });
+  const reloaded = (await fixture()).owner;
+  const frame = responseSchema.parse({ type: 'response', id: 'combined-fields', method: 'settings', payload: { kind: 'view', view: await reloaded.read(project) } });
+  const device = generateStaticKey().key, client = createInitiator(generateStaticKey().key, device.publicKey), server = createResponder(device);
+  server.readMessage1(client.message1());
+  const accepted = server.message2(), receiver = client.finish(accepted.bytes).channel;
+  const encrypted = accepted.channel.encrypt(encodeFrame(FRAME.json, Buffer.from(JSON.stringify(frame))));
+  expect(encrypted.length).toBeLessThan(4_000_000);
+  const plain = decodeFrame(receiver.decrypt(await websocketRoundTrip(encrypted)));
+  const received = responseSchema.parse(JSON.parse(plain.body.toString()));
+  if (received.method !== 'settings' || received.payload.kind !== 'view') throw new Error('missing settings view');
+  const loaded = projectViewSchema.parse(received.payload.view);
+  expect(loaded.sections.role?.stored.workRules).toBe(workRules);
+  expect(loaded.sections.skills?.stored.disabledPaths).toEqual(disabledPaths);
+});
+
+it('saves and reloads the 16 KiB boundary through the real CLI process and rejects overflow before writing', async () => {
+  await mkdir(resolve('node_modules/.cache'), { recursive: true });
+  const dir = await mkdtemp(resolve('node_modules/.cache/work-rules-cli-'));
+  const entry = join(dir, 'cli.mjs');
+  await build({ entryPoints: [resolve('src/cli/index.ts')], outfile: entry, bundle: true, packages: 'external', platform: 'node', format: 'esm', logLevel: 'silent' });
+  let owner = (await fixture({ getSecret: async () => undefined })).owner;
+  const snapshot = desktopSnapshotSchema.parse({
+    revision: 1, observedAt: 1, stale: false, host: { kind: 'starting' },
+    agents: [{ id: botId, name: 'Fixture', enabled: true, running: true, connection: 'connected', activation: 'active' }],
+    groups: [], memberships: [{ id: 'fixture-membership', agentId: botId, groupId: 'oc_demo', name: 'demo', directory: '/tmp/demo', backend: 'codex-appserver',
+      conversation: 'threads', response: 'mention', permission: { administrator: 'qa', member: 'qa', network: false }, stale: false }],
+    tools: [], jobs: [], application: { platform: 'unsupported', version: 'fixture', loginItem: false, dataPath: paths.appDir },
+  });
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0, perMessageDeflate: false });
+  await new Promise<void>(resolve => server.once('listening', resolve));
+  server.on('connection', socket => socket.on('message', async bytes => {
+    const raw = JSON.parse(bytes.toString());
+    if (raw.type === 'hello') return socket.send(JSON.stringify({ type: 'serverInfo', version: 'fixture', protocolVersion: PROTOCOL_VERSION }));
+    const request = requestSchema.parse(raw);
+    let payload: unknown;
+    if (request.method === 'admin') payload = { kind: 'daemonStatus', status: { installed: false, running: true, pid: process.pid, selfHosted: true, supported: true, version: 'fixture', startedAt: 1 } };
+    else if (request.method === 'snapshot') payload = snapshot;
+    else if (request.method === 'settings') {
+      const input = request.payload;
+      if (input.type === 'read') payload = { kind: 'view', view: await owner.read(input.scope) };
+      else if (input.type === 'save') payload = { kind: 'saved', result: await owner.save(parseSettingsEdit(input.edit)) };
+      else if (input.type === 'sessions') payload = { kind: 'sessions', sessions: [] };
+    }
+    socket.send(JSON.stringify(responseSchema.parse({ type: 'response', id: request.id, method: request.method, payload })));
+  }));
+  const address = server.address();
+  if (typeof address === 'string' || !address) throw new Error('missing WS address');
+  await writeFile(join(paths.appDir, 'daemon.pid'), JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), listen: `127.0.0.1:${address.port}` }));
+  await writeFile(join(paths.appDir, 'local-credential'), 'a'.repeat(64));
+  const run = (args: string[]) => new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+    const child = spawn(process.execPath, [entry, ...args, '--json'], {
+      env: { ...process.env, HOME: paths.appDir, USERPROFILE: paths.appDir, VONVON_HOME: paths.appDir, VONVON_SESSION: '', VONVON_BOT: '', VONVON_SCOPE: '', FEISHU_CODEX_BRIDGE: '' }, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '', stderr = '';
+    child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
+    child.stdout.on('data', bytes => { stdout += bytes; }); child.stderr.on('data', bytes => { stderr += bytes; });
+    child.once('error', reject); child.once('close', code => resolve({ code, stdout, stderr }));
+  });
+  try {
+    const role = (await owner.read(project) as ProjectSettingsView).sections.role!;
+    const workRules = '汉'.repeat(5461) + 'a';
+    expect(Buffer.byteLength(workRules)).toBe(WORK_RULES_MAX_BYTES);
+    const saved = await run(['settings', 'set', '--group', 'demo', '--revision', role.revision, 'role.workRules=' + JSON.stringify(workRules)]);
+    expect(saved.stderr).toBe(''); expect(saved.code, saved.stdout).toBe(0);
+    owner = (await fixture({ getSecret: async () => undefined })).owner;
+    const loaded = await run(['settings', 'get', 'role', '--group', 'demo']);
+    expect(loaded.code, loaded.stdout).toBe(0);
+    expect(JSON.parse(loaded.stdout).view.sections.role.stored.workRules === workRules).toBe(true);
+    const before = await readFile(paths.projectsFile, 'utf8');
+    const current = (await owner.read(project) as ProjectSettingsView).sections.role!;
+    const refused = await run(['settings', 'set', '--group', 'demo', '--revision', current.revision, 'role.workRules=' + JSON.stringify(workRules + 'x')]);
+    expect(refused.code, refused.stdout).toBe(2);
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(before);
+  } finally {
+    for (const socket of server.clients) socket.terminate();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+
+const crowdedSkillPaths = (count: number) => Array.from({ length: count }, (_, index) => '/workspace/' + index + '/' + 'skill'.repeat(409));
+async function secureSettingsRead(owner: Awaited<ReturnType<typeof fixture>>['owner']) {
+  const response = responseSchema.parse({ type: 'response', id: 'complete-project-settings', method: 'settings', payload: { kind: 'view', view: await owner.read(project) } });
+  const device = generateStaticKey().key, client = createInitiator(generateStaticKey().key, device.publicKey), server = createResponder(device);
+  server.readMessage1(client.message1());
+  const accepted = server.message2(), receiver = client.finish(accepted.bytes).channel;
+  const encrypted = accepted.channel.encrypt(encodeFrame(FRAME.json, Buffer.from(JSON.stringify(response))));
+  expect(encrypted.length).toBeLessThan(4_000_000);
+  const read = responseSchema.parse(JSON.parse(decodeFrame(receiver.decrypt(await websocketRoundTrip(encrypted))).body.toString()));
+  if (read.method !== 'settings' || read.payload.kind !== 'view') throw new Error('missing settings view');
+  return { bytes: encrypted.length, view: projectViewSchema.parse(read.payload.view) };
+}
+
+it.each(['skills-first', 'rules-first'])('rejects the oversized complete settings candidate before commit: %s', async order => {
+  const { owner } = await fixture({ getSecret: async () => undefined, discoverSkills: async () => [] });
+  let view = await owner.read(project) as ProjectSettingsView;
+  const workRules = '\u0000'.repeat(WORK_RULES_MAX_BYTES), disabledPaths = crowdedSkillPaths(940);
+  if (order === 'skills-first') expect(await owner.save({ scope: project, section: 'skills', revision: view.sections.skills!.revision, patch: { disabledPaths } })).toMatchObject({ kind: 'saved' });
+  else expect(await owner.save({ scope: project, section: 'role', revision: view.sections.role!.revision, patch: { workRules } })).toMatchObject({ kind: 'saved' });
+  view = await owner.read(project) as ProjectSettingsView;
+  const before = await readFile(paths.projectsFile, 'utf8');
+  let committed = false;
+  const result = order === 'skills-first'
+    ? await owner.save({ scope: project, section: 'role', revision: view.sections.role!.revision, patch: { workRules } }, { beforeCommit: () => { committed = true; } })
+    : await owner.save({ scope: project, section: 'skills', revision: view.sections.skills!.revision, patch: { disabledPaths } }, { beforeCommit: () => { committed = true; } });
+  expect(result).toMatchObject({ kind: 'rejected', fields: [{ message: expect.stringContaining(String(PROJECT_SETTINGS_MAX_JSON_BYTES)) }] });
+  expect(committed).toBe(false);
+  expect(await readFile(paths.projectsFile, 'utf8')).toBe(before);
+  const readable = await secureSettingsRead((await fixture({ getSecret: async () => undefined, discoverSkills: async () => [] })).owner);
+  expect(readable.view.sections.role?.stored.workRules).toBe(order === 'skills-first' ? '' : workRules);
+  expect(readable.view.sections.skills?.stored.disabledPaths).toEqual(order === 'skills-first' ? disabledPaths : []);
+  process.stdout.write(JSON.stringify({ order, rejectedBeforeCommit: true, retainedSecureFrameBytes: readable.bytes }) + '\n');
+});
+
+it('permits strict size repairs to old oversized records and refuses to expand them', async () => {
+  await updateProject('demo', { skills: { disabledPaths: crowdedSkillPaths(940) }, workRules: '\u0000'.repeat(WORK_RULES_MAX_BYTES) });
+  const { owner } = await fixture({ getSecret: async () => undefined, discoverSkills: async () => [] });
+  let view = await owner.read(project) as ProjectSettingsView;
+  expect(Buffer.byteLength(JSON.stringify({ kind: 'view', view }))).toBeGreaterThan(PROJECT_SETTINGS_MAX_JSON_BYTES);
+  expect(await owner.save({ scope: project, section: 'role', revision: view.sections.role!.revision, patch: { workRules: '\u0000'.repeat(WORK_RULES_MAX_BYTES - 1) } })).toMatchObject({ kind: 'saved' });
+  view = await owner.read(project) as ProjectSettingsView;
+  expect(Buffer.byteLength(JSON.stringify({ kind: 'view', view }))).toBeGreaterThan(PROJECT_SETTINGS_MAX_JSON_BYTES);
+  expect(await owner.save({ scope: project, section: 'skills', revision: view.sections.skills!.revision, patch: { disabledPaths: crowdedSkillPaths(939) } })).toMatchObject({ kind: 'saved' });
+  view = await owner.read(project) as ProjectSettingsView;
+  const repairedBytes = await readFile(paths.projectsFile, 'utf8');
+  expect(await owner.save({ scope: project, section: 'role', revision: view.sections.role!.revision, patch: { supplement: '扩大' } })).toMatchObject({ kind: 'rejected' });
+  expect(await readFile(paths.projectsFile, 'utf8')).toBe(repairedBytes);
+  expect(await owner.save({ scope: project, section: 'role', revision: view.sections.role!.revision, patch: { workRules: '' } })).toMatchObject({ kind: 'saved' });
+  const readable = await secureSettingsRead((await fixture({ getSecret: async () => undefined, discoverSkills: async () => [] })).owner);
+  expect(readable.view.sections.role?.stored.workRules).toBe('');
+  expect(readable.view.sections.skills?.stored.disabledPaths).toEqual(crowdedSkillPaths(939));
+  process.stdout.write(JSON.stringify({ repairedSecureFrameBytes: readable.bytes }) + '\n');
 });

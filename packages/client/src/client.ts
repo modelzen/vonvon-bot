@@ -1,5 +1,5 @@
 import {
-  NATIVE_RECIPE_PREVIEW_CAPABILITY, adminReplySchema, collaborationReplySchema, commandResultSchema,
+  RESOURCE_CONTEXT_CAPABILITY, NATIVE_RECIPE_PREVIEW_CAPABILITY, adminReplySchema, collaborationReplySchema, commandResultSchema,
   desktopSnapshotSchema, directoryReplySchema, environmentReplySchema, memoryReplySchema, contextPreviewReplySchema,
   errorEnvelopeSchema, eventSchema, machineReplySchema, requestSchema,
   libraryReplySchema, scheduleReplySchema, settingsReplySchema, deviceReplySchema, recipeInstallReplySchema,
@@ -50,6 +50,7 @@ export interface VonvonClient {
   contextPreview(request: ContextPreviewRequest): Promise<ContextPreviewReply>;
   schedule(botId: string, request: ScheduleRequest): Promise<ScheduleReply>;
   device(request: DeviceRequest): Promise<DeviceReply>;
+  readonly supportsResourceContext?:boolean;
   recipeAuthoring?(request: RecipeAuthoringRequest): Promise<RecipeAuthoringReply>;
   recipeInstall?(request: RecipeInstallRequest): Promise<RecipeInstallReply>;
   onLog(listener: (payload: LogEventPayload) => void): () => void;
@@ -185,6 +186,7 @@ export function createClient(socket: ClientConnection, capabilities: readonly st
   const snapshot = () => send("snapshot", {type:"get", ...(capabilities.includes("attention.group") ? {groupAttention: true as const} : {})});
   return {
     snapshot,
+    supportsResourceContext:capabilities.includes(RESOURCE_CONTEXT_CAPABILITY),
     watchSnapshots(listener) {
       let active = true;
       let revision = -1;
@@ -215,9 +217,11 @@ export function createClient(socket: ClientConnection, capabilities: readonly st
     schedule: (botId, request) => send("schedule", { botId, request }),
     device: request => send("device", request),
     recipeAuthoring: request => {
-      if (request.type === 'creatorOpen' && !capabilities.includes(NATIVE_RECIPE_PREVIEW_CAPABILITY)) {
-        const {nativePreview: _nativePreview, ...legacy} = request;
-        return send('recipeAuthoring', legacy);
+      if (request.type === 'resourceHandoff' && !capabilities.includes(RESOURCE_CONTEXT_CAPABILITY)) return Promise.reject(new Error('此设备尚不支持配方资源交付。'));
+      if (request.type === 'creatorOpen') {
+        const {nativePreview, resourceContext, ...base} = request;
+        return send('recipeAuthoring', {...base, ...(nativePreview && capabilities.includes(NATIVE_RECIPE_PREVIEW_CAPABILITY) && {nativePreview}),
+          ...(resourceContext && capabilities.includes(RESOURCE_CONTEXT_CAPABILITY) && {resourceContext})});
       }
       return send('recipeAuthoring', request);
     },

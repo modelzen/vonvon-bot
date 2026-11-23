@@ -20,6 +20,11 @@ export const recipePublicSchema = z.object({name: text(60), summary: text(240), 
 export const recipeConfigSchema = z.object({role: bytes(16384), setup: z.object({steps: z.array(z.object({kind: z.enum(['config','tool','context']), title: text(80), instructions: bytes(2048), required: z.boolean(), check: bytes(512).optional()}).strict()).min(1).max(8)}).strict().optional()}).strict();
 export type RecipeConfig = z.infer<typeof recipeConfigSchema>;
 export type RecipePublic = z.infer<typeof recipePublicSchema>;
+export const recipeResourceLatestSchema = z.union([
+  z.object({status: z.enum(['current', 'newer']), target: z.object({recipeId: id, versionId: id}).strict(), revision,
+    version: recipePublicSchema.shape.version, format: z.enum(['rich-v2', 'role-v1']), access: recipePublicSchema.shape.access}).strict(),
+  z.object({status: z.literal('unknown')}).strict(),
+]);
 export const publicDisplayNameSchema = z.string().refine(value => wellFormed(value) && !/[@\u0000-\u001f\u007f-\u009f]/.test(value)).transform(value => value.replace(/^ +| +$/g, '')).refine(value => Array.from(value).length >= 1 && Array.from(value).length <= 60);
 const creator = z.object({authorId:id,displayName:publicDisplayNameSchema}).strict();
 const richView = z.object({content: recipeRichContentSchema, texts: z.record(id, bytes(131072)), canonical: z.string().max(1401000)}).strict();
@@ -60,6 +65,7 @@ export type RichMetadataRequest = z.infer<typeof richMetadataRequestSchema>;
 export const richMetadataReceiptSchema = z.object({requestId:metadataRequestId,draftId:id,revision,manifestSha256:manifestSha}).strict();
 const changes = {public: recipePublicSchema, config: recipeConfigSchema};
 export const communityRequestSchema = z.discriminatedUnion('type', [
+  z.object({type: z.literal('latestVersion'), ...privateRequest, ...version, revision}).strict(),
   richMetadataRequestSchema,
   z.object({type: z.literal('profile'), ...privateRequest}).strict(),
   z.object({type: z.literal('saveProfile'), ...privateRequest, ...request, displayName: publicDisplayNameSchema}).strict(),
@@ -95,6 +101,7 @@ const richMetadataOutcomeSchema = z.discriminatedUnion('status',[
     z.object({status:z.literal('uncertain')}).strict(),
   ]);
 export const communityResponseSchemas = {
+  latestVersion: recipeResourceLatestSchema,
   withdraw: z.literal(''),
   profile: creator,
   saveProfile: creator,

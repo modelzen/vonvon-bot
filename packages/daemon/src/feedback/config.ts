@@ -1,11 +1,11 @@
-import {createHash, randomUUID} from 'node:crypto';
+import {randomUUID} from 'node:crypto';
 import {isDeepStrictEqual} from 'node:util';
 import {z} from 'zod';
 import type {Project} from '../project/registry';
 import {feedbackDestinationSchema, type FeedbackDestination} from './types';
 
 const config = z.object({
-  revision: z.string().uuid(), registration: z.string().min(1), installation: z.string().regex(/^[0-9a-f]{64}$/),
+  revision: z.string().uuid(), registration: z.string().min(1), bindingIncarnation: z.string().min(1),
   destination: feedbackDestinationSchema,
 }).strict();
 export type GroupFeedbackConfig = z.infer<typeof config>;
@@ -20,25 +20,25 @@ export function setupDestination(text: string): FeedbackDestination | undefined 
   return feedbackDestinationSchema.safeParse({baseToken: match?.[1], tableId: match?.[2], shareToken: form.exec(parts[3]!)?.[1]}).data;
 }
 
-export function feedbackInstallation(project: Project | undefined): string | undefined {
-  const state = project?.richRecipe;
-  if (!project || project.dm || project.enabled === false || !project.bindingIncarnation || !state?.pointer
-    || state.bindingIncarnation !== project.bindingIncarnation || state.pointer.format !== 'recipe-generation-1') return;
-  const {installationId, generationId, resolvedSha256, release} = state.pointer;
-  if (!installationId || !generationId || !resolvedSha256 || !release?.versionId || !release.contentSha256) return;
-  return createHash('sha256').update(JSON.stringify([project.bindingIncarnation, installationId, generationId, resolvedSha256,
-    release.recipeId, release.versionId, release.authorId, release.revision, release.contentSha256])).digest('hex');
+export type FeedbackBinding = Pick<Project, 'createdAt' | 'bindingIncarnation'>;
+
+export function feedbackBinding(project?: Project): FeedbackBinding | undefined {
+  if (project && !project.dm && project.enabled !== false)
+    return {createdAt: project.createdAt, bindingIncarnation: project.bindingIncarnation};
 }
 
 export function configuredFeedback(project: Project | undefined, registration: string): GroupFeedbackConfig | undefined {
   const saved = config.safeParse(project?.feedback).data;
-  if (saved && saved.registration === registration && saved.installation === feedbackInstallation(project)) return saved;
+  if (saved && saved.registration === registration && saved.bindingIncarnation === feedbackBinding(project)?.bindingIncarnation) return saved;
 }
 
-export function configureFeedback(project: Project, registration: string, destination: FeedbackDestination): void {
-  const binding = feedbackInstallation(project);
-  if (!binding) throw new Error('请先在本群安装反馈配方并启用本群。');
+export function configureFeedback(project: Project, registration: string, destination: FeedbackDestination, expected: FeedbackBinding): void {
+  if (!isDeepStrictEqual(feedbackBinding(project), expected)) throw new Error('群绑定已变化，请在当前群重新配置。');
   const prior = configuredFeedback(project, registration);
   if (prior && isDeepStrictEqual(prior.destination, destination)) return;
-  project.feedback = {revision: randomUUID(), registration, installation: binding, destination};
+  // Pre-existing ordinary groups can acquire their first incarnation in the same registry commit as setup.
+  const bindingIncarnation = project.bindingIncarnation ?? randomUUID();
+  const saved = config.parse({revision: randomUUID(), registration, bindingIncarnation, destination});
+  project.bindingIncarnation = bindingIncarnation;
+  project.feedback = saved;
 }
