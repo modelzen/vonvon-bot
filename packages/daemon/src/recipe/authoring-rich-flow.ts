@@ -30,24 +30,48 @@ export interface RichLocalDraft {
   destinationDraftId?:string;
 }
 export interface RichNativeOptions {bot:BotIdentity;channel:LarkChannel;tasks?:(chat:string)=>Promise<ScheduledTaskView[]>;managedSources?:(row:Project,root:string)=>Promise<ManagedSourceItem[]>}
+function managedSkillHandle(item:ManagedSourceItem){return '已安装 · '+String(item.value.name).slice(0,28)+' · '+item.itemId;}
+function managedSkillChoices(managed:ManagedSourceItem[]){
+  return managed.filter(item=>item.kind==='skills').map(item=>({name:managedSkillHandle(item),files:managed.filter(file=>file.kind==='files'&&
+    Array.isArray(item.value.fileIds)&&item.value.fileIds.includes(file.itemId)).sort((a,b)=>Number(b.itemId===item.value.entryFileId)-Number(a.itemId===item.value.entryFileId)).map(file=>String(file.value.name))}));
+}
+function selectManagedSources(managed:ManagedSourceItem[],options:InventoryOptions){
+  const files=new Set<string>();
+  const skills=new Map<string,ManagedSourceItem>();
+  for(const item of managed.filter(item=>item.kind==='skills')){
+    const choice=options.skills.find(choice=>choice.skill===managedSkillHandle(item));
+    if(!choice)continue;
+    const allowed=managed.filter(file=>file.kind==='files'&&Array.isArray(item.value.fileIds)&&item.value.fileIds.includes(file.itemId));
+    const selected=allowed.filter(file=>choice.files.includes(String(file.value.name)));
+    if(!selected.some(file=>file.itemId===item.value.entryFileId)||choice.files.some(name=>!allowed.some(file=>file.value.name===name)))throw new Error('请选择已安装技能的说明及实际参考资料。');
+    selected.forEach(file=>files.add(file.itemId));
+    skills.set(item.itemId,{...item,value:{...item.value,fileIds:selected.map(file=>file.itemId)}});
+  }
+  return managed.flatMap(item=>item.kind==='skills'?(skills.has(item.itemId)?[skills.get(item.itemId)!]:[]):
+    item.kind==='files'?(files.has(item.itemId)?[item]:[]):
+    item.kind==='memories'&&!options.includeBotMemories||item.kind==='tasks'&&!options.includeTasks?[]:[item]);
+}
 export async function richSkillOptions(native:RichNativeOptions,group:string){
   const row=await atSource(native.channel,native.bot,group,r=>structuredClone(r));
   const provider=groupBackendId(row)==='claude-agent'?'.claude':'.agents';
   const result=await recipeFileIO({operation:'skills',provider,root:row.cwd});
+  const managed=row.richRecipe?await native.managedSources?.(row,botPaths(native.bot.appId).dir):[];
+  if(row.richRecipe&&!managed)throw new Error('需要核对当前已安装配方的来源。');
   if(!await atSource(native.channel,native.bot,group,r=>r.bindingIncarnation===row.bindingIncarnation&&r.projectSettingsRevision===row.projectSettingsRevision&&r.cwd===row.cwd))throw new Error('来源群已变化。');
-  return result.skills??[];
+  return [...(result.skills??[]).map(skill=>({...skill,files:['SKILL.md',...skill.files.filter(name=>name!=='SKILL.md')]})),...managedSkillChoices(managed??[])];
 }
 export async function readRichSource(native:RichNativeOptions,scope:string,account:string,group:string,options:InventoryOptions){
   const row=await atSource(native.channel,native.bot,group,row=>structuredClone(row));
   const seed=wireDigest([scope,account,row.bindingIncarnation]);
-  const inventory=await nativeRichInventory({seed,row,botRoot:botPaths(native.bot.appId).dir,botId:native.bot.appId,...options,
+  const managed=row.richRecipe?await native.managedSources?.(row,botPaths(native.bot.appId).dir):[];
+  if(row.richRecipe&&!managed)throw new Error('需要核对当前已安装配方的来源。');
+  const handles=new Set(managedSkillChoices(managed??[]).map(skill=>skill.name));
+  const inventory=await nativeRichInventory({seed,row,botRoot:botPaths(native.bot.appId).dir,botId:native.bot.appId,...options,skills:options.skills.filter(choice=>!handles.has(choice.skill)),
     tasks:options.includeTasks?await native.tasks?.(group):[]});
   if('richRecipe' in row && row.richRecipe){
-    if(!native.managedSources)throw new Error('需要核对当前已安装配方的来源。');
-    const managed=await native.managedSources(row,botPaths(native.bot.appId).dir);
-    const visible=managed.filter(item=>(options.includeBotMemories||item.kind!=='memories')&&(options.includeTasks||item.kind!=='tasks'));
+    const visible=selectManagedSources(managed!,options);
     applyManagedInventory(inventory.content,inventory.evidence,visible,account);
-    inventory.lease=wireDigest([inventory.lease,managed]);
+    inventory.lease=wireDigest([inventory.lease,managed,options]);
   }
   const recheck=await atSource(native.channel,native.bot,group,live=>live.bindingIncarnation===row.bindingIncarnation&&live.projectSettingsRevision===row.projectSettingsRevision);
   if(!recheck)throw new Error('来源群已变化，请重新预览。');

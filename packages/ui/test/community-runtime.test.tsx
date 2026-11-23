@@ -30,11 +30,12 @@ const draw = async (state = devicesState({id: 'local'})) => {
   await act(async () => {root.render(<DesktopRootView state={state} fallback={client} shell={shell} renderApp={() => <Host/>}/>);});
 };
 async function click(text: string) {
-  const button = [...document.querySelectorAll('button')].find(button => button.textContent === text);
+  const button = [...document.querySelectorAll('[role="dialog"] button'), ...document.querySelectorAll('button')].find(button => button.textContent === text);
   expect(button, text).toBeDefined();
   await act(async () => {button!.click();});
 }
 async function fill(label: string, value: string) {
+  if (label === '分享码' && !document.querySelector('[aria-label="分享码"]')) await click('获取配方');
   const input = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[aria-label="${label}"]`)!;
   expect(input, label).not.toBeNull();
   const prototype = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -364,4 +365,48 @@ it('renders complete rich configuration through the strict facade and hides ever
   }
   await click('记忆');expect(document.querySelector('.community-config')?.textContent).toBe('记忆');
   await click('能力');expect(document.querySelector('.community-detail-content')?.textContent).toContain(content.role.text.value);
+});
+
+it('opens coded acquisition in a focused dialog and keeps an uncertain retry bound to the same request', async () => {
+  const normal = handle;
+  let acquired = false, attempts = 0;
+  handle = async request => {
+    if (request.type === 'detail') {const {config, ...intro} = recipe; return {...intro, public: {...recipe.public, access: 'coded'}, acquired, ...(acquired ? {config} : {})};}
+    if (request.type === 'acquire') {
+      if (++attempts === 1) throw new Error('receipt lost');
+      acquired = true;
+      return {recipeId: A, versionId: B, owned: false, acquired: true};
+    }
+    return normal(request);
+  };
+  await draw(); await click('打开已发布版本');
+  expect(document.querySelector('[aria-label="分享码"]')).toBeNull();
+  const trigger = [...document.querySelectorAll('button')].find(button => button.textContent === '获取配方')!;
+  expect(trigger.disabled).toBe(false);
+  await click('获取配方');
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('分享码');
+  expect(calls.filter(request => request.type === 'acquire')).toHaveLength(0);
+  await fill('分享码', 'VALID'); await click('获取配方');
+  expect(document.querySelector('[role="dialog"] [aria-label="分享码"]')).not.toBeNull();
+  await click('获取配方');
+  const requests = calls.filter(request => request.type === 'acquire');
+  expect(requests).toHaveLength(2); expect(requests[1]).toEqual(requests[0]);
+  expect(document.body.textContent).toContain('已获取，已保存在你的账号中');
+});
+
+
+it('keeps rental content distinct and explicitly returns other routes to recipes', async () => {
+  const normal = handle;
+  handle = async request => request.type === 'drafts' || request.type === 'publications' ? {items: []} : normal(request);
+  await draw();
+  const rental = [...document.querySelectorAll('button')].find(button => button.textContent?.startsWith('Bot 租赁'))!;
+  await act(async () => rental.click());
+  expect(document.querySelector('.community-section-heading')).toBeNull();
+  expect(document.querySelector('.community-empty h2')?.textContent).toBe('Bot 租赁');
+  expect(document.body.textContent?.match(/敬请期待/g)).toHaveLength(1);
+  await click('打开已发布版本');
+  await click('返回 Bot 配方');
+  expect(document.querySelector('.community-tabs button[aria-current="page"]')?.textContent).toBe('Bot 配方');
+  expect(document.querySelector('.community-card')).not.toBeNull();
+  expect(document.querySelector('.community-empty')).toBeNull();
 });
