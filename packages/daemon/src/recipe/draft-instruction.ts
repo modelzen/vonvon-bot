@@ -12,7 +12,7 @@ export function checkModelText(text: string) {
 const fields = ['name', 'summary', 'overview', 'version'] as const;
 export type PublicField = typeof fields[number];
 export const fieldLabels: Record<PublicField,string> = {name:'名称',summary:'简介',overview:'概览',version:'版本'};
-export interface CandidateCardDetails {draftId:string; revision: number; payloadDigest: string; fields: {label: string; valueJson: string; text?:string}[]; sourceCapture?:true}
+export interface CandidateCardDetails {draftId:string; revision: number; payloadDigest: string; fields: {label: string; valueJson: string; text?:string; separate?:true}[]; sourceCapture?:true}
 export interface DraftField { field: PublicField; value: string }
 export interface DraftFieldRequest {
   accountId: string; scope: string; draftId: string; baseRevision: number; field: PublicField;

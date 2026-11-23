@@ -28,7 +28,8 @@ export function candidateConfirmation(ref: string, details?: CandidateCardDetail
     if(text===undefined){
       try{const value:unknown=JSON.parse(field.valueJson);if(typeof value!=='string')return;text=value;}catch{return;}
     }
-    fields.push(plain(readable(field.label)+' → '+readable(text)));
+    if(field.separate)fields.push(md('**'+readable(field.label)+'**'),text===''?md('**空文本 · 0 字符**'):plain(readable(text)));
+    else fields.push(plain(readable(field.label)+' → '+readable(text)));
   }
   const elements = [plain(details.sourceCapture?'仅保存私人草稿。完整内容在 App 核对，发布前再次确认。':copy.confirm),
     plain(details.sourceCapture?'本次保存你刚选中的本地内容快照。':'第 '+details.revision+' 次修订。请核对以下完整新值。'),

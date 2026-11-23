@@ -2,7 +2,8 @@ import type {RecipeRichContent,RecipeRichDraftChange,RecipeRichSetting,RecipeRic
 import {fieldLabels,type CandidateCardDetails} from './draft-instruction';
 
 type Field=CandidateCardDetails['fields'][number];
-const field=(label:string,text:string):Field=>({label,text,valueJson:JSON.stringify(text)});
+type ItemKind=Extract<RecipeRichDraftChange,{op:'removeItem'}>['kind'];
+const field=(label:string,text:string):Field=>({label,text,valueJson:JSON.stringify(text),separate:true});
 const labels:Record<string,string>={
   sessionMode:'会话模式','response.noMention':'无需提及 Bot','run.pendingPolicy':'执行期间的新消息',
   'presentation.voiceEnabled':'语音回复','presentation.showToolCalls':'展示工具调用','presentation.showModel':'模型标记',
@@ -42,6 +43,43 @@ function text(value:RecipeRichText):string{
   if(value.kind!=='inline')throw new Error('文件完整内容未载入');
   return value.value;
 }
+function valueFields(value:unknown,label:string,key?:string):Field[]{
+  if(value===null)return [field(label+'模式','使用默认')];
+  if(typeof value!=='object')return [field(label,values(value,key))];
+  if(Array.isArray(value))return [field(label+'数量',String(value.length)),...value.flatMap((v,index)=>valueFields(v,label+'第 '+(index+1)+' 项',key))];
+  return Object.entries(value).flatMap(([key,v])=>{
+    const name=labels[key];if(!name)throw new Error('无法准确展示字段');
+    if(key==='modelEfforts'||key==='modelServiceTiers'){
+      if(!v||typeof v!=='object'||Array.isArray(v))throw new Error('模型建议无效');
+      return Object.entries(v).flatMap(([model,setting])=>[field('模型名称',model),...valueFields(setting,name)]);
+    }
+    return valueFields(v,label+' · '+name,key);
+  });
+}
+export function reviewPositions(states:readonly RecipeRichContent[]){
+  const positions=new Map<string,number>();
+  const groups=['settings','rules','skills','files','tasks','memories','setup','blocks'] as const;
+  for(const key of groups){
+    const seen=new Set<string>();
+    for(const content of states){
+      const items=key==='blocks'?content.settings.flatMap(s=>s.field==='presentation.cardDisplay'&&s.value?s.value.blocks:[]):content[key];
+      for(const item of items)if(!seen.has(item.itemId)){seen.add(item.itemId);positions.set(item.itemId,seen.size);}
+    }
+  }
+  return positions;
+}
+type Positions=ReadonlyMap<string,number>;
+function position(items:readonly {itemId:string}[],itemId:string,positions?:Positions){
+  const index=items.findIndex(item=>item.itemId===itemId);
+  if(index<0)throw new Error('修改目标不存在');
+  return '第 '+(positions?.get(itemId)??index+1)+' 项';
+}
+function fileIdentity(file:RecipeRichContent['files'][number],content:RecipeRichContent,positions?:Positions):Field[]{
+  return [field('文件位置',position(content.files,file.itemId,positions)),
+    ...content.skills.filter(skill=>skill.fileIds.includes(file.itemId)).flatMap(skill=>[
+      field('所属技能位置',position(content.skills,skill.itemId,positions)),field('所属技能名称',skill.name),
+    ]),field('文件相对路径',file.name)];
+}
 function skillFiles(skill:RecipeRichContent['skills'][number],content:RecipeRichContent){
   const files=skill.fileIds.map(id=>{
     const f=content.files.find(f=>f.itemId===id);if(!f)throw new Error('技能文件不存在');return f;
@@ -51,14 +89,17 @@ function skillFiles(skill:RecipeRichContent['skills'][number],content:RecipeRich
 }
 const uses={skillDescription:'技能说明',reference:'参考资料',declaration:'声明'};
 const purposes={work:'工作规则',smartRespond:'智能回复规则',smartNewTopic:'智能话题规则'};
-function settingValue(setting:RecipeRichSetting){
+function settingFields(setting:RecipeRichSetting):Field[]{
+  const name=labels[setting.field]!;
+  if(setting.field==='presentation.completionTemplate')return [field('设置项',name),
+    field('通知文案模式',setting.value===null?'使用默认':'自定义文案'),...(setting.value===null?[]:[field('完成通知文案',setting.value)])];
   if(setting.field==='presentation.cardDisplay'&&setting.value){
     const blocks=setting.value.blocks.map(({itemId:_id,originId:_origin,...block})=>block);
-    return values({...setting.value,blocks});
+    return [field('设置项',name),...valueFields({...setting.value,blocks},name)];
   }
-  return values(setting.value,setting.field);
+  return [field('设置项',name),...valueFields(setting.value,name,setting.field)];
 }
-function taskValue(task:RecipeRichContent['tasks'][number]){
+function taskFields(task:RecipeRichContent['tasks'][number]):Field[]{
   const spec=task.spec;
   let cadence:string;
   switch(spec.kind){
@@ -68,21 +109,26 @@ function taskValue(task:RecipeRichContent['tasks'][number]){
     case 'weekly':cadence='每周 '+spec.days.map(day=>['日','一','二','三','四','五','六'][day]).join('、')+' '+spec.time;break;
     case 'cron':cadence='Cron '+spec.expr;break;
   }
-  return '名称 → '+task.name+'\n任务说明 → '+text(task.instruction)+'\n时间 → '+cadence+'\n时区 → '+
-    (task.timeZone.kind==='targetChoice'?'由使用者选择':task.timeZone.iana)+'\n发布位置 → '+(task.placement==='follow'?'当前话题':'新话题');
+  return [field('任务名称',task.name),field('任务说明',text(task.instruction)),field('执行时间',cadence),
+    field('时区模式',task.timeZone.kind==='targetChoice'?'由使用者选择':'建议时区'),
+    ...(task.timeZone.kind==='recommended'?[field('建议时区',task.timeZone.iana)]:[]),
+    field('发布位置',task.placement==='follow'?'当前话题':'新话题')];
 }
 function itemFields(content:RecipeRichContent,summary:boolean):Field[]{
   const fields:Field[]=[];
   if(content.role)fields.push(field('角色',summary?'已选本地角色 · '+Buffer.byteLength(text(content.role.text))+' 字节':text(content.role.text)));
-  for(const setting of content.settings)fields.push(field(labels[setting.field]!,summary?'已选本地配置':settingValue(setting)));
-  for(const rule of content.rules)fields.push(field(purposes[rule.purpose],summary?'已选 · '+Buffer.byteLength(text(rule.text))+' 字节':text(rule.text)));
+  for(const setting of content.settings)fields.push(...(summary?[field(labels[setting.field]!,'已选本地配置')]:settingFields(setting)));
+  for(const rule of content.rules)fields.push(field('规则位置',position(content.rules,rule.itemId)),field('规则用途',purposes[rule.purpose]),
+    field('规则正文',summary?'已选 · '+Buffer.byteLength(text(rule.text))+' 字节':text(rule.text)));
   for(const skill of content.skills){
     const {files,entry}=skillFiles(skill,content);
-    fields.push(field('技能',skill.name+'\n说明文件 → '+entry.name+'\n包含文件\n'+files.map(f=>f.name+(summary?' · '+Buffer.byteLength(text(f.text))+' 字节':'')).join('\n')));
+    fields.push(field('技能位置',position(content.skills,skill.itemId)),field('技能名称',skill.name),field('说明文件相对路径',entry.name),
+      ...files.flatMap(f=>[field('包含文件相对路径',f.name),...(summary?[field('文件字节数',String(Buffer.byteLength(text(f.text))))]:[])]));
   }
   for(const file of content.files)if(!summary||!content.skills.some(s=>s.fileIds.includes(file.itemId)))
-    fields.push(field('文件',file.name+'\n用途 → '+uses[file.use]+(summary?'\n'+Buffer.byteLength(text(file.text))+' 字节':'\n完整内容\n'+text(file.text))));
-  for(const task of content.tasks)fields.push(field('任务',summary?task.name+' · '+Buffer.byteLength(text(task.instruction))+' 字节':taskValue(task)));
+    fields.push(...fileIdentity(file,content),field('文件用途',uses[file.use]),field(summary?'文件字节数':'完整内容',summary?String(Buffer.byteLength(text(file.text))):text(file.text)));
+  for(const task of content.tasks)fields.push(field('任务位置',position(content.tasks,task.itemId)),...(summary?
+    [field('任务名称',task.name),field('任务说明','已选 · '+Buffer.byteLength(text(task.instruction))+' 字节')]:taskFields(task)));
   for(const memory of content.memories)fields.push(field('记忆',summary?'已选 · '+Buffer.byteLength(text(memory.text))+' 字节':text(memory.text)));
   for(const step of content.setup){
     const {itemId:_id,originId:_origin,...value}=step;
@@ -94,25 +140,41 @@ function itemFields(content:RecipeRichContent,summary:boolean):Field[]{
 export function contentReviewFields(content:RecipeRichContent,summary:boolean){
   return [...Object.entries(content.public).filter(([,v])=>!summary||v.value!=='').map(([key,v])=>field(fieldLabels[key as keyof typeof fieldLabels],v.value)),...itemFields(content,summary)];
 }
-export function selectedItemReview(content:RecipeRichContent,itemId:string,kind:string):Field[]{
+function selectedItemReview(content:RecipeRichContent,itemId:string,kind:ItemKind,positions:Positions):Field[]{
   const subset:RecipeRichContent={...content,role:undefined,skills:[],files:[],settings:[],rules:[],tasks:[],memories:[],setup:[],finalLogo:undefined};
   switch(kind){
     case 'role':if(content.role?.itemId===itemId)subset.role=content.role;break;
     case 'skill':{
       const skill=content.skills.find(s=>s.itemId===itemId);
-      if(skill){subset.skills=[skill];subset.files=skillFiles(skill,content).files;}
+      if(skill){
+        const {files,entry}=skillFiles(skill,content);
+        return [field('技能位置',position(content.skills,itemId,positions)),field('技能名称',skill.name),field('说明文件相对路径',entry.name),
+          ...files.flatMap(file=>[...fileIdentity(file,content,positions),field('文件用途',uses[file.use]),field('完整内容',text(file.text))])];
+      }
       break;
     }
-    case 'setting':subset.settings=content.settings.filter(i=>i.itemId===itemId);break;
-    case 'file':subset.files=content.files.filter(i=>i.itemId===itemId);break;
-    case 'rule':subset.rules=content.rules.filter(i=>i.itemId===itemId);break;
-    case 'task':subset.tasks=content.tasks.filter(i=>i.itemId===itemId);break;
+    case 'setting':{
+      const setting=content.settings.find(i=>i.itemId===itemId);
+      if(setting)return [field('设置位置',position(content.settings,itemId,positions)),...settingFields(setting)];break;
+    }
+    case 'file':{
+      const file=content.files.find(i=>i.itemId===itemId);
+      if(file)return [...fileIdentity(file,content,positions),field('文件用途',uses[file.use]),field('完整内容',text(file.text))];break;
+    }
+    case 'rule':{
+      const rule=content.rules.find(i=>i.itemId===itemId);
+      if(rule)return [field('规则位置',position(content.rules,itemId,positions)),field('规则用途',purposes[rule.purpose]),field('规则正文',text(rule.text))];break;
+    }
+    case 'task':{
+      const task=content.tasks.find(i=>i.itemId===itemId);
+      if(task)return [field('任务位置',position(content.tasks,itemId,positions)),...taskFields(task)];break;
+    }
     case 'memory':subset.memories=content.memories.filter(i=>i.itemId===itemId);break;
     case 'setup':subset.setup=content.setup.filter(i=>i.itemId===itemId);break;
     case 'cardBlock':{
       for(const setting of content.settings)if(setting.field==='presentation.cardDisplay'&&setting.value){
         const block=setting.value.blocks.find(i=>i.itemId===itemId);
-        if(block){const {itemId:_id,originId:_origin,...value}=block;return [field('消息显示项',values(value))];}
+        if(block){const {itemId:_id,originId:_origin,...value}=block;return valueFields(value,'消息显示项');}
       }
       break;
     }
@@ -121,40 +183,70 @@ export function selectedItemReview(content:RecipeRichContent,itemId:string,kind:
   if(!fields.length)throw new Error('来源条目无法展示');
   return fields;
 }
-export function reviewTarget(content:RecipeRichContent,itemId:string){
-  for(const [key,item] of Object.entries(content.public))if(item.itemId===itemId)return fieldLabels[key as keyof typeof fieldLabels];
-  if(content.role?.itemId===itemId)return '角色';
-  for(const skill of content.skills)if(skill.itemId===itemId)return '技能“'+skill.name+'”';
-  for(const file of content.files)if(file.itemId===itemId)return '文件“'+file.name+'”';
-  for(const task of content.tasks)if(task.itemId===itemId)return '任务“'+task.name+'”';
+function reviewTargetFields(content:RecipeRichContent,itemId:string,positions:Positions):Field[]{
+  for(const [key,item] of Object.entries(content.public))if(item.itemId===itemId)return [field('目标字段',fieldLabels[key as keyof typeof fieldLabels])];
+  if(content.role?.itemId===itemId)return [field('目标项目','角色')];
+  for(const skill of content.skills)if(skill.itemId===itemId)return [field('技能位置',position(content.skills,itemId,positions)),field('技能名称',skill.name)];
+  for(const file of content.files)if(file.itemId===itemId)return fileIdentity(file,content,positions);
+  for(const task of content.tasks)if(task.itemId===itemId)return [field('任务位置',position(content.tasks,itemId,positions)),field('任务名称',task.name)];
   for(const setting of content.settings){
-    if(setting.itemId===itemId)return labels[setting.field]!;
+    if(setting.itemId===itemId)return [field('设置位置',position(content.settings,itemId,positions)),field('设置项',labels[setting.field]!)];
     if(setting.field==='presentation.cardDisplay'&&setting.value){
-      const block=setting.value.blocks.find(b=>b.itemId===itemId);if(block)return '显示项“'+block.name+'”';
+      const block=setting.value.blocks.find(b=>b.itemId===itemId);if(block)return [field('设置位置',position(content.settings,setting.itemId,positions)),
+        field('显示项位置',position(setting.value.blocks,itemId,positions)),field('显示项名称',block.name)];
     }
   }
-  const rule=content.rules.find(r=>r.itemId===itemId);if(rule)return purposes[rule.purpose]+'第 '+(content.rules.indexOf(rule)+1)+' 项';
-  const memory=content.memories.find(m=>m.itemId===itemId);if(memory)return '记忆第 '+(content.memories.indexOf(memory)+1)+' 项';
+  const rule=content.rules.find(r=>r.itemId===itemId);if(rule)return [field('规则位置',position(content.rules,itemId,positions)),field('规则用途',purposes[rule.purpose])];
+  const memory=content.memories.find(m=>m.itemId===itemId);if(memory)return [field('记忆位置',position(content.memories,itemId,positions))];
   throw new Error('修改目标不存在');
 }
-export function changeReviewFields(change:RecipeRichDraftChange,content:RecipeRichContent):Field[]{
+function addedItemId(before:RecipeRichContent,after:RecipeRichContent,kind:ItemKind){
+  const ids=(content:RecipeRichContent)=>{
+    switch(kind){
+      case 'role':return content.role?[content.role]:[];
+      case 'setting':return content.settings;
+      case 'rule':return content.rules;
+      case 'skill':return content.skills;
+      case 'file':return content.files;
+      case 'task':return content.tasks;
+      case 'memory':return content.memories;
+      case 'cardBlock':return content.settings.flatMap(s=>s.field==='presentation.cardDisplay'&&s.value?s.value.blocks:[]);
+      default:throw new Error('此类改动需要额外核对');
+    }
+  };
+  const prior=new Set(ids(before).map(item=>item.itemId)),added=ids(after).filter(item=>!prior.has(item.itemId));
+  if(added.length!==1)throw new Error('无法准确核对新增条目');
+  return added[0]!.itemId;
+}
+export function changeReviewFields(change:RecipeRichDraftChange,before:RecipeRichContent,after:RecipeRichContent,positions:Positions):Field[]{
   if(change.op==='setAccess')return [field('获取方式',change.value==='coded'?'凭码获取':'直接获取')];
-  if(change.op==='setFinalLogo'||change.op==='includeCandidate'||change.op==='addSetup'||change.op==='setSetup')throw new Error('此类改动需要额外核对');
-  if(change.op==='copyItem')return [field('复制',reviewTarget(content,change.source.itemId)),
-    ...('parentItemId'in change.source?[field('添加到',reviewTarget(content,change.source.parentItemId))]:[]),
-    ...selectedItemReview(content,change.source.itemId,change.source.kind)];
-  const name=reviewTarget(content,change.itemId);
+  if(change.op==='setFinalLogo'||change.op==='addSetup'||change.op==='setSetup')throw new Error('此类改动需要额外核对');
+  if(change.op==='copyItem'||change.op==='includeCandidate'){
+    const kind=change.op==='copyItem'?change.source.kind:change.value.kind;
+    return [field('操作',change.op==='copyItem'?'复制':'恢复原始条目'),
+      ...(change.op==='copyItem'?reviewTargetFields(before,change.source.itemId,positions).map(f=>({...f,label:'复制来源 · '+f.label})):[]),
+      ...selectedItemReview(after,addedItemId(before,after,kind),kind,positions)];
+  }
+  const target=reviewTargetFields(before,change.itemId,positions).map(f=>({...f,label:'修改目标 · '+f.label}));
   switch(change.op){
     case 'setPublicText':
-      if(content.public[change.field].itemId!==change.itemId)throw new Error('公开字段不匹配');
-      return [field(fieldLabels[change.field],change.value)];
-    case 'setRoleText':return [field(name,text(change.value))];
-    case 'setSkill':return [field(name+'名称',change.value.name)];
-    case 'setFile':return [field(name,'名称 → '+change.value.name+'\n完整内容\n'+text(change.value.text))];
-    case 'setRule':return [field(name,'用途 → '+purposes[change.value.purpose]+'\n'+text(change.value.text))];
-    case 'setTask':return [field(name,taskValue({...change.value,itemId:change.itemId,originId:change.itemId}))];
-    case 'setSetting':return [field(name,'设置项 → '+labels[change.value.field]+'\n'+values(change.value.value,change.value.field))];
-    case 'setCardReply':case 'setCardBlock':return [field(name,values(change.value))];
-    case 'removeItem':return [field('移除',name)];
+      if(after.public[change.field].itemId!==change.itemId)throw new Error('公开字段不匹配');
+      return [field(fieldLabels[change.field],after.public[change.field].value)];
+    case 'setSkill':{
+      const skill=after.skills.find(s=>s.itemId===change.itemId);if(!skill)throw new Error('技能不存在');
+      return [...target,field('技能新名称',skill.name)];
+    }
+    case 'setRoleText':return [...target,...selectedItemReview(after,change.itemId,'role',positions)];
+    case 'setFile':return [...target,...selectedItemReview(after,change.itemId,'file',positions)];
+    case 'setRule':return [...target,...selectedItemReview(after,change.itemId,'rule',positions)];
+    case 'setTask':return [...target,...selectedItemReview(after,change.itemId,'task',positions)];
+    case 'setSetting':return [...target,...selectedItemReview(after,change.itemId,'setting',positions)];
+    case 'setCardReply':{
+      const setting=after.settings.find(s=>s.itemId===change.itemId);
+      if(setting?.field!=='presentation.cardDisplay'||!setting.value?.reply)throw new Error('回复显示不存在');
+      return [...target,...valueFields(setting.value.reply,'回复显示')];
+    }
+    case 'setCardBlock':return [...target,...selectedItemReview(after,change.itemId,'cardBlock',positions)];
+    case 'removeItem':return [field('操作','移除'),...target];
   }
 }

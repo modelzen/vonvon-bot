@@ -17,7 +17,8 @@ import {checkedRichInput,proposeRich,type RichModelInput} from './authoring-rich
 import {parseChanges} from './authoring-wire';
 import {DraftProviderBusy,fieldLabels,type PublicField} from './draft-instruction';
 import {safeEditValue} from '../../../../services/recipe-api/src/draft-model-text.mjs';
-import {contentReviewFields,changeReviewFields,selectedItemReview,reviewTarget} from './authoring-review-text';
+import {contentReviewFields,changeReviewFields,reviewPositions} from './authoring-review-text';
+import {applyChanges} from '../../../../services/recipe-api/src/rich-document.mjs';
 
 type Preparation=Extract<RecipeAuthoringRequest,{type:'richPrepare'}>;
 type InventoryOptions=Preparation['selection']['options'];
@@ -245,18 +246,24 @@ export function richCardReview(op:{rich?:RichLocalDraft;view:Pick<LocalOperation
     const request=richFreezeInputSchema.parse(rich.request),payloadDigest=richReviewDigest(rich);
     const sourceCapture=!!rich.privateSelection&&!!rich.source&&rich.newFields?.length===0&&rich.sourceCaptureDigest===payloadDigest&&'content'in request;
     if(!sourceCapture&&rich.members?.some(m=>m.kind==='finalLogo'))return;
-    const fields='content'in request?contentReviewFields(request.content,sourceCapture):
-      request.payload.changes.flatMap(c=>{
-        if(c.op==='includeCandidate'){
-          const donor=request.candidates?.find(src=>src.sourceIntentId===c.value.source.sourceIntentId);
-          if(!donor)throw new Error('缺少恢复来源');
-          const content=decodeRichRecipeContent(Buffer.from(donor.canonical,'base64url')).content;
-          const fields=selectedItemReview(content,c.value.source.candidateId,c.value.kind).map(f=>({...f,label:'恢复原始'+f.label}));
-          if('parentItemId'in c.value)fields.unshift({label:'添加到',valueJson:JSON.stringify(reviewTarget(decodeRichRecipeContent(Buffer.from(request.baseCanonical,'base64url')).content,c.value.parentItemId))});
-          return fields;
-        }
-        return changeReviewFields(c,decodeRichRecipeContent(Buffer.from(request.baseCanonical,'base64url')).content);
+    const fields='content'in request?contentReviewFields(request.content,sourceCapture):(()=>{
+      const base=decodeRichRecipeContent(Buffer.from(request.baseCanonical,'base64url')).content;
+      const resolve=(ref:{sourceIntentId:string;candidateId:string})=>{
+        const donor=request.candidates?.find(src=>src.sourceIntentId===ref.sourceIntentId);
+        if(!donor)throw new Error('缺少恢复来源');
+        return {content:decodeRichRecipeContent(Buffer.from(donor.canonical,'base64url')).content,itemId:ref.candidateId};
+      };
+      const steps=request.payload.changes.map((change,index)=>({change,
+        after:applyChanges(base,request.payload.changes.slice(0,index+1),resolve,Buffer.alloc(32),request.newParts).doc.content}));
+      const positions=reviewPositions([base,...steps.map(step=>step.after)]);
+      let current=base;
+      return steps.flatMap(({change,after},index)=>{
+        const fields=changeReviewFields(change,current,after,positions);
+        current=after;
+        const step='第 '+(index+1)+' 项改动';
+        return [{label:'执行顺序',text:step,valueJson:JSON.stringify(step),separate:true as const},...fields];
       });
+    })();
     if(sourceCapture)for(const logo of rich.members?.filter(m=>m.kind==='finalLogo')??[])
       fields.push({label:'Logo',valueJson:JSON.stringify('已选本地图片 · '+Buffer.from(logo.bytes,'base64url').length+' 字节')});
     if(request.access)fields.push({label:'获取方式',valueJson:JSON.stringify(request.access==='coded'?'凭码获取':'直接获取')});

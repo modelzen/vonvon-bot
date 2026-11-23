@@ -1209,7 +1209,7 @@ it('binds the proactive private selection, attestation and exact final confirmat
   const draftId=randomUUID();
   await rpc('richAdvance',{operationId:op.operationId,destinationDraftId:draftId,authorization:{...await auth(op,'dispatch'),format:'rich-v2'}});
   expect(messages.size).toBe(1);expect(cards.size).toBe(1);
-  expect([...cards.values()][0]).toContain('角色 → 已选本地角色 · '+Buffer.byteLength(sourceRole)+' 字节');expect([...cards.values()][0]).not.toContain(hiddenMemory);
+  expect([...cards.values()][0]).toContain('已选本地角色 · '+Buffer.byteLength(sourceRole)+' 字节');expect([...cards.values()][0]).not.toContain(hiddenMemory);
   expect((await status(op.operationId)).state).toBe('candidate');
   await tap(oldFinish);await act(ref(),{by:stranger});
   expect((await status(op.operationId)).state).toBe('candidate');
@@ -1263,7 +1263,7 @@ it.each([['drop',false],['loseReply',false],['drop',true],['loseReply',true]] as
   const op=await status(h.operationId!);
   const draftId=randomUUID();
   await rpc('richAdvance',{operationId:op.operationId,destinationDraftId:draftId,authorization:{...await auth(op,'dispatch'),format:'rich-v2'}});
-  expect([...cards.values()][0]).toContain('角色 → 已选本地角色 · '+Buffer.byteLength(sourceRole)+' 字节');expect([...cards.values()][0]).not.toContain(hiddenMemory);
+  expect([...cards.values()][0]).toContain('已选本地角色 · '+Buffer.byteLength(sourceRole)+' 字节');expect([...cards.values()][0]).not.toContain(hiddenMemory);
   const preview=kind(await rpc('richInspect',{operationId:op.operationId,preview:true}),'richCandidate').request;
   expect(preview).toMatchObject({content:{role:{text:{kind:'inline',value:sourceRole}},memories:[]}});
   expect(kind(await rpc('beginHandoff',arg),'handoff').handoff.operationId).toBe(op.operationId);

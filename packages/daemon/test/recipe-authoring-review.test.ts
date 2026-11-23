@@ -1,9 +1,13 @@
 import {randomUUID} from 'node:crypto';
+import {mkdtemp,realpath,rm} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
 import {expect,it} from 'vitest';
 import {canonicalizeRichRecipeContent,recipeAuthoringRequestSchema,type RecipeRichContent} from '@vonvon/protocol';
 import {candidateConfirmation,authoringCard} from '../src/recipe/authoring-im';
 import {preparedRich,richCardReview,richReviewDigest,type RichLocalDraft} from '../src/recipe/authoring-rich-flow';
 import {itemsOf} from '../src/recipe/authoring-rich-snapshot';
+import {AuthoringJournal} from '../src/recipe/authoring-journal';
 
 const identity=()=>({itemId:randomUUID(),originId:randomUUID()});
 function content():RecipeRichContent {
@@ -24,7 +28,7 @@ function capture(c=content()) {
 const review=(rich:RichLocalDraft)=>richCardReview({view:{operationId:randomUUID()},rich});
 const visible=(body:ReturnType<typeof candidateConfirmation>)=>{
   const parsed=JSON.parse(JSON.stringify(body??{}));
-  return (parsed.body?.elements??[]).flatMap((e:{text?:{content?:string}})=>e.text?.content?[e.text.content]:[]).join('\n');
+  return (parsed.body?.elements??[]).flatMap((e:{content?:string;text?:{content?:string}})=>e.text?.content?[e.text.content]:e.content?[e.content]:[]).join('\n');
 };
 
 it('summarizes an unchanged 64KB private capture by actual names while binding every source byte',()=>{
@@ -41,6 +45,29 @@ it('summarizes an unchanged 64KB private capture by actual names while binding e
   expect(richReviewDigest(rich)).not.toBe(before);
   expect(candidateConfirmation('ref',review(rich))).toBeUndefined();
 });
+it.each(['privateSelection','source','newFields','sourceCaptureDigest','member'] as const)('keeps source summaries closed without the complete %s evidence',key=>{
+  const rich=capture();
+  if(key==='member')rich.members![0]!.sha256='0'.repeat(64);
+  else delete rich[key];
+  expect(review(rich)?.sourceCapture).toBeUndefined();
+  expect(candidateConfirmation('ref',review(rich))).toBeUndefined();
+});
+
+it('rereads a real source journal and refuses the 64KB legacy record without its capture digest',async()=>{
+  const root=await realpath(await mkdtemp(join(tmpdir(),'vonvon-review-journal-')));
+  try{
+    const rich=capture(),body=candidateConfirmation('ref',review(rich)),journal=new AuthoringJournal(root,()=>1);
+    await journal.run(db=>{db.links.source={bot:'review-bot',binding:'review-binding',recipient:{openId:'review-author',chatId:'review-chat',tenantKey:'review-tenant'},
+      sources:[{groupId:'review-source',reviewToken:'review-token',rich:{ref:'review-ref',draft:rich,identity:'review-identity'}}]};});
+    const reread=await journal.run(db=>db.links.source!.sources[0]!.rich!.draft);
+    expect(review(reread)?.sourceCapture).toBe(true);
+    expect(candidateConfirmation('ref',review(reread))).toEqual(body);
+    await journal.run(db=>{delete db.links.source!.sources[0]!.rich!.draft.sourceCaptureDigest;});
+    const legacy=await journal.run(db=>db.links.source!.sources[0]!.rich!.draft);
+    expect(review(legacy)?.sourceCapture).toBeUndefined();
+    expect(candidateConfirmation('ref',review(legacy))).toBeUndefined();
+  }finally{await rm(root,{recursive:true,force:true});}
+});
 it('shows model public and role edits as complete human text and keeps long edits closed',()=>{
   const c=content(),canonical=Buffer.from(canonicalizeRichRecipeContent(c).canonicalUTF8).toString('base64url');
   const rich:RichLocalDraft={request:{format:'rich-v2',baseCanonical:canonical,payload:{format:'rich-v2',purpose:'editDraft',draftId:randomUUID(),baseRevision:1,requestId:randomUUID(),schemaVersion:2,changes:[
@@ -48,7 +75,7 @@ it('shows model public and role edits as complete human text and keeps long edit
     {op:'setRoleText',itemId:c.role!.itemId,value:{kind:'inline',value:'第一行\n第二行'}},
   ]}}};
   const text=visible(candidateConfirmation('ref',review(rich)));
-  expect(text).toContain('名称 → 反馈手册');expect(text).toContain('角色 → 第一行\n第二行');
+  expect(text).toContain('**名称**\n反馈手册');expect(text).toContain('**角色**\n第一行\n第二行');
   expect(text).not.toMatch(/setPublicText|setRoleText|itemId|kind|[0-9a-f]{64}/);
   if(!rich.request||'content'in rich.request)throw new Error();
   rich.request.payload.changes=[{op:'setFile',itemId:c.files[0]!.itemId,value:{name:'SKILL.md',text:{kind:'inline',value:'x'.repeat(65536)}}}];
@@ -76,7 +103,7 @@ it('does not summarize model edits merely because a creation has no draft id',()
   rich.request.content.public.name.value='反馈手册';rich.newFields=[c.public.name.itemId];
   const details=review(rich),body=candidateConfirmation('ref',details),text=visible(body);
   expect(body).toBeDefined();expect(details?.sourceCapture).toBeUndefined();
-  expect(text).toContain('名称 → 反馈手册');expect(text).toContain('完整技能说明\n第二行');
+  expect(text).toContain('**名称**\n反馈手册');expect(text).toContain('完整技能说明\n第二行');
   expect(text).toContain('负责整理反馈\n保留事实');expect(text).not.toContain('本次保存你刚选中的本地内容快照');
   expect(candidateConfirmation('ref',details)).toEqual(body);
   rich.newFields=[];
@@ -87,11 +114,12 @@ it('shows the exact skill and file names and all changed file bytes without inte
   const c=content(),canonical=Buffer.from(canonicalizeRichRecipeContent(c).canonicalUTF8).toString('base64url');
   const rich:RichLocalDraft={request:{format:'rich-v2',baseCanonical:canonical,payload:{format:'rich-v2',purpose:'editDraft',draftId:randomUUID(),baseRevision:1,requestId:randomUUID(),schemaVersion:2,changes:[
     {op:'setSkill',itemId:c.skills[0]!.itemId,value:{name:'收集反馈'}},
-    {op:'setFile',itemId:c.files[0]!.itemId,value:{name:'docs/feedback.md',text:{kind:'inline',value:'# 收集反馈\n逐项核对。'}}},
+    {op:'setFile',itemId:c.files[0]!.itemId,value:{name:'docs/SKILL.md',text:{kind:'inline',value:'# 收集反馈\n逐项核对。'}}},
   ]}}};
   const body=candidateConfirmation('ref',review(rich)),text=visible(body);
-  expect(body).toBeDefined();expect(text).toContain('技能“整理反馈”名称 → 收集反馈');expect(text).toContain('文件“SKILL.md”');
-  expect(text).toContain('docs/feedback.md');expect(text).toContain('# 收集反馈\n逐项核对。');expect(text).not.toContain('itemId');
+  expect(body).toBeDefined();expect(text).toContain('**修改目标 · 技能名称**\n整理反馈');expect(text).toContain('**技能新名称**\n收集反馈');
+  expect(text).toContain('**所属技能名称**\n收集反馈');expect(text).toContain('**文件相对路径**\ndocs/SKILL.md');
+  expect(text).toContain('# 收集反馈\n逐项核对。');expect(text).not.toContain('itemId');
   for(const item of itemsOf(c))expect(text).not.toContain(item.itemId);
 });
 
@@ -103,6 +131,8 @@ it('rejects an unknown model operation and unavailable content instead of guessi
   expect(candidateConfirmation('ref',review(rich))).toBeUndefined();
   if(!rich.request||'content'in rich.request)throw new Error();
   Object.assign(rich.request.payload.changes[0]!,{op:'unknownOperation'});
+  expect(candidateConfirmation('ref',review(rich))).toBeUndefined();
+  rich.request.payload.changes=[{op:'setFile',itemId:c.files[0]!.itemId,value:{name:'docs/feedback.md',text:{kind:'inline',value:'API rejects a renamed skill entry without SKILL.md'}}}];
   expect(candidateConfirmation('ref',review(rich))).toBeUndefined();
 });
 
