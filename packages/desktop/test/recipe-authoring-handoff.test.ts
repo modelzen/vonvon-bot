@@ -26,24 +26,27 @@ function fixture(path?:string) {
   const botId=agentIdSchema.parse('cli_original'),groupId=groupIdSchema.parse('oc_original');
   const binding={accountId,viewId:'local' as const,deviceId,deviceKey,botId};
   const draft=manifest('目前的内容'),original=manifest('来源内容');
-  const remote={sourceIntentId,deviceKey,identity,linked:true,missing:false,statusFailures:0,cloudReceipt:undefined as AuthoringReceipt|undefined,operations:[] as AuthoringOperation[],field:undefined as AuthoringFieldRequest|undefined,pending:undefined as HandoffAttestation|undefined};
+  const remote={sourceIntentId,deviceKey,identity,linked:true,missing:false,handoffDraft:false,statusFailures:0,cloudReceipt:undefined as AuthoringReceipt|undefined,operations:[] as AuthoringOperation[],field:undefined as AuthoringFieldRequest|undefined,pending:undefined as HandoffAttestation|undefined};
   const op:AuthoringOperation={operationId:sourceIntentId,format:'rich-v2',groupId,purpose:'prepareDraft',targetPublicKey:deviceKey,
     nonceCommitment:deviceKey,createdAt:Date.now(),deliveryUnknown:false,state:'completed',
     receipt:{operationId:sourceIntentId,status:'accepted',stateRevision:3,draftId,revision:1}};
   const calls:RecipeAuthoringRequest[]=[];
-  const rpc=async (input:RecipeAuthoringRequest):Promise<RecipeAuthoringReply>=>{
+  const rpc=vi.fn(async (input:RecipeAuthoringRequest):Promise<RecipeAuthoringReply>=>{
     calls.push(input);
     switch(input.type){
       case 'open':return {kind:'session',session:randomUUID(),leaseMs:45000,linked:remote.linked};
       case 'close':return {kind:'closed'};
       case 'workflow':return {kind:'workflow',activity:0,ageMs:0,pausedContexts:[],handoff:remote.pending,field:remote.field};
-      case 'status':if(remote.statusFailures-->0)throw Error('transient status failure');return {kind:'status',operations:remote.operations,linked:remote.linked,reconciliation:[]};
+      case 'status':if(remote.statusFailures-->0)throw Error('transient status failure');return {kind:'status',
+        operations:remote.operations.filter(op=>input.operationId===undefined||op.operationId===input.operationId),linked:remote.linked,reconciliation:[]};
       case 'operationSourceIdentity':return {kind:'operationSourceIdentity',operationId:sourceIntentId,groupId,identity};
       case 'groupSourceIdentity':return {kind:'groupSourceIdentity',groupId,identity:remote.identity};
       case 'handoffStatus':return {kind:'handoff',handoff:{retryId:input.retryId,groupId,
+        ...(remote.handoffDraft&&{draftId}),
         ...(remote.operations[0]?{state:'prepared',operationId:remote.operations[0].operationId}:{state:'selecting'})}};
       case 'restoreHandoff':
         if(remote.missing)return {kind:'handoffUnavailable',retryId:input.retryId,reason:'notFound'};
+        remote.handoffDraft=input.expected.kind==='draft';
         return {kind:'handoff',handoff:{retryId:input.retryId,groupId,...(input.expected.kind==='draft'&&{draftId:input.expected.draftId}),
           ...(remote.operations[0]?{state:'prepared',operationId:remote.operations[0].operationId}:{state:'selecting'})}};
       case 'settle':{
@@ -57,7 +60,7 @@ function fixture(path?:string) {
         return {kind:'handoff',handoff:{groupId,retryId,draftId:input.type==='beginDraftHandoff'?draftId:undefined,state:'selecting'}};
       default:throw Error('unexpected RPC '+input.type);
     }
-  };
+  });
   const client={device:async()=>({kind:'deviceStatus',status:{device:{id:deviceId,name:'来源设备',publicKey:remote.deviceKey},
     remote:{addresses:[],port:3000},clients:{active:1,total:1}}}),
     snapshot:async()=>({agents:[{id:botId,name:'来源 Bot',running:true}],groups:[{id:groupId,name:'原群'}],memberships:[{agentId:botId,groupId}]}),
@@ -84,7 +87,7 @@ function fixture(path?:string) {
     return {journal,controller};
   };
   const openDraft={type:'openDraftSource' as const,accountId,viewId:'local',baseRevision:2,draftId};
-  return {build,binding,draftId,draft,original,op,openDraft,retryId,sourceIntentId,groupId,identity,remote,calls,request,signal};
+  return {build,binding,draftId,draft,original,op,openDraft,retryId,sourceIntentId,groupId,identity,remote,calls,rpc,request,signal};
 }
 
 it('backfills an old verified target from the exact daemon operation, then reopens after both journals expire',async()=>{
@@ -322,4 +325,165 @@ it.each([false,true])('restores and polls only the original operation without up
   expect(f.calls.filter(r=>'operationId' in r&&r.operationId===other.operationId)).toEqual([]);
   expect(f.request.mock.calls.some(([,path])=>path.includes(other.operationId))).toBe(false);
   expect(updated.operations.map(op=>op.operationId)).toEqual([original.operationId]);
+});
+
+it('finishes the original edit from background ticks after a restored selecting dialog is detached',async()=>{
+  vi.useFakeTimers();
+  clean.push(()=>vi.useRealTimers());
+  const f=fixture(),{journal,controller}=f.build();
+  journal.history.remember(f.binding,f.sourceIntentId,f.identity,f.groupId);
+  const restored=await controller.request({type:'restoreHandoff',accountId:f.binding.accountId,viewId:'local',retryId:f.retryId,
+    target:{kind:'draft',draftId:f.draftId,baseRevision:2}});
+  if(restored.kind!=='handoffRestored')throw Error('restored');
+  expect(restored.handoff.state).toBe('selecting');
+  await controller.request({type:'detach',handle:restored.session.handle});
+  const edit:AuthoringOperation={...f.op,operationId:randomUUID(),purpose:'editDraft',groupId:undefined,
+    draftId:f.draftId,baseRevision:2,state:'pendingMain',receipt:undefined};
+  const other:AuthoringOperation={...f.op,operationId:randomUUID(),groupId:groupIdSchema.parse('oc_other'),
+    state:'pendingMain',cardUpdate:'pending',receipt:undefined};
+  f.remote.operations=[edit,other];
+  f.remote.cloudReceipt={operationId:edit.operationId,status:'accepted',stateRevision:3,draftId:f.draftId,revision:3};
+  f.remote.field={requestId:randomUUID(),operationId:other.operationId,draftId:f.draftId,revision:1,field:'name'};
+  const before=f.calls.length;
+  for(let i=0;i<5;i++)await vi.advanceTimersByTimeAsync(3000);
+  expect(edit).toMatchObject({state:'completed',receipt:f.remote.cloudReceipt});
+  expect(f.calls.slice(before).filter(r=>r.type==='handoffStatus')).not.toHaveLength(0);
+  expect(f.calls.slice(before).filter(r=>r.type==='handoffStatus').every(r=>r.retryId===f.retryId)).toBe(true);
+  expect(f.calls.slice(before).filter(r=>r.type==='status').every(r=>r.operationId===edit.operationId)).toBe(true);
+  expect(f.calls.slice(before).some(r=>'operationId' in r&&r.operationId===other.operationId||r.type==='answerField')).toBe(false);
+  expect(f.request.mock.calls.some(([,path])=>path.includes(edit.operationId))).toBe(true);
+  expect(f.request.mock.calls.some(([,path])=>path.includes(other.operationId))).toBe(false);
+});
+
+it.each([false,true])('rejects a delayed draft restore after a new page reclaims the same detached handle (unavailable %s)',async missing=>{
+  const f=fixture(),{journal,controller}=f.build();
+  journal.history.remember(f.binding,f.sourceIntentId,f.identity,f.groupId);
+  const old=await controller.request(f.openDraft);
+  if(old.kind!=='session')throw Error('session');
+  await controller.request({type:'close',handle:old.handle});
+  const open={type:'open' as const,accountId:f.binding.accountId,viewId:'local',botId:f.binding.botId,groupId:f.groupId};
+  const prior=await controller.request(open);
+  if(prior.kind!=='session')throw Error('session');
+  await controller.request({type:'beginHandoff',handle:prior.handle,retryId:f.retryId,groupId:f.groupId});
+  await controller.request({type:'detach',handle:prior.handle});
+  const normal=f.request.getMockImplementation()!;
+  let release!:()=>void;
+  const held=new Promise<void>(resolve=>{release=resolve;});
+  f.request.mockImplementation(async(id,path)=>{if(path==='/v2/drafts/'+f.draftId)await held;return normal(id,path);});
+  const delayed=controller.request({type:'restoreHandoff',accountId:f.binding.accountId,viewId:'local',handle:old.handle,
+    retryId:randomUUID(),target:{kind:'draft',draftId:f.draftId,baseRevision:2}});
+  const result=delayed.then(value=>({value}),error=>({error}));
+  await vi.waitFor(()=>expect(f.request.mock.calls.filter(([,path])=>path==='/v2/drafts/'+f.draftId)).toHaveLength(2));
+  const reopened=await controller.request(open);
+  expect(reopened).toMatchObject({kind:'session',handle:prior.handle});
+  const before=f.calls.length;
+  f.remote.missing=missing;
+  release();
+  expect(await result).toHaveProperty('error');
+  expect(f.calls.slice(before).filter(r=>r.type==='close')).toEqual([]);
+  await expect(controller.request({type:'status',handle:prior.handle})).resolves.toMatchObject({kind:'session',handle:prior.handle});
+  expect(f.calls.filter(r=>r.type==='open')).toHaveLength(2);
+});
+
+it.each(['503','network','timeout'])('pauses writes without closing a valid handle after transient presence failure (%s)',async failure=>{
+  vi.useFakeTimers();
+  clean.push(()=>vi.useRealTimers());
+  const f=fixture(),{controller}=f.build();
+  const opened=await controller.request({type:'open',accountId:f.binding.accountId,viewId:'local',botId:f.binding.botId,groupId:f.groupId});
+  if(opened.kind!=='session')throw Error('session');
+  await controller.request({type:'beginHandoff',handle:opened.handle,groupId:f.groupId,retryId:f.retryId});
+  const restore={type:'restoreHandoff' as const,accountId:f.binding.accountId,viewId:'local',handle:opened.handle,
+    retryId:f.retryId,target:{kind:'source' as const,botId:f.binding.botId,groupId:f.groupId}};
+  const normal=f.request.getMockImplementation()!;
+  f.request.mockImplementation(async(id,path)=>{
+    if(path!=='/v1/me')return normal(id,path);
+    if(failure==='network')throw new TypeError('fetch failed');
+    if(failure==='timeout')throw new DOMException('timed out','TimeoutError');
+    return new Response('temporarily unavailable',{status:503});
+  });
+  const before=f.calls.length,checks=f.request.mock.calls.length;
+  await expect(controller.request(restore)).rejects.toThrow();
+  await vi.advanceTimersByTimeAsync(6000);
+  expect(f.calls.slice(before)).toEqual([]);
+  expect(f.request.mock.calls.slice(checks).filter(([,path])=>path==='/v1/me').length).toBeGreaterThan(1);
+  f.request.mockImplementation(normal);
+  await expect(controller.request(restore)).resolves.toMatchObject({kind:'handoffRestored',session:{handle:opened.handle}});
+  await expect(controller.request({type:'status',handle:opened.handle})).resolves.toMatchObject({kind:'session',handle:opened.handle});
+  expect(f.calls.filter(r=>r.type==='open')).toHaveLength(1);
+});
+
+it('does not answer a pending field after a transient online confirmation failure',async()=>{
+  const f=fixture(),{controller}=f.build();
+  f.remote.operations=[f.op];
+  const opened=await controller.request({type:'open',accountId:f.binding.accountId,viewId:'local',botId:f.binding.botId,groupId:f.groupId});
+  if(opened.kind!=='session')throw Error('session');
+  f.remote.field={requestId:randomUUID(),operationId:f.op.operationId,draftId:f.draftId,revision:1,field:'name'};
+  const normal=f.request.getMockImplementation()!;
+  f.request.mockImplementation((id,path)=>path==='/v1/me'?Promise.resolve(new Response('{}',{status:503})):normal(id,path));
+  const before=f.calls.length;
+  await expect(controller.request({type:'status',handle:opened.handle})).rejects.toThrow();
+  expect(f.calls.slice(before).filter(r=>r.type==='answerField'||r.type==='close')).toEqual([]);
+  f.remote.field=undefined;
+  f.request.mockImplementation(normal);
+  await expect(controller.request({type:'status',handle:opened.handle})).resolves.toMatchObject({kind:'session',handle:opened.handle});
+});
+
+it.each(['forbidden','account mismatch','lease aborted'])('still revokes a handle after confirmed identity or lease failure (%s)',async failure=>{
+  const f=fixture(),{controller}=f.build();
+  const opened=await controller.request({type:'open',accountId:f.binding.accountId,viewId:'local',botId:f.binding.botId,groupId:f.groupId});
+  if(opened.kind!=='session')throw Error('session');
+  const normal=f.request.getMockImplementation()!;
+  const before=f.calls.length;
+  if(failure==='lease aborted')f.signal.abort();
+  else f.request.mockImplementation((id,path)=>path==='/v1/me'?Promise.resolve(failure==='forbidden'
+    ?new Response('{}',{status:403}):Response.json({accountId:randomUUID()})):normal(id,path));
+  await expect(controller.request({type:'restoreHandoff',accountId:f.binding.accountId,viewId:'local',handle:opened.handle,
+    retryId:f.retryId,target:{kind:'source',botId:f.binding.botId,groupId:f.groupId}})).rejects.toThrow();
+  expect(f.calls.slice(before).filter(r=>r.type==='close')).toHaveLength(1);
+  await expect(controller.request({type:'status',handle:opened.handle})).rejects.toThrow();
+  expect(f.calls.slice(before).filter(r=>r.type==='restoreHandoff')).toEqual([]);
+});
+
+it.each(['source','draft'])('returns the real unavailable result when original %s evidence expires between RPCs',async targetKind=>{
+  const f=fixture(),{journal,controller}=f.build();
+  journal.history.remember(f.binding,f.sourceIntentId,f.identity,f.groupId);
+  const operationId=randomUUID();
+  const op:AuthoringOperation=targetKind==='source'?{...f.op}:{...f.op,operationId,groupId:undefined,
+    purpose:'editDraft',draftId:f.draftId,baseRevision:2,receipt:{operationId,status:'accepted',stateRevision:3,draftId:f.draftId,revision:3}};
+  f.remote.operations=[op];
+  const normal=f.rpc.getMockImplementation()!;
+  f.rpc.mockImplementation(async input=>{
+    if(input.type==='status'&&input.operationId===op.operationId){f.remote.operations=[];f.remote.missing=true;}
+    return normal(input);
+  });
+  const target=targetKind==='source'?{kind:'source' as const,botId:f.binding.botId,groupId:f.groupId}
+    :{kind:'draft' as const,draftId:f.draftId,baseRevision:2};
+  await expect(controller.request({type:'restoreHandoff',accountId:f.binding.accountId,viewId:'local',retryId:f.retryId,target}))
+    .resolves.toEqual({kind:'handoffUnavailable',retryId:f.retryId,reason:'notFound'});
+  const restores=f.calls.filter(r=>r.type==='restoreHandoff');
+  expect(restores).toHaveLength(2);
+  expect(restores[1]).toEqual(restores[0]);
+  expect(f.calls.some(r=>r.type==='beginHandoff'||r.type==='beginDraftHandoff')).toBe(false);
+});
+
+it.each(['still prepared','other operation','changed identity'])('rejects inconsistent scoped evidence rather than guessing unavailable (%s)',async failure=>{
+  const f=fixture(),{controller}=f.build();
+  f.remote.operations=[{...f.op}];
+  const normal=f.rpc.getMockImplementation()!;
+  let restores=0;
+  f.rpc.mockImplementation(async input=>{
+    if(input.type==='restoreHandoff'&&++restores===2&&failure==='changed identity')throw Error('identity changed');
+    if(input.type==='status'&&input.operationId===f.op.operationId){
+      if(failure==='other operation'){
+        f.remote.missing=true;
+        return {kind:'status',linked:true,reconciliation:[],operations:[{...f.op,operationId:randomUUID()}]};
+      }
+      return {kind:'status',linked:true,reconciliation:[],operations:[]};
+    }
+    return normal(input);
+  });
+  await expect(controller.request({type:'restoreHandoff',accountId:f.binding.accountId,viewId:'local',retryId:f.retryId,
+    target:{kind:'source',botId:f.binding.botId,groupId:f.groupId}})).rejects.toThrow();
+  expect(restores).toBe(failure==='other operation'?1:2);
+  expect(f.calls.some(r=>r.type==='beginHandoff'||r.type==='beginDraftHandoff')).toBe(false);
 });
