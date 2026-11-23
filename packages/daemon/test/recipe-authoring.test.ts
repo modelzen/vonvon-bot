@@ -3142,3 +3142,47 @@ it('APP PUBLICATION shares the same job with a simultaneous real private-card co
   expect(await rpc('creatorPreview',{work:snapshot.work,revision:2})).toMatchObject({state:'finished',job:{id:ready.job.id},result:answer});
   expect(await creatorJobs()).toEqual([]);
 });
+
+it('FINAL FOCUSED old rejected publication overrides a new valid offer on the same saved draft',async()=>{
+  await link();await attachCreator();
+  const first=await openManualWork('原名称',2);
+  const old=kind(await rpc('creatorPreview',{work:first.work,revision:2}),'creatorPreview');
+  await tap(privateChoice('确认发布'));
+  await rpc('creatorAnswer',{id:old.job.id,answer:{kind:'rejected',reason:'changed'}});
+  const next=await openManualWork('修正后的名称',3,first.work.draftId);
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const nextJob=await new AuthoringJournal(root,()=>clock).run(db=>Object.values(db.links).flatMap(l=>Object.values(l.creator?.jobs??{})).find(r=>r.state==='offer'&&r.job.task.kind==='command'&&r.job.task.command.kind==='publish'&&r.job.task.command.snapshot.revision===3));
+  expect(nextJob).toBeDefined();
+  expect((await rpc('creatorCheck',{id:nextJob!.job.id})).kind).toBe('creatorChecked');
+  await expect(rpc('creatorPreview',{work:next.work,revision:3})).rejects.toThrow();
+  expect(await rpc('creatorPreview',{work:first.work,revision:2})).toMatchObject({job:{id:old.job.id},state:'finished',result:{kind:'rejected'}});
+});
+
+it('FINAL STORAGE eight MiB ledger cannot accept normal rich chat editing results after six other drafts',async()=>{
+  await link();await attachCreator();
+  const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
+  const field=(value:string)=>({itemId:randomUUID(),originId:randomUUID(),value});
+  const rules=Array.from({length:32},()=>({itemId:randomUUID(),originId:randomUUID(),purpose:'work' as const,text:{kind:'inline' as const,value:'记录客户反馈事项。'.repeat(570)}}));
+  const document=canonicalizeRichRecipeContent({format:'rich-v2',schemaVersion:2,public:{name:field('周报'),summary:field(''),overview:field(''),version:field('1')},
+    settings:[],files:[],skills:[],tasks:[],memories:[],rules,setup:[],parts:[]});
+  const bytes=Buffer.from(document.canonicalUTF8),canonical=bytes.toString('base64url');
+  const identity=kind(await rpc('groupSourceIdentity',{groupId}),'groupSourceIdentity').identity;
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  let successful=0,failed='';
+  for(let index=0;index<10;index++){
+    const preparationId=randomUUID(),work={draftId:randomUUID(),source:{preparationId,groupId,identity}};
+    const pending=kind(await rpc('creatorPreview',{work,revision:2}),'creatorPreview');
+    const pub={name:'周报',version:'1',summary:'',overview:'',access:'direct'};
+    const snapshot={work,format:'rich-v2',recipeId:null,parent:null,revision:2,public:pub,contentSha256:digest(bytes),parts:[],sections:[{title:'规则',pageHashes:[digest('规则')]}]};
+    await rpc('creatorAnswer',{id:pending.job.id,answer:{kind:'snapshot',snapshot}});
+    await tap(privateChoice('继续修改内容'));
+    const edit=(await creatorJobs()).find(j=>j.task.kind==='read'&&j.task.read.kind==='edit'&&j.task.read.work.draftId===work.draftId)!;
+    try{await rpc('creatorAnswer',{id:edit.id,answer:{kind:'edit',work,revision:2,canonical,sourceCanonical:canonical}});}
+    catch(e){failed=String(e);break;}
+    successful++;
+    expect(await ledger.run(db=>Object.values(db.links).flatMap(l=>Object.values(l.creator?.jobs??{})).find(j=>j.job.id===edit.id)?.result?.kind)).toBe('edit');
+  }
+  console.log('FINAL STORAGE',successful,bytes.length,canonical.length,failed);
+  expect(failed).toContain('本机配方操作记录已满');expect(successful).toBe(6);
+},60000);

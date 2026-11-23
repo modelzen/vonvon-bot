@@ -319,3 +319,25 @@ it('APP PUBLICATION gives controlled source recovery guidance without exposing t
   if(!(error instanceof AuthoringError))throw Error('expected safe authoring failure');
   expect(error.message).toContain('保持原来源 Bot 在线');expect(error.message).not.toContain('private-secret');
 });
+
+it('FINAL FOCUSED native confirmation pending before authorization crosses navigation invalidation',async()=>{
+  const f=await publicationFixture(),ready=await f.prepare();if(ready.kind!=='publicationReady')throw Error('not ready');
+  let enter=()=>{},resume=()=>{};
+  const entered=new Promise<void>(resolve=>{enter=resolve;});
+  const resumed=new Promise<void>(resolve=>{resume=resolve;});
+  const prior=f.rpc.getMockImplementation()!;
+  let hold=true;
+  f.rpc.mockImplementation(async input=>{
+    if(hold&&input.type==='creatorPreview'){
+      hold=false;enter();await resumed;
+    }
+    return prior(input);
+  });
+  const pending=f.confirm(ready.reviewId);
+  await entered;
+  f.supervisor.invalidateReviews();
+  expect(f.rpcs.filter(r=>r.type==='creatorAppConfirm')).toHaveLength(0);
+  resume();
+  expect(await pending).toMatchObject({kind:'publicationResult',result:{kind:'published'}});
+  expect(f.rpcs.filter(r=>r.type==='creatorAppConfirm')).toHaveLength(1);
+});
