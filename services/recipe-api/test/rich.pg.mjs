@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {publicDisplayNameSchema} from '../../../packages/protocol/dist/index.js';
 import {createHash,randomUUID,generateKeyPairSync,randomBytes,sign} from 'node:crypto';
 import {mkdtempSync,mkdirSync,rmSync,readdirSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -86,7 +87,25 @@ try{
   const lido=opId(),lo='/v1/authoring/'+lido;
   await req(lo+'/register',a,{purpose:'prepareDraft',...legacyDevice});
   const lc=await req(lo+'/authorize',a,{stage:'dispatch',stateRevision:1,payloadDigest:DISPATCH_DIGEST});
+  sql('create role anon; create role authenticated');
   files.slice(firstRich).forEach(apply);
+  const profilesBefore=sql('select count(*) from recipe_private.creator_profiles');
+  assert.deepEqual(await req('/v2/me/profile',a),{authorId:account,displayName:'配方作者'});
+  assert.deepEqual(await req('/v2/me/profile',b),{authorId:reader,displayName:'配方作者'});
+  assert.equal(sql('select count(*) from recipe_private.creator_profiles'),profilesBefore);
+  await req('/v2/me/profile',undefined,undefined,{status:401});
+  assert.equal(sql("select has_function_privilege('anon','recipe_api.rich_profile_read()','execute') or has_function_privilege('authenticated','recipe_api.rich_profile_read()','execute')"),'f');
+  assert.equal(sql("begin read only; set local role recipe_api; select set_config('app.recipe_account','"+account+"',true); select recipe_api.rich_profile_read()->>'displayName'; rollback").split('\n').at(-1),'配方作者');
+  assert.deepEqual(await req('/v2/me/profile',a,{displayName:'  公开作者  '}),{authorId:account,displayName:'公开作者'});
+  assert.deepEqual(await req('/v2/me/profile',a),{authorId:account,displayName:'公开作者'});
+  assert.equal((await req('/v2/me/profile',b)).displayName,'配方作者');
+  for(const displayName of ['', ' ', 'a@b', 'a\nb', 'a'.repeat(61)])await req('/v2/me/profile',a,{displayName},{status:422});
+  for(const displayName of ['🦉'.repeat(60), '🦉'.repeat(61), '\u3000', 'a\u0085b', 'a\u007fb']) {
+    const parsed=publicDisplayNameSchema.safeParse(displayName);
+    const profile=await req('/v2/me/profile',b,{displayName},{status:parsed.success?200:422});
+    if(parsed.success)assert.equal(profile.displayName,parsed.data);
+  }
+  console.log('PASS: public profile GET is authenticated, read-only, private-name independent, and restricted to recipe_api.');
   assert.equal(sql("select bytes::text||':'||encode(recipe_private.install_manifest(v),'hex') from recipe_private.versions v where id='"+lv.versionId+"'"),historical);
   const lred=await req('/v1/operations/'+lid+'/redeem',null,{ticket:li.ticket,nonce:b64(legacyNonce),proof:b64(installProof(legacyKey.privateKey,li))});
   assert.equal(lred.manifest,lp.manifest);

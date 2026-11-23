@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {communityRequestSchema, communityResponseSchemas, recipeConfigSchema, recipePublicSchema} from '../src/desktop-community.js';
+import {communityRequestSchema, communityResponseSchemas, recipeConfigSchema, recipePublicSchema, publicDisplayNameSchema} from '../src/desktop-community.js';
 import {checkDraft, queryParams} from '../../../services/recipe-api/src/input.mjs';
 
 const recipeId = '11111111-1111-4111-8111-111111111111';
@@ -58,4 +58,14 @@ it('accepts current batch states without disclosing plaintext for redeemed or di
     expect(communityResponseSchemas.revealCode.safeParse(item).success).toBe(false);
   }
   expect(communityResponseSchemas.revealCode.parse(available)).toEqual(available);
+});
+
+it('keeps public names separate from login metadata and validates trimmed code points', () => {
+  expect(publicDisplayNameSchema.parse('  作者  ')).toBe('作者');
+  expect(publicDisplayNameSchema.parse('🦉'.repeat(60))).toBe('🦉'.repeat(60));
+  for (const displayName of ['', ' ', 'a@b', 'a\nb', 'a\u007fb', '\ud800', '🦉'.repeat(61)]) {
+    expect(publicDisplayNameSchema.safeParse(displayName).success).toBe(false);
+  }
+  expect(communityRequestSchema.safeParse({type: 'profile'}).success).toBe(false);
+  expect(communityRequestSchema.safeParse({type: 'saveProfile', accountId: recipeId, requestId: versionId, displayName: '作者', privateName: 'OAuth 姓名'}).success).toBe(false);
 });

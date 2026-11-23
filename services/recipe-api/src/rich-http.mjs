@@ -16,7 +16,7 @@ const routes=[
  ['POST','authoring/:o/freeze','richFreeze'],['GET','authoring/:o','richGet'],['GET','authoring/:o/recovery','richRecover'],['POST','authoring/:o/cancel','richCancel'],
  ['PATCH','drafts/:d/metadata','richMetadata'],['GET','drafts/:d','richDraft'],['GET','me/drafts','richDraftList'],['DELETE','drafts/:d','richDelete'],['POST','drafts/:d/publish','richPublish'],
  ['GET','versions/:v/source-items','richSourceItems'],['GET','recipes/:r/versions/:v','richDetail',true],['GET','community/recipes','richCatalog',true],['POST','versions/:v/withdraw','richWithdraw'],
- ['POST','me/profile','richProfile'],['POST','objects/:o/reserve','richReserve'],['POST','objects/:o/cancel','richCancelPackage'],['GET','me/object-capacity','richCapacity'],
+ ['GET','me/profile','richProfileRead'],['POST','me/profile','richProfile'],['POST','objects/:o/reserve','richReserve'],['POST','objects/:o/cancel','richCancelPackage'],['GET','me/object-capacity','richCapacity'],
 ].map(([method,path,action,isPublic=false])=>({method,action,isPublic,regex:new RegExp('^(?:/api)?/v2/'+path.replace(/:[odrv]/g,'([^/]+)')+'$')}));
 export function richRoute(method,path,admit) {
   const matches=routes.filter(r=>r.regex.test(path));

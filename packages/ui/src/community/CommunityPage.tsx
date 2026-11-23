@@ -236,7 +236,7 @@ function RecipeCodes({shell, accountId, versionId}: {shell: CommunityShell; acco
         throw error;
       }
     })}>{pendingIssue.current ? '重试上一批' : '生成分享码'}</Button></div>
-    {batch && <p role="status" className="community-muted">本批 {batch.items.length} 枚：{batch.items.filter(item => item.status === 'available').length} 枚可用，{batch.items.filter(item => item.status === 'redeemed').length} 枚已兑换，{batch.items.filter(item => item.status === 'disabled').length} 枚已停用。</p>}
+    {batch && <p role="status" className="community-muted">本次已生成 {batch.items.length} 枚分享码。</p>}
     {codes && <><CopyButton key={codes} value={codes} label="复制分享码"/></>}
     {page?.items.length === 0 && <p className="community-muted">没有分享码。</p>}
     {Boolean(page?.items.length) && <div className="community-list">{page?.items.map(item => <div className="community-list-row" key={item.codeId}><div><strong>…{item.suffix}</strong><small>{{available: '可用', redeemed: '已兑换', disabled: '已停用'}[item.status]}{item.redeemedAt ? ' · ' + new Date(item.redeemedAt).toLocaleString() : ''}</small></div>{item.status === 'available' && <><Button disabled={busy} onClick={() => void run(async () => {const result = await shell.request({type: 'revealCode', accountId, codeId: item.codeId, requestId: requestId('reveal:' + item.codeId)}); if (live.current) setCodes(result.code ?? '');})}>准备复制</Button><Button disabled={busy} onClick={() => setDisable(item.codeId)}>停用</Button></>}</div>)}</div>}
