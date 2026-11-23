@@ -20,10 +20,11 @@ type Choice =
 export type Option={label:string;choice:Choice};
 export type Card={
   ref:string;generation:number;session:string;sendId:string;expiresAt:number;title:string;text:string;
-  options:Option[];previewOwner?:string;previewApproval?:string;version?:VersionSelection;needsUpdate?:true;retryId?:string;cardId?:string;messageId?:string;url?:string;workId?:string;
+  options:Option[];previewOwner?:string;previewApproval?:string;version?:VersionSelection;needsUpdate?:true;retryId?:string;cardId?:string;messageId?:string;url?:string;appPreviewUrl?:string;workId?:string;
 };
 export const layout=(c:Card)=>card([
   {tag:'div',text:{tag:'plain_text',content:c.text}},
+  ...(c.appPreviewUrl?[linkButton('在 App 中预览',c.appPreviewUrl)]:[]),
   ...c.options.map((o,index)=>button(o.label,{a:'recipe.authoring',verb:'creator',ref:c.ref,generation:c.generation,index},o.choice.kind==='approve'?'primary':'default')),
   ...(c.url?[linkButton('打开社区版本',c.url)]:[]),
 ],{header:{title:c.title},forward:false,summary:c.title});
@@ -70,18 +71,9 @@ export class CreatorCards {
     if(c.kind==='publish'){
       const snap=c.snapshot,pub=snap.public;
       title='预览发布';label='确认发布 '+pub.version;
-      const longOverview=[...pub.overview].length>1500;
-      if(longOverview)choices.push({label:'查看完整公开概览',choice:{kind:'detailPage',id:row.job.id,page:0}});
-      text=[pub.name+' · '+pub.version,pub.summary,longOverview?'公开概览可分段查看。':pub.overview,pub.access==='coded'?'凭分享码获取':'直接获取',
-        '草稿修订 '+snap.revision,
-        snap.work.source?[row.botName&&'Bot '+row.botName,row.groupName?'来源群 '+row.groupName:'来源群的本地配置'].filter(Boolean).join(' · '):'本人账号的旧格式作品',
-        ...(snap.parent?['基于已选的历史版本创作']:[]),'可按节查看完整发布内容。修改公开信息可发送 /recipe name、version、summary 或 overview，后面加新值。获取方式可发送 /recipe access 直接获取 或 /recipe access 凭码获取。'].join('\n');
-      snap.sections.forEach((_part,section)=>choices.push({label:sectionName(snap,section),choice:{kind:'read',read:{kind:'page',work:snap.work,snapshotDigest:c.snapshotDigest,section,page:0}}}));
-      if(!retry){
-        choices.push({label:'继续修改内容',choice:{kind:'edit',id:row.job.id}});
-        if(snap.format==='rich-v2')choices.push({label:'更换 Logo',choice:{kind:'logo',work:snap.work}});
-        choices.push({label:'删除创作中作品',choice:{kind:'offer',command:{kind:'discard',work:snap.work,revision:snap.revision}}});
-      }
+      text=[pub.name+' · '+pub.version,pub.access==='coded'?'凭分享码获取':'直接获取','草稿修订 '+snap.revision,
+        ...(!snap.appPreviewUrl?['请打开 App 的「我的配方」查看完整内容。']:[])].join('\n');
+      if(!retry)choices.push({label:'继续修改内容',choice:{kind:'edit',id:row.job.id}});
     }else if(c.kind==='metadata'){
       title='采用公开信息修改';label='采用修改';
       const field={name:'名称',summary:'简介',overview:'概览',version:'显示版本',access:'获取方式',logo:'Logo'}[c.change.field];
@@ -102,6 +94,7 @@ export class CreatorCards {
     if(retry){title='核对原请求';text+='\n上次操作的结果尚未确定。重新确认后会核验同一次请求。';label='重新确认并重试';}
     choices.unshift({label,choice:{kind:'approve',id:row.job.id,retry}});
     const card=this.newCard(s,p,title,text,choices,work?.draftId);
+    if(c.kind==='publish'&&c.snapshot.appPreviewUrl)card.appPreviewUrl=c.snapshot.appPreviewUrl;
     if(row.preview?.readId){delete s.jobs[row.preview.readId];delete row.preview.readId;}
     if(row.preview){
       delete row.preview.position;

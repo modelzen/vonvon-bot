@@ -42,7 +42,7 @@ export type JobRecord={
   job:CreatorJob;state:'offer'|'active'|'unknown'|'finished';created:number;expiresAt:number;messageId?:string;originalCardId?:string;approvalGeneration?:number;
   workName?:string;botName?:string;groupName?:string;version?:VersionSelection;codeLabel?:string;
   preview?:{ref?:string;readId?:string;position?:string};previewOwner?:string;
-  attachment?:Attachment;originWork?:CreatorWork;answerDigest?:string;resultCard?:string;offerRef?:string;sourceChoice?:string;receiptCard?:boolean;
+  attachment?:Attachment;originWork?:CreatorWork;answerDigest?:string;result?:CreatorAnswer;resultCard?:string;offerRef?:string;sourceChoice?:string;receiptCard?:boolean;
 };
 type DraftSelection={kind:'draft';snapshot:CreatorSnapshot};
 export type VersionSelection={kind:'version';target:CreatorVersion;name:string;version:string};
@@ -639,19 +639,22 @@ export class PrivateCreator{
             card.generation!==generation||card.session!==p.session||card.cardId!==c.cardId||!same(card.options[index],c.options[index])||
             row.state!==(choice.retry?'unknown':'offer')||row.job.task.kind!=='command')return;
           const task=row.job.task;
-          this.noPendingSave(db,p,link,workOf(task.command));
+          this.noPendingSave(db,p,link,workOf(task.command),row.job.id);
           row.messageId=evt.messageId;row.originalCardId=card.cardId;row.approvalGeneration=card.generation;row.state='active';task.expiresAt=this.now()+ttl;
           task.approval=digest(JSON.stringify([row.job.id,task.command,task.expiresAt,link.binding,p.scope,p.account,recipient,card.cardId,evt.messageId,ref,generation]));
+          task.confirmation={kind:'feishu-card'};
           renewCreatorBinding(db,actual,this.now());
         });
       }
     }
   }
-  private noPendingSave(db:AuthoringLedger,p:Presence,link:Link,work?:CreatorWork){
+  private noPendingSave(db:AuthoringLedger,p:Presence,link:Link,work?:CreatorWork,exceptId?:string){
     if(!work)return;
     if(Object.values(db.operations).some(o=>o.scope===p.scope&&o.accountId===p.account&&o.binding===link.binding&&!o.revoked&&o.terminalAt===undefined&&
       (o.view.draftId===work.draftId||o.view.operationId===work.source?.preparationId)))throw denied();
     if(Object.values(db.handoffs??{}).some(h=>h.binding===link.binding&&h.draftId===work.draftId&&['selecting','awaitingAttestations'].includes(h.phase.state)))throw denied();
+    if(Object.values(db.links[linkKey(p.scope,p.account)]?.creator?.jobs??{}).some(r=>r.job.id!==exceptId&&r.state!=='finished'&&r.job.task.kind==='command'&&
+      r.job.task.command.kind==='metadata'&&r.job.task.command.work.draftId===work.draftId))throw denied();
   }
   private currentJob(p:Presence,link:Link,id:string){
     return this.run(p,link,s=>{
@@ -660,16 +663,73 @@ export class PrivateCreator{
       return row;
     });
   }
+  private appApproval(p:Presence,link:Link,job:CreatorJob){
+    const task=job.task;
+    if(task.kind!=='command'||task.confirmation?.kind!=='app')throw denied();
+    return digest(JSON.stringify(['app',task.confirmation.confirmationId,job.id,task.command,task.expiresAt,link.binding,p.scope,p.account]));
+  }
+  private async publicationPreview(p:Presence,link:Link,work:CreatorWork,revision:number):Promise<Extract<CreatorReply,{kind:'creatorPreview'}>>{
+    await this.source(p,work);
+    const row=await this.run(p,link,(s,_l,db)=>{
+      this.noPendingSave(db,p,link,work);
+      const publications=Object.values(s.jobs).filter(r=>r.job.task.kind==='command'&&r.job.task.command.kind==='publish'&&r.job.task.command.snapshot.work.draftId===work.draftId);
+      const existing=publications.find(r=>['active','unknown','finished'].includes(r.state))??publications.find(r=>r.state==='offer');
+      if(existing){
+        const task=existing.job.task;
+        if(task.kind!=='command'||task.command.kind!=='publish'||!same(task.command.snapshot.work,work)||task.command.snapshot.revision!==revision)throw denied();
+        if(existing.state==='offer'&&existing.expiresAt<=this.now())throw denied();
+        return existing;
+      }
+      const read=Object.values(s.jobs).find(r=>r.state==='active'&&r.job.task.kind==='read'&&r.job.task.read.kind==='draft'&&same(r.job.task.read.work,work));
+      return read??this.addJob(p,link,s,{kind:'read',read:{kind:'draft',work}},'active',work);
+    });
+    if(row.state==='offer'||row.state==='unknown'){
+      const card=await this.run(p,link,s=>{
+        const current=s.jobs[row.job.id];if(!current)throw denied();
+        let c=current.offerRef&&s.cards[current.offerRef];
+        if(current.state==='unknown'&&(!c||c.expiresAt<=this.now()||c.session!==p.session))c=this.cards.approvalCard(p,s,current,true);
+        if(!c||c.expiresAt<=this.now())throw denied();
+        c.session=p.session;return c;
+      });
+      await this.display(p,link,card);
+    }
+    return {kind:'creatorPreview',job:row.job,state:row.job.task.kind==='read'?'preparing':row.state,...(row.result&&{result:row.result})};
+  }
+  private async appConfirm(p:Presence,link:Link,input:Extract<CreatorRequest,{type:'creatorAppConfirm'}>){
+    const row=await this.currentJob(p,link,input.id),task=row.job.task;
+    if(task.kind!=='command'||task.command.kind!=='publish'||task.command.snapshotDigest!==input.snapshotDigest||snapshotHash(task.command.snapshot)!==input.snapshotDigest)throw denied();
+    await this.source(p,task.command.snapshot.work);
+    await this.run(p,link,(s,actual,db)=>{
+      const current=s.jobs[input.id],command=current?.job.task;
+      if(!current||command?.kind!=='command'||command.command.kind!=='publish'||command.command.snapshotDigest!==input.snapshotDigest)throw denied();
+      if(current.state==='active'||current.state==='finished')return;
+      if(command.confirmation?.kind==='app'&&command.confirmation.confirmationId===input.confirmationId)return;
+      if(current.state!=='offer'&&current.state!=='unknown')throw denied();
+      if(current.state==='offer'&&current.expiresAt<=this.now())throw denied();
+      this.noPendingSave(db,p,link,command.command.snapshot.work);
+      const carrier=current.offerRef?s.cards[current.offerRef]:undefined;
+      if(!carrier?.messageId||!carrier.cardId||carrier.needsUpdate||carrier.session!==p.session||carrier.expiresAt<=this.now())throw denied();
+      current.messageId=carrier.messageId;current.originalCardId=carrier.cardId;current.approvalGeneration=carrier.generation;
+      current.state='active';command.expiresAt=this.now()+ttl;
+      command.confirmation={kind:'app',confirmationId:input.confirmationId};command.approval=this.appApproval(p,link,current.job);
+      renewCreatorBinding(db,actual,this.now());
+    });
+  }
   private async allowedJob(p:Presence,link:Link,id:string):Promise<Extract<CreatorReply,{kind:'creatorChecked'}>>{
     const row=await this.currentJob(p,link,id);
     await this.source(p,row.originWork);
-    const mustCheckCard=row.job.task.kind==='read'&&row.job.task.read.kind==='page'||row.job.task.kind==='deliverCodes'||row.job.task.kind==='command'&&row.state==='active'&&row.job.task.expiresAt>this.now();
+    const mustCheckCard=row.job.task.kind==='read'&&row.job.task.read.kind==='page'||row.job.task.kind==='deliverCodes'||row.job.task.kind==='command'&&row.job.task.confirmation?.kind!=='app'&&row.state==='active'&&row.job.task.expiresAt>this.now();
     const cardAvailable=!mustCheckCard||Boolean(row.messageId&&row.originalCardId&&await this.im.matches(row.messageId,link.recipient.chatId,row.originalCardId));
     await this.hooks.guard(p,link.recipient);
     return this.run(p,link,(s,_l,db)=>{
       const r=s.jobs[id];
-      if(!r||r.state==='offer'||r.state==='finished'||row.originalCardId!==r.originalCardId||row.messageId!==r.messageId)throw denied();
+      if(!r||r.state==='finished'||row.originalCardId!==r.originalCardId||row.messageId!==r.messageId)throw denied();
       const {job}=r;
+      if(r.state==='offer'){
+        if(job.task.kind!=='command'||job.task.command.kind!=='publish'||r.expiresAt<=this.now())throw denied();
+        this.noPendingSave(db,p,link,job.task.command.snapshot.work);
+        return {kind:'creatorChecked',job,mode:'preview'};
+      }
       switch(job.task.kind){
         case 'read':
           if(r.expiresAt<=this.now())throw denied();
@@ -683,8 +743,9 @@ export class PrivateCreator{
           if(!cardAvailable)throw denied();
           return {kind:'creatorChecked',job,mode:'delivery'};
         case 'command':
+          if(job.task.confirmation?.kind==='app'&&job.task.approval!==this.appApproval(p,link,job))throw denied();
           if(!cardAvailable||r.state==='unknown'||job.task.expiresAt<=this.now())return {kind:'creatorChecked',job,mode:'receipt'};
-          this.noPendingSave(db,p,link,workOf(job.task.command));
+          this.noPendingSave(db,p,link,workOf(job.task.command),job.id);
           return {kind:'creatorChecked',job,mode:'execute'};
       }
     });
@@ -693,6 +754,8 @@ export class PrivateCreator{
     if(!this.enabled)throw denied();
     const link=await this.hooks.guard(p);
     switch(req.type){
+      case 'creatorPreview':return this.publicationPreview(p,link,req.work,req.revision);
+      case 'creatorAppConfirm':await this.appConfirm(p,link,req);break;
       case 'creatorContinue':this.hooks.interact(p);await this.selected(p,link,req.selection);break;
       case 'creatorPoll':{
         const wakeId=await this.run(p,link,(_s,l,db)=>l.wake&&l.wake.expiresAt>this.now()&&this.wakeRoute(db,l)?l.wake.id:undefined);
@@ -727,7 +790,9 @@ export class PrivateCreator{
             const work={draftId:receipt.draftId,source};
             (s.sources??={})[work.draftId]=source;
             (s.observed??={})[op.view.operationId]=now;
-            this.addJob(p,link,s,{kind:'read',read:{kind:'draft',work}},'active',work);
+            const existing=Object.values(s.jobs).some(r=>r.job.task.kind==='read'&&r.state==='active'&&r.job.task.read.kind==='draft'&&same(r.job.task.read.work,work)||
+              r.job.task.kind==='command'&&r.job.task.command.kind==='publish'&&same(r.job.task.command.snapshot.work,work));
+            if(!existing)this.addJob(p,link,s,{kind:'read',read:{kind:'draft',work}},'active',work);
           }
           for(const [id,time] of Object.entries(s.observed??{}))if(time+8*86400_000<=now)delete s.observed![id];
           const pending=Object.values(s.jobs).filter(r=>r.state==='active'||r.state==='unknown');
@@ -897,7 +962,7 @@ export class PrivateCreator{
           result.messageId=r.messageId;result.originalCardId=r.originalCardId;
         }
       }
-      r.state='finished';r.answerDigest=answerDigest;r.resultCard=card?.ref;
+      r.state='finished';r.answerDigest=answerDigest;r.result=a;r.resultCard=card?.ref;
       if(task.kind==='command'&&card){
         r.receiptCard=true;
         if(r.originalCardId&&r.messageId){

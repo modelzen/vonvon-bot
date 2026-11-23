@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {expect,it} from 'vitest';
-import {recipeAuthoringRequestSchema as request, recipeAuthoringReplySchema as reply} from '../src/index.js';
+import {recipeAuthoringRequestSchema as request, recipeAuthoringReplySchema as reply,desktopAuthoringRequestSchema,creatorSnapshotSchema} from '../src/index.js';
 
 const id = randomUUID(), hash = 'a'.repeat(64), botId = 'cli_bot';
 it('uses separate discovery and binding-checked activation on owner authoring RPC', () => {
@@ -8,6 +8,23 @@ it('uses separate discovery and binding-checked activation on owner authoring RP
   expect(request.safeParse({type:'creatorOpen',botId,accountId:id,binding:id,scope:hash,wakeId:null}).success).toBe(true);
   expect(request.safeParse({type:'creatorOpen',botId,accountId:id,wakeId:null}).success).toBe(false);
   expect(reply.safeParse({kind:'session',session:id,linked:true,leaseMs:45000,binding:id}).success).toBe(false);
+});
+it('keeps native App review and explicit confirmation separate from Feishu callback identity',()=>{
+  const confirm={type:'creatorAppConfirm',botId,session:id,id,snapshotDigest:hash,confirmationId:id};
+  expect(request.safeParse(confirm).success).toBe(true);
+  expect(request.safeParse({...confirm,messageId:'om_fabricated',cardId:'card_fabricated'}).success).toBe(false);
+  expect(desktopAuthoringRequestSchema.safeParse({type:'confirmPublication',accountId:id,reviewId:id}).success).toBe(true);
+  expect(desktopAuthoringRequestSchema.safeParse({type:'confirmPublication',accountId:id,reviewId:id,snapshotDigest:hash}).success).toBe(false);
+  const draft={draftId:id,recipeId:null,revision:2,public:{name:'名称',summary:'',overview:'',version:'1',access:'direct'},config:{role:'正文'}};
+  expect(desktopAuthoringRequestSchema.safeParse({type:'preparePublication',accountId:id,draft}).success).toBe(true);
+  expect(desktopAuthoringRequestSchema.safeParse({type:'preparePublication',accountId:id,draft:{...draft,token:'secret'}}).success).toBe(false);
+});
+it('allows only secret-free HTTPS draft navigation or existing local development origins',()=>{
+  const snapshot={work:{draftId:id,source:null},format:'role-v1',recipeId:null,parent:null,revision:2,
+    public:{name:'名称',summary:'',overview:'',version:'1',access:'direct'},contentSha256:hash,parts:[],sections:[{title:'角色',pageHashes:[hash]}]};
+  for(const origin of ['https://vonvon.cc','http://localhost:5000'])expect(creatorSnapshotSchema.safeParse({...snapshot,appPreviewUrl:`${origin}/open/draft#${id}?revision=2`}).success).toBe(true);
+  for(const url of [`http://example.org/open/draft#${id}?revision=2`,`https://user:password@vonvon.cc/open/draft#${id}?revision=2`,`https://vonvon.cc/open/draft?token=secret#${id}?revision=2`,`https://vonvon.cc/open/draft#${id}?revision=2&token=secret`])
+    expect(creatorSnapshotSchema.safeParse({...snapshot,appPreviewUrl:url}).success).toBe(false);
 });
 it('keeps plaintext out of journalable replies and arbitrary requests out of the native job', () => {
   const base = {type:'creatorAnswer',botId,session:id,id};
