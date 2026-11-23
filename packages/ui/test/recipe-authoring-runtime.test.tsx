@@ -144,6 +144,7 @@ beforeEach(() => {
     if(request.type==='drafts')return {items:[draft]};
     if(request.type==='publications')return {items:[]};
     if(request.type==='draft')return draft;
+    if(request.type==='recoverRichDraftMetadata'&&draft.format==='rich-v2')return {status:'current',draft};
     if(request.type==='saveDraft') {draft={...draft,public:request.public,config:request.config,revision:draft.revision+1};return draft;}
     throw new Error('Unexpected cloud request '+request.type);
   };

@@ -1,4 +1,4 @@
-import {decodeRichRecipeContent,recipeRichPartDescriptorSchema,recipeRichInstallIntentSchema} from '../../../packages/protocol/dist/index.js';
+import {richMetadataInputSchema,richMetadataCommitSchema,decodeRichRecipeContent,recipeRichPartDescriptorSchema,recipeRichInstallIntentSchema} from '../../../packages/protocol/dist/index.js';
 import {authoringInput} from './authoring-input.mjs';
 import {ApiError,badInput} from './errors.mjs';
 import {bodyJson,expectedRevision,objectKeys,queryParams,requestKey,uuid} from './input.mjs';
@@ -14,7 +14,7 @@ const routes=[
  ['POST','authoring/:o/register','richRegister'],['POST','authoring/:o/authorize','richAuthorize'],
  ['POST','authoring/:o/dispatch','richDispatch','possession'],['POST','authoring/:o/accept','richAccept','possession'],
  ['POST','authoring/:o/freeze','richFreeze'],['GET','authoring/:o','richGet'],['GET','authoring/:o/recovery','richRecover'],['POST','authoring/:o/cancel','richCancel'],
- ['GET','drafts/:d','richDraft'],['GET','me/drafts','richDraftList'],['DELETE','drafts/:d','richDelete'],['POST','drafts/:d/publish','richPublish'],
+ ['PATCH','drafts/:d/metadata','richMetadata'],['GET','drafts/:d','richDraft'],['GET','me/drafts','richDraftList'],['DELETE','drafts/:d','richDelete'],['POST','drafts/:d/publish','richPublish'],
  ['GET','versions/:v/source-items','richSourceItems'],['GET','recipes/:r/versions/:v','richDetail',true],['GET','community/recipes','richCatalog',true],['POST','versions/:v/withdraw','richWithdraw'],
  ['POST','me/profile','richProfile'],['POST','objects/:o/reserve','richReserve'],['POST','objects/:o/cancel','richCancelPackage'],['GET','me/object-capacity','richCapacity'],
 ].map(([method,path,action,isPublic=false])=>({method,action,isPublic,regex:new RegExp('^(?:/api)?/v2/'+path.replace(/:[odrv]/g,'([^/]+)')+'$')}));
@@ -41,7 +41,7 @@ export async function richInput(req,url,{action,ids:[id,...other]}) {
   }
   queryParams(url,[]);
   if(req.method==='GET')return [action,id?[id,...other]:[]];
-  const b=await bodyJson(req,['richFreeze','richAccept','richPublish'].includes(action)?4*1048576:2048);
+  const b=await bodyJson(req,['richFreeze','richAccept','richPublish','richMetadata'].includes(action)?4*1048576:action==='richReserve'?262144:2048);
   if(action==='richUnredeemable'){objectKeys(b,['accountId']);return [action,[operationId(id),uuid(b.accountId)]];}
   if(action==='richInstallAuthorize'){const result=recipeRichInstallIntentSchema.safeParse(b);if(!result.success)throw badInput();return [action,[operationId(id),result.data]];}
   if(action==='richInstallRedeem'||action==='richInstallComplete'){
@@ -64,7 +64,25 @@ export async function richInput(req,url,{action,ids:[id,...other]}) {
   }
   if(action==='richFreeze')return [action,[operationId(id),b]];
   if(action==='richPublish'){objectKeys(b,['canonical']);const doc=readDocument(b.canonical);return [action,[id,expectedRevision(req),requestKey(req),Buffer.from(doc.canonicalUTF8)]];}
+  if(action==='richMetadata'){
+    const requestId=operationId(requestKey(req)), revision=expectedRevision(req);
+    const parsed='baseCanonical' in (b??{}) ? richMetadataCommitSchema.safeParse(b) : richMetadataInputSchema.safeParse(b?.input);
+    if(!parsed.success)throw badInput();
+    if(!('baseCanonical' in b)){
+      objectKeys(b,['input'],['close']);
+      if('close' in b && b.close!==true)throw badInput();
+    }
+    else if((b.input.logo.kind==='replace')!==Object.hasOwn(b,'logoDescriptor'))throw badInput();
+    return [action,[requestId,id,revision,b]];
+  }
   if(action==='richReserve'){
+    if(b?.metadata!==undefined){
+      objectKeys(b,['draftId','cap','revision','metadata']);
+      const parsed=richMetadataInputSchema.safeParse(b.metadata);
+      if(!parsed.success||!Number.isInteger(b.cap)||b.cap<1||b.cap>4194304||
+        !Number.isInteger(b.revision)||b.revision<1||b.revision>2147483647)throw badInput();
+      return ['richReserveMetadata',[operationId(id),uuid(b.draftId),b.cap,b.revision,parsed.data]];
+    }
     objectKeys(b,['draftId','cap']);if(!Number.isInteger(b.cap)||b.cap<1||b.cap>4194304)throw badInput();return [action,[operationId(id),uuid(b.draftId),b.cap]];
   }
   if(action==='richProfile'){objectKeys(b,['displayName']);if(typeof b.displayName!=='string')throw badInput();return [action,[b.displayName]];}

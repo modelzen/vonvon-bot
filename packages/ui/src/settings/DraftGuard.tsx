@@ -2,9 +2,11 @@ import {createContext, useCallback, useContext, useId, useLayoutEffect, useMemo,
 import {Button, InlineNotice} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
 
+export type DraftDiscardEligibility = {kind: 'allowed'} | {kind: 'blocked'; reason: string};
+
 /** A draft without `save` is one whose save is not a harmless write (JoinGroupDialog's would create a
  * real Feishu group), so leaving only offers 继续编辑 and 放弃并离开. */
-type Draft = {autoSave?: boolean; title: string; save?: () => Promise<boolean>; discard: () => void};
+type Draft = {autoSave?: boolean; title: string; save?: () => Promise<boolean>; discard: () => void; discardEligibility?: () => DraftDiscardEligibility; leaveDescription?: string; leaveLabel?: string};
 /** 保存并离开 is offered only when every open draft can be saved. */
 export function canSaveAll(drafts: Iterable<Pick<Draft, 'save'>>): boolean {
   return [...drafts].every(draft => Boolean(draft.save));
@@ -22,10 +24,20 @@ export function DraftGuardProvider({children}: {children: ReactNode}) {
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<string>();
   const [savable, setSavable] = useState(true);
+  const [leaveDetails, setLeaveDetails] = useState<{description?: string; label?: string}>({});
+  const [discardBlocked, setDiscardBlocked] = useState<string>();
+  const refresh = useCallback(() => {
+    setSavable(canSaveAll(drafts.current.values()));
+    const pending = [...drafts.current.values()].find(draft => draft.leaveDescription);
+    setLeaveDetails({description: pending?.leaveDescription, label: pending?.leaveLabel});
+    const blocked = [...drafts.current.values()].map(draft => draft.discardEligibility?.()).find(eligibility => eligibility?.kind === 'blocked');
+    setDiscardBlocked(blocked?.kind === 'blocked' ? blocked.reason : undefined);
+  }, []);
   const register = useCallback((id: string, draft: Draft) => {
     drafts.current.set(id, draft);
-    return () => { if (drafts.current.get(id) === draft) drafts.current.delete(id); };
-  }, []);
+    refresh();
+    return () => { if (drafts.current.get(id) === draft) {drafts.current.delete(id); queueMicrotask(refresh);} };
+  }, [refresh]);
   const navigate = useCallback((action: () => void) => {
     if (destination.current) return;
     if (!drafts.current.size) { action(); return; }
@@ -45,9 +57,9 @@ export function DraftGuardProvider({children}: {children: ReactNode}) {
       return;
     }
     setFailure(undefined);
-    setSavable(canSaveAll(drafts.current.values()));
+    refresh();
     setOpen(true);
-  }, []);
+  }, [refresh]);
   const context = useMemo(() => ({register, navigate}), [register, navigate]);
   function stay() { destination.current = null; setOpen(false); }
   function proceed() {
@@ -72,15 +84,25 @@ export function DraftGuardProvider({children}: {children: ReactNode}) {
       setFailure(error instanceof Error ? error.message : '保存失败，修改仍保留。');
     } finally { setSaving(false); }
   }
+  function discardAll() {
+    if (saving) return;
+    const pending = [...drafts.current.values()];
+    if (pending.some(draft => draft.discardEligibility?.().kind === 'blocked')) {refresh(); return;}
+    for (const draft of pending) draft.discard();
+    drafts.current.clear();
+    proceed();
+  }
   return <Context.Provider value={context}>
     {children}
     <Dialog open={open} title="有未保存的修改" onClose={saving ? undefined : stay}
       footer={<>
         <Button disabled={saving} onClick={stay}>继续编辑</Button>
-        <Button disabled={saving} onClick={() => {for (const draft of drafts.current.values()) draft.discard(); drafts.current.clear(); proceed();}}>放弃并离开</Button>
+        <Button disabled={saving || Boolean(discardBlocked)} onClick={discardAll}>{leaveDetails.label ?? '放弃并离开'}</Button>
         {savable && <Button variant="primary" loading={saving} onClick={() => void saveAll()}>保存并离开</Button>}
       </>}>
       <p>{savable ? '离开前，请选择如何处理当前修改。' : '离开后，填写的内容不会保留。'}</p>
+      {leaveDetails.description && <p>{leaveDetails.description}</p>}
+      {discardBlocked && <p>{discardBlocked}</p>}
       {failure && <InlineNotice title="保存未完成" tone="danger">{failure}</InlineNotice>}
     </Dialog>
   </Context.Provider>;
