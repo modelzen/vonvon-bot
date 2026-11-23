@@ -1,12 +1,26 @@
+import {useState} from 'react';
 import {RecipeCommunication, RecipeModelSettings} from './RecipeModelAndCommunication';
 import {recipeSkillDescription} from '@vonvon/protocol';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
+import {Button} from '../reference/components/ui';
+import {Dialog} from '../reference/components/ui/Dialog';
 import {ReadonlyRecipeSkills} from '../settings/GroupSkills';
 import {RecipeMarkdown, type RecipeDisplay, type RecipeSection} from './RecipeContent';
 import {richText} from './RichConfiguration';
 import {RecipeTasks} from './RecipeTasks';
 
-export function RecipeGroupConfiguration({recipe, section}: {recipe: RecipeDisplay; section: RecipeSection}) {
+function DraftRole({role}: {role: string}) {
+  const [open, setOpen] = useState(false);
+  return <>
+    <SettingsRow title="角色说明" onClick={() => setOpen(true)}/>
+    <Dialog open={open} title="本群角色" onClose={() => setOpen(false)}
+      footer={<Button onClick={() => setOpen(false)}>完成</Button>}>
+      <RecipeMarkdown text={role}/>
+    </Dialog>
+  </>;
+}
+
+export function RecipeGroupConfiguration({recipe, section, draft}: {recipe: RecipeDisplay; section: RecipeSection; draft?: boolean}) {
   const rich = recipe.rich, preview = recipe.preview;
   const settings = preview?.settings ?? rich?.content.settings ?? [];
   if (section === '任务') return <RecipeTasks recipe={recipe}/>;
@@ -22,11 +36,11 @@ export function RecipeGroupConfiguration({recipe, section}: {recipe: RecipeDispl
       <SettingsGroup label="语音"><SettingsRow title="语音转文字"
         value={voice === undefined ? preview?.omittedSettingCount ? '概览未提供' : '未指定' : voice ? '开启' : '关闭'}/></SettingsGroup>
       <SettingsGroup label="本群角色">{role
-        ? <div className="recipe-reading-surface"><RecipeMarkdown text={role}/></div>
+        ? draft ? <DraftRole role={role}/> : <div className="recipe-reading-surface"><RecipeMarkdown text={role}/></div>
         : <SettingsRow title={preview ? '角色说明' : '未指定本群角色'} description={preview ? '交给 Bot 时读取配方中的角色配置。' : '沿用目标群聊的角色。'}/>}</SettingsGroup>
     </div>;
   }
-  if (section === '沟通方式') return <RecipeCommunication settings={settings} omitted={preview?.omittedSettingCount}
+  if (section === '沟通方式') return <RecipeCommunication settings={settings} omitted={preview?.omittedSettingCount} draft={draft}
     ruleCount={preview?.ruleCount ?? rich?.content.rules.length ?? 0}/>;
   return <RecipeModelSettings settings={settings} omitted={preview?.omittedSettingCount}/>;
 }

@@ -83,10 +83,16 @@ export function RecipeMarkdown({text}: {text: string}) {
 }
 
 export function RecipeVersion({version, revision, draft}: {version: string; revision?: number; draft?: boolean}) {
-  return <span className="recipe-version-inline"><span className="recipe-version-value" title={version || '未指定'}>{version || '未指定'}</span>{draft && revision ? <small className="recipe-version-revision">草稿修订 {revision}</small> : null}</span>;
+  const label = version || (draft ? '待填写' : '未指定');
+  return <span className="recipe-version-inline"><span className="recipe-version-value" title={label}>{label}</span>{draft && revision ? <small className="recipe-version-revision">草稿修订 {revision}</small> : null}</span>;
 }
 export function RecipeMetadata({meta, revision, draft, author}: {author?:ReactNode;draft?:boolean;meta: RecipePublic | RecipeSummary['public']; revision?: number}) {
-  return <dl className="community-metadata">{author && <div><dt>作者</dt><dd>{author}</dd></div>}<div className="recipe-version-meta"><dt>版本</dt><dd><RecipeVersion version={meta.version} revision={revision} draft={draft}/></dd></div><div><dt>获取方式</dt><dd>{meta.access === 'coded' ? '凭分享码获取' : '直接获取'}</dd></div></dl>;
+  return <dl className="community-metadata">
+    {draft && <div><dt>可见范围</dt><dd>仅自己可见</dd></div>}
+    {author && <div><dt>作者</dt><dd>{author}</dd></div>}
+    <div className="recipe-version-meta"><dt>版本</dt><dd><RecipeVersion version={meta.version} revision={revision} draft={draft}/></dd></div>
+    <div><dt>获取方式</dt><dd>{meta.access === 'coded' ? '凭分享码获取' : '直接获取'}</dd></div>
+  </dl>;
 }
 
 export function RecipeConfiguration({config, section}: {config: RecipeConfig; section: Section}) {
@@ -121,10 +127,15 @@ export function RecipeDetails({recipe, action, management, share, draft, heading
   const published = !draft && !heading && Boolean(action);
   const hasSidebar = published || Boolean(sidebar);
   const reading = useRecipeCardAlignment(hasSidebar ? '.ss-section > .ss-group' : undefined);
+  const name = draft ? recipe.public.name || '未命名配方' : recipe.public.name;
   return <article className={hasSidebar ? "community-detail community-published" : "community-detail"}>
-    {heading ?? <header className="community-detail-heading"><RecipeMark name={recipe.public.name} logo={logo}/><div><h1>{recipe.public.name}</h1><p>{recipe.public.summary}</p></div>{!published && <div className="community-actions">{share}{action}</div>}</header>}
+    {heading ?? <header className="community-detail-heading">
+      <RecipeMark name={name} logo={logo}/>
+      <div><h1>{name}</h1>{(!draft || recipe.public.summary) && <p>{recipe.public.summary}</p>}</div>
+      {!draft && !published && <div className="community-actions">{share}{action}</div>}
+    </header>}
     <div className="community-detail-layout"><nav aria-label="配方详细信息">{recipeSections.filter(item => allowed || item === '概览').map(item => <button type="button" key={item} aria-current={section === item ? 'page' : undefined} onClick={() => setSection(item)}>{item}</button>)}</nav>
-      <div className="community-detail-columns"><div className="community-detail-content" ref={reading}>{section === '概览' ? <>{overview ?? <RecipeOverview recipe={recipe} draft={draft} showMetadata={!hasSidebar}/>}{overviewFooter}{!allowed && <p className="community-access-note">{recipe.previewUnavailable ? '配置概览暂不可用，请稍后重新打开。' : '获取此版本后，可查看配方配置概览并交给自己的 Bot 使用。'}</p>}{!published && management}</> : <RecipeGroupConfiguration recipe={recipe} section={section}/>}</div>
+      <div className="community-detail-columns"><div className="community-detail-content" ref={reading}>{section === '概览' ? <>{overview ?? <RecipeOverview recipe={recipe} draft={draft} showMetadata={!hasSidebar}/>}{overviewFooter}{!allowed && <p className="community-access-note">{recipe.previewUnavailable ? '配置概览暂不可用，请稍后重新打开。' : '获取此版本后，可查看配方配置概览并交给自己的 Bot 使用。'}</p>}{!published && management}</> : <RecipeGroupConfiguration recipe={recipe} section={section} draft={draft}/>}</div>
     {sidebar}{published && <aside className="community-detail-sidebar" aria-label="获取与使用配方"><h2>这份配方</h2><RecipeMetadata meta={recipe.public} author={recipe.creator && <RecipeAuthor creator={recipe.creator}/>}/><div className="community-side-actions">{action}{share}{management}</div></aside>}</div></div>
   </article>;
 }

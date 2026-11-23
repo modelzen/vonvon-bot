@@ -31,9 +31,15 @@ function richDraft(revision = 1, patch: Partial<RecipeRichDraft['public']> = {})
   const identity = (n: number) => ({itemId: `70000000-0000-4000-8000-${String(n).padStart(12, '0')}`, originId: `80000000-0000-4000-8000-${String(n).padStart(12, '0')}`});
   const file = {...identity(1), name: 'SKILL.md', use: 'skillDescription', text: {kind: 'inline', value: 'SETUP_SKILL_BODY'}};
   content.files = [file]; content.skills = [{...identity(2), name: 'setup', entryFileId: file.itemId, fileIds: [file.itemId]}];
-  content.settings = [{...identity(3), field: 'presentation.voiceEnabled', value: true}];
+  content.settings = [
+    {...identity(3), field: 'presentation.voiceEnabled', value: true},
+    {...identity(6), field: 'sessionMode', value: 'smart'},
+    {...identity(7), field: 'run.pendingPolicy', value: 'steer'},
+    {...identity(8), field: 'permission.requirement', value: {mode: 'qa'}},
+  ];
   content.memories = [{...identity(4), text: {kind: 'inline', value: 'PRIVATE_MEMORY_NEVER_DISPLAY'}}];
   content.setup = [{...identity(5), kind: 'tool', title: '旧说明', instructions: 'LEGACY_SETUP_KEEP', check: '核对工具', required: true, action: {kind: 'manual'}}];
+  content.tasks = [{...identity(9), name: '晨间检查', instruction: {kind: 'inline', value: '检查今日安排'}, spec: {kind: 'daily', time: '09:00'}, timeZone: {kind: 'recommended', iana: 'Asia/Shanghai'}, placement: 'newTopic'}];
   const doc = canonicalizeRichRecipeContent(content);
   return recipeRichDraftSchema.parse({draftId, recipeId: null, revision, public: info, format: 'rich-v2', sourceIntentId: '019a8000-0000-7000-8000-000000000001', rich: {content: doc.content, texts: {}, canonical: Buffer.from(doc.canonicalUTF8).toString('base64url')}});
 }
@@ -83,10 +89,16 @@ it('reads complete rich content through the read-only configuration tabs without
   expect(document.body.textContent).not.toMatch(/编辑发布信息/);
   expect(button('发布到社区').disabled).toBe(false);
   expect([...document.querySelectorAll('[aria-label="配方详细信息"] button')].map(node => node.textContent)).toEqual(['概览', '模型与权限', '能力', '沟通方式', '任务']);
-  for (const section of ['概览', '模型与权限', '能力', '沟通方式', '任务']) {
+  for (const [section, text] of [['概览', '什么时候使用'], ['模型与权限', '只读'], ['能力', '语音转文字'], ['沟通方式', '智能'], ['任务', '晨间检查']]) {
     await click(section);
+    expect(button(section).getAttribute('aria-current')).toBe('page');
+    expect(document.body.textContent).toContain(text);
+    expect(document.querySelector('input, textarea, select')).toBeNull();
     expect(document.body.textContent).not.toContain('PRIVATE_MEMORY_NEVER_DISPLAY');
   }
+  await click('沟通方式');
+  expect([...document.querySelectorAll('.ss-row')].find(row => row.querySelector('.ss-row__title')?.textContent === '会话模式')?.textContent).toContain('智能');
+  expect(document.body.textContent).toContain('立即插话');
   await click('能力'); expect(document.querySelector('[aria-label="配方技能"] button[aria-haspopup=dialog]')).not.toBeNull(); expect(document.body.textContent).not.toContain('SETUP_SKILL_BODY');
   expect(document.body.textContent).toContain('语音转文字');
   await click('继续创作'); expect(resume).toHaveBeenCalledWith(draft);
@@ -99,7 +111,10 @@ it('preserves complete legacy role data without conversion and names unnamed wor
   await draw();
   expect(document.querySelector('h1')?.textContent).toBe('未命名配方');
   expect(document.body.textContent).toContain('LEGACY_NOTES_KEEP');
-  await click('能力'); expect(document.body.textContent).toContain('LEGACY_ROLE_KEEP');
+  await click('能力');
+  await click('角色说明');
+  expect(document.querySelector('[role=dialog]')?.textContent).toContain('LEGACY_ROLE_KEEP');
+  await click('完成');
   await click('继续创作'); expect(resume).toHaveBeenCalledWith(draft);
   expect(requests.map(request => request.type)).toEqual(['draft']);
 });

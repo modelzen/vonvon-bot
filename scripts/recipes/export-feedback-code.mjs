@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {mkdir, mkdtemp, readFile, rename, rm, writeFile, lstat} from 'node:fs/promises';
 import {basename, dirname, join, posix, resolve} from 'node:path';
 import {feedbackBoardUrl, feedbackFormUrl} from '../feedback/center.mjs';
-import {createFeedbackRecipe, feedbackHelpUrls} from '../../packages/daemon/src/feedback/recipe.ts';
+import {createFeedbackRecipe, feedbackHelpUrls, feedbackSourceUrl} from '../../packages/daemon/src/feedback/recipe.ts';
 import {decodeRichRecipeContent, openResourceSnapshot} from '../../packages/protocol/dist/index.js';
 import {document, freezeSnapshot, inventory, writableDocument} from '../../services/recipe-api/src/rich-document.mjs';
 
@@ -94,7 +94,7 @@ content.parts = content.parts.filter(p => !oldTextParts.has(p.objectId));
 writableDocument(content);
 const userFacing = [content.role.text.value, ...Object.values(content.public).map(value => value.value), ...files.values()].join('\n');
 const officialUrls = new Set(userFacing.match(/https?:\/\/[^\s]+/gu));
-assert.deepEqual(officialUrls, new Set([feedbackBoardUrl, feedbackFormUrl, ...Object.values(feedbackHelpUrls)]), 'recipe must contain only the approved public URLs');
+assert.deepEqual(officialUrls, new Set([feedbackBoardUrl, feedbackFormUrl, feedbackSourceUrl, ...Object.values(feedbackHelpUrls)]), 'recipe must contain only the approved public URLs');
 assert.doesNotMatch(userFacing, /(?:oc|ou|on|om)_[a-zA-Z0-9]{8,}|Bearer\s+\S+|(?:appSecret|access_token|refresh_token)\s*[:=]\s*\S+|\/(?:Users|home)\/[a-zA-Z0-9._-]+/u);
 const prior = new Map(inventory(base).map(row => [row.itemId, row]));
 const origins = inventory(content).map(({itemId}) => ({itemId, source: prior.has(itemId) ? {

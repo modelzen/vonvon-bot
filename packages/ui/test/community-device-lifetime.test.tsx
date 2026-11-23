@@ -103,13 +103,15 @@ it('moves production App subscriptions, search and actions to the selected devic
   expect(second.client.run.mock.calls.filter(([command]) => command.type === 'registerAgent')).toHaveLength(1);
   expect(first.client.run.mock.calls.filter(([command]) => command.type === 'registerAgent')).toHaveLength(0);
 });
+const draftHeading = () => document.querySelector('aside[aria-label="草稿操作"]')?.closest('article')?.querySelector('h1');
+
 it('keeps the readonly account draft through A to B to A and returns to a fresh device page', async () => {
   await draw(A); await click('社区'); await click('我的配方'); await click('创作中'); await click('查看配方');
-  const heading = document.querySelector('.recipe-draft-heading h1');
+  const heading = draftHeading();
   expect(heading?.textContent).toBe(draft.public.name);
   for (const [id, phase] of [[B, 'connecting'], [B, 'ready'], [B, 'failed'], [A, 'ready']] as const) {
     await draw(id, phase);
-    expect(document.querySelector('.recipe-draft-heading h1')).toBe(heading);
+    expect(draftHeading()).toBe(heading);
     expect(document.querySelector('input, textarea')).toBeNull();
   }
   expect(requests.filter(request => request.type === 'saveDraft')).toEqual([]);
@@ -196,13 +198,13 @@ it('does not reuse the first A search generation when B never returned a snapsho
 it('switches the community device through the actual menu while keeping the account draft readonly', async () => {
   shell.devices.switchTo.mockImplementation(async (id: string) => {root.render(<DesktopRootView state={devicesState({id})} fallback={first.client} shell={shell} renderApp={() => <App/>}/>);});
   await draw(A); await click('社区'); await click('我的配方'); await click('创作中'); await click('查看配方');
-  const heading = document.querySelector('.recipe-draft-heading h1');
+  const heading = draftHeading();
   expect(heading?.textContent).toBe(draft.public.name);
   await act(async () => document.querySelector<HTMLButtonElement>('[aria-label^="当前设备："]')!.click());
   const target = [...document.querySelectorAll<HTMLButtonElement>('.device-switcher__device')].find(button => button.querySelector('[title="家里"]'))!;
   await act(async () => target.click());
   expect(shell.devices.switchTo).toHaveBeenCalledExactlyOnceWith(B);
-  expect(document.querySelector('.recipe-draft-heading h1')).toBe(heading);
+  expect(draftHeading()).toBe(heading);
   await click('Bot');
   expect(document.body.textContent).not.toContain('有未保存的修改');
   expect(requests.filter(request => request.type === 'saveDraft')).toEqual([]);

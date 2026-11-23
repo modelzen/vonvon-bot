@@ -372,11 +372,11 @@ it('routes only the current account and draft publication to the exact owned imm
   await openDraft();
   const receipt = {accountId: accountA, draftId, recipeId: A, versionId: B, revision: 77};
   for (const value of [{...receipt, accountId: accountB}, {...receipt, draftId: A}]) await act(async () => emit({type: 'authoringPublished', value}));
-  expect(document.querySelector('.recipe-draft-page')).not.toBeNull();
+  expect(document.querySelector('aside[aria-label="草稿操作"]')).not.toBeNull();
   expect(cloudCalls.filter(request => request.type === 'browse')).toEqual([]);
   await act(async () => emit({type: 'authoringPublished', value: receipt}));
   expect(cloudCalls.filter(request => request.type === 'browse')).toEqual([{type: 'browse', accountId: accountA, recipeId: A, versionId: B}]);
-  expect(document.querySelector('.recipe-draft-page')).toBeNull();
+  expect(document.querySelector('aside[aria-label="草稿操作"]')).toBeNull();
   expect(document.querySelector('h1')?.textContent).toBe(draft.public.name);
   expect(document.body.textContent).not.toContain('创作新版本');
   expect(document.body.textContent).toContain('删除此版本');

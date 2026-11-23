@@ -1,10 +1,10 @@
 import {useState} from 'react';
 import './recipe-group-settings.css';
-import {backendLabel, type RecipeRichSetting} from '@vonvon/protocol';
+import {backendLabel, modeToConversation, type RecipeRichSetting} from '@vonvon/protocol';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {Dialog} from '../reference/components/ui/Dialog';
 import {DefaultBadge, ModelSummaryMenu} from '../settings/CompactModelSelection';
-import {ConversationSlider} from '../settings/ConversationSlider';
+import {communicationModes, ConversationSlider} from '../settings/ConversationSlider';
 import {ExecutionPermissionSummary, groupProviderIcon} from '../settings/GroupSettingsSummary';
 import {allowedEfforts, modelAccessDefaultId} from '../settings/model-access-draft';
 import {judgeLabel} from '../settings/judgeChoice';
@@ -86,16 +86,19 @@ export function RecipeModelSettings({settings, omitted}: {settings: Settings; om
   </div>;
 }
 
-export function RecipeCommunication({settings, omitted, ruleCount}: {settings: Settings; omitted?: number; ruleCount: number}) {
+export function RecipeCommunication({settings, omitted, ruleCount, draft}: {settings: Settings; omitted?: number; ruleCount: number; draft?: boolean}) {
   const mode = setting(settings,'sessionMode')?.value, noMention = setting(settings,'response.noMention')?.value, pending = setting(settings,'run.pendingPolicy')?.value;
+  const conversation = mode && modeToConversation(mode);
+  const summary = communicationModes.find(option => option.value === conversation);
   const judge = setting(settings,'judge.recommendation')?.value;
   const tools = setting(settings,'presentation.showToolCalls')?.value, model = setting(settings,'presentation.showModel')?.value;
   const completion = setting(settings,'presentation.completionMode')?.value, minutes = setting(settings,'presentation.longTaskMinutes')?.value;
   const template = setting(settings,'presentation.completionTemplate')?.value, card = setting(settings,'presentation.cardDisplay')?.value;
   return <div className="gd-page recipe-group-settings">
     <SettingsGroup label="聊天方式">
-      {mode ? <ConversationSlider label="聊天方式" value={mode === 'multi' ? 'threads' : mode === 'single' ? 'shared' : 'smart'} disabled onChange={() => {}}/>
-        : <SettingsRow title="会话模式" value={unset(omitted)}/>}
+      {conversation && !draft
+        ? <ConversationSlider label="聊天方式" value={conversation} disabled onChange={() => {}}/>
+        : <SettingsRow title="会话模式" value={summary?.label ?? unset(omitted)} description={summary?.description}/>}
       {mode === 'smart' ? <SettingsRow title="免 @" value="由 Bot 判断"/> :
         noMention !== undefined && <SettingsRow title="不 @ 也能发起任务" value={toggle(noMention)}/>}
       {pending && <SettingsRow title="新消息处理" value={{queue:'排队等待',steer:'立即插话',default:'跟着 Bot 默认'}[pending]}/>}

@@ -6,7 +6,7 @@ import {GlowButton} from '../GlowButton';
 import {useShellCapabilities} from '../client-context';
 import {Button, InlineNotice} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
-import {RecipeDetails, RecipeMark} from './RecipeContent';
+import {RecipeDetails, RecipeMetadata} from './RecipeContent';
 import './recipe-draft.css';
 
 type Props = {
@@ -199,7 +199,7 @@ function DraftSession({shell, accountId, draftId, expectedRevision, onBack, onDe
       if (alive.current) setDeleting(false);
     }
   }
-  return <div className="community-page recipe-draft-page">
+  return <div className="community-page">
     <BackButton label="返回我的配方" onClick={onBack}/>
     {read.kind === 'loading' && <p role="status">正在读取配方…</p>}
     {read.kind === 'failed' && publication.kind !== 'pending' && publication.kind !== 'published' && <InlineNotice title="配方尚未更新" tone="warning" actions={<Button onClick={() => setRefresh(value => value + 1)}>重新读取</Button>}>{read.message}</InlineNotice>}
@@ -210,14 +210,10 @@ function DraftSession({shell, accountId, draftId, expectedRevision, onBack, onDe
     }}>核对发布结果</Button>}>{publication.message || '本次发布尚未确认。继续核对同一次请求即可。'}</InlineNotice>}
     {publication.kind === 'published' && <InlineNotice title="已发布到社区">这份配方已发布，可以在我的配方中管理版本与分享码。</InlineNotice>}
     {draft && expectedRevision !== undefined && expectedRevision !== draft.revision && <InlineNotice title="配方已有更新">链接指向修订 {expectedRevision}，这里展示当前修订 {draft.revision}。请查看当前内容后再发布。</InlineNotice>}
-    {draft && <>
-      <RecipeDetails draft recipe={draft} heading={<header className="community-detail-heading recipe-draft-heading">
-        <RecipeMark name={draft.public.name} logo={draft.format === 'rich-v2' ? draft.logo : undefined}/>
-        <div><h1>{draft.public.name || '未命名配方'}</h1>{draft.public.summary && <p>{draft.public.summary}</p>}</div>
-      </header>}
+    {draft && <RecipeDetails draft recipe={draft}
         sidebar={<aside className="community-detail-sidebar recipe-draft-sidebar" aria-label="草稿操作">
-          <h2>本地草稿</h2><dl><div><dt>可见范围</dt><dd>仅自己可见</dd></div><div><dt>版本</dt><dd>{draft.public.version || '待填写'}</dd></div>
-            <div><dt>获取方式</dt><dd>{draft.public.access === 'coded' ? '凭分享码获取' : '直接获取'}</dd></div></dl>
+          <h2>本地草稿</h2>
+          <RecipeMetadata meta={draft.public} draft/>
           {publicationIssue && <p className="recipe-draft-readiness" role="status">{publicationIssue}</p>}
           <div className="community-side-actions">
             <Button title="在来源 Bot 的私聊里继续创作" disabled={!current || deleting || publicationLocked || !onContinueInChat} onClick={() => onContinueInChat?.(draft)}>继续创作</Button>
@@ -225,8 +221,7 @@ function DraftSession({shell, accountId, draftId, expectedRevision, onBack, onDe
           </div>
           {!onContinueInChat && <p className="community-muted">请在已关联的 Bot 私聊中继续创作。</p>}
           <div className="recipe-draft-footer"><Button variant="ghost" disabled={!current || deleting || publicationLocked} onClick={() => {setDeleteError(undefined); setDeletion(draft);}}>删除未发布配方</Button></div>
-        </aside>}/>
-    </>}
+        </aside>}/>}
     <Dialog open={publication.kind === 'confirm' || publication.kind === 'publishing'} size="sm" title="发布到社区" onClose={() => {if (!publicationBusy) setPublication({kind: 'idle'});}} footer={<>
       <Button disabled={publicationBusy} onClick={() => setPublication({kind: 'idle'})}>继续检查</Button>
       <GlowButton variant="dark" disabled={publication.kind !== 'confirm' || !current || publishMode==='version'&&!chosenVersion} onClick={() => {if (publication.kind === 'confirm') void confirm(publication.confirmation);}}>{publication.kind === 'publishing' ? '正在发布…' : '确认发布'}</GlowButton>
