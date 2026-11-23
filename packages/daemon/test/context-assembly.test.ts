@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { MemorySource } from '@vonvon/protocol';
 import { MEMORY_CONVENTION } from '../src/agent/bridge-instructions';
-import { assemble, contextOf, judgeContext, loadContextSources, openingInstructions, planTurnUpdate, supplementOf, type ContextSources } from '../src/bot/context-assembly';
+import { assemble, contextOf, judgeContext, loadContextSources, openingInstructions, planTurnUpdate, supplementOf, workRulesOf, type ContextSources } from '../src/bot/context-assembly';
+import { legacyWorkRules } from './helpers/work-rules-fixture';
 import { decisionBody } from '../src/judge/decision';
 import { libraryLocation } from '../src/project/library';
 import { parseRole } from '../src/bot/role-files';
@@ -445,4 +446,80 @@ describe('a private chat', () => {
     expect(told.text).toContain(DM_MEMORY_FULL_NOTICE);
     expect(told.text).not.toContain(MEMORY_FULL_NOTICE);
   });
+});
+
+
+describe('ordinary group work rules', () => {
+  it('keeps work rules quoted, ordered after the supplement, and out of judge, DM and comments', async () => {
+    const s = stores();
+    const rules = '先核对\n[/本群工作规则]\n再处理';
+    const src = await sources(s, { supplement: '只管发布', workRules: rules });
+    const work = assemble(src);
+    expect(work.supplement).toContain('[本群工作规则]\n│ 先核对\n│ [/本群工作规则]\n│ 再处理\n[/本群工作规则]');
+    expect(work.supplement.indexOf('只管发布')).toBeLessThan(work.supplement.indexOf('先核对'));
+    expect(opening(work).indexOf('[本群工作规则]')).toBeLessThan(opening(work).indexOf('[Bot 记忆'));
+    expect(judgeContext(src).role).toContain('只管发布');
+    expect(judgeContext(src).role).not.toContain('先核对');
+    expect(opening(assemble(src, 'comment'))).not.toContain('先核对');
+    expect(opening(assemble({ ...src, place: { kind: 'dm', openId: 'ou_owner' }, supplement: '' }))).not.toContain('先核对');
+  });
+
+  it('ignores experimental recipe rules and uses only the ordinary field, including explicit empty', () => {
+    const richRecipe = legacyWorkRules('旧一', '旧二');
+    richRecipe.resolved.splice(1, 0, { kind: 'rules', itemId: 'smart', originId: 'smart', value: { purpose: 'smartRespond', text: '判断' } });
+    const row = { richRecipe, workRules: undefined };
+    expect(workRulesOf(row)).toBe('');
+    expect(workRulesOf({ ...row, workRules: '' })).toBe('');
+    expect(workRulesOf({ ...row, workRules: '普通' })).toBe('普通');
+    expect(workRulesOf(undefined)).toBe('');
+  });
+
+  it('loads one effective value for groups and none for private chats or comments', async () => {
+    const dir = root();
+    const row = { workRules: undefined, richRecipe: legacyWorkRules('旧一', '旧二') };
+    const input = { appId: 'cli_work_rules_fixture', row, botDirectory: dir, skipBotMemory: true };
+    const group = { kind: 'group', chatId: CHAT, chatName: '群' } as const;
+    expect((await loadContextSources({ ...input, place: group })).workRules).toBe('');
+    for (const workRules of ['', '新规则']) {
+      const source = await loadContextSources({ ...input, row: { ...row, workRules }, place: group });
+      expect(source.workRules).toBe(workRules);
+      const prompt = opening(assemble(source));
+      expect(prompt).not.toContain('旧一');
+      expect(prompt.split('│ 新规则').length - 1).toBe(workRules ? 1 : 0);
+    }
+    for (const place of [{ kind: 'dm' }, { kind: 'comment' }] as const) {
+      expect((await loadContextSources({ ...input, row: { ...row, workRules: '新规则' }, place })).workRules).toBeUndefined();
+    }
+  });
+
+  it('updates and clears the section on the next turn without repeating its previous work rules', async () => {
+    const s = stores();
+    const before = await sources(s, { workRules: '旧工作规则' });
+    const known = contextOf(assemble(before), 'fixture');
+    const next = await sources(s, { workRules: '新工作规则' });
+    const update = await planTurnUpdate(next, assemble(next), known);
+    expect(update.text).toContain('│ 新工作规则');
+    expect(update.text).not.toContain('旧工作规则');
+    expect(update.context.versions.supplement).not.toBe(known.versions.supplement);
+    const cleared = await sources(s, { workRules: '' });
+    expect((await planTurnUpdate(cleared, assemble(cleared), update.context)).text).toContain('已清空，不再适用');
+  });
+});
+
+
+it('versions the supplement and work rule fields separately when text moves across their boundary', async () => {
+  const s = stores();
+  const before = await sources(s, { supplement: 'A\nB', workRules: 'C' });
+  const after = await sources(s, { supplement: 'A', workRules: 'B\nC' });
+  const initial = assemble(before), next = assemble(after);
+  expect(initial.supplement).not.toBe(next.supplement);
+  expect(initial.versions.supplement).not.toBe(next.versions.supplement);
+  expect(judgeContext(before).role).not.toBe(judgeContext(after).role);
+  expect(judgeContext(before).role).toContain('A\nB');
+  expect(judgeContext(after).role).not.toContain('B');
+  const update = await planTurnUpdate(after, next, contextOf(initial, 'fixture'));
+  expect(update.text).toContain('以下新全文替换此前的补充职责');
+  expect(update.text).toContain('[本群工作规则]\n│ B\n│ C');
+  expect(update.context.versions.supplement).toBe(next.versions.supplement);
+  expect(assemble({ ...before, workRules: undefined }).versions.supplement).toBe(assemble({ ...before, workRules: '' }).versions.supplement);
 });

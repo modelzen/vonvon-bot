@@ -7,7 +7,7 @@ import type {CardActionEvent, NormalizedMessage} from '@larksuiteoapi/node-sdk';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import {isChatAllowed, isUserAllowedInProject, type AppConfig} from '../src/config/schema';
 import type {FeedbackChatIm} from '../src/feedback/chat';
-import {configuredFeedback, configureFeedback, setupDestination} from '../src/feedback/config';
+import {configuredFeedback, configureFeedback, feedbackBinding, setupDestination} from '../src/feedback/config';
 import {FEEDBACK_ACTION} from '../src/feedback/events';
 import {createFeedbackHost} from '../src/feedback/host';
 import {NativeFeedbackIm, type FeedbackImClient} from '../src/feedback/im';
@@ -36,11 +36,7 @@ function action(draft: FeedbackDraft, openId = draft.actor.openId): CardActionEv
 }
 function projectRow(): Project {
   const bindingIncarnation = randomUUID();
-  return {name: 'group', chatId: 'oc_group', bindingIncarnation, blank: true, createdAt: 1, cwd: root,
-    richRecipe: {bindingIncarnation, pointer: {format: 'recipe-generation-1', installationId: randomUUID(),
-      generationId: randomUUID(), selection: 'effective', rootIdentity: 'root', resolvedSha256: 'a'.repeat(64),
-      release: {format: 'rich-v2', recipeId: randomUUID(), versionId: randomUUID(), authorId: randomUUID(), revision: 1, access: 'direct', contentSha256: 'b'.repeat(64), logicalBytes: 1}},
-      choices: {}, sources: {}, setup: {}, resolved: [], receipt: 'receipt', installedAt: 1}};
+  return {name: 'group', chatId: 'oc_group', bindingIncarnation, blank: true, createdAt: 1, cwd: root};
 }
 function fixture() {
   const project = projectRow();
@@ -60,8 +56,8 @@ function fixture() {
   const beginAuthorization = vi.fn(async () => ({verificationUrl: 'private-fixture', qrPath: 'unused', expiresAt: 1000}));
   const checkBot = vi.fn(async () => {});
   const makeHost = (operationStore = store, im: FeedbackChatIm = {reply, review, authorization: async () => {}}) => createFeedbackHost({root, bot, registration, store: operationStore, gateway, project: id => id === project.chatId ? project : undefined,
-    checkBot, close, allowed: (current, openId) => isChatAllowed(cfg, current.chatId) && (!openId || isUserAllowedInProject(cfg, current, openId)), configure: async (actor, dest) => {
-      if (actor.openId !== 'ou_admin') throw new Error('non-admin'); configureFeedback(project, registration, dest);
+    checkBot, close, allowed: (current, openId) => isChatAllowed(cfg, current.chatId) && (!openId || isUserAllowedInProject(cfg, current, openId)), configure: async (actor, dest, binding) => {
+      if (actor.openId !== 'ou_admin') throw new Error('non-admin'); configureFeedback(project, registration, dest, binding);
     }, im: () => im, authorization: {beginAuthorization, finishAuthorization: gateway.user},
     download: async () => Readable.from(['file'])});
   const host = makeHost();
@@ -70,7 +66,7 @@ function fixture() {
   return {host, makeHost, setup, prepare, project, access, checkBot, store, gateway, review, reply, close, beginAuthorization};
 }
 
-it('binds explicit setup to the current registered installation and exact official URL shapes', async () => {
+it('binds explicit setup to an ordinary group binding and bot registration and exact official URL shapes', async () => {
   expect(setupDestination(command)).toEqual(destination);
   for (const text of [command.replace('my.feishu.cn', 'my.feishu.cn.example.org'), command.replace('https:', 'http:'),
     command.replace('BaseABC?', 'BaseABC/../BaseABC?'), command.replace('&view=vewX', '&table=tblOther'), command + '#extra'])
@@ -81,7 +77,8 @@ it('binds explicit setup to the current registered installation and exact offici
   expect(f.project.feedback).toBeUndefined();
   await f.setup();
   const first = f.project.feedback;
-  expect(first?.destination).toEqual(destination);
+  expect(first).toMatchObject({destination, bindingIncarnation: f.project.bindingIncarnation, registration});
+  expect(f.host.enabled('oc_group')).toBe(true);
   await f.setup();
   expect(f.project.feedback).toEqual(first);
   expect(configuredFeedback(f.project, 'different-registration')).toBeUndefined();
@@ -90,6 +87,35 @@ it('binds explicit setup to the current registered installation and exact offici
   expect(f.host.enabled('oc_group')).toBe(false);
   await expect(bound.prepare({summary, attachmentRefs: []}, new AbortController().signal, () => {})).rejects.toThrow();
   expect(f.review).not.toHaveBeenCalled();
+});
+
+it('assigns legacy ordinary groups an incarnation only on valid setup and rejects a stale setup after rebind', async () => {
+  const f = fixture();
+  delete f.project.bindingIncarnation;
+  const initial = feedbackBinding(f.project)!;
+  expect(() => configureFeedback(f.project, '', destination, initial)).toThrow();
+  expect(() => configureFeedback(f.project, registration, {...destination, tableId: 'invalid'}, initial)).toThrow();
+  expect(f.project.bindingIncarnation).toBeUndefined();
+  await f.setup();
+  expect(f.project.bindingIncarnation).toBeTruthy();
+  expect(f.host.enabled('oc_group')).toBe(true);
+  f.project.bindingIncarnation = randomUUID();
+  expect(() => configureFeedback(f.project, registration, destination, initial)).toThrow('绑定已变化');
+  expect(f.host.enabled('oc_group')).toBe(false);
+});
+
+it('keeps feedback cards and in-flight receipt checks in their original binding', async () => {
+  const f = fixture();
+  await f.setup();
+  const {operationId} = await f.prepare();
+  const {draft} = await f.store.read(operationId);
+  await f.store.write({state: 'sending', draft, sentAt: Date.now()});
+  f.project.bindingIncarnation = randomUUID();
+  await f.setup();
+  await f.host.onAction(action(draft));
+  expect(f.gateway.lookup).not.toHaveBeenCalled();
+  expect(f.gateway.submit).not.toHaveBeenCalled();
+  expect((await f.prepare()).operationId).not.toBe(operationId);
 });
 
 it('routes only the feedback command to private authorization with matching raw sender', async () => {
@@ -126,14 +152,14 @@ it('serializes two preparations, invalidates the first, and after restart accept
   expect((await f.store.read(b.operationId)).state).toEqual('submitted');
 });
 
-it.each(['disable', 'destination', 'installation', 'registration'] as const)('rejects a previously issued review after %s changes', async changed => {
+it.each(['disable', 'destination', 'binding', 'registration'] as const)('rejects a previously issued review after %s changes', async changed => {
   const f = fixture();
   await f.setup();
   const {operationId} = await f.prepare();
   const {draft} = await f.store.read(operationId);
   if (changed === 'disable') f.project.enabled = false;
-  if (changed === 'destination') configureFeedback(f.project, registration, {...destination, shareToken: 'shrTwo'});
-  if (changed === 'installation') f.project.richRecipe!.pointer = {...f.project.richRecipe!.pointer, generationId: randomUUID()};
+  if (changed === 'destination') configureFeedback(f.project, registration, {...destination, shareToken: 'shrTwo'}, feedbackBinding(f.project)!);
+  if (changed === 'binding') f.project.bindingIncarnation = randomUUID();
   if (changed === 'registration') f.checkBot.mockRejectedValue(new Error('removed'));
   await f.host.onAction(action(draft));
   expect(f.gateway.submit).not.toHaveBeenCalled();
@@ -188,7 +214,7 @@ it('releases an operation rejected after persisting sending without dispatching 
   const write = f.store.write.bind(f.store);
   vi.spyOn(f.store, 'write').mockImplementation(async operation => {
     await write(operation);
-    if (operation.state === 'sending') configureFeedback(f.project, registration, {...destination, shareToken: 'shrTwo'});
+    if (operation.state === 'sending') configureFeedback(f.project, registration, {...destination, shareToken: 'shrTwo'}, feedbackBinding(f.project)!);
   });
   await f.host.onAction(action(draft));
   expect(f.gateway.submit).not.toHaveBeenCalled();
@@ -198,15 +224,14 @@ it('releases an operation rejected after persisting sending without dispatching 
   expect(next.operationId).not.toBe(operationId);
 });
 
-it.each(['destination', 'installation', 'disabled'] as const)('reconciles an original uncertain card after %s changes and restart without another write', async changed => {
+it.each(['destination', 'disabled'] as const)('reconciles an original uncertain card after %s changes and restart without another write', async changed => {
   const f = fixture();
   await f.setup();
   const {operationId} = await f.prepare();
   const {draft} = await f.store.read(operationId);
   f.gateway.submit.mockRejectedValue(new Error('response lost after form start'));
   await f.host.onAction(action(draft));
-  if (changed === 'destination') configureFeedback(f.project, registration, {...destination, baseToken: 'BaseTwo', tableId: 'tblTwo', shareToken: 'shrTwo'});
-  if (changed === 'installation') f.project.richRecipe!.pointer = {...f.project.richRecipe!.pointer, generationId: randomUUID()};
+  if (changed === 'destination') configureFeedback(f.project, registration, {...destination, baseToken: 'BaseTwo', tableId: 'tblTwo', shareToken: 'shrTwo'}, feedbackBinding(f.project)!);
   if (changed === 'disabled') f.project.enabled = false;
   const restarted = f.makeHost(new FileFeedbackStore(join(root, 'operations')));
   const calls = f.gateway.lookup.mock.calls.length;
@@ -215,7 +240,7 @@ it.each(['destination', 'installation', 'disabled'] as const)('reconciles an ori
   expect(f.gateway.lookup).toHaveBeenLastCalledWith(expect.objectContaining({destination}));
   expect((await f.store.read(operationId)).state).toBe('uncertain');
   f.project.enabled = true;
-  configureFeedback(f.project, registration, {...destination, shareToken: 'shrNew'});
+  configureFeedback(f.project, registration, {...destination, shareToken: 'shrNew'}, feedbackBinding(f.project)!);
   await expect(restarted.bind(message(), f.project)!.prepare({summary, attachmentRefs: []}, new AbortController().signal, () => {})).rejects.toThrow(/回执/);
   const beforeWrongEvents = f.gateway.lookup.mock.calls.length;
   await restarted.onAction(action(draft, 'ou_other'));
@@ -244,7 +269,7 @@ it('reconciles a persisted sending operation against its original destination af
   const {operationId} = await f.prepare();
   const {draft} = await f.store.read(operationId);
   await f.store.write({state: 'sending', draft, sentAt: Date.now()});
-  configureFeedback(f.project, registration, {...destination, shareToken: 'shrTwo'});
+  configureFeedback(f.project, registration, {...destination, shareToken: 'shrTwo'}, feedbackBinding(f.project)!);
   const restarted = f.makeHost(new FileFeedbackStore(join(root, 'operations')));
   await restarted.onAction(action(draft));
   expect((await f.store.read(operationId)).state).toBe('uncertain');
@@ -325,7 +350,7 @@ it.each(['submitted', 'uncertain'].flatMap(state => ['allowedChats', 'allowedUse
     if (state === 'uncertain') f.gateway.submit.mockRejectedValue(new Error('response lost after form start'));
     await f.host.onAction(action(draft));
     expect((await f.store.read(operationId)).state).toBe(state);
-    configureFeedback(f.project, registration, {...destination, baseToken: 'BaseTwo', tableId: 'tblTwo', shareToken: 'shrTwo'});
+    configureFeedback(f.project, registration, {...destination, baseToken: 'BaseTwo', tableId: 'tblTwo', shareToken: 'shrTwo'}, feedbackBinding(f.project)!);
     f.gateway.lookup.mockImplementation(async input => ({state: 'found', recordId: 'recLater', creatorOpenId: input.actor.openId}));
     let release = () => {};
     const gate = new Promise<void>(resolve => {release = resolve;});

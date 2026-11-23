@@ -7,6 +7,7 @@ import {isAdmin} from '../config/schema';
 import {AuthoringJournal, authoringBotKey, linkKey, matchesAuthoringRoute, sameRecipient, type AuthoringRoute} from './authoring-journal';
 import {fromMessage, type AuthoringOptions, type AuthoringPeer, type AuthoringSession, type Presence} from './authoring-service';
 import {creatorIntent,creatorClick} from './private-creator';
+import {ResourceContext} from './resource-context';
 import {AuthoringIm} from './authoring-im';
 import {draftIntent} from './draft-instruction';
 
@@ -19,12 +20,14 @@ export class AuthoringRouter {
   private readonly now:()=>number;
   private readonly botKey:string;
   private readonly im:AuthoringIm;
+  readonly resources:ResourceContext;
   private closed=false;
   constructor(private readonly opts:AuthoringOptions,private readonly spawn:(canRefreshPreview:(p:Presence,delivery:string)=>boolean)=>AuthoringSession){
     this.now=opts.now??Date.now;
     this.journal=new AuthoringJournal(opts.root??paths.appDir,this.now);
     this.botKey=authoringBotKey(opts.bot);
     this.im=new AuthoringIm(opts.channel);
+    this.resources=new ResourceContext(opts,this.journal,this.now,()=>[...this.sessions].flatMap(s=>s.presence?[s.presence]:[]),()=>opts.currentBot?.()??assertBotIdentity(opts.bot));
     this.idle=spawn(this.canRefreshPreview);
   }
   async request(peer:AuthoringPeer,input:RecipeAuthoringRequest):Promise<Awaited<ReturnType<AuthoringSession['request']>>>{
@@ -37,11 +40,11 @@ export class AuthoringRouter {
       if(pending){await pending;return this.request(peer,input);}
       const existing=[...this.sessions].find(s=>s.presence?.peer.id===peer.id && s.presence.peer.device===peer.device &&
         (req.type==='open'||s.presence.account===req.accountId&&s.presence.binding===req.binding) && this.owners.get(s)?.creator===(req.type==='creatorOpen'));
-      if(existing&&req.type==='creatorOpen'&&existing.presence!.nativePreview===req.nativePreview&&existing.presence!.until>this.now()&&this.now()-existing.presence!.activeAt<30*60_000){
+      if(existing&&req.type==='creatorOpen'&&existing.presence!.nativePreview===req.nativePreview&&existing.presence!.resourceContext===req.resourceContext&&existing.presence!.until>this.now()&&this.now()-existing.presence!.activeAt<30*60_000){
         const p=existing.presence!;
         if(p.scope!==req.scope)throw new Error('来源身份已改变。');
         await existing.creator.open(p,req.binding,req.wakeId);
-        return {kind:'creatorSession' as const,session:p.session,scope:p.scope,binding:req.binding,leaseMs:45_000};
+        return {kind:'creatorSession' as const,session:p.session,scope:p.scope,binding:req.binding,leaseMs:45_000,...(p.resourceContext&&{resourceContext:true as const})};
       }
       if(existing){existing.close();this.sessions.delete(existing);}
       for(const s of this.sessions)if(s.presence&&s.presence.until<=this.now()){s.close();this.sessions.delete(s);}
@@ -67,6 +70,23 @@ export class AuthoringRouter {
       if(req.type==='close')return {kind:'closed' as const};
       throw new Error('身份、来源或草稿上下文已改变，请重新连接。');
     }
+    const p=session.presence!;
+    if(req.type==='resourceHandoff'){
+      if(!p.resourceContext)throw new Error('此设备尚不支持配方资源交付。');
+      return this.resources.handoff(p,req.requestId,req.target);
+    }
+    if(p.resourceContext){
+      if(req.type==='creatorCheck'){
+        const checked=await this.resources.check(p,req.id);if(checked)return checked;
+      }
+      if(req.type==='creatorAnswer'&&await this.resources.answer(p,req.id,req.answer))return {kind:'creatorAck'};
+      if(req.type==='creatorPoll'){
+        const author=await session.request(peer,req);
+        if(author.kind!=='creatorJobs')throw new Error('配方请求无效。');
+        const jobs=await this.resources.poll(p);
+        return {kind:'creatorJobs',jobs:[...jobs,...author.jobs].slice(0,16)};
+      }
+    }
     if(req.type==='close')this.sessions.delete(session);
     return session.request(peer,req);
   }
@@ -87,6 +107,7 @@ export class AuthoringRouter {
     const recipient=fromMessage(msg), text=msg.content.trim();
     const active=[...this.sessions].filter(s=>s.presence&&s.presence.until>this.now()&&this.now()-s.presence.activeAt<30*60_000);
     if(!recipient){
+      if(this.resources.hasTrigger(msg.messageId))return true;
       if(msg.chatType==='p2p'&&await this.journal.run(db=>Object.values(db.links).some(l=>l.bot===this.botKey&&l.recipient.chatId===msg.chatId&&
         l.recipient.openId===msg.senderId&&((l.creator?.focusUntil??0)>this.now()||Object.values(db.operations).some(o=>o.bot===l.bot&&sameRecipient(o.recipient,l.recipient)&&o.contextOpen)||
         Object.values(db.handoffs??{}).some(h=>h.binding===l.binding&&sameRecipient(h.recipient,l.recipient)&&['selecting','awaitingAttestations'].includes(h.phase.state))))))return true;
@@ -98,6 +119,12 @@ export class AuthoringRouter {
       return (session??this.idle).onMessage(msg);
     }
     const intent=creatorIntent(text)??(/^\/recipe\s+(?:name|summary|overview|version|access|logo|retry|issue)\b/i.test(text)?'works':undefined);
+    const resource=await this.resources.route(msg,recipient,Boolean(intent||text.startsWith('/recipe ')));
+    if(resource==='resource')return false;
+    if(resource==='duplicate')return true;
+    if(resource==='refuse'){
+      await this.im.reply(recipient.chatId,msg.messageId,'本次配方资料尚未就绪，请在 App 核对原请求。');return true;
+    }
     const snapshot=await this.journal.run(db=>{
       const now=this.now(),rows=Object.entries(db.links).filter(([,l])=>l.bot===this.botKey&&sameRecipient(l.recipient,recipient));
       const own=rows.map(([key,l])=>({key,binding:l.binding}));

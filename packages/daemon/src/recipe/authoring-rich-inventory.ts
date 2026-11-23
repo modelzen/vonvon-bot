@@ -65,6 +65,7 @@ export async function nativeRichInventory(options:InventoryOptions){
       });
     }
   }
+  if(row.workRules&&safeEditValue(row.workRules))content.rules.push({...identity('work'),purpose:'work',text:{kind:'inline',value:row.workRules}});
   for(const [key,purpose] of [['respond','smartRespond'],['newTopic','smartNewTopic']] as const){
     const value=row.smartRules?.[key];
     if(value&&safeEditValue(value))content.rules.push({...identity(purpose),purpose,text:{kind:'inline',value}});

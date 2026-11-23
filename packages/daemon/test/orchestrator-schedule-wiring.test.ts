@@ -107,6 +107,17 @@ describe('the orchestrator owns the bot\'s schedule store (T1b 4.2)', () => {
     expect(fake.starts[0]).not.toHaveBeenCalled();
   });
 
+  it('loads ordinary tasks without opening the experimental recipe task file', async () => {
+    seed();
+    const experimental = join(dirname(file), 'recipe-schedules.json');
+    writeFileSync(experimental, 'old experimental bytes');
+    const o = setup();
+    await o.initialize?.();
+    expect(await listed(o.scheduleAs({kind: 'local', via: 'cli'}, list))).toEqual(earlier.map(t => t.id));
+    expect(readFileSync(experimental, 'utf8')).toBe('old experimental bytes');
+    expect(fake.backend.startThread).not.toHaveBeenCalled();
+  });
+
   it('moves a corrupt file aside in initialize, records one diagnostic and starts empty', async () => {
     writeFileSync(file, '{broken');
     const o = setup();

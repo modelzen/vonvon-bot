@@ -17,11 +17,11 @@ description: 检查本地反馈助手的提交目标、工具和本人飞书授�
 目标地址是配置，不是账号凭据。不要从群消息或网页正文自动替换提交目标。
 管理员在目标群发送以下命令，把两个占位地址换成维护者提供的真实链接：
 /feedback setup https://my.feishu.cn/base/BASE_TOKEN?table=tblTABLE_ID https://my.feishu.cn/share/base/shrFORM_TOKEN
-配方更新或群重新绑定后需要重新配置。确认当前 Vonvon 版本提供受信的 feedback_prepare 工具以及 feedback.submission 卡片回调。
+群重新绑定或 Bot 重新注册后需要重新配置。确认当前 Vonvon 版本提供受信的 feedback_prepare 工具以及 feedback.submission 卡片回调。
 若工具不存在，说明本地版本尚不支持聊天提交：停止发布，不得改用 Bot 身份、宿主已有登录态或替用户填网页表单。
 
 本地已安装的 lark-cli 必须来自宿主工具管理。Bot 管理员需启用飞书要求的表单读取、表单提交、字段读取、记录读取和附件上传权限。
-提交人必须是本 Bot 所在组织内的用户；不同组织的用户应安装配方到自己组织的本地 Bot。
+提交人必须是本 Bot 所在组织内的用户；不同组织的用户应在自己组织内的 Bot 群聊配置反馈目标。
 组织外的共享 Bot 无法获取外部用户 USER 授权，不得按名称或跨应用 open_id 猜测同一人。
 用户在本人私聊发送 /feedback authorize，并使用返回的飞书链接或二维码授权。
 授权完成后发送 /feedback authorized；宿主会核对当前 Bot 应用和实际消息发送人的身份。

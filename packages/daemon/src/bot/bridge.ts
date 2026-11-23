@@ -16,6 +16,7 @@ import type { AdminLibraryOp } from '../admin/library';
 import type { GroupIdentity, ScheduleReply, ScheduleRequest } from '@vonvon/protocol';
 import type { ScheduleActor } from '../admin/schedule-commands';
 import { isAdmin, type AppConfig } from '../config/schema';
+import {resourceTools} from '../agent/entry/resource-tools';
 import { createCommandTools } from '../agent/entry/command-tools';
 import { createFeishuReader, type FeishuReadReply, type FeishuReadRequest } from '../feishu-read/reader';
 import { createFeishuCalls, createFeishuReads } from '../agent/entry/feishu-tools';
@@ -57,7 +58,6 @@ export interface BridgeOptions {
 }
 
 export interface BridgeHandle {
-  richRecipe:(op:import('../recipe/rich-installer').RichBotOp)=>Promise<unknown>;
   authoring: (op: AuthoringIpc) => Promise<unknown>;
   entries: AgentEntries;
   channel: LarkChannel;
@@ -121,7 +121,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     return result;
   };
   const entries = createAgentEntries({ feedbackEnabled: feedback.enabled, appId: app.id, isAdmin: id => isAdmin(opts.cfg, id), ...(sessions ? { sessions } : {}),
-    memoryPlace: turn => memory.placeOf(turn), tools: createCommandTools({
+    memoryPlace: turn => memory.placeOf(turn), tools: [...resourceTools((get,query)=>authoring.resources.tool(get,query)),...createCommandTools({
     appId: app.id, feedback: true, memory, feishu, groupTier: chatId => orchestrator.permissionOf(chatId),
     schedule: { execute: (actor, request) => orchestrator.scheduleAs(actor, request) },
     groups: async cursor => {
@@ -130,7 +130,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
       return result;
     },
     members, ...(host ? { route: (bot, request) => host.feishuRead(bot, request), routeApi: (bot, request) => host.feishuApi(bot, request) } : {}),
-  }) });
+  })] });
   const sessionCli = await writeSessionCli();
   if (sessionCli) putSessionCliOnPath(sessionCli);
   const parser = codexDraftParser(async () => {
@@ -283,7 +283,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
       void task.then(() => groupTasks.delete(task), () => groupTasks.delete(task));
       return task;
     };
-    return { channel, entries, richRecipe:op=>orchestrator.richRecipe!(op,identity,async chatId=>{await adminGroups({kind:'groupMembership',chatId,identity});}), authoring: async op => op.kind === 'recipeAuthoringDisconnect' ? authoring.disconnect(op.peer.id) : authoring.request(op.peer, op.request), collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, libraryExecute: orchestrator.libraryExecute, settings: orchestrator.settings, schedule: orchestrator.scheduleAs, feishuRead: createFeishuReads({ feishu, members }), feishuApi: createFeishuCalls(feishu), firstHello: firstHello.attempt, shutdown };
+    return { channel, entries, authoring: async op => op.kind === 'recipeAuthoringDisconnect' ? authoring.disconnect(op.peer.id) : authoring.request(op.peer, op.request), collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, libraryExecute: orchestrator.libraryExecute, settings: orchestrator.settings, schedule: orchestrator.scheduleAs, feishuRead: createFeishuReads({ feishu, members }), feishuApi: createFeishuCalls(feishu), firstHello: firstHello.attempt, shutdown };
   } catch (error) {
     try { await shutdown(); }
     catch (cleanupError) {

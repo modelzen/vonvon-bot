@@ -30,7 +30,7 @@ import { parseSettingsAction, parseSettingsEdit, SettingsInputError } from './se
 import type * as T from './settings-types';
 import { offlineModelCatalog, rememberModelCatalog } from './model-catalog';
 import { log } from '../core/logger';
-import { supplementOf } from '../bot/context-assembly';
+import { supplementOf, workRulesOf } from '../bot/context-assembly';
 import { botFiles, readRole, readSoulText, readText, roleDraft, roleProblem, updateRole, waitForBotFiles } from '../bot/role-files';
 import { loadBots } from '../config/bots';
 import { discoverGroupSkills, discoverLocalGroupSkills } from '../agent/group-skills';
@@ -220,7 +220,7 @@ function projectData(p: Project, backend: AgentBackend): T.ProjectSections {
   const env = { ...tableEnv(backend), group: true };
   return {
     profile: p.profile ?? { persona: '', memory: '', inheritPersona: true, inheritMemory: true },
-    role: { supplement: p.supplement ?? '' },
+    role: { supplement: p.supplement ?? '', workRules: workRulesOf(p) },
     modelAccess: resolveProjectModelAccess({ group: p }),
     workspace: workspaceOf(p),
     smartRules: resolveSmartRules(p.smartRules ?? { respond: '', newTopic: '' }),
@@ -264,7 +264,7 @@ export function workspaceRevision(botId: string, p: Project): string {
 }
 function projectRaw(p: Project, section: keyof T.ProjectSections): unknown {
   if (section === 'speed') return [p.name, p.chatId, p.backend, p.serviceTier];
-  if (section === 'role') return [p.name, p.chatId, p.supplement ?? null];
+  if (section === 'role') return [p.name, p.chatId, p.supplement ?? null, p.workRules ?? null];
   if (section === 'workspace') return [p.name, p.chatId, p.cwd, p.directories];
   if (section === 'modelAccess') return [p.name, p.chatId, p.modelAccess, p.defaultModel, p.defaultEffort];
   if (['profile', 'smartRules', 'skills', 'presentation'].includes(section)) return [p.name, p.chatId, p[section as 'profile']];
@@ -600,7 +600,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     if (!deps.offline) await deps.backendFor(groupBackendId(p)).refreshPermissions?.({ cached: true });
     const result = projectData(p, deps.backendFor(groupBackendId(p)));
     // `profile` is only a record of what the row held before the memory migration; the runtime reads `role` and the entries.
-    result.role = { supplement: supplementOf(p) };
+    result.role = { supplement: supplementOf(p), workRules: workRulesOf(p) };
     result.modelAccess = resolveProjectModelAccess({ bot: cfg.preferences, group: p }, peekModels(groupBackendId(p)));
     if (!p.directories?.repositories) result.workspace.repositories = [...cfg.preferences?.directories?.repositories ?? []];
     if (!p.smartRules) result.smartRules = p.dm ? { ...DEFAULT_DM_SMART_RULES } : rulesFromSmartPrompt(await (deps.readSmartPrompt ?? readSmartPrompt)(botId, p.chatId));
@@ -996,7 +996,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
             case 'role': {
               const supplement = e.patch.supplement ?? original.role.supplement;
               if (supplement !== original.role.supplement && [...supplement].length > SUPPLEMENT_MAX) throw new SettingsInputError(`补充职责最多 ${SUPPLEMENT_MAX} 字`);
-              p.supplement = supplement;
+              if (e.patch.supplement !== undefined) p.supplement = supplement;
+              if (e.patch.workRules !== undefined) p.workRules = e.patch.workRules;
               break;
             }
             case 'smartRules': p.smartRules = { ...original.smartRules, ...e.patch }; break;

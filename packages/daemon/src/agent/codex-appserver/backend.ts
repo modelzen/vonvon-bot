@@ -31,6 +31,7 @@ import { AppServerClient } from './app-server-client';
 import { admitCodexWorkspaceLayout } from './workspace-admission';
 import { codexFilesystem, codexInstallRoot, codexShellReadRoot, type CodexInstallRoot, codexWorkspaceRoots, verifyCodexWorkspaceEcho } from './workspace-policy';
 import { CONNECTOR_SCHEDULING_OFF, NATIVE_MEMORY_OFF, NATIVE_SCHEDULING_OFF } from './memory-config';
+import { FEEDBACK_PREPARE } from '../entry/feedback-tool';
 import { startDynamicTools } from './dynamic-tools';
 import { connectGated, refillWarmPool, takeWarmClient, utilityRequest } from './client-pool';
 import { mapChildNotification, mapNotification, readSubAgentActivity, readSubagentSpawn, type Child } from './event-map';
@@ -340,6 +341,7 @@ class CodexThread implements AgentThread {
     readonly lastCompaction?: string,
     private readonly entry?: AgentEntry,
     private readonly supportsEffort?: (model: string) => boolean,
+    readonly startedWithFeedbackTool?: boolean,
   ) {
     if (entry) client.hostTools(sessionId, { entry, turnAcked: (turnId, ms) => this.turnAcked(turnId, ms) });
   }
@@ -1050,19 +1052,20 @@ export class CodexAppServerBackend implements AgentBackend {
     if (bin && process.platform === 'win32' && (opts.mode ?? 'full') !== 'full') await this.refreshPermissions({ selectedBin: bin });
     const params = codexSessionParams(opts, version, bin);
     await admitCodexWorkspaceLayout(opts);
+    const tools = startDynamicTools(opts);
     const client = await this.spawn(opts.cwd, bin);
     let nativeServiceTier: string | null | undefined;
     let res: { thread: { id: string } };
     try {
       nativeServiceTier = await readNativeServiceTier(client, opts.cwd);
-      res = await client.request<{ thread: { id: string } }>('thread/start', { ...params, ...startDynamicTools(opts) });
+      res = await client.request<{ thread: { id: string } }>('thread/start', { ...params, ...tools });
       verifyCodexWorkspaceEcho(res, opts);
     } catch (err) {
       await client.close().catch((closeErr: unknown) => log.fail('agent', closeErr, { phase: 'start-close' }));
       throw err;
     }
     return new CodexThread(client, res.thread.id, opts.model, opts.effort, opts.serviceTier, nativeServiceTier, false, undefined, opts.entry,
-      this.threadEffortSupport());
+      this.threadEffortSupport(), tools.dynamicTools?.some(ns => ns.tools.some(tool => tool.name === FEEDBACK_PREPARE)));
   }
 
   async resumeThread(opts: ResumeThreadOptions): Promise<AgentThread> {

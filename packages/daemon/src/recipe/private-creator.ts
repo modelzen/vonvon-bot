@@ -2,7 +2,7 @@ import {z} from 'zod';
 import {randomUUID} from 'node:crypto';
 import type {CardActionEvent, NormalizedMessage} from '@larksuiteoapi/node-sdk';
 import {agentIdSchema, creatorCommandSchema, creatorSnapshotSchema, groupIdSchema,
-  type CreatorAnswer, type CreatorCommand, type CreatorJob, type CreatorRead, type CreatorReply, type CreatorRequest,
+  type CreatorAnswer, type CreatorCommand, type CreatorJob as WireJob, type CreatorRead, type CreatorReply, type CreatorRequest,
   type CreatorSelection, type CreatorSnapshot, type CreatorVersion, type CreatorWork, type InheritedPublication, type RecipeAuthoringRequest} from '@vonvon/protocol';
 import {safeEditValue} from '../../../../services/recipe-api/src/draft-model-text.mjs';
 import {PRIVATE_RECIPE_CODES_TITLE} from '../bot/card-content';
@@ -38,6 +38,7 @@ function directImage(msg:NormalizedMessage){
   if(content?.[resource.type==='image'?'image_key':'file_key']!==resource.fileKey)throw denied();
   return {type:raw.message_type,key:resource.fileKey};
 }
+type CreatorJob=Omit<WireJob,'task'>&{task:Extract<WireJob['task'],{kind:'read'|'command'|'deliverCodes'}>};
 export type JobRecord={
   job:CreatorJob;state:'offer'|'active'|'unknown'|'finished';created:number;expiresAt:number;messageId?:string;originalCardId?:string;approvalGeneration?:number;
   workName?:string;botName?:string;groupName?:string;version?:VersionSelection;codeLabel?:string;
@@ -968,7 +969,7 @@ export class PrivateCreator{
       return;
     }
     const checked=await this.allowedJob(p,link,id),task=checked.job.task;
-    if(task.kind==='deliverCodes')throw denied();
+    if(task.kind!=='read'&&task.kind!=='command')throw denied();
     if(task.kind==='read'&&task.read.kind==='edit'&&a.kind==='edit'){
       const q=task.read,src=a.work.source;
       if(!same(q.work,a.work)||q.revision!==a.revision||!src)throw denied();

@@ -345,6 +345,8 @@ export interface AgentThread {
    * terminal or the Codex app cannot open it, and only closing the process lets go
    * (`thread/unsubscribe` keeps the writer). */
   readonly releaseAfterRun?: boolean;
+  /** Codex accepted feedback_prepare on thread/start. A resumed rollout uses its stored tool set. */
+  readonly startedWithFeedbackTool?: boolean;
   /** false once the underlying agent process has died (crash / kill / close) —
    * the thread is unusable and must be evicted from the live cache so
    * resolveThread's resume fallback can take over. */

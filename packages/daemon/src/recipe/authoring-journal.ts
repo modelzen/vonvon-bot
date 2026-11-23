@@ -20,7 +20,10 @@ export function sameRecipient(a: Recipient | undefined, b: Recipient | undefined
   return Boolean(a && b && a.openId === b.openId && a.chatId === b.chatId && a.tenantKey === b.tenantKey);
 }
 export interface Source { groupId: string; reviewToken: string; setup?: RecipeSetup; rich?:{ref:string;draft:RichLocalDraft;identity:string} }
-export interface Link { wake?: import('./private-creator').CreatorWake; creator?: import('./private-creator').CreatorLedger; bot: string; binding: string; recipient: Recipient; sources: Source[]; context?: {operationId: string; until: number} }
+let lastSelectionOrder=0;
+/** Compare explicit selections at intake, even when a later account check finishes first in the same millisecond. */
+export function recipeSelectionOrder(now:number){return lastSelectionOrder=Math.max(lastSelectionOrder+1,now*1000);}
+export interface Link { selectionOrder?:number; wake?: import('./private-creator').CreatorWake; creator?: import('./private-creator').CreatorLedger; bot: string; binding: string; recipient: Recipient; sources: Source[]; context?: {operationId: string; until: number} }
 export interface Carrier {
   ref: string; sendUuid: string; generation: number; seq: number; mode: CardMode; dirty: boolean;
   cardId?: string; messageId?: string; firstSend?: number; createdAt?: number;
@@ -66,12 +69,15 @@ export function editApproval(op: LocalOperation, payloadDigest: string) {
     op.view.targetPublicKey, op.view.nonceCommitment, op.view.draftId, op.view.baseRevision, payloadDigest]));
 }
 export interface AuthoringLedger {
+  resources?: Record<string, import('./resource-context').ResourceHandoff>;
   handoffs?: Record<string, import('./authoring-handoff-menu').PrivateHandoff>;
   version: 1; links: Record<string, Link>; operations: Record<string, LocalOperation>;
   daily: Record<string, {day: string; count: number}>;
 }
 const CREATOR_SELECTION_TTL = 30 * 60_000;
 export function selectCreatorBinding(db: AuthoringLedger, current: Link, now: number) {
+  current.selectionOrder=recipeSelectionOrder(now);
+  for(const row of Object.values(db.resources??{}))if(row.bot===current.bot&&sameRecipient(row.recipient,current.recipient))row.focus=false;
   for (const link of Object.values(db.links)) if (link.bot === current.bot && sameRecipient(link.recipient,current.recipient)) {
     if(link.wake?.cardRef&&link.creator)delete link.creator.cards[link.wake.cardRef];
     if(link.wake?.jobId&&link.creator)delete link.creator.jobs[link.wake.jobId];
@@ -113,6 +119,7 @@ export function retire(op: LocalOperation, state: 'completed' | 'cancelled' | 'e
   discardAuthoringMaterial(op);
 }
 export function maintain(ledger: AuthoringLedger, now: number) {
+  for(const [id,row] of Object.entries(ledger.resources??{}))if(row.expires+7*DAY<=now)delete ledger.resources![id];
   for(const link of Object.values(ledger.links))if(link.wake&&link.wake.expiresAt<=now){
     const creator=link.creator,wake=link.wake;
     if(creator&&wake.cardRef&&!Object.values(creator.jobs).some(job=>job.receiptCard&&job.resultCard===wake.cardRef))delete creator.cards[wake.cardRef];
@@ -152,7 +159,7 @@ export function reserve(ledger: AuthoringLedger, account: string, now: number) {
 export function linkKey(scope: string, account: string) { return digest(JSON.stringify([scope, account])); }
 export class AuthoringJournal {
   constructor(private readonly root: string, private readonly now: () => number) {}
-  async run<T>(edit: (ledger: AuthoringLedger) => T): Promise<T> {
+  async run<T>(edit: (ledger: AuthoringLedger) => T,beforeCommit?:()=>void): Promise<T> {
     const dir = join(this.root, 'recipe-authoring');
     await ensureDurableDirectory(dir);
     const file = join(dir, 'journal.json');
@@ -168,7 +175,7 @@ export class AuthoringJournal {
       const after = JSON.stringify(ledger);
       if (after !== before) {
         if (Buffer.byteLength(after) > 8 * 1024 * 1024) throw new Error('本机配方操作记录已满。');
-        await writeFileAtomic(file, after, {durable: true});
+        await writeFileAtomic(file, after, {durable: true,beforeCommit});
       }
       // The atomic writer allows a best-effort directory fsync. Authoring's next irreversible action needs a durable result.
       await syncDirectory(dir);

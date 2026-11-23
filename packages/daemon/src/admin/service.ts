@@ -144,7 +144,6 @@ export interface AdminService {
   readGroupIdentity?(botId: string, chatId: string): Promise<GroupIdentity>;
   joinedGroups?(botId: string, cursor?: string): Promise<JoinedGroups>;
   groupMembers?(botId: string, chatId: string, cursor?: string): Promise<GroupMembers>;
-  richRecipe?: (botId:string,op:import('../recipe/rich-installer').RichBotOp)=>Promise<unknown>;
   recipeAuthoring?: (botId: string, op: import('../recipe/authoring-service').AuthoringIpc) => Promise<unknown>;
   assertGroupMembership?(botId: string, chatId: string, identity: BotIdentity): Promise<void>;
   /** dm-agent 7.3: a Feishu read, on the Bot `reach` comes to (admin/feishu-route.ts). Refusals are replies, not errors. */
@@ -490,7 +489,6 @@ export interface AdminServiceDeps {
   executeSettingsRead?: (botId: string, op: AdminSettingsReadOp) => Promise<unknown>;
   codexTools?: CodexSetupService;
   executeCollaboration?: (botId: string, request: CollaborationRequest) => Promise<unknown>;
-  richRecipe?:AdminService['richRecipe'];
   recipeAuthoring?: AdminService['recipeAuthoring'];
   executeGroups?: (botId: string, op: AdminGroupOp) => Promise<unknown>;
   executeWrite?: (botId: string, op: AdminWriteOp) => Promise<unknown>;
@@ -759,7 +757,6 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       if (!deps.executeGroups) throw new NotWiredYetError('群成员');
       return parseGroupMembers(await deps.executeGroups(botId, { kind: 'groupMembers', chatId, cursor }));
     },
-    richRecipe:deps.richRecipe,
     recipeAuthoring: deps.recipeAuthoring,
     async assertGroupMembership(botId, chatId, identity) {
       if (!deps.executeGroups) throw new NotWiredYetError('群成员身份');

@@ -35,7 +35,7 @@ export type TurnPresence = 'human' | 'scheduled' | 'none';
 /** 隐藏块在 `done` 前要用的这一轮的事实：现取，不是开轮时的快照 */
 export interface TurnMemory { turn(): MemoryTurn | undefined; place: AgentPlace; triggerMessageId?: string }
 /** 开轮时定下的这一轮：`presence`、`scheduled` 不随插话变（插话看 `steered`） */
-export interface TurnScope { readonly id: number; readonly presence: TurnPresence; readonly scheduled?: { taskId: string; runId: string }; close(): void }
+export interface TurnScope { readonly sessionId?:string; readonly id: number; readonly presence: TurnPresence; readonly scheduled?: { taskId: string; runId: string }; close(): void }
 export interface AgentEntries {
   issue(place: AgentPlace): AgentEntry;
   openTurn(thread: AgentThread, facts: TurnFacts): TurnScope;
@@ -247,10 +247,13 @@ export function createAgentEntries(opts: {
   function authorizeFeedback(grant: Grant, auth: TurnAuth | undefined): Failure | undefined {
     const refusal = authorizeMemory(grant, auth);
     const source = auth?.facts.feedback;
-    if (refusal || !auth?.human || auth.feedbackSteer.signal.aborted || !source || grant.place.kind !== 'group'
-      || !opts.feedbackEnabled?.(source.chatId) || source.chatId !== grant.place.chatId || source.openId !== auth.facts.requesterOpenId || source.messageId !== auth.facts.triggerMessageId) {
-      return { ...(refusal ?? refused('not-human-turn')), message: '这次调用没有对应的本人群消息。请在原群重新发起反馈。' };
-    }
+    if (refusal) return refusal;
+    if (auth?.human && !auth.feedbackSteer.signal.aborted && grant.place.kind === 'group' && grant.place.chatId
+      && !opts.feedbackEnabled?.(grant.place.chatId))
+      return { ok: false, code: 'refused', message: '本群反馈尚不可用。请让 Bot 管理员检查工具并用 /feedback setup 配置接收目标。' };
+    if (!auth?.human || auth.feedbackSteer.signal.aborted || !source || grant.place.kind !== 'group'
+      || source.chatId !== grant.place.chatId || source.openId !== auth.facts.requesterOpenId || source.messageId !== auth.facts.triggerMessageId)
+      return { ...refused('not-human-turn'), message: '这次调用没有对应的本人群消息。请在原群重新发起反馈。' };
   }
   /**
    * schedule 类的授权（3.13 的表、总设计第 8 节"在场"）：这一层先查，拒绝不进命令核；命令核按 actor 再查一遍，
@@ -366,11 +369,12 @@ export function createAgentEntries(opts: {
       const document = tool.class === 'document' && (tool.writes === true || grant.place.kind === 'doc');
       const feishuApi = tool.class === 'feishu-api';
       const feedback = tool.class === 'feedback';
-      const gated = feedback || settings || memory || schedule || document || feishuApi;
+      const resource=tool.class==='resource';
+      const gated = resource || feedback || settings || memory || schedule || document || feishuApi;
       const taskId = schedule && args && typeof args === 'object' && 'taskId' in args ? args.taskId : undefined;
       // Claude's tool-use id, or the Codex turn id its turn/start answered with (定时任务 T3b): both noted by noteToolUse.
       const auth = origin?.toolUseId ? grant.origins.get(origin.toolUseId) : undefined;
-      const authNow = (): Failure | undefined => feedback ? authorizeFeedback(grant, auth) : memory ? authorizeMemory(grant, auth)
+      const authNow = (): Failure | undefined => resource ? (authorizeNow(grant,auth)??(auth?.presence!=='human'||auth.steered?refused('not-human-turn'):undefined)) : feedback ? authorizeFeedback(grant, auth) : memory ? authorizeMemory(grant, auth)
         : schedule ? authorizeSchedule(grant, auth, tool.action, taskId)
           : document ? authorizeFeishu(grant, auth) : feishuApi ? authorizeFeishuApi(grant, auth) : authorizeNow(grant, auth);
       if (gated) {
@@ -431,6 +435,11 @@ export function createAgentEntries(opts: {
         };
         async function execute() {
           const ctx: ToolContext = { signal: controller.signal, place: grant.place, sessionId: grant.sessionId, notAfter: deadline, get admin() { return !adminTurn(grant); }, get writeRefusal() { return authorizeNow(grant, auth); } };
+          if(resource&&auth)ctx.resourceCaller=()=>{
+            const {requesterOpenId:openId,triggerMessageId:messageId}=auth.facts,chatId=grant.place.chatId;
+            if(authNow()||grant.place.kind!=='p2p'||!openId||!messageId||!chatId||controller.signal.aborted)return;
+            return {sessionId:grant.sessionId,openId,messageId,chatId};
+          };
           if (memory && auth) {
             ctx.turn = { id: auth.id, requesterOpenId: auth.facts.requesterOpenId ?? '', triggerMessageId: auth.facts.triggerMessageId ?? '', role: roleOf(auth) };
             ctx.memoryTurn = () => memoryTurnOf(grant, auth);
@@ -512,7 +521,7 @@ export function createAgentEntries(opts: {
         // 评论会话（doc）只给读类和文档这一列的工具；写记忆的和任务的在群和私聊里给；只为设置服务的读工具只在私聊里给
         return tools.filter(tool => {
           if (!placed(tool, grant.place)) return false;
-          if (tool.class === 'feedback') return !!grant.place.chatId && opts.feedbackEnabled?.(grant.place.chatId);
+          if (tool.class === 'feedback') return !!grant.place.chatId;
           return tool.class === 'read' || tool.class === 'document'
             || (tool.class === 'memory' || tool.class === 'schedule' ? grant.place.kind !== 'doc' : grant.place.kind === 'p2p');
         })
@@ -649,7 +658,7 @@ export function createAgentEntries(opts: {
         grant.previous = grant.turn;
         grant.turn = auth;
       } else end(auth);
-      return { id: auth.id, presence, ...(scheduled ? { scheduled: { ...scheduled } } : {}), close() { end(auth); } };
+      return { ...(grant?.phase==='attached'&&{sessionId:grant.sessionId}),id: auth.id, presence, ...(scheduled ? { scheduled: { ...scheduled } } : {}), close() { end(auth); } };
     },
     memoryTurn(thread) {
       const grant = threads.get(thread);

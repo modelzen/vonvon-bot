@@ -1,3 +1,4 @@
+import { legacyWorkRules } from './helpers/work-rules-fixture';
 import { FocusEverywhere } from './helpers/focus-everywhere';
 import { Attention } from '../src/bot/attention';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -494,7 +495,9 @@ describe('smart rules from group settings', () => {
   }
 
   it('sends both saved group rules to the model ahead of legacy prompts and executes a reply decision', async () => {
-    fake.project = { ...base, smartRules: { respond: '遇到需要协助的技术问题就回复', newTopic: '独立的问题创建新话题' } };
+    const richRecipe = legacyWorkRules();
+    richRecipe.resolved.push({kind: 'rules', itemId: 'old', originId: 'old', value: {purpose: 'smartRespond', text: 'Retired judge instruction'}});
+    fake.project = { ...base, richRecipe, smartRules: { respond: '遇到需要协助的技术问题就回复', newTopic: '独立的问题创建新话题' } };
     const judge = await useRealJudge('bot', 'main');
     await send(says('登录接口报错，请帮忙看一下'));
     await vi.waitFor(() => expect(fake.inputs).toHaveLength(1));
@@ -502,6 +505,7 @@ describe('smart rules from group settings', () => {
     expect(judge.calls[0]!.system).toContain('遇到需要协助的技术问题就回复');
     expect(judge.calls[0]!.system).toContain('独立的问题创建新话题');
     expect(judge.calls[0]!.system).not.toContain('LEGACY_SMART_PROMPT');
+    expect(judge.calls[0]!.system).not.toContain('Retired judge instruction');
     expect(judge.readPrompt).not.toHaveBeenCalled();
     expect(fake.inputs[0]).toContain('登录接口报错，请帮忙看一下');
   });

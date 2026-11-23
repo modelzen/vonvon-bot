@@ -36,7 +36,7 @@ afterEach(() => { rmSync(fixture.root, { recursive: true, force: true }); rmSync
 const botDir = (): string => join(fixture.root, 'bots', 'cli_a');
 const owner = { via: 'tool', botId: 'cli_a', actorRole: 'owner', actorOpenId: 'ou_o', chatId: CHAT } as const;
 
-async function world(options: { judge?: unknown } = {}) {
+async function world(options: { judge?: unknown; workRules?: string } = {}) {
   mkdirSync(botDir(), { recursive: true });
   writeFileSync(join(botDir(), 'SOUL.md'), '## 身份与职责\n支付组的发布助手\n\n## 其他说明\n先说结论\n');
   // what the project's own files say must never reach the result
@@ -44,7 +44,7 @@ async function world(options: { judge?: unknown } = {}) {
   writeFileSync(join(work, 'CLAUDE.md'), '项目规矩 SECRET-CLAUDE-TEXT');
   const library = libraryLocation(fixture.root);
   const project = await createLibraryProject({ name: '支付组', workspace: { primary: work, additional: [] }, createdBy: { botId: 'cli_a', chatId: CHAT } }, library);
-  const row = { name: '支付组群', chatId: CHAT, cwd: work, projectId: project.id, supplement: '只管发布', ...(options.judge ? { judge: options.judge } : {}) };
+  const row = { name: '支付组群', chatId: CHAT, cwd: work, projectId: project.id, supplement: '只管发布', ...(options.workRules !== undefined ? { workRules: options.workRules } : {}), ...(options.judge ? { judge: options.judge } : {}) };
   writeFileSync(join(botDir(), 'projects.json'), JSON.stringify({ version: 1, projects: [row] }));
   const store = new MemoryStore(projectMemoryLocation(project.id, { library }));
   const bot = new MemoryStore(botMemoryLocation(botDir()));
@@ -208,4 +208,15 @@ describe('the turn update stays the one assembly', () => {
     expect(update.text).toBeUndefined();
     expect(update.context.lastTurn?.used).toEqual([]);
   });
+});
+
+
+it('counts ordinary work rules in the supplement delivery section without adding them to the judge', async () => {
+  const plain = await world();
+  const before = await plain.preview(false);
+  const w = await world({ workRules: '先核对😀\n再执行' });
+  const reply = await w.preview(false);
+  expect(reply.next.sections.find(section => section.key === 'supplement')?.chars).toBe(4 + Array.from('先核对😀\n再执行').length);
+  expect(reply.judge.roleChars).toBe(before.judge.roleChars);
+  expect(reply.next.sections.find(section => section.key === 'supplement')?.version).not.toBe(before.next.sections.find(section => section.key === 'supplement')?.version);
 });
