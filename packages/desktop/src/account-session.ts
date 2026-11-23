@@ -295,7 +295,7 @@ export function createAccountSession(options: {
       headers.set('Authorization', 'Bearer ' + access.token);
       const signals = init.signal ? AbortSignal.any([signal, init.signal]) : signal;
       beforeSend?.();
-      // Member writes must outlast the edge's 15-second upstream response deadline.
+      // Member uploads also wait for normalization and private storage.
       const timeout = init.method === 'PUT' && privateObjectMember.test(path) ? 20_000 : undefined;
       const response = await transport(url, { ...init, headers, credentials: 'omit', redirect: 'error', cache: 'no-store', signal: requestSignal(signals, timeout) });
       signal.throwIfAborted();

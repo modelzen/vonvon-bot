@@ -128,7 +128,9 @@ function RichRecipeEditorSession({shell, accountId, draft: initial, initialRecov
       if (!live.current) return false;
       if (!fresh) {setRecovery('uncertain'); return false;}
       setRecovery('ready');
-      if (result.status === 'rejected') setError(metadataFailureMessage(result.code));
+      if (result.status === 'rejected') setError(result.code === 'operation_expired'
+        ? '此前保存已过期，请核对草稿后重新保存。'
+        : result.code === 'conflict' ? '草稿已有更新，请重新读取并核对。' : metadataFailureMessage(result.code));
       return true;
     } catch (cause) {
       if (live.current) {setRecovery('uncertain'); setError(cause instanceof Error ? cause.message : '草稿尚未核对完成，请重试。');}

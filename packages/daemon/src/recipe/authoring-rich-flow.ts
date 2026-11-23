@@ -3,7 +3,7 @@ import {groupBackendId} from '../config/execution';
 import {staticLogoFormat} from '../../../../services/recipe-api/src/logo-format.mjs';
 import {createHash,randomUUID} from 'node:crypto';
 import type {LarkChannel} from '@larksuiteoapi/node-sdk';
-import {canonicalizeRichRecipeContent,decodeRichRecipeContent,recipeRichDraftChangeSchema,type RecipeAuthoringRequest,type RecipeRichContent,type ScheduledTaskView, type RichFreezeInput} from '@vonvon/protocol';
+import {canonicalizeRichRecipeContent,decodeRichRecipeContent,richFreezeInputSchema,recipeRichDraftChangeSchema,type RecipeAuthoringRequest,type RecipeRichContent,type ScheduledTaskView, type RichFreezeInput} from '@vonvon/protocol';
 import {botPaths} from '../config/paths';
 import type {BotIdentity} from '../config/bots';
 import {applyManagedInventory,type ManagedSourceItem,type ManagedSourceSelection} from './authoring-rich-managed';
@@ -17,12 +17,15 @@ import {checkedRichInput,proposeRich,type RichModelInput} from './authoring-rich
 import {parseChanges} from './authoring-wire';
 import {DraftProviderBusy,fieldLabels,type PublicField} from './draft-instruction';
 import {safeEditValue} from '../../../../services/recipe-api/src/draft-model-text.mjs';
+import {contentReviewFields,changeReviewFields,reviewPositions} from './authoring-review-text';
+import {applyChanges} from '../../../../services/recipe-api/src/rich-document.mjs';
 
 type Preparation=Extract<RecipeAuthoringRequest,{type:'richPrepare'}>;
 type InventoryOptions=Preparation['selection']['options'];
 export interface RichLocalDraft {
   selectionDigest?:string;
   privateSelection?:boolean;
+  sourceCaptureDigest?:string;
   newFields?:string[];
   sourceRef?:string;
   source?:{groupId:string;options:InventoryOptions;token:string;selected:string[]};
@@ -111,7 +114,9 @@ export function preparedRich(req:Preparation,inventory:Awaited<ReturnType<typeof
     staticLogoFormat(bytes);
     members.push({itemId:inventoryAlias(inventory.lease,'logo'),kind:'finalLogo',bytes:selection.logo,sha256:createHash('sha256').update(bytes).digest('hex')});
   }
-  return {newFields:[],selectionDigest:wireDigest(selection),members,source:{groupId:req.groupId,options:selection.options,token:inventory.lease,selected:selection.selected},request};
+  const rich:RichLocalDraft={newFields:[],selectionDigest:wireDigest(selection),members,source:{groupId:req.groupId,options:selection.options,token:inventory.lease,selected:selection.selected},request};
+  rich.sourceCaptureDigest=richReviewDigest(rich);
+  return rich;
 }
 export function richReviewDigest(rich:RichLocalDraft){
   if(!rich.request)throw new Error('缺少当前审核内容。');
@@ -234,38 +239,37 @@ export function richEditTargets(content:RecipeRichContent,selected:readonly stri
   if(items.length!==selected.length)throw new Error('选择的草稿条目不存在。');
   return items;
 }
-function privateSourceReview(content:RecipeRichContent){
-  const fields:{label:string;valueJson:string}[]=[];
-  const add=(label:string,item:{itemId:string;originId:string})=>{
-    const {itemId:_id,originId:_origin,...values}=item;
-    fields.push({label,valueJson:wireJson(values)});
-  };
-  if(content.role)add('角色',content.role);
-  for(const [key,label] of [['settings','设置'],['rules','规则'],['skills','技能'],['files','文件'],['tasks','任务'],['memories','记忆']] as const)
-    for(const item of content[key])add(label,item);
-  return fields.length?fields:[{label:'群配置',valueJson:'本次不包含任何群配置。'}];
-}
 export function richCardReview(op:{rich?:RichLocalDraft;view:Pick<LocalOperation['view'],'operationId'|'draftId'|'baseRevision'>}){
-  const request=op.rich?.request;
-  if(!request)return;
-  const fields='content' in request ? [
-    ...Object.entries(request.content.public).filter(([,v])=>!op.rich?.newFields||op.rich.newFields.includes(v.itemId)).map(([field,v])=>({label:fieldLabels[field as PublicField],valueJson:JSON.stringify(v.value)})),
-    ...request.content.setup.map(step=>({label:'旧补充说明',valueJson:wireJson({title:step.title,instructions:step.instructions,kind:step.kind,required:step.required,action:step.action,...(step.check!==undefined&&{check:step.check})})})),
-    ...(op.rich?.privateSelection?privateSourceReview(request.content):[{label:'已在 App 核对的来源',valueJson:'公开字段 4、规则 '+request.content.rules.length+'、技能 '+request.content.skills.length+'、任务 '+request.content.tasks.length+'、记忆 '+request.content.memories.length+'、设置 '+request.content.settings.length+'。'}]),
-  ] : [...request.payload.changes.map(c=>{
-    if(c.op==='includeCandidate'){
-      const donor=request.candidates?.find(src=>src.sourceIntentId===c.value.source.sourceIntentId);
-      const content=donor&&decodeRichRecipeContent(Buffer.from(donor.canonical,'base64url')).content;
-      const item=content&&itemsOf(content).find(i=>i.itemId===c.value.source.candidateId);
-      if(item){
-        const {itemId:_id,originId:_origin,...value}=item;
-        const fileIds=content!.skills.find(skill=>skill.itemId===item.itemId)?.fileIds;
-        const files=fileIds&&content!.files.filter(file=>fileIds.includes(file.itemId)).map(file=>({name:file.name,text:file.text}));
-        return {label:'恢复原始草稿内容',valueJson:wireJson(files?{...value,files}:value)};
-      }
-    }
-    return c.op==='setFinalLogo'?{label:'所选 Logo 原图 SHA-256',valueJson:op.rich?.members?.find(m=>m.kind==='finalLogo')?.sha256??''}:{label:c.op,valueJson:wireJson(c)};}),...(request.access?[{label:'获取方式',valueJson:request.access==='coded'?'凭码获取':'直接获取'}]:[])];
-  return {draftId:op.view.draftId??op.view.operationId,revision:op.view.baseRevision??1,payloadDigest:richReviewDigest(op.rich!),fields};
+  const rich=op.rich;
+  if(!rich?.request)return;
+  try{
+    const request=richFreezeInputSchema.parse(rich.request),payloadDigest=richReviewDigest(rich);
+    const sourceCapture=!!rich.privateSelection&&!!rich.source&&rich.newFields?.length===0&&rich.sourceCaptureDigest===payloadDigest&&'content'in request;
+    if(!sourceCapture&&rich.members?.some(m=>m.kind==='finalLogo'))return;
+    const fields='content'in request?contentReviewFields(request.content,sourceCapture):(()=>{
+      const base=decodeRichRecipeContent(Buffer.from(request.baseCanonical,'base64url')).content;
+      const resolve=(ref:{sourceIntentId:string;candidateId:string})=>{
+        const donor=request.candidates?.find(src=>src.sourceIntentId===ref.sourceIntentId);
+        if(!donor)throw new Error('缺少恢复来源');
+        return {content:decodeRichRecipeContent(Buffer.from(donor.canonical,'base64url')).content,itemId:ref.candidateId};
+      };
+      const states:RecipeRichContent[]=[];
+      applyChanges(base,request.payload.changes,resolve,Buffer.alloc(32),request.newParts,after=>states.push(after));
+      const positions=reviewPositions([base,...states]);
+      let current=base;
+      return request.payload.changes.flatMap((change,index)=>{
+        const after=states[index]!;
+        const fields=changeReviewFields(change,current,after,positions);
+        current=after;
+        const step='第 '+(index+1)+' 项改动';
+        return [{label:'执行顺序',text:step,valueJson:JSON.stringify(step),separate:true as const},...fields];
+      });
+    })();
+    if(sourceCapture)for(const logo of rich.members?.filter(m=>m.kind==='finalLogo')??[])
+      fields.push({label:'Logo',valueJson:JSON.stringify('已选本地图片 · '+Buffer.from(logo.bytes,'base64url').length+' 字节')});
+    if(request.access)fields.push({label:'获取方式',valueJson:JSON.stringify(request.access==='coded'?'凭码获取':'直接获取')});
+    return {draftId:op.view.draftId??op.view.operationId,revision:op.view.baseRevision??1,payloadDigest,fields,...(sourceCapture&&{sourceCapture:true as const})};
+  }catch{return;}
 }
 export function verifyEditBase(raw:string,selected:readonly string[]){
   const bytes=Buffer.from(raw,'base64url');

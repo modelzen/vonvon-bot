@@ -123,7 +123,9 @@ function ExistingDraft(props: EditorProps & {draftId: string}) {
         const recovery = receipt.current ? {status:'committed' as const, receipt:receipt.current, draft} : result;
         setEntry({kind:'read',draft,recovery});
       } else if (result.status === 'rejected' && !receipt.current) {
-        setEntry({kind:'failed',message: readError instanceof Error ? readError.message : communityFailureMessages[result.code]});
+        const message = result.code === 'operation_expired' ? '此前保存已过期，请重新读取草稿并核对。'
+          : result.code === 'conflict' ? '草稿已有更新，请重新读取并核对。' : communityFailureMessages[result.code];
+        setEntry({kind:'failed',message: readError instanceof Error ? readError.message : message});
       } else {
         setEntry({kind:'recovering',receipt:receipt.current,message:receipt.current ? '此前提交已保存，最新草稿尚未读取。可以重试核对，或稍后再回来。' : '此前保存尚未核对完成。可以稍后回来继续核对，已提交的保存不会因离开而取消。'});
       }

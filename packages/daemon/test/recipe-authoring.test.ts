@@ -506,8 +506,8 @@ it.each([
   expect(digest(bytes)).toBe(candidate.payloadDigest);
   expect(JSON.parse(bytes.toString())).toEqual({schemaVersion:1,draftId,baseRevision:7,
     changes:changes.map(c=>({op:'setPublicText',field:c.field,value:c.value}))});
-  for (const [label,value] of values) expect(text).toContain(label+' → '+JSON.stringify(value));
-  expect(text).toContain('候选摘要 '+candidate.payloadDigest);
+  for (const [label,value] of values) expect(text).toContain(label+' → '+value);
+  expect(text.join('\n')).not.toContain(candidate.payloadDigest);
 });
 it.each([
   {command:'name',label:'名称',value:'<at id=all></at> [更改](https://example.test) **值**'},
@@ -528,7 +528,9 @@ it.each([
   const displays=shown.body.elements.filter((e:{tag:string})=>e.tag==='div');
   expect(displays.every((e:{text:{tag:string;lines?:number}})=>e.text.tag==='plain_text' && e.text.lines===undefined)).toBe(true);
   const text=displays.find((e:{text:{content:string}})=>e.text.content.startsWith(label+' → ')).text.content;
-  expect(JSON.parse(text.slice((label+' → ').length))).toEqual(value);
+  const visible=value.replace(/[⟦⟧\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu,
+    char=>char==='\n'?char:'⟦U+'+char.codePointAt(0)!.toString(16).toUpperCase().padStart(4,'0')+'⟧');
+  expect(text.slice((label+' → ').length)).toEqual(visible);
   expect(text).not.toMatch(/[\u202a-\u202e\u2066-\u2069\u200d]/u);
   expect(shown.body.elements.filter((e:{behaviors?:unknown})=>e.behaviors)).toHaveLength(2);
   const requests=bodies.filter(b=>b.path.includes('/cardkit/'));
@@ -930,7 +932,7 @@ it('saves only the private-chat-reviewed rich source and continues against its s
   await orch.shutdown();restart();await open();orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});
   await rpc('deliver',{operationId:op.operationId});
   expect((await status(op.operationId)).state).toBe('candidate');
-  expect([...cards.values()].join('')).not.toContain(sourceRole);
+  expect([...cards.values()].join('')).toContain(sourceRole);
   proposeRich.mockResolvedValueOnce({kind:'proposal',commands:[{action:'setPublicText',target:'T3',text:'使用前请运行 setup 技能，先在群里确认周报格式。'}]});
   await orch.onMessage(msg('把概览改为：使用前请运行 setup 技能，先在群里确认周报格式。'));
   const post=await status(op.operationId);
@@ -1207,7 +1209,7 @@ it('binds the proactive private selection, attestation and exact final confirmat
   const draftId=randomUUID();
   await rpc('richAdvance',{operationId:op.operationId,destinationDraftId:draftId,authorization:{...await auth(op,'dispatch'),format:'rich-v2'}});
   expect(messages.size).toBe(1);expect(cards.size).toBe(1);
-  expect([...cards.values()][0]).toContain(sourceRole);expect([...cards.values()][0]).not.toContain(hiddenMemory);
+  expect([...cards.values()][0]).toContain('已选本地角色 · '+Buffer.byteLength(sourceRole)+' 字节');expect([...cards.values()][0]).not.toContain(hiddenMemory);
   expect((await status(op.operationId)).state).toBe('candidate');
   await tap(oldFinish);await act(ref(),{by:stranger});
   expect((await status(op.operationId)).state).toBe('candidate');
@@ -1261,7 +1263,7 @@ it.each([['drop',false],['loseReply',false],['drop',true],['loseReply',true]] as
   const op=await status(h.operationId!);
   const draftId=randomUUID();
   await rpc('richAdvance',{operationId:op.operationId,destinationDraftId:draftId,authorization:{...await auth(op,'dispatch'),format:'rich-v2'}});
-  expect([...cards.values()][0]).toContain(sourceRole);expect([...cards.values()][0]).not.toContain(hiddenMemory);
+  expect([...cards.values()][0]).toContain('已选本地角色 · '+Buffer.byteLength(sourceRole)+' 字节');expect([...cards.values()][0]).not.toContain(hiddenMemory);
   const preview=kind(await rpc('richInspect',{operationId:op.operationId,preview:true}),'richCandidate').request;
   expect(preview).toMatchObject({content:{role:{text:{kind:'inline',value:sourceRole}},memories:[]}});
   expect(kind(await rpc('beginHandoff',arg),'handoff').handoff.operationId).toBe(op.operationId);

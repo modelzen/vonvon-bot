@@ -444,6 +444,29 @@ async function openDraft(knownRichDraft = false, account = accountId) {
     <RecipeEditor shell={facade.shell.community!} accountId={account} draftId={draftId} knownRichDraft={knownRichDraft} onBack={back} onPublished={() => {}}/>
   </DraftGuardProvider></ClientProvider>));
 }
+it.each(['operation_expired','conflict'] as const)('explains a previous %s without acquisition or retained-input promises and reopens the verified cloud draft', async code => {
+  recover = async () => ({status:'rejected',code});
+  await openDraft(true);
+  expect(document.body.textContent).toContain(code === 'operation_expired' ? '此前保存已过期，请重新读取草稿并核对。' : '草稿已有更新，请重新读取并核对。');
+  expect(document.body.textContent).not.toMatch(/领取|修改仍保留|输入仍保留/);
+  recover = async () => ({status:'current',draft});
+  await click('重试读取');
+  expect(document.querySelector('h1')?.textContent).toBe(draft.public.name);
+  expect(button('预览发布').disabled).toBe(false);
+});
+it.each(['operation_expired','conflict'] as const)('does not promise restored local input after leaving an uncertain save and reopening with %s', async code => {
+  send = async request => request.type === 'draft' ? draft : {status:'uncertain'};
+  await openDraft();
+  await click('编辑发布信息'); await fill('配方名称','离开前未提交的名称'); await click('保存');
+  await click('返回创作中心'); await click('稍后核对并离开');
+  await act(async () => root.render(<div/>));
+  recover = async () => ({status:'rejected',code});
+  await openDraft();
+  expect(document.body.textContent).toContain(code === 'operation_expired' ? '此前保存已过期，请核对草稿后重新保存。' : '草稿已有更新，请重新读取并核对。');
+  expect(document.body.textContent).not.toMatch(/领取|修改仍保留|输入仍保留/);
+  await click('编辑发布信息');
+  expect(document.querySelector<HTMLInputElement>('[aria-label="配方名称"]')?.value).toBe(draft.public.name);
+});
 it('offers an honest retry and leave from the draft entry when the ordinary read and the previous save are unresolved', async () => {
   send = async () => {throw new Error('offline');};
   recover = async () => ({status:'uncertain'});

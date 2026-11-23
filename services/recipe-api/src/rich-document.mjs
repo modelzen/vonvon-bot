@@ -120,7 +120,7 @@ function stripParts(content,candidates) {
   const pool=new Map([...content.parts,...candidates].map(p=>[p.objectId,p]));
   content.parts=[...pool.values()].filter(p=>wanted.has(p.objectId));
 }
-export function applyChanges(original,changes,resolveCandidate,seed,newParts=[]) {
+export function applyChanges(original,changes,resolveCandidate,seed,newParts=[],onStep) {
   const randomUUID=allocator(seed);
   const content=structuredClone(original),copies=[],parts=[...newParts];
   const find=(id,kind)=>{const entry=entries(content).find(e=>e.item.itemId===id);if(!entry||entry.kind!==kind)throw badInput();return entry;};
@@ -142,8 +142,8 @@ export function applyChanges(original,changes,resolveCandidate,seed,newParts=[])
     if(kind==='cardBlock')item.id='b'+item.itemId.replaceAll('-','');
     return item;
   }
-  for(const c of changes) {
-    if(c.op==='setAccess')continue;
+  function applyChange(c) {
+    if(c.op==='setAccess')return;
     if(c.op==='setFinalLogo') {
       if(content.finalLogo){
         if(content.finalLogo.itemId!==c.itemId)throw badInput();
@@ -157,14 +157,14 @@ export function applyChanges(original,changes,resolveCandidate,seed,newParts=[])
         copies.push({kind:'finalLogo',itemId:item.itemId,originId:item.originId,baselineSha256:richDigest(item),
           contentFingerprint:richDigest({sha256:part.sha256}),source:{kind:'accountClaim'}});
       }
-      continue;
+      return;
     }
     if(c.op==='addSetup') {
       const item={...structuredClone(c.value),itemId:randomUUID(),originId:randomUUID()};
       content.setup.push(item);
       copies.push({kind:'setup',itemId:item.itemId,originId:item.originId,baselineSha256:richDigest(item),
         contentFingerprint:richDigest(stableValue(content,{kind:'setup',item})),source:c.source});
-      continue;
+      return;
     }
     if(c.op==='copyItem'||c.op==='includeCandidate') {
       const ref=c.source??c.value;let donor,sourceContent;
@@ -172,13 +172,13 @@ export function applyChanges(original,changes,resolveCandidate,seed,newParts=[])
       else {const candidate=resolveCandidate(ref.source);if(!candidate)throw denies();
         sourceContent=candidate.content;const entry=entries(sourceContent).find(e=>e.item.itemId===candidate.itemId&&e.kind===ref.kind);
         if(!entry)throw denies();donor=entry.item;parts.push(...sourceContent.parts);}
-      insert(ref.kind,clone(ref.kind,donor,sourceContent),ref.parentItemId);continue;
+      insert(ref.kind,clone(ref.kind,donor,sourceContent),ref.parentItemId);return;
     }
     if(c.op==='removeItem') {
       const e=find(c.itemId,c.kind);
       if(c.kind==='file')for(const skill of content.skills){if(skill.entryFileId===c.itemId)throw badInput();skill.fileIds=skill.fileIds.filter(id=>id!==c.itemId);}
       if(Array.isArray(e.parent))e.parent.splice(e.parent.indexOf(e.item),1);else delete e.parent[e.key];
-      if(c.kind==='skill'){const kept=new Set(content.skills.flatMap(s=>s.fileIds));content.files=content.files.filter(f=>kept.has(f.itemId));}continue;
+      if(c.kind==='skill'){const kept=new Set(content.skills.flatMap(s=>s.fileIds));content.files=content.files.filter(f=>kept.has(f.itemId));}return;
     }
     const kind={setPublicText:'publicText',setRoleText:'role',setSetting:'setting',setCardReply:'setting',setCardBlock:'cardBlock',
       setRule:'rule',setSkill:'skill',setFile:'file',setTask:'task',setSetup:'setup'}[c.op];
@@ -189,6 +189,10 @@ export function applyChanges(original,changes,resolveCandidate,seed,newParts=[])
     else {if(c.op==='setSetting'&&item.field!==c.value.field)throw badInput();
       if(['setTask','setSetup','setCardBlock'].includes(c.op))for(const key of Object.keys(item))if(!['id','itemId','originId'].includes(key))delete item[key];
       Object.assign(item,c.value);}
+  }
+  for(const change of changes) {
+    applyChange(change);
+    if(onStep)onStep(structuredClone(content));
   }
   stripParts(content,parts);
   return {doc:document(content),copies};
