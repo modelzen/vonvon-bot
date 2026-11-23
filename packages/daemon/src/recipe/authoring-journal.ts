@@ -72,9 +72,11 @@ export interface AuthoringLedger {
 }
 const CREATOR_SELECTION_TTL = 30 * 60_000;
 export function selectCreatorBinding(db: AuthoringLedger, current: Link, now: number) {
-  for (const link of Object.values(db.links)) if (link.bot === current.bot && sameRecipient(link.recipient,current.recipient) && link.creator) {
-    delete link.creator.chosenUntil;
-    delete link.creator.accountChoice;
+  for (const link of Object.values(db.links)) if (link.bot === current.bot && sameRecipient(link.recipient,current.recipient)) {
+    if(link.wake?.cardRef&&link.creator)delete link.creator.cards[link.wake.cardRef];
+    if(link.wake?.jobId&&link.creator)delete link.creator.jobs[link.wake.jobId];
+    delete link.wake;
+    if(link.creator){delete link.creator.chosenUntil;delete link.creator.accountChoice;}
   }
   (current.creator ??= {jobs:{},cards:{}}).chosenUntil = now + CREATOR_SELECTION_TTL;
 }

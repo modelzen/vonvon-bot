@@ -56,6 +56,7 @@ type Hooks={
   guard(p:Presence,recipient?:Recipient):Promise<Link>;live(p:Presence):void;interact(p:Presence):void;
   begin(p:Presence,link:Link,r:Extract<RecipeAuthoringRequest,{type:'beginHandoff'|'beginDraftHandoff'}>):Promise<unknown>;
   resume(p:Presence,link:Link,id:string,commit:(db:AuthoringLedger,actual:Link)=>void):Promise<unknown>;
+  resumeEdit(p:Presence,id:string,commit:(db:AuthoringLedger,actual:Link)=>void):Promise<void>;
   edit(p:Presence,link:Link,work:CreatorWork,revision:number,commit?:(db:AuthoringLedger,actual:Link)=>void):Promise<unknown>;
 };
 const ttl=30*60_000;
@@ -110,25 +111,40 @@ export class PrivateCreator{
       return fn(state(actual),actual,db);
     });
   }
+  private wakeRoute(db:AuthoringLedger,link:Link):AuthoringRoute|undefined{
+    const key=Object.keys(db.links).find(key=>db.links[key]===link);
+    if(!key)return;
+    const chosenUntil=link.creator?.chosenUntil;
+    const route:AuthoringRoute=chosenUntil!==undefined&&chosenUntil>this.now()?
+      {key,binding:link.binding,kind:'chosen',chosenUntil}:{key,binding:link.binding,kind:'intent'};
+    if(matchesAuthoringRoute(db,link,route,this.now()))return route;
+  }
+  private currentWake(db:AuthoringLedger,link:Link,wake:{id:string;route:AuthoringRoute}){
+    const current=link.wake;
+    if(current?.id!==wake.id||current.expiresAt<=this.now()||!matchesAuthoringRoute(db,link,wake.route,this.now()))throw new CreatorSelectionChanged();
+    return current;
+  }
   async open(p:Presence,binding:string,wakeId:string|null){
     const link=await this.hooks.guard(p);
     if(binding!==p.binding||binding!==link.binding)throw denied();
-    const intent=await this.run(p,link,(s,l)=>{
+    const wake=await this.run(p,link,(_s,l,db)=>{
       if(!wakeId)return;
-      const w=l.wake;
-      if(w?.id!==wakeId||w.expiresAt<=this.now())throw denied();
-      return w.intent;
+      const route=this.wakeRoute(db,l);
+      if(!route)throw new CreatorSelectionChanged();
+      const current=this.currentWake(db,l,{id:wakeId,route});
+      return {id:wakeId,route,intent:current.intent};
     });
     this.enabled=true;
-    if(intent&&wakeId){
+    if(wake){
       this.hooks.interact(p);
-      if(intent==='create')await this.groups(p,link,0,undefined,wakeId);
-      else await this.run(p,link,(s,l)=>{
-        if(l.wake?.id!==wakeId)throw denied();
-        l.wake.jobId??=this.addJob(p,link,s,{kind:'read',read:{kind:'works',offset:0}}).job.id;
+      if(wake.intent==='create')await this.groups(p,link,0,undefined,wake);
+      else await this.run(p,link,(s,l,db)=>{
+        const current=this.currentWake(db,l,wake);
+        current.jobId??=this.addJob(p,link,s,{kind:'read',read:{kind:'works',offset:0}}).job.id;
       });
-      await this.run(p,link,(s,l)=>{
-        if(l.wake?.id===wakeId){s.seen=[...(s.seen??[]).slice(-63),l.wake.messageId];delete l.wake;}
+      await this.run(p,link,(s,l,db)=>{
+        const current=this.currentWake(db,l,wake);
+        s.seen=[...(s.seen??[]).slice(-63),current.messageId];delete l.wake;
       });
     }
   }
@@ -234,8 +250,9 @@ export class PrivateCreator{
     }
     await this.display(p,link,card);
   }
-  private async display(p:Presence,link:Link,c:Card){
+  private async display(p:Presence,link:Link,c:Card,wake?:{id:string;route:AuthoringRoute}){
     await this.hooks.guard(p,link.recipient);
+    if(wake)await this.run(p,link,(_s,l,db)=>this.currentWake(db,l,wake));
     if(c.needsUpdate&&c.messageId&&c.cardId){
       const attached=c.previewOwner?await this.im.cardStatus(c.messageId,link.recipient.chatId,c.cardId):'matched';
       const result=attached==='matched'?await this.im.updateJson(c.cardId,c.generation,c.ref,layout(c)):attached;
@@ -251,10 +268,11 @@ export class PrivateCreator{
     }
     if(!c.cardId){
       const id=await this.im.createJson(layout(c));
-      c=await this.run(p,link,s=>{const r=s.cards[c.ref];if(!r||r.generation!==c.generation||r.expiresAt<=this.now())throw denied();r.cardId??=id;return r;});
+      c=await this.run(p,link,(s,l,db)=>{if(wake)this.currentWake(db,l,wake);const r=s.cards[c.ref];if(!r||r.generation!==c.generation||r.expiresAt<=this.now())throw denied();r.cardId??=id;return r;});
     }
     if(!c.messageId){
       await this.hooks.guard(p,link.recipient);
+      if(wake)await this.run(p,link,(_s,l,db)=>this.currentWake(db,l,wake));
       const id=await this.im.send(link.recipient.chatId,c.cardId!,c.sendId);
       c=await this.run(p,link,s=>{const r=s.cards[c.ref];if(!r||r.generation!==c.generation||r.cardId!==c.cardId)throw denied();r.messageId=id;return r;});
     }
@@ -305,16 +323,17 @@ export class PrivateCreator{
       actual.wake={id:randomUUID(),messageId:evt.messageId,intent:choice.intent,expiresAt:this.now()+300_000};
     });
   }
-  private async groups(p:Presence,link:Link,offset:number,inherited?:InheritedPublication,wakeId?:string){
-    if(wakeId){
-      const existing=await this.run(p,link,(s,l)=>{
-        if(l.wake?.id!==wakeId)throw denied();
-        const c=l.wake.cardRef&&s.cards[l.wake.cardRef];
+  private async groups(p:Presence,link:Link,offset:number,inherited?:InheritedPublication,wake?:{id:string;route:AuthoringRoute}){
+    if(wake){
+      const existing=await this.run(p,link,(s,l,db)=>{
+        const current=this.currentWake(db,l,wake);
+        const c=current.cardRef&&s.cards[current.cardRef];
         if(c&&c.session===p.session)return c;
       });
-      if(existing){await this.display(p,link,existing);return;}
+      if(existing){await this.display(p,link,existing,wake);return;}
     }
-    if(offset===0)await this.run(p,link,s=>{
+    if(offset===0)await this.run(p,link,(s,l,db)=>{
+      if(wake)this.currentWake(db,l,wake);
       const prev=s.current;
       if(prev?.kind==='draft'){
         const offered=Object.values(s.jobs).some(r=>r.state==='offer'&&r.job.task.kind==='command'&&workOf(r.job.task.command)?.draftId===prev.snapshot.work.draftId);
@@ -331,13 +350,13 @@ export class PrivateCreator{
     }
     if(offset>0)buttons.push({label:'上一页',choice:{kind:'groups',offset:offset-8,inherited}});
     if(rows.length>offset+8)buttons.push({label:'下一页',choice:{kind:'groups',offset:offset+8,inherited}});
-    const view=await this.run(p,link,(s,l)=>{
-      if(wakeId&&l.wake?.id!==wakeId)throw denied();
+    const view=await this.run(p,link,(s,l,db)=>{
+      const current=wake&&this.currentWake(db,l,wake);
       const c=this.cards.newCard(s,p,'选择来源群',buttons.length?'请选择本次要取用配置的群。':'没有可用的已绑定群。',buttons);
-      if(wakeId&&l.wake)l.wake.cardRef=c.ref;
+      if(current)current.cardRef=c.ref;
       return c;
     });
-    await this.display(p,link,view);
+    await this.display(p,link,view,wake);
   }
   private async intent(p:Presence,link:Link,intent:Intent){
     if(intent==='create')return this.groups(p,link,0);
@@ -387,14 +406,36 @@ export class PrivateCreator{
       if(select)selectCreatorBinding(db,actual,this.now());
     };
     if(selection.kind==='draft'){
-      await this.source(p,selection.work);
-      const editing=await this.run(p,link,(s,actual,db)=>{
-        commit(s,actual,db);delete s.current;s.focusDraft=selection.work.draftId;s.focusUntil=this.now()+ttl;
-        return Object.values(db.operations).some(o=>o.bot===this.botKey&&o.accountId===p.account&&o.scope===p.scope&&o.binding===link.binding&&
-          sameRecipient(o.recipient,link.recipient)&&!o.revoked&&o.contextOpen&&(o.contextUntil??0)>this.now()&&o.terminalAt===undefined&&
-          o.view.purpose==='editDraft'&&o.view.draftId===selection.work.draftId&&['waiting','candidate'].includes(o.view.state));
+      const selectionState=(db:AuthoringLedger,actual:Link)=>({
+        chosen:Object.entries(db.links).filter(([,l])=>l.bot===this.botKey&&sameRecipient(l.recipient,link.recipient)).map(([key,l])=>[key,l.binding,l.creator?.chosenUntil,l.wake?.id]),
+        focus:[actual.creator?.focusDraft,actual.creator?.focusUntil,actual.creator?.current],
       });
-      if(editing)return;
+      const beforeSource=await this.run(p,link,(_s,actual,db)=>selectionState(db,actual));
+      await this.source(p,selection.work);
+      const edits=(db:AuthoringLedger)=>Object.values(db.operations).filter(o=>o.bot===this.botKey&&o.accountId===p.account&&o.scope===p.scope&&o.binding===link.binding&&
+        sameRecipient(o.recipient,link.recipient)&&o.terminalAt===undefined&&o.view.purpose==='editDraft'&&o.view.draftId===selection.work.draftId);
+      const editing=await this.run(p,link,(s,actual,db)=>{
+        if(!same(beforeSource,selectionState(db,actual)))throw new CreatorSelectionChanged();
+        const rows=edits(db);
+        if(rows.length){
+          const row=rows[0]!,source=selection.work.source;
+          if(rows.length!==1||row.revoked||!['waiting','candidate'].includes(row.view.state)||!row.dispatched||row.view.deliveryUnknown||
+            !row.carrier.messageId||!row.carrier.cardId||row.rich?.destinationDraftId&&row.rich.destinationDraftId!==selection.work.draftId||
+            source&&row.originalGroup&&(source.groupId!==row.originalGroup.groupId||source.identity!==row.originalGroup.identity))throw denied();
+          if(!select&&(!row.contextOpen||(row.contextUntil??0)<=this.now()))throw denied();
+        }else this.noPendingSave(db,p,link,selection.work);
+        commit(s,actual,db);delete s.current;s.focusDraft=selection.work.draftId;s.focusUntil=this.now()+ttl;
+        if(rows.length)return {id:rows[0]!.view.operationId,focusUntil:s.focusUntil,
+          route:{key:linkKey(p.scope,p.account),binding:link.binding,kind:'chosen' as const,chosenUntil:s.chosenUntil!}};
+      });
+      if(editing){
+        if(select)await this.hooks.resumeEdit(p,editing.id,(db,actual)=>{
+          const s=state(actual),rows=edits(db),known=s.sources?.[selection.work.draftId];
+          if(!matchesAuthoringRoute(db,actual,editing.route,this.now())||s.focusDraft!==selection.work.draftId||s.focusUntil!==editing.focusUntil||
+            s.current||rows.length!==1||rows[0]!.view.operationId!==editing.id||known!==undefined&&!same(known,selection.work.source))throw new CreatorSelectionChanged();
+        });
+        return;
+      }
       if(await this.retryCard(p,link,selection.work.draftId))return;
       await this.read(p,link,{kind:'draft',work:selection.work});
     }else{
@@ -534,7 +575,12 @@ export class PrivateCreator{
     switch(choice.kind){
       case 'detailPage':return this.preview(p,link,c,choice);
       case 'codePage':return this.display(p,link,await this.run(p,link,s=>this.cards.codePage(s,p,choice.answer,choice.offset,c.version)));
-      case 'select':return this.selected(p,link,choice.selection,{card:c,index});
+      case 'select':
+        try{return await this.selected(p,link,choice.selection,{card:c,index});}
+        catch(error){
+          await this.im.reply(evt.chatId,evt.messageId,error instanceof CreatorSelectionChanged?'账号选择已改变，请引用原配方卡或重新选择账号后重发本条修改。':denied().message);
+          throw error;
+        }
       case 'resumeHandoff':await this.hooks.resume(p,link,choice.id,(_db,actual)=>this.consumeChoice(state(actual),p,c,index));return;
       case 'groups':return this.groups(p,link,choice.offset,choice.inherited);
       case 'group':{
@@ -638,6 +684,8 @@ export class PrivateCreator{
     switch(req.type){
       case 'creatorContinue':this.hooks.interact(p);await this.selected(p,link,req.selection);break;
       case 'creatorPoll':{
+        const wakeId=await this.run(p,link,(_s,l,db)=>l.wake&&l.wake.expiresAt>this.now()&&this.wakeRoute(db,l)?l.wake.id:undefined);
+        if(wakeId)await this.open(p,link.binding,wakeId).catch(error=>{if(!(error instanceof CreatorSelectionChanged))throw error;});
         const {jobs,cards}=await this.run(p,link,(s,_l,db)=>{
           const now=this.now();
           for(const [id,r] of Object.entries(s.jobs)){

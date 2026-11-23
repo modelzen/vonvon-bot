@@ -127,6 +127,7 @@ export class AuthoringSession {
       interact:p=>this.interact(p),
       begin:(p,link,req)=>this.handoffs.begin(p,link,req,true),
       resume:(p,link,id,commit)=>this.handoffs.continuePrivate(p,link,id,commit),
+      resumeEdit:(p,id,commit)=>this.resumeContext(p,id,commit),
       edit:(p,link,work,revision,selectionCommit)=>this.start(p,link.recipient,{draftId:work.draftId,baseRevision:revision,selectionCommit}),
     });
   }
@@ -522,19 +523,7 @@ export class AuthoringSession {
           });
           return {kind:'reconciled', receipt:req.receipt};
         }
-        case 'resumeContext': {
-          const op = await this.operation(p,req.operationId);
-          if (!['waiting','candidate'].includes(op.view.state) || !op.dispatched || !op.carrier.messageId) refusal();
-          await this.validate(p,op);
-          await this.ledger.run(db => {
-            const linked = this.liveLink(db,p), row = this.locate(db,p,req.operationId);
-            if (!linked || !bound(row,linked)) refusal();
-            row.contextOpen = true; row.contextUntil = this.now()+CONTEXT;
-            linked.context = {operationId:req.operationId,until:row.contextUntil};
-            setCard(row,row.carrier.mode);
-          });
-          await this.refresh(p,req.operationId); break;
-        }
+        case 'resumeContext': await this.resumeContext(p,req.operationId); break;
         case 'updateCard': await this.refresh(p,req.operationId); break;
         case 'settle': await this.settle(p,req.receipt,req.operationId); break;
         case 'advance': await this.advance(p,req.operationId,req.authorization); break;
@@ -543,6 +532,21 @@ export class AuthoringSession {
       }
       return {kind:'operation',operation:await this.change(p,req.operationId,op => operationView(op,this.now()))};
     });
+  }
+  private async resumeContext(p:Presence,id:string,commit?:(db:AuthoringLedger,link:Link)=>void){
+    const eligible=(op:LocalOperation)=>!op.revoked&&active(op)&&['waiting','candidate'].includes(op.view.state)&&
+      op.dispatched&&!op.view.deliveryUnknown&&Boolean(op.carrier.messageId&&op.carrier.cardId);
+    const op=await this.operation(p,id);
+    if(!eligible(op))refusal();
+    await this.validate(p,op);
+    await this.change(p,id,(row,linked,db)=>{
+      if(!eligible(row))refusal();
+      commit?.(db,linked);
+      row.contextOpen=true;row.contextUntil=this.now()+CONTEXT;
+      linked.context={operationId:id,until:row.contextUntil};
+      setCard(row,row.carrier.mode);
+    });
+    await this.refresh(p,id);
   }
   private async start(p: Presence, recipient: Recipient, target: {selectionCommit?:(db:AuthoringLedger,link:Link)=>void;userSelection?:true;handoff?:{id:string;ref:string;groupId:string;generation:number;cardId:string;messageId:string};originalGroup?:LocalOperation['originalGroup'];rich?:RichLocalDraft;source?: Source; sourceIdentity?: string; sourceCard?: Pick<SourceMenu,'cardId'|'messageId'|'createdAt'>&{seq?:number}; draftId?: string; baseRevision?: number; instructionId?: string; payload?: string; proposalDigest?: string}): Promise<RecipeAuthoringReply> {
     if (target.source && !target.sourceIdentity) refusal();

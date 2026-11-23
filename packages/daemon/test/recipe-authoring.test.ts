@@ -1702,7 +1702,7 @@ it.each([false,true])('does not let an old account button replace a newer choice
   await tap(old);
   const expected=await ledger.run(db=>linkKey(Object.values(db.operations).find(o=>o.accountId===other.accountId)!.scope,other.accountId));
   expect(await ledger.run(db=>Object.entries(db.links).filter(([,l])=>(l.creator?.chosenUntil??0)>clock).map(([key])=>key))).toEqual([expected]);
-  expect(await ledger.run(db=>Object.values(db.links).filter(l=>l.wake))).toHaveLength(duringLookup?0:1);
+  expect(await ledger.run(db=>Object.values(db.links).filter(l=>l.wake))).toHaveLength(0);
 });
 
 it('refuses an account button whose current ref has multiple valid owners',async()=>{
@@ -2741,4 +2741,235 @@ it('keeps an unquoted version command for completed draft A from editing a diffe
   const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
   const result=await new AuthoringJournal(root,()=>clock).run(db=>({chosen:Object.values(db.links)[0]!.creator!.focusDraft===draftId,state:db.operations[b.operationId]!.view.state,request:db.operations[b.operationId]!.rich?.request}));
   expect({chosen:result.chosen,state:result.state,mutation:result.request&&'payload'in result.request&&result.request.payload.changes}).toEqual({chosen:true,state:'waiting',mutation:undefined});
+});
+
+
+it.each(['waiting','candidate','live'] as const)('CHAT RESUME selects an exact %s rich edit from its works card without a blocked draft read',async(mode)=>{
+  const {op,draftId}=await richChatContext();
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  if(mode==='candidate')await orch.onMessage(msg('/recipe name 尚未保存的候选'));
+  if(mode!=='live'){
+    clock+=31*60_000;await orch.shutdown();restart();await open();
+    orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});
+  }
+  await attachCreator();
+  const before=await ledger.run(db=>db.operations[op.operationId]!);
+  await rpc('creatorContinue',{selection:{kind:'version',target:{recipeId:randomUUID(),versionId:randomUUID()},name:'旧版本焦点',version:'9'}});
+  await service.onMessage(msg('我的配方'));
+  const list=(await creatorJobs()).find(j=>j.task.kind==='read'&&j.task.read.kind==='works')!;
+  await rpc('creatorAnswer',{id:list.id,answer:{kind:'works',items:[{kind:'draft',work:{draftId,source:null},name:'原作品',version:'1'}],nextOffset:null}});
+  const choice=privateChoice('原作品');await tap(choice);
+  const after=await ledger.run(db=>db.operations[op.operationId]!);
+  expect({open:after.contextOpen,live:(after.contextUntil??0)>clock,jobs:await creatorJobs()}).toEqual({open:true,live:true,jobs:[]});
+  expect(after.rich).toEqual(before.rich);expect(after.payload).toBe(before.payload);expect(after.view.payloadDigest).toBe(before.view.payloadDigest);
+  expect(after.view.baseRevision).toBe(before.view.baseRevision);expect(after.carrier.messageId).toBe(before.carrier.messageId);
+  expect(await ledger.run(db=>Object.keys(db.operations))).toEqual([op.operationId]);
+  proposeRich.mockResolvedValueOnce({kind:'proposal',commands:[{action:'setPublicText',target:'T1',text:'私聊继续修改'}]});
+  await orch.onMessage(msg('把名称改成私聊继续修改'));
+  expect(proposeRich).toHaveBeenCalledTimes(1);expect((await status(op.operationId)).state).toBe('candidate');
+  expect(cloud.map(c=>c.action)).toEqual(['dispatch']);
+  await tap(choice);expect(await creatorJobs()).toEqual([]);
+});
+
+it.each(['works','create'] as const)('CHAT WAKE lets an existing creator worker consume a new account choice for %s exactly once',async(intent)=>{
+  await link();await anotherAuthor();await attachCreator();
+  await service.onMessage(msg(intent==='works'?'我的配方':'创建配方'));
+  await tap(privateChoice('关联 1'));
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock),before=messages.size;
+  const first=await creatorJobs();
+  if(intent==='works')expect(first).toMatchObject([{task:{kind:'read',read:{kind:'works',offset:0}}}]);
+  else {expect(first).toEqual([]);expect(lastCard()).toContain('选择来源群');expect(messages.size).toBe(before+1);}
+  expect(await ledger.run(db=>Object.values(db.links).some(l=>l.wake))).toBe(false);
+  expect(await creatorJobs()).toEqual(first);expect(messages.size).toBe(before+(intent==='create'?1:0));
+});
+
+it('CHAT WAKE removes an older wake atomically when another account is explicitly selected',async()=>{
+  await link();const other=await anotherAuthor();await attachCreator();
+  await service.onMessage(msg('我的配方'));await tap(privateChoice('关联 1'));
+  await other.request('edit',{draftId:randomUUID(),baseRevision:1});
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  expect(await new AuthoringJournal(root,()=>clock).run(db=>Object.values(db.links).some(l=>l.wake))).toBe(false);
+  expect(await creatorJobs()).toEqual([]);
+});
+
+it.each(['pendingCloud','cancelPending','unknown','ambiguous','undispatched','missingCarrier','revoked'] as const)('CHAT RESUME refuses an unsafe %s local edit without allocating a blocked read',async(change)=>{
+  const {op,draftId}=await richChatContext();
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  await attachCreator();
+  await ledger.run(db=>{
+    const row=db.operations[op.operationId]!;row.contextOpen=false;
+    if(change==='pendingCloud'||change==='cancelPending')row.view.state=change;
+    if(change==='unknown')row.view.deliveryUnknown=true;
+    if(change==='undispatched')row.dispatched=false;
+    if(change==='missingCarrier')delete row.carrier.messageId;
+    if(change==='revoked')row.revoked=true;
+    if(change==='ambiguous'){const copy=structuredClone(row),id=randomUUID();copy.view.operationId=id;db.operations[id]=copy;}
+  });
+  await expect(rpc('creatorContinue',{selection:{kind:'draft',work:{draftId,source:null},name:'原作品',version:'1'}})).rejects.toThrow();
+  expect(await ledger.run(db=>Object.values(db.links).flatMap(l=>Object.values(l.creator?.jobs??{})))).toEqual([]);
+  expect(await ledger.run(db=>db.operations[op.operationId]!.contextOpen)).toBe(false);
+  expect(cloud.map(c=>c.action)).toEqual(['dispatch']);
+});
+
+it.each(['pendingCloud','cancelPending','unknown','revoked','terminal'] as const)('CHAT RESUME rechecks %s after asynchronous source validation on the generic resume path',async(change)=>{
+  const {op}=await richChatContext();
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock),identity=kind(await rpc('groupSourceIdentity',{groupId}),'groupSourceIdentity').identity;
+  await ledger.run(db=>{const row=db.operations[op.operationId]!;row.contextOpen=false;row.originalGroup={groupId,identity};});
+  onMembership=async()=>{
+    onMembership=undefined;
+    await ledger.run(db=>{
+      const row=db.operations[op.operationId]!;
+      if(change==='pendingCloud'||change==='cancelPending')row.view.state=change;
+      if(change==='unknown')row.view.deliveryUnknown=true;
+      if(change==='revoked')row.revoked=true;
+      if(change==='terminal')row.terminalAt=clock;
+    });
+  };
+  await expect(rpc('resumeContext',{operationId:op.operationId})).rejects.toThrow();
+  expect(await ledger.run(db=>db.operations[op.operationId]!.contextOpen)).toBe(false);
+});
+
+
+it.each(['draft','account'] as const)('CHAT RESUME preserves a newer %s selection committed while the exact edit is being validated',async(target)=>{
+  const {op,draftId}=await richChatContext();
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock),identity=kind(await rpc('groupSourceIdentity',{groupId}),'groupSourceIdentity').identity;
+  const other=target==='account'?await anotherAuthor():undefined;
+  await attachCreator();
+  const association=kind(await service.request(peer,recipeAuthoringRequestSchema.parse({type:'creatorDiscover',botId:appId,accountId:account})),'creatorBinding').association!;
+  const second={id:randomUUID(),device:peer.device};
+  const opened=kind(await service.request(second,recipeAuthoringRequestSchema.parse({type:'creatorOpen',botId:appId,accountId:account,binding:association.binding,scope:association.scope,wakeId:null})),'creatorSession');
+  const bDraft=randomUUID();
+  const requestB=()=>target==='account'?other!.request('edit',{draftId:bDraft,baseRevision:1}):service.request(second,recipeAuthoringRequestSchema.parse({type:'creatorContinue',botId:appId,session:opened.session,selection:{kind:'draft',work:{draftId:bDraft,source:null},name:'B 草稿',version:'1'}}));
+  await ledger.run(db=>{const row=db.operations[op.operationId]!;row.contextOpen=false;row.originalGroup={groupId,identity};});
+  let chosen:unknown,focus:unknown;
+  onMembership=async()=>{
+    onMembership=undefined;await requestB();
+    ({chosen,focus}=await ledger.run(db=>({chosen:Object.values(db.links).map(l=>l.creator?.chosenUntil),focus:Object.values(db.links).map(l=>l.creator?.focusDraft)})));
+  };
+  await expect(rpc('creatorContinue',{selection:{kind:'draft',work:{draftId,source:null},name:'A 草稿',version:'1'}})).rejects.toThrow();
+  const after=await ledger.run(db=>({chosen:Object.values(db.links).map(l=>l.creator?.chosenUntil),focus:Object.values(db.links).map(l=>l.creator?.focusDraft),open:db.operations[op.operationId]!.contextOpen}));
+  expect(after).toEqual({chosen,focus,open:false});
+});
+
+it('CHAT WAKE discards A before creating or displaying a group card when B is selected during inventory',async()=>{
+  await link();const b=await anotherAuthor();await attachCreator();
+  await service.onMessage(msg('创建配方'));await tap(privateChoice('关联 1'));
+  const before=messages.size;
+  onMembership=async()=>{onMembership=undefined;await b.request('edit',{draftId:randomUUID(),baseRevision:1});};
+  expect(await creatorJobs()).toEqual([]);
+  expect(messages.size).toBe(before);
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  expect(await new AuthoringJournal(root,()=>clock).run(db=>Object.values(db.links).filter(l=>l.creator&&Object.values(l.creator.cards).some(c=>c.title==='选择来源群')))).toEqual([]);
+});
+
+it.each(['expired','superseded','wrongBinding','recipient','admin'] as const)('CHAT WAKE keeps a %s wake inert during ordinary polling',async(change)=>{
+  await link();await anotherAuthor();await attachCreator();
+  await service.onMessage(msg('创建配方'));await tap(privateChoice('关联 1'));
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock),before=messages.size;
+  await ledger.run(db=>{
+    const a=Object.values(db.links).find(l=>l.wake)!;
+    if(change==='expired')a.wake!.expiresAt=clock;
+    if(change==='superseded'){delete a.creator!.chosenUntil;const b=Object.values(db.links).find(l=>l!==a)!;(b.creator??={jobs:{},cards:{}}).chosenUntil=clock+60_000;}
+    if(change==='wrongBinding')a.binding=randomUUID();
+    if(change==='recipient')onMembership=async()=>{onMembership=undefined;await ledger.run(db=>{Object.values(db.links).find(l=>l.wake)!.recipient.tenantKey='changed';});};
+  });
+  if(change==='admin')cfg.preferences!.access!.admins=[];
+  const jobs=await creatorJobs().catch(()=>[]);
+  expect(jobs).toEqual([]);expect(messages.size).toBe(before);
+});
+
+it('CHAT WAKE preserves a sole-link intent wake without asking for an account choice',async()=>{
+  await link();
+  await orch.shutdown();restart();orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});
+  await service.onMessage(msg('创建配方'));
+  const association=kind(await service.request(peer,recipeAuthoringRequestSchema.parse({type:'creatorDiscover',botId:appId,accountId:account})),'creatorBinding');
+  expect(association.wakeId).not.toBeNull();await attachCreator();
+  const before=messages.size;expect(await creatorJobs()).toEqual([]);
+  expect(lastCard()).toContain('选择来源群');expect(messages.size).toBe(before+1);expect(lastCard()).not.toContain('选择本人账号关联');
+});
+
+it('CHAT RESUME validates the original group while accepting an absent prior snapshot source',async()=>{
+  const {op,draftId}=await richChatContext();
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock),identity=kind(await rpc('groupSourceIdentity',{groupId}),'groupSourceIdentity').identity;
+  await ledger.run(db=>{const row=db.operations[op.operationId]!;row.contextOpen=false;row.originalGroup={groupId,identity};});
+  await attachCreator();
+  const work={draftId,source:{groupId,identity,preparationId:randomUUID()}};
+  await rpc('creatorContinue',{selection:{kind:'draft',work,name:'原作品',version:'1'}});
+  expect(await creatorJobs()).toEqual([]);
+  expect(await ledger.run(db=>db.operations[op.operationId]!.contextOpen)).toBe(true);
+});
+
+
+it('CHAT WAKE never redelivers an abandoned group card when B selects during card creation',async()=>{
+  await link();const b=await anotherAuthor();await attachCreator();
+  await service.onMessage(msg('创建配方'));await tap(privateChoice('关联 1'));
+  const {AuthoringIm}=await import('../src/recipe/authoring-im');
+  const create=AuthoringIm.prototype.createJson,before=messages.size;
+  const delayed=vi.spyOn(AuthoringIm.prototype,'createJson').mockImplementationOnce(async function(this:InstanceType<typeof AuthoringIm>,body){
+    const id=await create.call(this,body);await b.request('edit',{draftId:randomUUID(),baseRevision:1});return id;
+  });
+  try{expect(await creatorJobs()).toEqual([]);expect(messages.size).toBe(before);expect(await creatorJobs()).toEqual([]);expect(messages.size).toBe(before);}
+  finally{delayed.mockRestore();}
+});
+
+it('CHAT WAKE reuses the original group card and message after a lost send response',async()=>{
+  await link();await anotherAuthor();await attachCreator();
+  await service.onMessage(msg('创建配方'));await tap(privateChoice('关联 1'));
+  loseSend=true;await expect(creatorJobs()).rejects.toThrow();
+  const sent=messages.size,created=cards.size;
+  loseSend=false;expect(await creatorJobs()).toEqual([]);
+  expect(messages.size).toBe(sent);expect(cards.size).toBe(created);expect(lastCard()).toContain('选择来源群');
+  expect(await creatorJobs()).toEqual([]);expect(messages.size).toBe(sent);
+});
+
+it('CHAT RESUME never reopens an expired edit through the indirect preview command',async()=>{
+  await link();await attachCreator();const snapshot=await openManualWork('原草稿');
+  const op=kind(await rpc('edit',{draftId:snapshot.work.draftId,baseRevision:snapshot.revision}),'operation').operation;
+  await advance(op,'dispatch');
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  await ledger.run(db=>{
+    const row=db.operations[op.operationId]!;row.contextOpen=false;row.contextUntil=clock-1;
+    const creator=Object.values(db.links)[0]!.creator!;creator.focusUntil=clock+60_000;creator.focusDraft=snapshot.work.draftId;
+    creator.current={kind:'draft',snapshot:{...snapshot,format:'role-v1',public:{...snapshot.public,access:'direct'}}};
+  });
+  await service.onMessage(msg('预览发布'));
+  expect(await ledger.run(db=>db.operations[op.operationId]!.contextOpen)).toBe(false);
+  expect(await creatorJobs()).toEqual([]);
+});
+
+
+it('CHAT RESUME visibly refuses an unsafe works-card selection in the original private chat',async()=>{
+  const {op,draftId}=await richChatContext();await attachCreator();
+  await service.onMessage(msg('我的配方'));
+  const list=(await creatorJobs()).find(j=>j.task.kind==='read'&&j.task.read.kind==='works')!;
+  await rpc('creatorAnswer',{id:list.id,answer:{kind:'works',items:[{kind:'draft',work:{draftId,source:null},name:'原作品',version:'1'}],nextOffset:null}});
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  await new AuthoringJournal(root,()=>clock).run(db=>{db.operations[op.operationId]!.view.deliveryUnknown=true;});
+  await tap(privateChoice('原作品'));
+  expect(replies()).toContain('请从原私聊重新选择');expect(await creatorJobs()).toEqual([]);
+});
+
+
+it('CHAT RESUME preserves B selected during the initial works-source validation',async()=>{
+  const {op,draftId}=await richChatContext();const b=await anotherAuthor();await attachCreator();
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock),identity=kind(await rpc('groupSourceIdentity',{groupId}),'groupSourceIdentity').identity;
+  await ledger.run(db=>{const row=db.operations[op.operationId]!;row.contextOpen=false;row.originalGroup={groupId,identity};});
+  let chosen:unknown;
+  onMembership=async()=>{
+    onMembership=undefined;await b.request('edit',{draftId:randomUUID(),baseRevision:1});
+    chosen=await ledger.run(db=>Object.values(db.links).map(l=>l.creator?.chosenUntil));
+  };
+  const work={draftId,source:{groupId,identity,preparationId:randomUUID()}};
+  await expect(rpc('creatorContinue',{selection:{kind:'draft',work,name:'A 草稿',version:'1'}})).rejects.toThrow();
+  expect(await ledger.run(db=>Object.values(db.links).map(l=>l.creator?.chosenUntil))).toEqual(chosen);
+  expect(await ledger.run(db=>db.operations[op.operationId]!.contextOpen)).toBe(false);
 });
