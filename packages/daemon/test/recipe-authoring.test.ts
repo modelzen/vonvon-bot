@@ -3641,3 +3641,126 @@ it.each(['active','unknown'] as const)('NATIVE SDK PREVIEW preserves an %s publi
     expect(await nativePreviewCarrier(f)).toEqual(before);expect(f.opened).toHaveBeenCalledTimes(state==='unknown'?1:0);expect(f.published).not.toHaveBeenCalled();
   }finally{await sdk.close();f.history.history.close();}
 });
+
+it.each(['在 App 中预览','确认发布'])('NATIVE SDK PREVIEW accepts a visible %s click before the refresh PUT acknowledgement',async label=>{
+  const f=await nativePreviewFixture(),sdk=await nativePreviewSdkReceiver();
+  try{
+    const before=await nativePreviewCarrier(f);
+    await sdk.click(f.choice,'first-preview');const [first]=await creatorJobs();
+    updateFault='loseReply';
+    await expect(f.executor.run(f.context,first!)).rejects.toThrow('卡片等待更新');
+    const visible=privateChoice(label,f.choice.messageId);
+    expect(visible.value.generation).toBe(before.card.generation+1);
+    expect((await nativePreviewCarrier(f)).card.needsUpdate).toBe(true);
+    await sdk.click(visible,'visible-before-ack');
+    expect(sdk.seen).toEqual(['first-preview','visible-before-ack']);
+    updateFault=undefined;
+    const [job]=await creatorJobs();
+    if(label==='在 App 中预览'){
+      expect(job?.task).toMatchObject({kind:'read',read:{kind:'openPreview'}});
+      await f.executor.run(f.context,job!);
+      expect(f.opened).toHaveBeenCalledTimes(2);
+      expect((await nativePreviewCarrier(f)).owner).toEqual(before.owner);
+    }else{
+      expect(job?.id).toBe(f.offer.job.id);
+      expect(await rpc('creatorCheck',{id:job!.id})).toMatchObject({mode:'execute',job:{task:{confirmation:{kind:'feishu-card'}}}});
+      const approved=await nativePreviewCarrier(f);
+      await sdk.click(visible,'same-value-again');
+      expect(sdk.seen).toHaveLength(2);expect(await nativePreviewCarrier(f)).toEqual(approved);
+    }
+    expect(f.requests.every(r=>r.method==='GET')).toBe(true);expect(f.published).not.toHaveBeenCalled();
+  }finally{await sdk.close();f.history.history.close();}
+});
+
+it.each(['disconnect','daemon restart','lost native answer'])('NATIVE SDK PREVIEW restores the physical button after an unacknowledged online click and %s',async fault=>{
+  const f=await nativePreviewFixture(),sdk=await nativePreviewSdkReceiver();
+  try{
+    const before=await nativePreviewCarrier(f);
+    await sdk.click(f.choice,'online');const [delivery]=await creatorJobs();
+    expect(delivery?.task).toMatchObject({kind:'read',read:{kind:'openPreview'}});
+    if(fault==='lost native answer'){
+      const failed={...f.context,rpc:(req:RecipeAuthoringRequest)=>req.type==='creatorAnswer'?Promise.reject(Error('lost answer')):f.context.rpc(req)};
+      await expect(f.executor.run(failed,delivery!)).rejects.toThrow('lost answer');
+    }
+    if(fault==='daemon restart'){await orch.shutdown();restart();orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});}
+    else service.disconnect(peer.id);
+    await attachCreator();expect(session).not.toBe(before.card.session);
+    expect(await creatorJobs()).toEqual([]);expect(await creatorJobs()).toEqual([]);
+    expect(f.opened).toHaveBeenCalledTimes(fault==='lost native answer'?1:0);
+    const restored=privateChoice('在 App 中预览',f.choice.messageId);
+    await sdk.click(restored,'reopen');
+    expect(sdk.seen).toEqual(['online','reopen']);
+    const [next]=await creatorJobs();expect(next?.id).toBeDefined();expect(next?.id).not.toBe(delivery!.id);
+    await f.executor.run({...f.context,session},next!);
+    expect(f.opened).toHaveBeenCalledTimes(fault==='lost native answer'?2:1);
+    const after=await nativePreviewCarrier(f);expect(after.owner).toEqual(before.owner);
+    expect(after.card).toMatchObject({cardId:before.card.cardId,messageId:before.card.messageId,session:before.card.session});
+    expect(f.requests.every(r=>r.method==='GET')).toBe(true);expect(f.published).not.toHaveBeenCalled();
+  }finally{await sdk.close();f.history.history.close();}
+});
+
+it('NATIVE SDK PREVIEW waits for a unique successor and preserves other polling work',async()=>{
+  const f=await nativePreviewFixture(),sdk=await nativePreviewSdkReceiver();
+  try{
+    const before=await nativePreviewCarrier(f);
+    await sdk.click(f.choice,'online');const [delivery]=await creatorJobs();
+    const other=kind(await rpc('creatorPreview',{work:{draftId:randomUUID(),source:null},revision:1}),'creatorPreview');
+    const connect=async()=>{
+      const client={id:randomUUID(),device:peer.device};
+      const connection=kind(await service.request(client,recipeAuthoringRequestSchema.parse({type:'creatorOpen',botId:appId,accountId:account,
+        binding:f.association.binding,scope:f.association.scope,nativePreview:true,wakeId:null})),'creatorSession');
+      const poll=async()=>kind(await service.request(client,recipeAuthoringRequestSchema.parse({type:'creatorPoll',botId:appId,session:connection.session})),'creatorJobs').jobs;
+      return {client,poll};
+    };
+    const a=await connect();
+    expect(await a.poll()).toEqual([other.job]);expect(await nativePreviewCarrier(f)).toEqual(before);
+    expect(await creatorJobs()).toContainEqual(delivery);
+    const b=await connect();service.disconnect(peer.id);
+    expect(await a.poll()).toEqual([other.job]);expect(await b.poll()).toEqual([other.job]);expect(await nativePreviewCarrier(f)).toEqual(before);
+    service.disconnect(b.client.id);expect(await a.poll()).toEqual([other.job]);
+    const ready=await nativePreviewCarrier(f);
+    expect(ready.card.generation).toBe(before.card.generation+1);expect(ready.owner).toEqual(before.owner);
+    expect(f.opened).not.toHaveBeenCalled();
+  }finally{await sdk.close();f.history.history.close();}
+});
+
+it('NATIVE SDK PREVIEW rearms a visible pending refresh clicked while offline',async()=>{
+  const f=await nativePreviewFixture(),sdk=await nativePreviewSdkReceiver();
+  try{
+    const before=await nativePreviewCarrier(f);
+    await sdk.click(f.choice,'online');const [first]=await creatorJobs();
+    updateFault='loseReply';await expect(f.executor.run(f.context,first!)).rejects.toThrow('卡片等待更新');
+    const visible=privateChoice('在 App 中预览',f.choice.messageId);
+    service.disconnect(peer.id);await sdk.click(visible,'offline');expect(sdk.seen).toEqual(['online','offline']);
+    updateFault=undefined;await attachCreator();expect(await creatorJobs()).toEqual([]);
+    await sdk.click(privateChoice('在 App 中预览',f.choice.messageId),'again');
+    const [job]=await creatorJobs();await f.executor.run({...f.context,session},job!);
+    expect(f.opened).toHaveBeenCalledTimes(2);expect((await nativePreviewCarrier(f)).owner).toEqual(before.owner);
+    expect(f.requests.every(r=>r.method==='GET')).toBe(true);expect(f.published).not.toHaveBeenCalled();
+  }finally{await sdk.close();f.history.history.close();}
+});
+
+it('NATIVE SDK PREVIEW keeps ordinary updates pending on a physical click',async()=>{
+  const f=await nativePreviewFixture(),sdk=await nativePreviewSdkReceiver();
+  try{
+    const before=await nativePreviewCarrier(f);
+    await f.ledger.run(db=>{Object.values(db.links).find(l=>l.binding===f.association.binding)!.creator!.cards[before.card.ref]!.needsUpdate=true;});
+    await sdk.click(f.choice,'preview');await sdk.click(privateChoice('确认发布',f.choice.messageId),'confirm');
+    expect((await nativePreviewCarrier(f)).card.needsUpdate).toBe(true);
+    expect((await nativePreviewCarrier(f)).owner).toEqual(before.owner);
+    expect(f.opened).not.toHaveBeenCalled();expect(f.published).not.toHaveBeenCalled();
+  }finally{await sdk.close();f.history.history.close();}
+});
+
+it('NATIVE SDK PREVIEW delivers a fresh physical click after a daemon restart before the first poll',async()=>{
+  const f=await nativePreviewFixture(),sdk=await nativePreviewSdkReceiver();
+  try{
+    await tap(f.choice,owner,chatId,tenant,'old');const [unfinished]=await creatorJobs();
+    await orch.shutdown();restart();orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});await attachCreator();
+    await sdk.click(privateChoice('在 App 中预览',f.choice.messageId),'fresh');
+    expect(sdk.seen).toEqual(['fresh']);
+    const [delivery]=await creatorJobs();
+    expect(delivery?.task).toMatchObject({kind:'read',read:{kind:'openPreview'}});expect(delivery?.id).not.toBe(unfinished!.id);
+    await f.executor.run({...f.context,session},delivery!);expect(f.opened).toHaveBeenCalledOnce();
+  }finally{await sdk.close();f.history.history.close();}
+});

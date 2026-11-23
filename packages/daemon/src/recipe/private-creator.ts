@@ -54,6 +54,7 @@ export interface CreatorLedger {
   accountChoice?:{ref:string;intent:Intent;expiresAt:number} & ({messageId?:never;cardId?:never}|{messageId:string;cardId:string});
 }
 type Hooks={
+  canRefreshPreview(p:Presence,delivery:string):boolean;
   guard(p:Presence,recipient?:Recipient):Promise<Link>;live(p:Presence):void;interact(p:Presence):void;
   begin(p:Presence,link:Link,r:Extract<RecipeAuthoringRequest,{type:'beginHandoff'|'beginDraftHandoff'}>):Promise<unknown>;
   resume(p:Presence,link:Link,id:string,commit:(db:AuthoringLedger,actual:Link)=>void):Promise<unknown>;
@@ -219,15 +220,25 @@ export class PrivateCreator{
     return Boolean(refresh&&c.needsUpdate&&c.cardId===refresh.cardId&&c.messageId===refresh.messageId&&c.expiresAt>this.now()&&
       owner?.state==='offer'&&owner.expiresAt>this.now()&&owner.offerRef===c.ref&&owner.job.task.kind==='command'&&owner.job.task.command.kind==='publish');
   }
+  private acknowledgeVisibleRefresh(s:CreatorLedger,clicked:Card){
+    const c=s.cards[clicked.ref];
+    if(!c||c.generation!==clicked.generation||c.cardId!==clicked.cardId||c.messageId!==clicked.messageId||c.session!==clicked.session)return false;
+    if(!c.needsUpdate)return true;
+    if(!this.pendingPreviewRefresh(s,c))return false;
+    delete c.needsUpdate;
+    delete c.previewRefresh;
+    return true;
+  }
   private async openPreview(p:Presence,link:Link,card:Card,read:Extract<CreatorRead,{kind:'openPreview'}>,eventId:string|undefined){
     await this.source(p,read.work);
     await this.run(p,link,(s,_l,db)=>{
       if(!p.nativePreview)throw denied();
       const owner=this.appPreviewOwner(s,card,read);
       this.noPendingSave(db,p,link,read.work);
-      const existing=Object.values(s.jobs).some(row=>row.previewOwner===owner.job.id&&row.originalCardId===card.cardId&&row.approvalGeneration===card.generation&&
-        (eventId?row.previewRequest?.eventId===eventId:row.previewRequest?.session===p.session&&row.state==='active'));
-      if(existing)return;
+      const prior=Object.values(s.jobs).filter(row=>row.previewRequest&&row.previewOwner===owner.job.id&&
+        row.originalCardId===card.cardId&&row.approvalGeneration===card.generation);
+      if(prior.some(row=>eventId?row.previewRequest?.eventId===eventId:row.previewRequest?.session===p.session&&row.state==='active'))return;
+      for(const old of prior)if(old.state==='active'&&old.previewRequest&&this.hooks.canRefreshPreview(p,old.previewRequest.session))delete s.jobs[old.job.id];
       const row=this.addJob(p,link,s,{kind:'read',read},'active',read.work);
       row.previewRequest={session:p.session,cardSession:card.session,eventId};
       row.previewOwner=owner.job.id;row.originalCardId=card.cardId;row.messageId=card.messageId;
@@ -623,11 +634,12 @@ export class PrivateCreator{
     const {ref,generation,index}=click;
     if(typeof ref!=='string'||!Number.isInteger(index))return;
     const c=await this.run(p,link,s=>s.cards[ref]);
-    if(!c||c.session!==(previewFrom??p.session)||c.expiresAt<=this.now()||c.generation!==generation||c.messageId!==evt.messageId||c.needsUpdate||!c.cardId||!c.options[index])return;
+    if(!c||c.session!==(previewFrom??p.session)||c.expiresAt<=this.now()||c.generation!==generation||c.messageId!==evt.messageId||c.needsUpdate&&!c.previewRefresh||!c.cardId||!c.options[index])return;
     const choice=c.options[index]!.choice;
     if(previewFrom&&(choice.kind!=='read'||choice.read.kind!=='openPreview'))return;
     if(!await this.im.matches(evt.messageId,evt.chatId,c.cardId))return;
     await this.hooks.guard(p,recipient);
+    if(c.needsUpdate&&!await this.run(p,link,s=>this.acknowledgeVisibleRefresh(s,c)))return;
     this.hooks.interact(p);
     switch(choice.kind){
       case 'detailPage':return this.preview(p,link,c,choice);
@@ -708,7 +720,7 @@ export class PrivateCreator{
       if(!entry)return;
       const [key,link]=entry;
       const card=link?.creator?.cards[click.ref],choice=card?.options[click.index]?.choice;
-      if(card&&card.expiresAt>this.now()&&!card.needsUpdate&&card.generation===click.generation&&card.messageId===evt.messageId&&
+      if(card&&card.expiresAt>this.now()&&(!card.needsUpdate||card.previewRefresh)&&card.generation===click.generation&&card.messageId===evt.messageId&&
         card.cardId&&choice?.kind==='read'&&choice.read.kind==='openPreview')return {card,key,binding:link.binding};
     });
     if(!verified)return;
@@ -717,6 +729,7 @@ export class PrivateCreator{
       await this.ledger.run(db=>{
         const link=db.links[verified.key];
         if(!link?.creator||link.bot!==this.botKey||link.binding!==verified.binding||!sameRecipient(link.recipient,recipient))return;
+        if(card.needsUpdate&&!this.acknowledgeVisibleRefresh(link.creator,card))return;
         const owner=Object.values(link.creator.jobs).find(r=>r.offerRef===card.ref);
         this.refreshPreview(link.creator,owner,card);
       });
@@ -850,6 +863,9 @@ export class PrivateCreator{
             if(r.state!=='finished'&&r.job.task.kind==='read'&&r.job.task.read.kind==='openPreview'){
               const owner=r.previewOwner?s.jobs[r.previewOwner]:undefined,card=owner?.offerRef?s.cards[owner.offerRef]:undefined;
               if(!card||card.session!==r.previewRequest?.cardSession||!this.livePreview(s,card.session,owner)||card.generation!==r.approvalGeneration||card.cardId!==r.originalCardId||card.messageId!==r.messageId){
+                delete s.jobs[id];continue;
+              }
+              if(this.hooks.canRefreshPreview(p,r.previewRequest.session)&&this.refreshPreview(s,owner,card)){
                 delete s.jobs[id];continue;
               }
             }

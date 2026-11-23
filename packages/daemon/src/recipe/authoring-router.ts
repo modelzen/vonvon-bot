@@ -5,7 +5,7 @@ import {assertBotIdentity} from '../config/bots';
 import {paths} from '../config/paths';
 import {isAdmin} from '../config/schema';
 import {AuthoringJournal, authoringBotKey, linkKey, matchesAuthoringRoute, sameRecipient, type AuthoringRoute} from './authoring-journal';
-import {fromMessage, type AuthoringOptions, type AuthoringPeer, type AuthoringSession} from './authoring-service';
+import {fromMessage, type AuthoringOptions, type AuthoringPeer, type AuthoringSession, type Presence} from './authoring-service';
 import {creatorIntent,creatorClick} from './private-creator';
 import {AuthoringIm} from './authoring-im';
 import {draftIntent} from './draft-instruction';
@@ -20,12 +20,12 @@ export class AuthoringRouter {
   private readonly botKey:string;
   private readonly im:AuthoringIm;
   private closed=false;
-  constructor(private readonly opts:AuthoringOptions,private readonly spawn:()=>AuthoringSession){
+  constructor(private readonly opts:AuthoringOptions,private readonly spawn:(canRefreshPreview:(p:Presence,delivery:string)=>boolean)=>AuthoringSession){
     this.now=opts.now??Date.now;
     this.journal=new AuthoringJournal(opts.root??paths.appDir,this.now);
     this.botKey=authoringBotKey(opts.bot);
     this.im=new AuthoringIm(opts.channel);
-    this.idle=spawn();
+    this.idle=spawn(this.canRefreshPreview);
   }
   async request(peer:AuthoringPeer,input:RecipeAuthoringRequest):Promise<Awaited<ReturnType<AuthoringSession['request']>>>{
     const req=recipeAuthoringRequestSchema.parse(input);
@@ -50,7 +50,7 @@ export class AuthoringRouter {
         const p=s.presence;
         return p?.binding&&p.peer.id===peer.id&&p.peer.device===peer.device&&p.scope===req.scope&&p.account===req.accountId&&p.binding!==req.binding;
       }):[];
-      const session=this.spawn();
+      const session=this.spawn(this.canRefreshPreview);
       this.sessions.add(session);this.owners.set(session,{id:peer.id,creator:req.type==='creatorOpen'});
       const opening=session.request(peer,req);
       this.opening.set(key,opening);
@@ -161,6 +161,18 @@ export class AuthoringRouter {
     if(snapshot.context||snapshot.knownQuote||route.kind==='chosen')return recover();
     return this.idle.onMessage(msg);
   }
+  private linkedCreators(key:string,binding:string){
+    return [...this.sessions].filter(s=>{
+      const p=s.presence;
+      return s.creator.enabled&&p?.binding===binding&&p.until>this.now()&&this.now()-p.activeAt<30*60_000&&linkKey(p.scope,p.account)===key;
+    });
+  }
+  private readonly canRefreshPreview=(p:Presence,delivery:string)=>{
+    if(!p.nativePreview||!p.binding||delivery===p.session)return false;
+    const linked=this.linkedCreators(linkKey(p.scope,p.account),p.binding);
+    const supported=linked.filter(s=>s.presence?.nativePreview);
+    return !linked.some(s=>s.presence?.session===delivery)&&supported.length===1&&supported[0]?.presence===p;
+  };
   async onAction(evt:CardActionEvent){
     if(this.closed)return;
     const raw=evt.raw as {operator?:{open_id?:string;tenant_key?:string}};
@@ -169,23 +181,22 @@ export class AuthoringRouter {
     const click=creatorClick.safeParse(evt.action?.value).data;
     if(click?.verb==='creatorAccount'){await this.idle.creator.accountAction(evt,recipient);return;}
     const bindings=await this.journal.run(db=>Object.entries(db.links).filter(([,l])=>l.bot===this.botKey&&sameRecipient(l.recipient,recipient)).map(([key,l])=>({key,binding:l.binding})));
-    const sessions=[...this.sessions].filter(s=>{const p=s.presence;return p&&bindings.some(l=>l.key===linkKey(p.scope,p.account)&&(!p.binding||p.binding===l.binding));});
     if(click?.verb==='creator'){
       const route=await this.journal.run(db=>bindings.flatMap(l=>{
         const card=db.links[l.key]?.creator?.cards[click.ref],choice=card?.options[click.index]?.choice;
         return card?.messageId===evt.messageId?[{...l,session:card.session,preview:choice?.kind==='read'&&choice.read.kind==='openPreview'}]:[];
       })[0]);
-      const live=sessions.filter(s=>s.creator.enabled&&s.presence&&s.presence.until>this.now()&&this.now()-s.presence.activeAt<30*60_000);
       if(!route)return;
-      const original=live.find(s=>s.presence?.session===route.session);
+      const linked=this.linkedCreators(route.key,route.binding);
+      const original=linked.find(s=>s.presence?.session===route.session);
       if(original&&(!route.preview||original.presence?.nativePreview)){await original.onAction(evt);return;}
       if(!route.preview)return;
-      const linked=live.filter(s=>{const p=s.presence!;return p.binding===route.binding&&linkKey(p.scope,p.account)===route.key;});
       const restored=linked.filter(s=>s.presence?.nativePreview);
       if(restored.length===1)await restored[0]!.onAction(evt,route.session);
       else await this.idle.creator.offlinePreview(evt,linked.length>0);
       return;
     }
+    const sessions=[...this.sessions].filter(s=>{const p=s.presence;return p&&bindings.some(l=>l.key===linkKey(p.scope,p.account)&&(!p.binding||p.binding===l.binding));});
     if(sessions.length>1){
       const route=await this.journal.run(db=>{
         const v=evt.action?.value;
