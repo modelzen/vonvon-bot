@@ -60,6 +60,7 @@ export const richMetadataReceiptSchema = z.object({requestId:metadataRequestId,d
 const changes = {public: recipePublicSchema, config: recipeConfigSchema};
 export const communityRequestSchema = z.discriminatedUnion('type', [
   richMetadataRequestSchema,
+  z.object({type:z.literal('recoverRichDraftMetadata'),...privateRequest,draftId:id}).strict(),
   z.object({type: z.literal('shareLink'), ...version}).strict(),
   z.object({type: z.literal('catalog'), accountId: id.optional(), query: text(120).optional(), ...catalogPage}).strict(),
   z.object({type: z.literal('detail'), accountId: id.optional(), ...version}).strict(),
@@ -84,12 +85,14 @@ const nextCursor=id.nullable();
 const catalogNextCursor=z.string().min(1).max(1600).nullable();
 const codeState = z.enum(['available', 'redeemed', 'disabled']);
 const fullCode = z.object({codeId: id, status: z.literal('available'), code: z.string().regex(/^[A-F0-9-]{32,40}$/i)}).strict();
-export const communityResponseSchemas = {
-  saveRichDraftMetadata:z.discriminatedUnion('status',[
+const richMetadataOutcomeSchema = z.discriminatedUnion('status',[
     z.object({status:z.literal('committed'),receipt:richMetadataReceiptSchema,draft:recipeRichDraftSchema.optional()}).strict(),
     z.object({status:z.literal('rejected'),code:z.enum(['conflict','operation_expired','operation_clock_skew','session_changed','auth_required','account_disabled','forbidden','quota_exceeded','credential_detected','invalid_input','not_found','rate_limited','source_unavailable','object_capacity','invalid_logo'])}).strict(),
     z.object({status:z.literal('uncertain')}).strict(),
-  ]),
+  ]);
+export const communityResponseSchemas = {
+  saveRichDraftMetadata:richMetadataOutcomeSchema,
+  recoverRichDraftMetadata:z.union([z.object({status:z.literal('current'),draft:recipeRichDraftSchema}).strict(),richMetadataOutcomeSchema]),
   shareLink: z.object({url: z.string().url().max(2048)}).strict(),
   catalog: z.object({heroKind:z.enum(['featured','latest']).nullable().optional(),hero: summary.nullable(), items: z.array(summary).max(8), nextCursor:catalogNextCursor}).strict(),
   detail: recipeDetailSchema,

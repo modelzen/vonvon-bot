@@ -3,7 +3,7 @@ import {GlowButton} from '../GlowButton';
 import {RichRecipeEditor, type RichDraftContinuationProps} from './RichRecipeEditor';
 import {useEffect, useReducer, useRef, useState} from 'react';
 import {communityFailureMessages, recipePublicSchema, recipeConfigSchema} from '@vonvon/protocol';
-import type {CommunityRequest, CommunityShell, RecipeConfig, RecipeDetail, RecipeDraft, RecipeRoleDraft, RecipePublic} from '@vonvon/protocol';
+import type {CommunityRequest, CommunityResponses, CommunityShell, RecipeConfig, RecipeDetail, RecipeDraft, RecipeRoleDraft, RecipePublic} from '@vonvon/protocol';
 import {Button, InlineNotice} from '../reference/components/ui';
 import {useShellCapabilities} from '../client-context';
 import {Dialog} from '../reference/components/ui/Dialog';
@@ -76,15 +76,73 @@ function editorDraft(state: EditorDraft, action: DraftAction): EditorDraft {
     }
   }
 }
-export function RecipeEditor(props: Parameters<typeof RoleRecipeEditor>[0] & RichDraftContinuationProps) {
-  const [read, setRead] = useState<RecipeDraft>();
-  const [error, setError] = useState<string>();
-  const [retry,setRetry]=useState(0);
-  useEffect(() => {if (!props.draftId) return; let active=true; void props.shell.request({type:'draft',accountId:props.accountId,draftId:props.draftId}).then(value => {if(active)setRead(value);},e => {if(active)setError(e instanceof Error?e.message:'草稿读取失败。');}); return () => {active=false;};},[props.shell,props.accountId,props.draftId,retry]);
-  if (props.draftId && !read) return <><p role="status">{error ?? '正在读取私人草稿…'}</p>{error&&<Button onClick={()=>{setError(undefined);setRetry(value=>value+1);}}>重试读取</Button>}<BackButton onClick={props.onBack} label="返回创作中心"/></>;
-  if (read?.format==='rich-v2') return <RichRecipeEditor {...props} draft={read}/>;
+type EditorProps = Parameters<typeof RoleRecipeEditor>[0] & RichDraftContinuationProps & {knownRichDraft?: boolean};
+type RecoveryResult = CommunityResponses['recoverRichDraftMetadata'];
+type DraftEntry =
+  | {kind: 'loading'}
+  | {kind: 'read'; draft: RecipeDraft; recovery?: RecoveryResult}
+  | {kind: 'failed'; message: string}
+  | {kind: 'recovering'; message: string; receipt?: Extract<RecoveryResult, {status: 'committed'}>['receipt']};
+
+export function RecipeEditor(props: EditorProps) {
+  if (props.draftId) return <ExistingDraft key={props.accountId + ':' + props.draftId} {...props} draftId={props.draftId}/>;
   if (props.source?.format === 'rich-v2') return <><InlineNotice title="从来源群准备新版">请回到已应用此配方的群，核对本地来源并准备新版。富配方不会转换成仅角色草稿。</InlineNotice><BackButton onClick={props.onBack} label="返回创作中心"/></>;
-  return <RoleRecipeEditor {...props} initialDraft={read}/>;
+  return <RoleRecipeEditor {...props}/>;
+}
+
+function ExistingDraft(props: EditorProps & {draftId: string}) {
+  const {shell, accountId, draftId, knownRichDraft} = props;
+  const [entry, setEntry] = useState<DraftEntry>({kind:'loading'});
+  const [retry, setRetry] = useState(0);
+  const [busy, setBusy] = useState(true);
+  const {navigate} = useDraftGuard();
+  const requiredRevision = useRef(0);
+  const authoring = useShellCapabilities()?.recipeAuthoring;
+  useEffect(() => authoring?.onSaved?.(event => {
+    if (event.accountId === accountId && event.draftId === draftId) requiredRevision.current = Math.max(requiredRevision.current,event.revision);
+  }),[authoring,accountId,draftId]);
+  const receipt = useRef<Extract<RecoveryResult, {status:'committed'}>['receipt'] | undefined>(undefined);
+
+  useEffect(() => {
+    let active = true;
+    async function load() {
+      let readError: unknown;
+      if (!knownRichDraft && !receipt.current) {
+        try {
+          const draft = await shell.request({type:'draft',accountId,draftId});
+          if (active) setEntry({kind:'read',draft});
+          return;
+        } catch (cause) {readError = cause;}
+      }
+      if (!active) return;
+      const result = await shell.request({type:'recoverRichDraftMetadata',accountId,draftId});
+      if (!active) return;
+      if (result.status === 'committed') receipt.current = result.receipt;
+      const draft = result.status === 'current' || result.status === 'committed' ? result.draft : undefined;
+      if (draft) {
+        const recovery = receipt.current ? {status:'committed' as const, receipt:receipt.current, draft} : result;
+        setEntry({kind:'read',draft,recovery});
+      } else if (result.status === 'rejected' && !receipt.current) {
+        setEntry({kind:'failed',message: readError instanceof Error ? readError.message : communityFailureMessages[result.code]});
+      } else {
+        setEntry({kind:'recovering',receipt:receipt.current,message:receipt.current ? '此前提交已保存，最新草稿尚未读取。可以重试核对，或稍后再回来。' : '此前保存尚未核对完成。可以稍后回来继续核对，已提交的保存不会因离开而取消。'});
+      }
+    }
+    setBusy(true);
+    void load().catch(cause => {if (active) setEntry({kind:'recovering',receipt:receipt.current,message:cause instanceof Error ? cause.message : '草稿核对失败。'});})
+      .finally(() => {if (active) setBusy(false);});
+    return () => {active=false;};
+  },[shell,accountId,draftId,knownRichDraft,retry]);
+  useDraft(entry.kind === 'recovering', {title:'配方发布信息', discard:() => {}, leaveLabel:'稍后核对并离开', leaveDescription:'已提交的保存不会因离开而取消。稍后重新打开此草稿可继续核对。'});
+  if (entry.kind === 'read') {
+    if (entry.draft.format === 'rich-v2') return <RichRecipeEditor {...props} draft={entry.draft} initialRecovery={entry.recovery} minimumRevision={requiredRevision.current}/>;
+    return <RoleRecipeEditor {...props} initialDraft={entry.draft}/>;
+  }
+  return <div className="community-page"><BackButton onClick={() => navigate(props.onBack)} label="返回创作中心"/>
+    {entry.kind === 'loading' ? <p role="status">正在读取私人草稿…</p> :
+      <InlineNotice title={entry.kind === 'failed' ? '草稿读取失败' : entry.receipt ? '发布信息已保存，正在核对草稿' : '核对此前保存'}
+        actions={<Button disabled={busy} onClick={() => setRetry(value => value+1)}>{entry.kind === 'failed' ? '重试读取' : '重试核对保存'}</Button>}>{entry.message}</InlineNotice>}
+  </div>;
 }
 function RoleRecipeEditor({shell, accountId, draftId, source, onBack, onPublished, initialDraft}: {
   shell: CommunityShell; accountId: string; draftId?: string; source?: RecipeDetail; initialDraft?: RecipeRoleDraft; onBack: () => void; onPublished: (recipe: RecipeDetail & {firstCode?: string}) => void;
