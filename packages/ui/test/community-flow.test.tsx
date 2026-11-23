@@ -102,3 +102,50 @@ it('confirms author withdrawal, reads uncertain outcomes without resubmitting, a
   h.route={...h.route,privateView:false};render();await flush();all=render();
   expect(all.find(node=>node.type===RecipeDetails)!.props.management).toBeUndefined();
 });
+
+it('reloads the cached catalog after closing an uncertain author withdrawal', async () => {
+  let withdrawn = false;
+  h.catalog = {...h.catalog, result: {hero: recipe, items: [recipe]}, scrollTop: 400};
+  h.route = {...h.route, privateView: true};
+  h.request.mockImplementation(async request => {
+    if (request.type === 'detail') return {...recipe, format: 'rich-v2', owned: true, state: withdrawn ? 'withdrawn' : 'listed'};
+    if (request.type === 'shareLink') return {url: 'https://community.example/version'};
+    if (request.type === 'withdraw') {withdrawn = true; throw new Error('暂时离线');}
+    return {hero: null, items: [], nextCursor: null};
+  });
+  render(); await flush(); let all = render();
+  all.find(node => node.props.children === '撤下此版本' && node.props.onClick)!.props.onClick();
+  all = render(); all.find(node => node.props.children === '确认撤下')!.props.onClick(); await flush();
+  all = render(); all.find(node => node.props.children === '关闭' && node.props.onClick)!.props.onClick();
+  h.route = {kind: 'catalog'}; render(); await flush(); render();
+  expect(h.request.mock.calls.filter(([request]) => request.type === 'withdraw')).toHaveLength(1);
+  expect(h.request.mock.calls.filter(([request]) => request.type === 'catalog')).toHaveLength(1);
+  expect(h.catalog.result).toEqual({hero: null, items: [], nextCursor: null});
+  expect(h.catalog.scrollTop).toBe(0);
+});
+
+it('invalidates a mounted catalog when a late withdrawal settles and discards its older catalog response', async () => {
+  let finishWithdrawal!: () => void;
+  let finishCatalog!: (result: unknown) => void;
+  let reads = 0;
+  h.catalog = {...h.catalog, result: {hero: recipe, items: [recipe]}};
+  h.route = {...h.route, privateView: true};
+  h.request.mockImplementation(async request => {
+    if (request.type === 'detail') return {...recipe, format: 'rich-v2', owned: true, state: 'listed'};
+    if (request.type === 'shareLink') return {url: 'https://community.example/version'};
+    if (request.type === 'withdraw') return new Promise<void>(resolve => {finishWithdrawal = resolve;});
+    if (request.type === 'catalog' && ++reads === 1) return new Promise(resolve => {finishCatalog = resolve;});
+    return {hero: null, items: [], nextCursor: null};
+  });
+  render(); await flush(); let all = render();
+  all.find(node => node.props.children === '撤下此版本' && node.props.onClick)!.props.onClick();
+  all = render(); all.find(node => node.props.children === '确认撤下')!.props.onClick();
+  h.route = {kind: 'catalog'}; render();
+  finishWithdrawal(); await flush(); render(); await flush(); render();
+  expect(reads).toBe(2);
+  finishCatalog({hero: recipe, items: [recipe]}); await flush(); const final = render();
+  expect(h.catalog.result).toEqual({hero: null, items: [], nextCursor: null});
+  expect(final.some(node => node.type === RecipeDetails)).toBe(false);
+  expect(h.request.mock.calls.filter(([request]) => request.type === 'detail')).toHaveLength(1);
+  expect(h.request.mock.calls.filter(([request]) => request.type === 'withdraw')).toHaveLength(1);
+});

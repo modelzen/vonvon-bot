@@ -61,6 +61,13 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [refresh, setRefresh] = useState(0);
+  const [catalogRevision, setCatalogRevision] = useState(0);
+  const catalogEpoch = useRef(0);
+  const invalidateCatalog = () => {
+    ++catalogEpoch.current;
+    community.setCatalog(old => ({...old, result: undefined, scrollTop: 0}));
+    setCatalogRevision(old => old + 1);
+  };
   const live = useRef(true);
   const generation = useRef(0);
   const submitted = useRef(new Map<string, {raw: string; key: string}>());
@@ -84,13 +91,14 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   useEffect(() => {
     let active = true;
     const current = ++generation.current;
+    const catalogRequestEpoch = catalogEpoch.current;
     setError(undefined); setDetail(undefined); setShareUrl(undefined);
     const request = async () => {
       if (route.kind === 'catalog') {
         if (catalog) {requestAnimationFrame(() => {const element = document.getElementById('main-content'); if (element) element.scrollTop = community.catalog.scrollTop;}); return;}
         setBusy(true);
         const result = await shell.request({type: 'catalog', ...(accountId ? {accountId} : {}), query: search});
-        if (active && current === generation.current) setCatalog(result);
+        if (active && current === generation.current && catalogRequestEpoch === catalogEpoch.current) setCatalog(result);
       } else if (route.kind === 'detail') {
         setBusy(true);
         const result = await shell.request({type: 'detail', ...(accountId ? {accountId} : {}), recipeId: route.recipe.recipeId, versionId: route.recipe.versionId});
@@ -111,7 +119,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
     };
     void request().catch(e => {if (active && current === generation.current) setError(e instanceof Error ? e.message : '读取未完成。');}).finally(() => {if (active && current === generation.current) setBusy(false);});
     return () => {active = false;};
-  }, [shell, accountId, route, search, refresh]);
+  }, [shell, accountId, route, search, refresh, route.kind === 'catalog' ? catalogRevision : 0]);
   async function run(action: () => Promise<void>) {
     if (busy) return;
     const current = generation.current;
@@ -170,7 +178,9 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
     if (withdrawal === 'confirm') {
       uncertainWithdrawals.current.add(selected.versionId);
       setWithdrawal('uncertain');
-      await shell.request({type: 'withdraw', accountId, versionId: selected.versionId});
+      invalidateCatalog();
+      try {await shell.request({type: 'withdraw', accountId, versionId: selected.versionId});}
+      finally {invalidateCatalog();}
       if (!active()) return;
     }
     const next = await shell.request({type: 'detail', accountId, recipeId: selected.recipeId, versionId: selected.versionId});
@@ -181,7 +191,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
     setWithdrawal('closed');
     if (next.state === 'withdrawn') {
       setNotice('此版本已撤下。已有获取者仍可查看和重新添加，已安装的配置会保留。');
-      community.setCatalog(old => ({...old, result: undefined}));
+      invalidateCatalog();
     } else setNotice('已确认此版本仍在发布中。如需撤下，请重新确认。');
   }
   const login = <div className="community-empty"><h2>登录后继续</h2><p>{accountStatusText(account.status, account.supported)}</p><GlowButton variant="dark" disabled={!account.supported || account.status?.kind === 'signingIn'} onClick={() => void account.login()}>登录</GlowButton></div>;
@@ -204,7 +214,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
           {catalog?.hero && <RecipeCard recipe={catalog.hero} hero heroKind={catalog.heroKind} onOpen={() => open({kind: 'detail', recipe: {recipeId: catalog.hero!.recipeId, versionId: catalog.hero!.versionId}})}/>}
           {catalog && Boolean(catalog.items.length) && <section className="community-catalog-list">{!search && <h2>{catalog.hero ? '更多配方' : '配方'}</h2>}<div className="community-grid">{catalog.items.map(recipe => <RecipeCard key={recipe.versionId} recipe={recipe} onOpen={() => open({kind: 'detail', recipe: {recipeId: recipe.recipeId, versionId: recipe.versionId}})}/>)}</div></section>}
           {catalog && !catalog.hero && !catalog.items.length && <div className="community-empty"><h2>{search ? '没有找到匹配的配方' : '社区正在准备第一份配方'}</h2><p>{search ? '换一个名称或关键词试试。' : '你也可以在创作中心准备自己的作品。'}</p></div>}
-          {catalog?.nextCursor && <div><Button disabled={busy} onClick={() => void run(async () => {const current = generation.current; const next = await shell.request({type: 'catalog', ...(accountId ? {accountId} : {}), query: search, cursor: catalog.nextCursor!}); if (live.current && current === generation.current) setCatalog(old => old ? {...old, items: uniqueRecipes(old.items, next.items), nextCursor: next.nextCursor} : next);})}>加载更多</Button></div>}
+          {catalog?.nextCursor && <div><Button disabled={busy} onClick={() => void run(async () => {const current = generation.current, epoch = catalogEpoch.current; const next = await shell.request({type: 'catalog', ...(accountId ? {accountId} : {}), query: search, cursor: catalog.nextCursor!}); if (live.current && current === generation.current && epoch === catalogEpoch.current) setCatalog(old => old ? {...old, items: uniqueRecipes(old.items, next.items), nextCursor: next.nextCursor} : next);})}>加载更多</Button></div>}
         </>}
       </>}
       {route.kind === 'library' && <section className="community-workspace-section"><h2>已获取</h2>{library?.items.length === 0 && <div className="community-empty"><h2>还没有获取配方</h2><p>从社区获取后，任何设备登录这个账号都可以继续使用。</p></div>}<div className="community-grid">{library?.items.map(recipe => <RecipeCard key={recipe.versionId} recipe={recipe} context="library" onOpen={() => open({kind: 'detail', recipe: {recipeId: recipe.recipeId, versionId: recipe.versionId}, from: 'library'})}/>)}</div>
