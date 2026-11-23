@@ -97,7 +97,7 @@ export async function richSetup(
       tasks: store
         .byChat(groupId)
         .filter((t) => store.managed?.review(t.id))
-        .map((t) => ({id:t.id,name:t.name,state:t.state,token:sha256(store.managed!.review(t.id)!),instruction:t.instruction,schedule:describeSpec(t.spec,t.timeZone,t.timeZone,Date.now()),timeZone:t.timeZone,placement:t.placement.kind==='follow'?'follow' as const:'newTopic' as const})),
+        .map((t) => ({id:t.id,name:t.name,state:t.state,token:sha256(store.managed!.review(t.id)!),instruction:t.instruction,spec:structuredClone(t.spec),schedule:describeSpec(t.spec,t.timeZone,t.timeZone,Date.now()),timeZone:t.timeZone,placement:t.placement.kind==='follow'?'follow' as const:'newTopic' as const})),
       ...(open ? { open } : {}),
     };
   } finally {
