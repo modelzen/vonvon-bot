@@ -13,7 +13,13 @@ const revision = z.number().int().positive().max(2147483647);
 const handle = { handle: uuid };
 const operation = { ...handle, operationId: uuid };
 const link = { ...handle, challengeId: uuid };
+const creatorSource = z.object({viewId:viewIdSchema,botId:agentIdSchema}).strict();
 export const desktopAuthoringRequestSchema = z.discriminatedUnion('type', [
+  z.object({type:z.literal('creatorContinue'),accountId:uuid,entry:z.discriminatedUnion('kind',[
+    z.object({kind:z.literal('source'),viewId:viewIdSchema,botId:agentIdSchema,groupId:groupIdSchema,parent:z.object({recipeId:uuid,versionId:uuid}).strict().optional()}).strict(),
+    z.object({kind:z.literal('draft'),draftId:uuid,revision}).strict(),
+    z.object({kind:z.literal('version'),recipeId:uuid,versionId:uuid}).strict(),
+  ]),source:creatorSource.optional()}).strict(),
   z.object({type:z.literal('restoreHandoff'),accountId:uuid,viewId:viewIdSchema,retryId:uuid,handle:uuid.optional(),target:z.discriminatedUnion('kind',[
     z.object({kind:z.literal('source'),botId:agentIdSchema,groupId:groupIdSchema,parent:z.object({recipeId:uuid,versionId:uuid}).strict().optional()}).strict(),
     z.object({kind:z.literal('draft'),draftId:uuid,baseRevision:revision}).strict(),
@@ -100,6 +106,8 @@ const desktopAuthoringSessionSchema = z
     })
     .strict();
 export const desktopAuthoringReplySchema = z.discriminatedUnion('kind', [
+  z.object({kind:z.literal('creatorContinuing'),accountId:uuid,viewId:viewIdSchema,botId:agentIdSchema}).strict(),
+  z.object({kind:z.literal('creatorSourceRequired'),options:z.array(creatorSource.extend({botName:name})).max(64)}).strict(),
   handoffUnavailableSchema,
   z.object({kind:z.literal('handoffRestored'),session:desktopAuthoringSessionSchema,handoff:authoringHandoffSchema}).strict(),
   z.object({kind:z.literal('handoffLinkRequired'),session:desktopAuthoringSessionSchema}).strict(),
@@ -158,7 +166,10 @@ export type DesktopAuthoringReply = z.infer<typeof desktopAuthoringReplySchema>;
 export type DesktopAuthoringOperation = z.infer<typeof desktopAuthoringOperationSchema>;
 export const authoringSavedSchema = z.object({accountId:uuid,draftId:uuid,revision}).strict();
 export type AuthoringSaved = z.infer<typeof authoringSavedSchema>;
+export const authoringPublishedSchema=z.object({accountId:uuid,draftId:uuid,recipeId:uuid,versionId:uuid,revision}).strict();
+export type AuthoringPublished=z.infer<typeof authoringPublishedSchema>;
 export interface RecipeAuthoringShell {
+  onPublished?(listener:(receipt:AuthoringPublished)=>void):()=>void;
   onSaved?(listener: (receipt:AuthoringSaved) => void): () => void;
   request(input: DesktopAuthoringRequest): Promise<DesktopAuthoringReply>;
 }

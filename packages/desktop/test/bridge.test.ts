@@ -63,6 +63,7 @@ function fakeDevices() {
     onState: (listener: (value: DevicesState) => void) => { stateListeners.add(listener); return () => { stateListeners.delete(listener); }; },
     onView: (listener: (change: ViewChange) => void) => { viewListeners.add(listener); return () => { viewListeners.delete(listener); }; },
     view: () => current,
+    retainSource: vi.fn(async () => { throw new Error('retained sources are outside this bridge fixture'); }),
     switchTo: vi.fn(async (_id: string) => {}),
     retry: vi.fn(), wake: vi.fn(),
     inspectLink: vi.fn((_text: string) => ({ ok: false as const, code: 'invalid_link' as const })),

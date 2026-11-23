@@ -5,7 +5,7 @@ import type {CommunityShell, RecipeDetail, CommunityResponses} from '@vonvon/pro
 import {useActiveDevice, useClient} from '../client-context';
 import type {RecipeGroupTarget} from '../recipes/recipe-use-context';
 
-export type CommunityRoute = {kind: 'catalog'} | {kind: 'library'} | {kind: 'workspace'} | {kind: 'detail'; recipe: {recipeId: string; versionId: string}; from?: 'library'; privateView?: boolean; useTarget?: RecipeGroupTarget} | {kind: 'draft'; draftId?: string; source?: RecipeDetail};
+export type CommunityRoute = {kind: 'catalog'} | {kind: 'library'} | {kind: 'workspace'} | {kind: 'detail'; recipe: {recipeId: string; versionId: string}; from?: 'library'; privateView?: boolean; useTarget?: RecipeGroupTarget} | {kind: 'draft'; draftId: string};
 export type CommunityDeparture = {deviceId: string; destination: Destination};
 type CommunityContextValue = {
   shell?: CommunityShell; isOpen: boolean; route: CommunityRoute;

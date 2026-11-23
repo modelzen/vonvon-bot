@@ -102,16 +102,15 @@ it('moves production App subscriptions, search and actions to the selected devic
   expect(second.client.run.mock.calls.filter(([command]) => command.type === 'registerAgent')).toHaveLength(1);
   expect(first.client.run.mock.calls.filter(([command]) => command.type === 'registerAgent')).toHaveLength(0);
 });
-it('keeps the production account editor and pending save through A to B to A while returning to a fresh A page', async () => {
-  await draw(A); await click('社区'); await click('创作中心'); await click('查看草稿'); await click('编辑草稿');
-  const input = await fill('配方名称', '不会因切设备丢失'); await click('保存私人草稿'); input.focus(); input.setSelectionRange(2, 4);
+it('keeps the readonly account draft through A to B to A and returns to a fresh device page', async () => {
+  await draw(A); await click('社区'); await click('我的配方'); await click('查看配方');
+  const heading = document.querySelector('.recipe-draft-heading h1');
   for (const [id, phase] of [[B, 'connecting'], [B, 'ready'], [B, 'failed'], [A, 'ready']] as const) {
     await draw(id, phase);
-    expect(document.querySelector('[aria-label="配方名称"]')).toBe(input);
-    expect(input.value).toBe('不会因切设备丢失'); expect(input.selectionStart).toBe(2); expect(input.selectionEnd).toBe(4);
+    expect(document.querySelector('.recipe-draft-heading h1')).toBe(heading);
+    expect(document.querySelector('input, textarea')).toBeNull();
   }
-  await click('保存私人草稿');
-  const saves = requests.filter(request => request.type === 'saveDraft'); expect(saves).toHaveLength(2); expect(saves[1]).toEqual(saves[0]);
+  expect(requests.filter(request => request.type === 'saveDraft')).toEqual([]);
   await act(async () => first.emit(snapshot('重新连接A', 3)));
   await click('Bot');
   expect(first.active.size).toBe(1); expect(second.active.size).toBe(0);
@@ -169,20 +168,12 @@ it('keeps dirty production group settings behind the original guard before unmou
   expect(first.client.watchSnapshots).toHaveBeenCalledTimes(2);
   expect(settings.mock.calls.every(([request]) => request.type === 'read')).toBe(true);
 });
-it('keeps the account editor behind its own guard before opening account management and logout', async () => {
-  await draw(A); await click('社区'); await click('创作中心'); await click('查看草稿'); await click('编辑草稿');
-  const editor = await fill('配方名称', '退出前保留输入');
-  const menu = document.querySelector<HTMLButtonElement>('[aria-label^="当前设备："]')!;
-  await act(async () => menu.click());
+it('leaves a readonly account draft for account management and logout without an edit guard', async () => {
+  await draw(A); await click('社区'); await click('我的配方'); await click('查看配方');
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label^="当前设备："]')!.click());
   await act(async () => document.querySelector<HTMLButtonElement>('.device-switcher__account-button')!.click());
-  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('有未保存的修改');
+  expect(document.body.textContent).not.toContain('有未保存的修改');
   expect(account.logout).not.toHaveBeenCalled();
-  await click('继续编辑');
-  expect(document.querySelector('[aria-label="配方名称"]')).toBe(editor); expect(editor.value).toBe('退出前保留输入');
-  await act(async () => menu.click());
-  await act(async () => document.querySelector<HTMLButtonElement>('.device-switcher__account-button')!.click());
-  await click('放弃并离开');
-  expect(document.querySelector('[aria-label="配方名称"]')).toBeNull();
   await click('退出登录'); expect(account.logout).toHaveBeenCalledOnce();
 });
 it('does not reuse the first A search generation when B never returned a snapshot', async () => {
@@ -200,24 +191,18 @@ it('does not reuse the first A search generation when B never returned a snapsho
   expect(document.querySelector('[role="listbox"]')?.textContent).toContain('新一代A机器人');
 });
 
-it('switches the community target through the actual menu without discarding its dirty editor', async () => {
+it('switches the community device through the actual menu while keeping the account draft readonly', async () => {
   shell.devices.switchTo.mockImplementation(async (id: string) => {root.render(<DesktopRootView state={devicesState({id})} fallback={first.client} shell={shell} renderApp={() => <App/>}/>);});
-  await draw(A); await click('社区'); await click('创作中心'); await click('查看草稿'); await click('编辑草稿');
-  const editor = await fill('配方名称', '切目标不会放弃草稿'); await click('保存私人草稿'); editor.focus(); editor.setSelectionRange(2, 4);
+  await draw(A); await click('社区'); await click('我的配方'); await click('查看配方');
+  const heading = document.querySelector('.recipe-draft-heading h1');
   await act(async () => document.querySelector<HTMLButtonElement>('[aria-label^="当前设备："]')!.click());
   const target = [...document.querySelectorAll<HTMLButtonElement>('.device-switcher__device')].find(button => button.querySelector('[title="家里"]'))!;
   await act(async () => target.click());
-  expect(document.querySelector('[role="dialog"]')).toBeNull();
   expect(shell.devices.switchTo).toHaveBeenCalledExactlyOnceWith(B);
-  expect(document.querySelector('[aria-label="配方名称"]')).toBe(editor);
-  expect(editor.value).toBe('切目标不会放弃草稿'); expect(editor.selectionStart).toBe(2); expect(editor.selectionEnd).toBe(4);
+  expect(document.querySelector('.recipe-draft-heading h1')).toBe(heading);
   await click('Bot');
-  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('有未保存的修改');
-  await click('继续编辑');
-  expect(document.querySelector('[aria-label="配方名称"]')).toBe(editor);
-  expect(editor.value).toBe('切目标不会放弃草稿'); expect(editor.selectionStart).toBe(2); expect(editor.selectionEnd).toBe(4);
-  await click('保存私人草稿');
-  const saves = requests.filter(request => request.type === 'saveDraft'); expect(saves).toHaveLength(2); expect(saves[1]).toEqual(saves[0]);
+  expect(document.body.textContent).not.toContain('有未保存的修改');
+  expect(requests.filter(request => request.type === 'saveDraft')).toEqual([]);
 });
 it('does not reopen account management when an offline device reconnects after returning to connection controls', async () => {
   await draw(A); await click('社区'); await draw(A, 'failed');

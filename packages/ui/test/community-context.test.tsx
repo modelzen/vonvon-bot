@@ -23,12 +23,10 @@ function render() {
 beforeEach(() => {h.state = []; h.effects = []; h.pending = []; h.account = a;});
 
 it('clears an author route and private source snapshot immediately on account switch or logout', () => {
-  const source = {recipeId: a.accountId, versionId: b.accountId, revision: 1, public: {name: '私人内容', summary: '', overview: '', version: '1', access: 'coded' as const}, owned: true, acquired: false, config: {role: 'private sentinel'}};
-  render().open({kind: 'draft', source});
-  expect(render().route).toEqual({kind: 'draft', source});
+  render().open({kind: 'draft', draftId: a.accountId});
+  expect(render().route).toEqual({kind: 'draft', draftId: a.accountId});
   h.account = b;
   expect(render().route).toEqual({kind: 'catalog'});
-  expect(JSON.stringify(h.state)).not.toContain('private sentinel');
   h.account = a;
   expect(render().route).toEqual({kind: 'catalog'});
   render().open({kind: 'workspace'});

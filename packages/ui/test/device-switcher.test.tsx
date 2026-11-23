@@ -5,6 +5,7 @@ import type {DevicesState} from '@vonvon/protocol';
 import {activeDeviceFrom, ClientProvider, type ShellCapabilities} from '../src/client-context';
 import type {Page} from '../src/collaboration-model';
 import {AppShell} from '../src/LocalShell';
+import {BackButton} from '../src/BackButton';
 import {DeviceSwitcher, DeviceSwitcherMenu} from '../src/devices/DeviceSwitcher';
 import {linkPreviewCopy} from '../src/devices/devices-presentation';
 import {DraftGuardProvider} from '../src/settings/DraftGuard';
@@ -67,17 +68,17 @@ it('offers ← 此刻 in first use on the desktop, where neither the tabs nor th
     const onNavigate = vi.fn();
     const shell = AppShell({page, view: 'agents', title: '页面', firstUse, onNavigate, onOpenList: () => {},
       deviceSwitcher: switcher ? <span className="probe-switcher"/> : undefined, children: <p/>});
-    const row = tree(shell).find(node => node.props.className === 'today-back');
-    return {html: row && renderToStaticMarkup(row), click: () => { (row!.props.children as Element).props.onClick(); return onNavigate.mock.calls; }};
+    const row = tree(shell).find(node => node.type === BackButton);
+    return {html: row && renderToStaticMarkup(row), click: () => {row?.props.onClick(); return onNavigate.mock.calls;}};
   };
   // 设置 itself, and the Bot / 群组 lists that search opens: nothing else leads back.
   for (const page of ['settings', 'collaboration'] as const) {
-    expect(back(page).html).toContain('此刻');
+    expect(back(page).html).toContain('aria-label="返回此刻"');
     expect(back(page).click()).toEqual([['home']]);
   }
   expect(back('home').html).toBeUndefined();
   // A settings page keeps its way back to 设置, which then leads home.
-  expect(back('devices').html).toContain('设置');
+  expect(back('devices').html).toContain('aria-label="返回设置"');
   expect(back('devices').html).not.toContain('此刻');
   expect(back('devices').click()).toEqual([['settings']]);
   // With the tabs, and on the web (the brand), nothing changes.
