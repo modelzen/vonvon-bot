@@ -12,6 +12,7 @@ import {CommunityWindow} from '../community/CommunityWindow';
 import {CommunityProvider, useCommunity} from '../community/community-context';
 import {AccountProvider} from '../account-context';
 import {AccountPageProvider} from '../accounts/account-page';
+import {RecipeUseProvider, useRecipeUse} from '../recipes/recipe-use-context';
 import './devices.css';
 
 export {desktopPlatformMark, shouldMarkPlatform} from './devices-presentation';
@@ -29,22 +30,31 @@ export function DesktopRoot({fallback, shell, renderApp = () => <App/>}: {fallba
 
 /** No effects: tests give it the state. */
 export function DesktopRootView({state, fallback, shell, renderApp}: {state?: DevicesState; fallback: VonvonClient; shell?: ShellCapabilities; renderApp: () => ReactNode}) {
-  return <AccountProvider account={shell?.account}><AccountPageProvider><CommunityProvider shell={shell?.community}><DesktopDeviceView state={state} fallback={fallback} shell={shell} renderApp={renderApp}/></CommunityProvider></AccountPageProvider></AccountProvider>;
+  return <AccountProvider account={shell?.account}><AccountPageProvider><DesktopDeviceView state={state} fallback={fallback} shell={shell} renderApp={renderApp}/></AccountPageProvider></AccountProvider>;
 }
 
 function DesktopDeviceView({state, fallback, shell, renderApp}: {state?: DevicesState; fallback: VonvonClient; shell?: ShellCapabilities; renderApp: () => ReactNode}) {
   const devicesShell = shell?.devices;
-  const community = useCommunity();
   const device = state ? activeDeviceFrom(state) : LOCAL_ACTIVE_DEVICE;
   const client = useMemo(() => devicesShell ? devicesShell.clientFor(device.id) : fallback, [devicesShell, device.id, fallback]);
   // Kept while the same device stays remote or local, so subscriptions to the shell are not renewed on every state.
   const deviceShell = useMemo(() => shellForDevice(shell, device), [shell, device.isRemote]);
-  if (!devicesShell) return <ClientProvider client={fallback} shell={shell}><DirectoryPickerProvider>{renderApp()}</DirectoryPickerProvider></ClientProvider>;
   return <ClientProvider client={client} shell={deviceShell} device={device} devices={state}>
-    {community?.isOpen ? <DirectoryPickerProvider><CommunityWindow/></DirectoryPickerProvider> : <DeviceGate key={device.id} state={state} renderApp={renderApp}/>}
+    <RecipeUseProvider><DesktopCommunityProvider shell={shell}>
+      <DesktopDeviceContent deviceId={device.id} state={state} renderApp={renderApp} hasDevices={Boolean(devicesShell)}/>
+    </DesktopCommunityProvider></RecipeUseProvider>
     {/* devices-ui-3 4.5: beside the gate, so a pairing with this computer shows whichever device is looked at */}
     <PairedToasts shell={shell} local={!device.isRemote}/>
   </ClientProvider>;
+}
+
+function DesktopCommunityProvider({shell, children}: {shell?: ShellCapabilities; children: ReactNode}) {
+  const useRecipe = useRecipeUse();
+  return <CommunityProvider shell={shell?.community} onUse={useRecipe?.available ? (recipe, target) => useRecipe.start(recipe, target) : undefined}>{children}</CommunityProvider>;
+}
+function DesktopDeviceContent({deviceId, state, renderApp, hasDevices}: {deviceId: string; state?: DevicesState; renderApp: () => ReactNode; hasDevices: boolean}) {
+  const community = useCommunity();
+  return community?.isOpen ? <DirectoryPickerProvider><CommunityWindow/></DirectoryPickerProvider> : hasDevices ? <DeviceGate key={deviceId} state={state} renderApp={renderApp}/> : <DirectoryPickerProvider>{renderApp()}</DirectoryPickerProvider>;
 }
 
 export function DeviceGate({state, renderApp}: {state?: DevicesState; renderApp: () => ReactNode}) {
