@@ -19,7 +19,7 @@ export type HandoffSelection = {
 export interface PrivateHandoff {
   retryId:string;groupId:AuthoringHandoff['groupId'];groupName:string;identity:string;account:string;scope:string;binding:string;recipient:Recipient;
   session:string;expiresAt:number;sourceVersionId?:string;edit?:Pick<Edit,'draftId'|'baseRevision'|'canonical'|'source'>;
-  draftId?:string;ref:string;generation:number;cardId?:string;messageId?:string;sendUuid:string;sentAt?:number;
+  draftId?:string;ref:string;generation:number;cardId?:string;messageId?:string;sendUuid:string;sentAt?:number;cardDirty?:true;
   selection:HandoffSelection;
   phase:{state:'selecting'|'cancelled'|'expired'|'needsReview'|'deliveryUnknown'}|
     {state:'awaitingAttestations';request:HandoffAttestation}|{state:'prepared';operationId:string};

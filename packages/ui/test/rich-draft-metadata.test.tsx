@@ -83,7 +83,7 @@ it('saves publication information directly without a source or authoring session
   const original = draft;
   await draw({chatContinuationUnavailable: '来源群聊已不可用，仍可编辑发布信息。'});
   expect(button('在飞书私聊中修改').disabled).toBe(true);
-  await click('编辑发布信息'); await fill('配方名称', '发布信息新名称'); await click('保存');
+  await click('编辑发布信息'); await fill('配方名称', '发布信息新名称'); await click('完成编辑');
   const request = requests.find(item => item.type === 'saveRichDraftMetadata');
   expect(request).toMatchObject({accountId, draftId, revision: 1, public: {name: '发布信息新名称'}, logo: {kind: 'keep'}});
   if (request?.type !== 'saveRichDraftMetadata') throw new Error('Missing metadata command');
