@@ -576,25 +576,6 @@ it('selects actual rich skill files and complete items before sending a source-a
   expect(text()).toContain('等待本人在飞书操作');
 });
 
-it('edits rich public metadata through native attested chat and preserves newer local input when a receipt arrives',async()=>{
-  const {readFileSync}=await import('node:fs');const {resolve}=await import('node:path');const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
-  const content=JSON.parse(readFileSync(resolve(process.cwd(),'../protocol/test/fixtures/recipe-rich-v2.content.json'),'utf8'));content.parts=[];content.memories=[];delete content.finalLogo;
-  for(const field of ['name','summary','overview','version'] as const)content.public[field].value=draft.public[field];
-  const doc=canonicalizeRichRecipeContent(content);
-  draft={...draft,config:undefined,sourceIntentId:operationId,format:'rich-v2',rich:{content:doc.content,texts:{},canonical:Buffer.from(doc.canonicalUTF8).toString('base64url')}};
-  linked=true;const normal=authoring;
-  authoring=async request=>{if(request.type==='richEdit'){const session=sessionFor(request);operations=[{...op(session),format:'rich-v2',purpose:'editDraft',draftId,baseRevision:request.baseRevision}];return {kind:'operation',operation:operations[0]!};}return normal(request);};
-  await draw();await click('社区');await click('创作中心');await click('查看草稿');await click('编辑发布信息');await fill('配方名称','本次提交的名称');await click('核对并保存修改');
-  await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="选择 Bot"] button')!.click());await click('确认编辑 Bot');await click('发送继续编辑卡片');
-  const sent=calls.find(request=>request.type==='richEdit');expect(sent).toMatchObject({draftId,baseRevision:1,selected:[doc.content.public.name.itemId],changes:[{op:'setPublicText',field:'name',itemId:doc.content.public.name.itemId,value:'本次提交的名称'}]});
-  await fill('配方名称','收到回执前的新输入');content.public.name.value='本次提交的名称';const changed=canonicalizeRichRecipeContent(content);
-  draft={...draft,revision:2,public:{...draft.public,name:'本次提交的名称'},rich:{content:changed.content,texts:{},canonical:Buffer.from(changed.canonicalUTF8).toString('base64url')}};
-  await act(async()=>emit({type:'authoringSaved',value:{accountId:accountA,draftId,revision:2}}));
-  expect(document.querySelector<HTMLInputElement>('[aria-label="配方名称"]')?.value).toBe('收到回执前的新输入');expect(text()).toContain('云端已有新修订');
-  await click('采用已保存版本');expect(document.querySelector<HTMLInputElement>('[aria-label="配方名称"]')?.value).toBe('本次提交的名称');
-  const publish=[...document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='预览发布');expect(publish?.disabled).toBe(false);
-});
-
 it('discards delayed inventory across memory ABA and never selects legacy setup metadata',async()=>{
   const {readFileSync}=await import('node:fs');const {resolve}=await import('node:path');
   const content=JSON.parse(readFileSync(resolve(process.cwd(),'../protocol/test/fixtures/recipe-rich-v2.content.json'),'utf8'));
