@@ -1,3 +1,6 @@
+import type { FeedbackSource } from '../agent/entry/feedback-tool';
+import { FEEDBACK_ACTION } from '../feedback/events';
+import type { FeedbackHost } from '../feedback/host';
 import { NOT_DM_MESSAGE, type AgentEntries, type AgentPlace, type TurnMemory, type TurnScope } from '../agent/entry/registry';
 import { createHiddenBlockFilter, escapeInboundMarkers, memoryNonce, noteMissedBlocks, takeLastMissed, takeMemoryNotices, type FoundBlocks, type RawBlock } from './hidden-blocks';
 import type { MemoryWriter } from './memory-writer';
@@ -545,6 +548,7 @@ export { BACKEND_PROBE_TIMEOUT_MS, probeBackends, validateBackendSwitch } from '
  * requester and enqueue clock travel with the input so completion @ mentions,
  * manual-reminder ownership and long-task timing never leak from turn one. */
 export interface QueuedTurn {
+  feedback?: FeedbackSource;
   attentionAcceptance?: AttentionAcceptance;
   voice?: VoiceReply;
   input: AgentInput;
@@ -864,6 +868,7 @@ interface AttentionAcceptance {
 
 /** Inputs a synthetic turn (🔁 重试) carries that a real message would not. */
 interface TurnExtra {
+  feedback?: FeedbackSource;
   /** A smart judgement's one-use acknowledgement of actual session intake. */
   attentionAcceptance?: AttentionAcceptance;
   /** Local image paths to send instead of downloading the message's own. */
@@ -1191,7 +1196,7 @@ export function createOrchestrator(
   /** `droppedFile`: where a shutdown keeps the queued messages it drops (s18c). No default: without it, nothing is
    * kept or answered (tests, and every caller but `daemon run`). */
   // Only daemon run supplies judgeUsageFile; tests that omit it do not persist usage.
-  options?: { authoring?: Pick<import('../recipe/authoring-service').AuthoringService, 'onMessage' | 'onAction' | 'adminRemoved'>; entries?: AgentEntries; memory?: MemoryWriter; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention;
+  options?: { feedback?: FeedbackHost; authoring?: Pick<import('../recipe/authoring-service').AuthoringService, 'onMessage' | 'onAction' | 'adminRemoved'>; entries?: AgentEntries; memory?: MemoryWriter; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention;
     /** devices-4a 4.3: where each new session's token comes from (the host, over IPC). Without it a session gets none (tests). */
     host?: Pick<HostApi, 'issueSessionToken'>;
     /** The launcher this Bot wrote for its sessions (agent/session-cli.ts); without one a session's PATH stays as it was. */
@@ -1601,7 +1606,11 @@ export function createOrchestrator(
   /** sessions.set + 打点 —— 所有放进 LIVE 缓存的会话一律走这里。 */
   function epochOf(project: Project | undefined):string|undefined {
     if (!project?.richRecipe) return;
-    return JSON.stringify([project.bindingIncarnation, project.richRecipe.pointer.resolvedSha256, project.richRecipe.pointer.generationId, project.cwd, project.directories, project.skills, project.modelAccess, permissionFingerprint(turnPerm(project))]);
+    // Provider tool schemas are fixed when the group thread opens. A newly
+    // configured feedback installation needs a fresh schema on the next turn.
+    return JSON.stringify([project.bindingIncarnation, project.richRecipe.pointer.resolvedSha256, project.richRecipe.pointer.generationId,
+      project.cwd, project.directories, project.skills, project.modelAccess, permissionFingerprint(turnPerm(project)),
+      ...(project.feedback ? [project.feedback.revision] : [])]);
   }
   async function openGroupThread(be:AgentBackend, opts:StartThreadOptions, place:AgentPlace, previous?:string):Promise<AgentThread> {
     const create = (options:StartThreadOptions,id?:string) => createWithPermission(be,options,place,actual=> id ? be.resumeThread({...actual,sessionId:id}) : be.startThread(actual));
@@ -2860,7 +2869,11 @@ export function createOrchestrator(
     if (decision !== 'topic') takeUpTo({ chatId: msg.chatId, place }, trig.createTime);
     const accepted = acceptAttention({ chatId: msg.chatId, place }, under?.senderId ?? trig.senderId, !wake, item.attentionGroup);
     log.info('intake', 'judge-landed', { ref, decision, variant, ...(look ? { glance: true, looked: look.length } : {}), ...(trig !== msg ? { trigger: trig.messageId.slice(-6) } : {}), ...(wake ? { wake: true } : {}), ...(under ? { anchor: under.id.slice(-6) } : {}) });
-    const extra: TurnExtra = { attentionAcceptance: accepted, ...(wake ? { wake: { name: wake.sender.name ?? '' } } : initiative ? { initiative: true as const } : {}), ...(item.burst ? { burst: item.burst } : {}) };
+    const namedSource = batch.length === 1 && item.kind === 'named' && !item.burst
+      && !wake && !initiative && !(verdict.kind === 'judged' && verdict.result.anchor);
+    const extra: TurnExtra = {attentionAcceptance: accepted, ...(namedSource ? directFeedback(msg) : {}),
+      ...(wake ? {wake: {name: wake.sender.name ?? ''}} : initiative ? {initiative: true as const} : {}),
+      ...(item.burst ? {burst: item.burst} : {})};
     if (decision === 'topic') startTopicDirectly(msg, text, project, false, extra, under);
     else void trackTask(handleTurn(trig, turnText, ts.sessionKey, !trig.threadId, project, ts, extra)
       .catch((err) => log.fail('intake', err)));
@@ -2953,6 +2966,8 @@ export function createOrchestrator(
     if (!ingested || await intakeStoppedBeforeText(msg, owner)) return undefined;
     return voiceMessages.remember(msg, ingested);
   }
+  const feedbackSources = new WeakMap<NormalizedMessage, FeedbackSource>();
+  const directFeedback = (msg: NormalizedMessage): Pick<TurnExtra, 'feedback'> => ({feedback: feedbackSources.get(msg)});
   const handleMessage = async (msg: NormalizedMessage, intakeOwner?: IntakeStatus): Promise<void> => {
     // Feishu does not keep events in order: a recall can come before its message (s15).
     if (await intakeStoppedBeforeText(msg, intakeOwner)) return;
@@ -2973,6 +2988,7 @@ export function createOrchestrator(
       if (await syncCopy.skip(msg, true)) return;
       if (fromBot(msg)) return;
       // Whoever a group's agent asked may reply to their card; everything else stops here, before any transcription (dm-agent 3.5).
+      if (options?.feedback && /^\/feedback (?:authorize|authorized)$/.test(msg.content.trim()) && await options.feedback.onMessage(msg)) return;
       if (!isAdmin(cfg, msg.senderId)) {
         if (!askAnswered(msg)) await refuseDm(msg);
         return;
@@ -3020,6 +3036,12 @@ export function createOrchestrator(
       || (noMentionOf(project) && !msg.mentionAll && !msg.mentions.some(mention => !mention.isBot))));
     // Resolve audio copies before spending a transcription on the duplicate.
     if (await syncCopy.skip(msg, voiceCandidate || (smart ? msg.mentionedBot : maybe) || resumePublications.has(msg.chatId))) return;
+    if (options?.feedback && project && !bot && project.enabled !== false && !projectMutations.has(msg.chatId)
+      && !resumePublications.has(msg.chatId) && isChatAllowed(cfg, msg.chatId) && isUserAllowedInProject(cfg, project, msg.senderId)) {
+      if (/^\/feedback(?:\s|$)/.test(msg.content.trim()) && await options.feedback.onMessage(msg)) return;
+      const source = options.feedback.bind(msg, project);
+      if (source) feedbackSources.set(msg, source);
+    }
     if (voiceCandidate && project && project.enabled !== false
       && !resumePublications.has(msg.chatId) && !projectMutations.has(msg.chatId)
       && isChatAllowed(cfg, msg.chatId) && isUserAllowedInProject(cfg, project, msg.senderId)) {
@@ -3238,7 +3260,7 @@ export function createOrchestrator(
         return;
       }
       if (await alreadySeen(msg, ts.sessionKey)) return;
-      void trackTask(handleTurn(msg, text, ts.sessionKey, true, project, ts).catch((err) => log.fail('intake', err)));
+      void trackTask(handleTurn(msg, text, ts.sessionKey, true, project, ts, directFeedback(msg)).catch((err) => log.fail('intake', err)));
       return;
     }
 
@@ -3307,7 +3329,7 @@ export function createOrchestrator(
         return;
       }
       if (await alreadySeen(msg, ts.sessionKey)) return;
-      void trackTask(handleTurn(msg, text, ts.sessionKey, false, project, ts).catch((err) => log.fail('intake', err)));
+      void trackTask(handleTurn(msg, text, ts.sessionKey, false, project, ts, directFeedback(msg)).catch((err) => log.fail('intake', err)));
       return;
     }
     // Main group area: /resume opens the history picker; /settings is a private
@@ -3369,7 +3391,7 @@ export function createOrchestrator(
       return;
     }
     if (await refuseUnavailableTier(msg, project, turnPerm(project))) return;
-    startTopicDirectly(msg, text, project);
+    startTopicDirectly(msg, text, project, false, directFeedback(msg));
   }
 
   /**
@@ -3966,6 +3988,7 @@ export function createOrchestrator(
         origin,
         ...(extra?.initiative ? { initiative: true as const } : {}),
         wake: extra?.wake,
+        feedback: extra?.feedback,
         ...memoryTriggerOf(msg, extra),
         ...(extra?.scheduled ? { scheduled: extra.scheduled } : {}),
       });
@@ -4322,6 +4345,7 @@ export function createOrchestrator(
           ...(recreateReason && !unused ? { sessionNotice: sessionChangeNotice(recreateReason, Boolean(topicId)) } : {}),
           ...(extra?.initiative ? { initiative: true as const } : {}),
           wake: extra?.wake,
+          feedback: extra?.feedback,
           ...memoryTriggerOf(msg, extra),
           ...(extra?.scheduled ? { scheduled: extra.scheduled } : {}),
         };
@@ -4567,7 +4591,7 @@ export function createOrchestrator(
    * Detached — onMessage must return fast (see {@link handleTurn}); a new
    * topic has a unique reply target so no same-topic reservation is needed.
    * `under`: the earlier line the smart mode opens it on instead (s25b). */
-  function startTopicDirectly(msg: NormalizedMessage, text: string, project?: Project, goal?: boolean, extra?: Pick<TurnExtra, 'initiative' | 'wake' | 'attentionAcceptance'>, under?: RecentLine): void {
+  function startTopicDirectly(msg: NormalizedMessage, text: string, project?: Project, goal?: boolean, extra?: Pick<TurnExtra, 'initiative' | 'wake' | 'attentionAcceptance' | 'feedback'>, under?: RecentLine): void {
     // When this start ends, the registry or Feishu knows the topic under that line, or it did not open (anchorLine put it in).
     const opened = (): void => { if (under) openingUnder.delete(under.id); };
     if (resumePublications.has(msg.chatId) || projectMutations.has(msg.chatId)) {
@@ -4700,6 +4724,7 @@ export function createOrchestrator(
           : { id: msg.messageId, from: senderOf(msg), at: msg.createTime || undefined, text: msg.content },
         ...(extra?.initiative ? { initiative: true as const } : {}),
         wake: extra?.wake,
+        feedback: extra?.feedback,
         ...memoryTriggerOf(msg, extra),
         backendId: be.id,
         titleJobKey,
@@ -5172,6 +5197,7 @@ export function createOrchestrator(
       return super.on(actionId, admitEvent(handler));
     }
   }(channel, cfg);
+  if (options?.feedback) dispatcher.on(FEEDBACK_ACTION, ({evt}) => options.feedback!.onAction(evt));
   if (options?.authoring) dispatcher.on('recipe.authoring', ({evt}) => options.authoring!.onAction(evt));
   const asks = new AskCoordinator(channel, cfg, names);
   dispatcher.on('ask_submit', ({ evt, value, formValue }) => {
@@ -7541,6 +7567,7 @@ export function createOrchestrator(
   }
 
   interface LaunchOpts {
+    feedback?: FeedbackSource;
     attentionAcceptance?: AttentionAcceptance;
     /** Only group-message launches have a sender to notify if preparation is cut short. */
     origin?: DroppedOrigin;
@@ -7996,6 +8023,7 @@ export function createOrchestrator(
         replayText: opts.replayText,
         seen: opts.seen,
         triggerMessageId: opts.triggerMessageId,
+        feedback: opts.feedback,
         seenHow: opts.seenHow,
         streaming: opts.streaming,
         woven: opts.woven,
@@ -8017,6 +8045,8 @@ export function createOrchestrator(
       const dmPeople = Object.values((await getProjectByChatId(opts.chatId).catch(() => undefined))?.dm?.people ?? {});
       for (;;) {
         let turnInput = currentTurn.input;
+        const refs = currentTurn.feedback?.attachments;
+        if (refs?.length) turnInput = {...turnInput, text: turnInput.text + '\n本条消息可供反馈核对的附件引用：' + JSON.stringify(refs)};
         // In flight from here, through the preparation below, not only once turn/start went out (review 260).
         state.inFlight = currentTurn.origin;
         state.requesterOpenId = currentTurn.requesterOpenId;
@@ -8025,7 +8055,7 @@ export function createOrchestrator(
         state.scheduled = scheduled ? true : undefined;
         const dmUnionId = dmPeople.find(person => person.openId === currentTurn.requesterOpenId)?.unionId;
         turnScope = entries?.openTurn(opts.thread, {
-          requesterOpenId: currentTurn.requesterOpenId, requesterKind: currentTurn.requesterKind,
+          feedback: currentTurn.feedback, requesterOpenId: currentTurn.requesterOpenId, requesterKind: currentTurn.requesterKind,
           triggerMessageId: currentTurn.seen?.id ?? currentTurn.triggerMessageId, retry: currentTurn.replayText !== undefined,
           initiative: Boolean(currentTurn.initiative), wake: Boolean(currentTurn.wake),
           ...(currentTurn.memoryTrigger ? { typed: currentTurn.memoryTrigger.typed, triggerText: currentTurn.memoryTrigger.text } : {}),

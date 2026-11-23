@@ -6,6 +6,7 @@ import type { ScheduleActor } from '../../admin/schedule-commands';
 import type { AgentPlace, TurnWhere } from './registry';
 
 export interface ToolContext {
+  feedback?: (args: Parameters<import('./feedback-tool').FeedbackSource['prepare']>[0]) => Promise<unknown>;
   signal: AbortSignal;
   notAfter: number;
   admin?: boolean;
@@ -33,7 +34,7 @@ export interface AgentTool {
    * `document`: the document column of dm-agent 7.2, the Feishu tools a comment's session gets too. `feishu-api`: the
    * private chat's generic tool (7.6), kept to an administrator's turn or task by the registry.
    */
-  class: 'read' | 'settings' | 'memory' | 'schedule' | 'document' | 'feishu-api';
+  class: 'read' | 'settings' | 'memory' | 'schedule' | 'document' | 'feishu-api' | 'feedback';
   /** `document` 类：这个工具改东西，所有位置都要这一轮还在（registry 的 authorizeFeishu） */
   writes?: boolean;
   /** Where it is listed and may be called, besides what its class allows; everywhere its class allows when absent. */

@@ -1207,6 +1207,45 @@ it('resumes an uncertain private send and invalidates old callbacks across daemo
   expect(kind(await rpc('cancelHandoff',{retryId:arg.retryId}),'handoff').handoff.state).toBe('cancelled');
 });
 
+it.each([['drop',false],['loseReply',false],['drop',true],['loseReply',true]] as const)('recovers the same selected private card after an uncertain update (%s, reopen %s)',async(fault,reopen)=>{
+  await link();const arg=beginInput();await rpc('beginHandoff',arg);
+  const role=privateChoice('☐ 群角色'),staleFinish=privateChoice('确认所选来源');
+  updateFault=fault;
+  await tap(role);
+  expect(kind(await rpc('handoffStatus',{retryId:arg.retryId}),'handoff').handoff.state).toBe('deliveryUnknown');
+  await tap(role);await tap(staleFinish);
+  expect(kind(await rpc('workflow'),'workflow').handoff).toBeUndefined();
+  expect(kind(await rpc('status'),'status').operations).toHaveLength(0);
+  if(reopen){
+    restart();await open();
+    await expect(rpc('handoffStatus',{retryId:arg.retryId})).rejects.toThrow('重新核验');
+  }
+  updateFault=undefined;
+  expect(kind(await rpc('beginHandoff',arg),'handoff').handoff.state).toBe('selecting');
+  const selected=privateChoice('☑ 群角色');
+  expect(selected.value.ref).not.toBe(role.value.ref);
+  expect(kind(await rpc('handoffStatus',{retryId:arg.retryId}),'handoff').handoff.state).toBe('selecting');
+  restart();await open();
+  await expect(rpc('handoffStatus',{retryId:arg.retryId})).rejects.toThrow('重新核验');
+  expect(kind(await rpc('beginHandoff',arg),'handoff').handoff.state).toBe('selecting');
+  expect(privateChoice('☑ 群角色').value.ref).not.toBe(selected.value.ref);
+  await service.onAction({operator:{openId:owner},raw:{operator:{open_id:owner,tenant_key:tenant}},chatId,messageId:selected.messageId,action:{tag:'button',value:selected.value}});
+  expect(privateChoice('☑ 群角色')).toBeTruthy();
+  await service.onAction({operator:{openId:owner},raw:{operator:{open_id:owner,tenant_key:tenant}},chatId,messageId:selected.messageId,action:{tag:'button',value:privateChoice('确认所选来源').value}});
+  const request=kind(await rpc('workflow'),'workflow').handoff!;
+  expect(request.retryId).toBe(arg.retryId);
+  const h=kind(await rpc('answerHandoff',{request,attestations:[]}),'handoff').handoff;
+  const op=await status(h.operationId!);
+  const draftId=randomUUID();
+  await rpc('richAdvance',{operationId:op.operationId,destinationDraftId:draftId,authorization:{...await auth(op,'dispatch'),format:'rich-v2'}});
+  expect([...cards.values()][0]).toContain(sourceRole);expect([...cards.values()][0]).not.toContain(hiddenMemory);
+  const preview=kind(await rpc('richInspect',{operationId:op.operationId,preview:true}),'richCandidate').request;
+  expect(preview).toMatchObject({content:{role:{text:{kind:'inline',value:sourceRole}},memories:[]}});
+  expect(kind(await rpc('beginHandoff',arg),'handoff').handoff.operationId).toBe(op.operationId);
+  expect(kind(await rpc('status'),'status').operations).toHaveLength(1);
+  expect(messages.size).toBe(1);expect(cards.size).toBe(1);
+});
+
 it('rejects a source revision changed during cloud attestation and expires a new selection after its deadline',async()=>{
   await link();const arg=beginInput();await rpc('beginHandoff',arg);
   await tap(privateChoice('确认所选来源'));
