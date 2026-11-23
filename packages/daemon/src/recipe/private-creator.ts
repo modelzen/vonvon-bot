@@ -25,7 +25,7 @@ export const creatorClick=z.discriminatedUnion('verb',[
 ]);
 type Intent='create'|'works';
 export function creatorIntent(text:string):Intent|undefined{
-  if(/^(?:\/recipe\s+(?:create|start)|(?:从群配置|从这个群|帮我)?(?:创建|制作|分享)(?:一个|一份)?配方)[。！]?$/i.test(text))return 'create';
+  if(/^(?:\/recipe\s+(?:create|start)|(?:从群配置|从这个群|帮我)?(?:创建|创作|制作|分享)(?:一个|一份)?配方)[。！]?$/i.test(text))return 'create';
   if(/^(?:\/recipe(?:\s+(?:list|works|preview|publish|continue))?|我的配方|继续创作|预览发布|发布吧)[。！]?$/i.test(text))return 'works';
 }
 export interface CreatorWake {id:string;messageId:string;intent:Intent;expiresAt:number;cardRef?:string;jobId?:string}
@@ -547,7 +547,7 @@ export class PrivateCreator{
       const openOperations=Object.values(db.operations).filter(o=>o.bot===this.botKey&&o.accountId===p.account&&o.scope===p.scope&&o.binding===link.binding&&sameRecipient(o.recipient,recipient)&&
         o.contextOpen&&(o.contextUntil??0)>this.now()&&o.terminalAt===undefined);
       const commandOperation=!quoted&&!selected&&s.focusUntil&&s.focusUntil>this.now()&&openOperations.length===1?openOperations[0]:undefined;
-      const editableFocus=commandOperation&&!commandOperation.revoked&&commandOperation.view.purpose==='editDraft'&&commandOperation.view.draftId===s.focusDraft&&
+      const editableFocus=commandOperation&&!commandOperation.revoked&&(commandOperation.view.purpose==='prepareDraft'||commandOperation.view.purpose==='editDraft'&&commandOperation.view.draftId===s.focusDraft)&&
         ['waiting','candidate'].includes(commandOperation.view.state);
       return {selected,quote:activeCard||undefined,logo:s.awaitLogo,duplicate:s.seen?.includes(msg.messageId),originalOp:Boolean(op),matching:matching||focusedOperation,editableFocus:Boolean(editableFocus),foreignQuote:Boolean(quoted&&!op&&!activeCard),active:Boolean(s.focusUntil&&s.focusUntil>this.now())};
     });

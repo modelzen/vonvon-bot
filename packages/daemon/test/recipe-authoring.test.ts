@@ -1044,6 +1044,72 @@ async function richChatContext(fields:('name'|'summary'|'overview'|'version')[]=
 const lastCard=()=>[...cards.values()].at(-1)!;
 const replies=()=>JSON.stringify(textSend.mock.calls);
 
+const versionCandidateInstruction='请把正在准备的新版版本设为「0.2.0-test」。名称、简介和群角色都保留。把概览润色成简洁的 Markdown 使用说明，保留原来的三步流程，并增加一句说明这次同时验证飞书直接发布。只生成这份配方的待确认候选，不要保存或发布，不要修改原群配置。';
+
+it.each(['natural','command'] as const)('routes candidate generation language to the selected rich creation without saving or publishing: %s',async mode=>{
+  await link();
+  const options={includeTasks:false,includeBotMemories:false,skills:[]};
+  const {inventory}=kind(await rpc('richInventory',{groupId,options}),'richInventory');
+  const selection={options,reviewToken:inventory.reviewToken,selected:[inventory.content.role!.itemId],sourceAttested:true,
+    public:{name:'周报',summary:'每周整理',overview:'1. 选择来源\n2. 确认候选\n3. 保存',version:''},access:'direct',setup:[]};
+  const op=kind(await rpc('richPrepare',{groupId,selection,attestations:[]}),'operation').operation;
+  await rpc('richAdvance',{operationId:op.operationId,destinationDraftId:randomUUID(),authorization:{...await auth(op,'dispatch'),format:'rich-v2'}});
+  if(mode==='command'){
+    await attachCreator();
+    const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+    await new AuthoringJournal(root,()=>clock).run(db=>{const link=Object.values(db.links)[0]!;link.creator!.focusUntil=clock+60_000;delete link.creator!.current;});
+  }
+  const projects=await readFile(join(botPaths(appId).dir,'projects.json'),'utf8');
+  proposeRich.mockImplementationOnce(async(input:RichModelInput)=>({kind:'proposal',commands:input.selected.flatMap((item,index)=>item.field==='version'
+    ?[{action:'setPublicText',target:'T'+(index+1),text:'0.2.0-test'}]:item.field==='overview'
+    ?[{action:'setPublicText',target:'T'+(index+1),text:'1. 选择来源\n2. 确认候选\n3. 保存\n本次同时验证飞书直接发布。'}]:[])}));
+  expect(await service.onMessage(msg(mode==='natural'?versionCandidateInstruction:'/recipe version 0.2.0-test'))).toBe(true);
+  expect(proposeRich).toHaveBeenCalledTimes(mode==='natural'?1:0);
+  expect((await status(op.operationId)).state).toBe('candidate');
+  expect(kind(await rpc('status'),'status').operations).toHaveLength(1);
+  expect(lastCard()).toContain('0.2.0-test');expect(lastCard()).toContain(sourceRole);
+  expect(cloud.map(c=>c.action)).toEqual(['dispatch']);
+  expect(await readFile(join(botPaths(appId).dir,'projects.json'),'utf8')).toBe(projects);
+});
+
+it('routes candidate generation language to an existing rich edit',async()=>{
+  const {op}=await richChatContext(['version']);
+  proposeRich.mockResolvedValueOnce({kind:'proposal',commands:[{action:'setPublicText',target:'T1',text:'0.2.0-test'}]});
+  await service.onMessage(msg(versionCandidateInstruction));
+  expect(proposeRich).toHaveBeenCalledTimes(1);
+  expect((await status(op.operationId)).state).toBe('candidate');
+  expect(cloud.map(c=>c.action)).toEqual(['dispatch']);
+});
+
+it.each(['/recipe create','/recipe start','创建配方','创作配方'])('keeps explicit new creation separate from an active edit: %s',async instruction=>{
+  const {op}=await richChatContext();
+  const before=await status(op.operationId);
+  await service.onMessage(msg(instruction));
+  expect(proposeRich).not.toHaveBeenCalled();
+  expect(await status(op.operationId)).toEqual(before);
+  expect(replies()).toContain('已有草稿正在编辑');
+});
+
+it('does not choose among multiple active drafts from fuzzy creation language',async()=>{
+  const {op}=await richChatContext();
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  await new AuthoringJournal(root,()=>clock).run(db=>{const copy=structuredClone(db.operations[op.operationId]!);copy.view.operationId=randomUUID();db.operations[copy.view.operationId]=copy;});
+  await service.onMessage(msg(versionCandidateInstruction));
+  expect(proposeRich).not.toHaveBeenCalled();expect(replies()).toContain('选择来源群或草稿');
+  expect(cloud.map(c=>c.action)).toEqual(['dispatch']);
+});
+
+it('keeps candidate generation behind the current source selection',async()=>{
+  await link();const arg=beginInput();
+  await rpc('beginHandoff',arg);
+  expect(await service.onMessage(msg(versionCandidateInstruction))).toBe(true);
+  expect(proposeRich).not.toHaveBeenCalled();
+  expect(replies()).toMatch(/选择内容并确认|重新选择账号/);
+  expect(kind(await rpc('handoffStatus',{retryId:arg.retryId}),'handoff').handoff.state).toBe('selecting');
+  expect(kind(await rpc('status'),'status').operations).toEqual([]);
+  expect(cloud).toEqual([]);
+});
+
 it.each([false,true])('handles explicit rich public commands without a Provider, completed=%s',async(completed)=>{
   await orch.shutdown();restart(null);await open();orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});
   const {op,content}=await richChatContext(['name'],completed);

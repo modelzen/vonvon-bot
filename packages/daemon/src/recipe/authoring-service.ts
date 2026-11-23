@@ -1,5 +1,5 @@
 import {AuthoringRouter} from './authoring-router';
-import {PrivateCreator, invalidateWorkOffer,creatorClick} from './private-creator';
+import {PrivateCreator, invalidateWorkOffer,creatorClick,creatorIntent} from './private-creator';
 import {PrivateHandoffs} from './authoring-handoff';
 import {handoffClick} from './authoring-handoff-menu';
 import {richSkillOptions,readRichSource,preparedRich,richReviewDigest,bindRichMembers,richMemberCap,richCardReview,typedRichEdit,chatRichProposal,richEditCardContext,type RichLocalDraft,type RichNativeOptions} from './authoring-rich-flow';
@@ -885,7 +885,7 @@ export class AuthoringSession {
         await reply(selected ? '可用当前私聊的 Provider 解读单条草稿指令，例如“把名称改成周报”。'+commandHelp : '发 /recipe create 创建私人草稿，或在 App 选择已有草稿并点「在飞书继续编辑」。');
         return true;
       }
-      if (/^\/recipe\s+(?:create|start)$/i.test(cmd) || intent === 'create') {
+      if (creatorIntent(cmd) === 'create' || intent === 'create' && !contexts.length) {
         if (open.length) { await reply('已有草稿正在编辑。请先在卡片完成或取消本次操作，再创建新草稿。'); return true; }
         if (!await this.offerSources(p,link,recipient,msg.messageId)) await reply(appChoose);
         return true;
