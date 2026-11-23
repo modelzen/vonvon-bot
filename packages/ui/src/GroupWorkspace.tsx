@@ -41,7 +41,8 @@ export function groupTabForSection(section?: string): GroupDesignTab {
     case '执行权限':
     case '群设置':
     case '模型与权限':
-    case '可用模型': return 'model';
+    case '可用模型':
+    case '模型设置': return 'model';
     case '权限':
     case '工作目录权限':
     case '能挡到什么':
@@ -140,7 +141,6 @@ export function GroupWorkspace({member, agent, group, snapshot, dmMode, initialT
     finally {saving.current = false; setBusy(false); setPendingEnabled(null); setPendingConversation(null);}
   }
   const available = agent.running && !!project && !member.stale;
-  const tabs = groupDesignTabs;
   const groupBots = snapshot.memberships.filter(item => item.groupId === group.id).flatMap(item => {
     const bot = snapshot.agents.find(candidate => candidate.id === item.agentId);
     return bot ? [{item, bot}] : [];
@@ -177,8 +177,8 @@ export function GroupWorkspace({member, agent, group, snapshot, dmMode, initialT
       </div>
       <div className="config-header-navigation">
         <nav className="group-design-tabs config-tabs gooey-tabs" aria-label={dmMode ? '私聊设置' : '群设置'}>
-          <NavigationIndicator activeIndex={tabs.findIndex(([value]) => tab === value)}/>
-          {tabs.map(([value,label]) => <button type="button" key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => guard.navigate(() => {setTab(value); onTabChange?.(value);})}>{value === 'memory' && newMemoryCount ? <>{label}<span className="group-memory-tab-new" aria-label={`${newMemoryCount} 条新记忆`}>新 {newMemoryCount}</span></> : label}</button>)}
+          <NavigationIndicator activeIndex={groupDesignTabs.findIndex(([value]) => tab === value)}/>
+          {groupDesignTabs.map(([value,label]) => <button type="button" key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => guard.navigate(() => {setTab(value); onTabChange?.(value);})}>{value === 'memory' && newMemoryCount ? <>{label}<span className="group-memory-tab-new" aria-label={`${newMemoryCount} 条新记忆`}>新 {newMemoryCount}</span></> : label}</button>)}
         </nav>
         {dmMode ? (!agent.running && <span className="group-control-note">{agent.enabled ? 'Bot 未运行' : 'Bot 已停用'}</span>) : project ? <span className="config-enable group-enable-control"><span role="status" className="group-save-status">{notice === '已保存。' && <><Check size={12} aria-hidden="true"/>已保存</>}</span>{pendingEnabled !== null && <OperationActivity key={`${member.id}:${pendingEnabled}`} label={pendingEnabled ? '本群启用中' : '本群停用中'} state={pendingEnabled ? 'connecting' : 'working'}/>}<Toggle aria-label={`在本群使用 ${agent.name}`} label="在本群使用" checked={project.enabled} disabled={!available || busy} onChange={event => {const enabled=event.target.checked; guard.navigate(() => {void update({enabled});});}}/></span> : <span className="group-control-note">{!agent.enabled ? 'Bot 已停用' : !agent.running ? 'Bot 未运行' : '读取中…'}</span>}
       </div>

@@ -27,3 +27,9 @@ it('rejects duplicate native IDs and oversized generated structures',()=>{
   expect(()=>assertCardDisplayRender({schema:'2.0',body:{elements:[{tag:'markdown',element_id:'answer'},{tag:'markdown',element_id:'answer'}]}})).toThrow('重复');
   expect(()=>assertCardDisplayRender({schema:'2.0',body:{elements:Array.from({length:201},()=>({tag:'markdown',content:'x'}))}})).toThrow('过多');
 });
+it.each(['display-reminder','display-stop','1answer','_answer','','a'.repeat(21),'has space','提醒','answer\n',123,null])('rejects a Feishu-incompatible element ID %j',element_id=>{
+  expect(()=>assertCardDisplayRender({schema:'2.0',body:{elements:[{tag:'column',elements:[{tag:'markdown',element_id}]}]}})).toThrow('ID 格式');
+});
+it.each(['a','Answer_09','a'.repeat(20)])('accepts the valid Feishu element ID %s',element_id=>{
+  expect(()=>assertCardDisplayRender({schema:'2.0',body:{elements:[{tag:'markdown',element_id},{tag:'markdown'}]}})).not.toThrow();
+});

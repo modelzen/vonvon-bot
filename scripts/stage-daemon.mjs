@@ -208,7 +208,10 @@ export async function stageDaemon(destination, metadata, options = {}) {
     sourcemap: false,
     metafile: true,
     plugins: [runtimePlugin(runtime, bundled)],
-    define: { __VONVON_SUPERVISOR_SHA256__: supervisorHash ? JSON.stringify(supervisorHash) : 'undefined' },
+    define: {
+      __VONVON_SUPERVISOR_SHA256__: supervisorHash ? JSON.stringify(supervisorHash) : 'undefined',
+      __VONVON_ACCOUNT_API_ORIGIN__: JSON.stringify(process.env.VONVON_ACCOUNT_API_ORIGIN) ?? 'undefined',
+    },
   });
   const external = new Set();
   for (const output of Object.values(result.metafile.outputs)) {

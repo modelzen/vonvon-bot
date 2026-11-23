@@ -90,3 +90,7 @@ mac:
   target:
     - dmg
     - zip
+
+protocols:
+  - name: Vonvon draft preview
+    schemes: [vonvon]

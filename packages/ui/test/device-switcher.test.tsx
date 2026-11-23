@@ -5,6 +5,7 @@ import type {DevicesState} from '@vonvon/protocol';
 import {activeDeviceFrom, ClientProvider, type ShellCapabilities} from '../src/client-context';
 import type {Page} from '../src/collaboration-model';
 import {AppShell} from '../src/LocalShell';
+import {BackButton} from '../src/BackButton';
 import {DeviceSwitcher, DeviceSwitcherMenu} from '../src/devices/DeviceSwitcher';
 import {linkPreviewCopy} from '../src/devices/devices-presentation';
 import {DraftGuardProvider} from '../src/settings/DraftGuard';
@@ -67,17 +68,17 @@ it('offers ← 此刻 in first use on the desktop, where neither the tabs nor th
     const onNavigate = vi.fn();
     const shell = AppShell({page, view: 'agents', title: '页面', firstUse, onNavigate, onOpenList: () => {},
       deviceSwitcher: switcher ? <span className="probe-switcher"/> : undefined, children: <p/>});
-    const row = tree(shell).find(node => node.props.className === 'today-back');
-    return {html: row && renderToStaticMarkup(row), click: () => { (row!.props.children as Element).props.onClick(); return onNavigate.mock.calls; }};
+    const row = tree(shell).find(node => node.type === BackButton);
+    return {html: row && renderToStaticMarkup(row), click: () => {row?.props.onClick(); return onNavigate.mock.calls;}};
   };
   // 设置 itself, and the Bot / 群组 lists that search opens: nothing else leads back.
   for (const page of ['settings', 'collaboration'] as const) {
-    expect(back(page).html).toContain('此刻');
+    expect(back(page).html).toContain('aria-label="返回此刻"');
     expect(back(page).click()).toEqual([['home']]);
   }
   expect(back('home').html).toBeUndefined();
   // A settings page keeps its way back to 设置, which then leads home.
-  expect(back('devices').html).toContain('设置');
+  expect(back('devices').html).toContain('aria-label="返回设置"');
   expect(back('devices').html).not.toContain('此刻');
   expect(back('devices').click()).toEqual([['settings']]);
   // With the tabs, and on the web (the brand), nothing changes.
@@ -132,4 +133,17 @@ it('greys out 添加设备… for the same reasons as the page', () => {
   expect(add).toContain(`title="${linkPreviewCopy('no_secure_storage', '')}"`);
   const manage = items(menuOf(devicesState({id: A}, {}, {secureStorage: false})))[4]!;
   expect(manage).not.toContain('disabled');
+});
+
+it('keeps account actions below device actions with the user profile', () => {
+  const profile = {kind: 'signedIn', accountId: '11111111-1111-4111-8111-111111111111', displayName: 'Clay', provider: 'github', persistence: 'secure'} as const;
+  const renderMenu = (status: typeof profile | {kind: 'signedOut'}) => renderToStaticMarkup(<DeviceSwitcherMenu state={remote} now={Date.now()} onPick={() => {}} onAdd={() => {}} onManage={() => {}}
+    account={{status, supported: true, onLogin: () => {}, onManage: () => {}}}/>);
+  const signedIn = renderMenu(profile);
+  expect(signedIn.indexOf('Clay')).toBeGreaterThan(signedIn.indexOf('管理设备…'));
+  expect(signedIn).toContain('账号管理');
+  expect(signedIn).toContain('account-avatar');
+  const signedOut = renderMenu({kind: 'signedOut'});
+  expect(signedOut.indexOf('登录 Vonvon')).toBeGreaterThan(signedOut.indexOf('管理设备…'));
+  expect(signedOut).not.toContain('网页登录');
 });

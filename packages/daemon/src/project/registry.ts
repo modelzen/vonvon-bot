@@ -43,6 +43,11 @@ export function cardDisplayPresentationDefaults(cfg:Partial<AppConfig>):ProjectP
 
 /** A project = a Feishu group bound to a fixed working directory. */
 export interface Project {
+  feedback?: import('../feedback/config').GroupFeedbackConfig;
+  bindingIncarnation?: string;
+  projectSettingsRevision?: number;
+  richRecipe?: import('../recipe/rich-state').RichRecipeState;
+  recipeInstall?: import('../recipe/types').RecipeInstallation;
   /** Default for new sessions; omitted uses the provider's native default. */
   serviceTier?: import('../agent/types').ServiceTier;
   profile?: GroupProfile;
@@ -130,6 +135,8 @@ export interface Project {
   /** 补充职责（原"本群个性"，记忆设计 2.2）：这个 bot 在这个项目里多做什么、少做什么。写入时 ≤ 5,000 字，读取不校验。
    * P4a 之前和 `profile.persona` 双写；读者切换后 `profile` 不再读。 */
   supplement?: string;
+  /** 仅用于群工作执行，不参与智能判断。 */
+  workRules?: string;
   /** 记忆设计 7.1 的分步标记，每步做完的时间（epoch ms）：`library` = 步骤 A，`memory` = 步骤 B。 */
   migration?: { library?: number; memory?: number };
   /** This row is the bot's private chat (dm-agent 4.1): one per bot, kept out of everything about groups by
@@ -423,6 +430,16 @@ async function writeStored(location: RegistryLocation, body: Record<string, unkn
   const oldProjects = directoryRows(previous.projects);
   const nextProjects = directoryRows(next.projects);
   for (const row of nextProjects) {
+    const priorBinding = oldProjects.find(project => project.chatId === row.chatId);
+    if (!row.dm && (!priorBinding || priorBinding.bindingIncarnation !== undefined || priorBinding.projectSettingsRevision !== undefined
+      || JSON.stringify(row) !== JSON.stringify(priorBinding))) {
+      row.bindingIncarnation = typeof priorBinding?.bindingIncarnation === 'string' ? priorBinding.bindingIncarnation
+        : priorBinding && typeof row.bindingIncarnation === 'string' ? row.bindingIncarnation : randomUUID();
+      const settings = (value: DirectoryRow): string => JSON.stringify(Object.fromEntries(Object.entries(value)
+        .filter(([key]) => !['projectSettingsRevision', 'bindingIncarnation', 'recipeInstall'].includes(key))));
+      const revision = typeof priorBinding?.projectSettingsRevision === 'number' ? priorBinding.projectSettingsRevision : 0;
+      row.projectSettingsRevision = revision + (priorBinding && settings(row) !== settings(priorBinding) ? 1 : 0);
+    }
     validateGroupSettings(row);
     const directories = parseDirectorySettings(row.directories);
     const old = oldProjects.find(project => project.chatId === row.chatId && project.name === row.name);
@@ -448,12 +465,12 @@ async function writeStored(location: RegistryLocation, body: Record<string, unkn
   const tmp = `${location.file}.tmp-${process.pid}-${randomUUID()}`;
   try {
     if (durable) {
-      const file = await open(tmp, 'wx');
+      const file = await open(tmp, 'wx', 0o600);
       let failed = false;
       try { await file.writeFile(serialized, 'utf8'); await file.sync(); }
       catch (error) { failed = true; throw error; }
       finally { try { await file.close(); } catch (error) { if (!failed) throw error; } }
-    } else await writeFile(tmp, serialized, 'utf8');
+    } else await writeFile(tmp, serialized, {encoding: 'utf8', mode: 0o600});
     await renameOverReaders(tmp, location.file, beforeCommit);
   } catch (error) {
     await unlink(tmp).catch(() => undefined);
@@ -467,6 +484,33 @@ export interface ProjectCommitOptions {
   /** Set only by the host's workspace funnel (admin/library.ts): the one writer allowed to change the folders of a row
    * that belongs to a library project, to make them the project's again. */
   mirror?: boolean;
+}
+
+export function mutateProjectStore<T>(target: RegistryLocation, operation: (store: Record<string, unknown>, rows: Project[]) => Promise<{changed: boolean; value: T; durableRead?: true}>, beforeCommit?: () => void): Promise<T> {
+  return ownProjects(async location => {
+    const stored = await readStored(location.file);
+    const rows = stored.projects === undefined ? [] : storedRows(stored);
+    const previous = structuredClone(stored);
+    const result = await operation(stored, rows);
+    if (result.changed) await writeStored(location, {...stored, version: FILE_VERSION, projects: rows}, previous, beforeCommit, true);
+    else if (result.durableRead) await syncProjectStore(location);
+    return result.value;
+  }, target);
+}
+
+async function syncProjectStore(location: RegistryLocation): Promise<void> {
+  const file = await open(location.file, 'r+');
+  try { await file.sync(); }
+  finally { await file.close(); }
+  await syncDirectory(dirname(location.file));
+}
+
+export function readDurableProjectStore<T>(target: RegistryLocation, operation: (store: Record<string, unknown>) => T): Promise<T> {
+  return ownProjects(async location => {
+    const value = operation(await readStored(location.file));
+    await syncProjectStore(location);
+    return value;
+  }, target);
 }
 async function write(location: RegistryLocation, projects: Project[], selected?: undefined, options?: ProjectCommitOptions): Promise<void>;
 async function write(location: RegistryLocation, projects: Project[], selected: Project, options?: ProjectCommitOptions): Promise<Project>;
@@ -554,9 +598,9 @@ export async function getProjectByChatId(chatId: string, file?: string): Promise
 }
 
 /** {@link getProjectByChatId} read synchronously, for the scheduled-task gate (bot/schedule/scheduler.ts), which decides in place. */
-export function getProjectByChatIdSync(chatId: string): Project | undefined {
+export function getProjectByChatIdSync(chatId: string, file = paths.projectsFile): Project | undefined {
   let text: string;
-  try { text = readFileSync(paths.projectsFile, 'utf8'); } catch (err) {
+  try { text = readFileSync(file, 'utf8'); } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw err;
   }
@@ -621,7 +665,7 @@ export async function rememberDmChat(chatId: string, openId: string, name?: stri
 /** Add a project. Throws if the name — or the bound chat — is already taken.
  * The chatId check is the registry-level hard guard against binding one group
  * twice (createProject's chatId is freshly minted so it never trips). */
-export async function addProject(input: Project, target?: RegistryLocation): Promise<void> {
+export async function addProject(input: Project, target?: RegistryLocation): Promise<Project> {
   const p = structuredClone(input);
   return ownProjects(async location => {
     const projects = await read(location.file);
@@ -633,7 +677,7 @@ export async function addProject(input: Project, target?: RegistryLocation): Pro
       if (bound) throw new Error(`该群已绑定为项目「${bound.name}」`);
     }
     projects.push(p);
-    await write(location, projects);
+    return write(location, projects, p);
   }, target);
 }
 

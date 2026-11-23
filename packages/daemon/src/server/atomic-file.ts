@@ -5,7 +5,7 @@ import { mkdir, open, rename, rm, writeFile } from 'node:fs/promises';
 import { log } from '../core/logger';
 import { basename, dirname, join } from 'node:path';
 
-export async function writeFileAtomic(filePath: string, data: string | NodeJS.ArrayBufferView, opts?: { durable?: boolean }): Promise<void> {
+export async function writeFileAtomic(filePath: string, data: string | NodeJS.ArrayBufferView, opts?: { durable?: boolean; beforeCommit?:()=>void }): Promise<void> {
   const parent = dirname(filePath);
   await mkdir(parent, { recursive: true, mode: 0o700 });
   const temporary = join(parent, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
@@ -17,7 +17,7 @@ export async function writeFileAtomic(filePath: string, data: string | NodeJS.Ar
         await file.sync();
       } finally { await file.close(); }
     } else await writeFile(temporary, data, { mode: 0o600 });
-    await renameOverReaders(temporary, filePath);
+    await renameOverReaders(temporary, filePath, opts?.beforeCommit);
   } catch (error) {
     await rm(temporary, { force: true });
     throw error;

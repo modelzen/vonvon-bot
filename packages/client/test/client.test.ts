@@ -208,3 +208,23 @@ it('delivers the negotiated attention model even when an initial legacy event ha
   expect(seen).toEqual([undefined, 'group']);
   stop(); await client.close();
 });
+
+it.each([
+  {preview:false,resource:false},{preview:true,resource:false},{preview:false,resource:true},{preview:true,resource:true},
+])('sends creator preview and resource fields independently after the hello ($preview/$resource)',async ({preview,resource})=>{
+  const session=randomUUID(),binding=randomUUID(),scope='f'.repeat(64);
+  const input={type:'creatorOpen' as const,botId:'cli_creator',accountId:randomUUID(),binding,scope,wakeId:null};
+  const payloads:unknown[]=[];
+  const options=await fixture((socket,frame)=>{
+    payloads.push(frame.payload);
+    socket.send(JSON.stringify({type:'response',id:frame.id,method:'recipeAuthoring',payload:{kind:'creatorSession',session,binding,scope,leaseMs:45000}}));
+  },[...preview?['recipe.native-preview']:[],...resource?['recipe.resource-context.v1']:[]]);
+  const {client}=await connectLocal(options);
+  const {recipeAuthoringRequestSchema}=await import('@vonvon/protocol');
+  await client.recipeAuthoring!(recipeAuthoringRequestSchema.parse({...input,nativePreview:true,resourceContext:true}));
+  expect(client.supportsResourceContext).toBe(resource);
+  if(!resource)await expect(client.recipeAuthoring!(recipeAuthoringRequestSchema.parse({type:'resourceHandoff',botId:input.botId,session,requestId:randomUUID(),
+    target:{recipeId:randomUUID(),versionId:randomUUID()}}))).rejects.toThrow('不支持');
+  expect(payloads).toEqual([{...input,...preview&&{nativePreview:true},...resource&&{resourceContext:true}}]);
+  await client.close();
+});

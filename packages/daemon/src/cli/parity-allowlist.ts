@@ -20,6 +20,12 @@ const pending = (slice: ParitySlice, note: string): ParityEntry => ({ reason: 'p
 const dead = (slice: ParitySlice, note = 'the daemon answers unsupported'): ParityEntry => ({ reason: 'dead', slice, note });
 
 export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
+  ...Object.fromEntries([
+    'source', 'ignoreVersion', 'createdGroup', 'prepare', 'commit', 'status', 'cancel', 'issuing', 'reconcile',
+    'richCancel', 'richIssuing', 'richReconcile', 'richPrepare', 'richCommit', 'richStatus', 'richSetup',
+  ].map(type => ['recipeInstall.' + type, {reason: 'superseded' as const, note: 'group installation has retired; the daemon answers unsupported'}])),
+  ...Object.fromEntries('resourceHandoff creatorAnswer creatorAppConfirm creatorCheck creatorContinue creatorDeliver creatorDiscover creatorLogo creatorOpen creatorPoll creatorPreview beginHandoff beginDraftHandoff restoreHandoff handoffStatus cancelHandoff answerHandoff richSourceOptions richInventory richPrepare richEdit richReadMember richMembers richBindMembers richInspect richAdvance'.split(' ').map(type => ['recipeAuthoring.' + type, {reason: 'desktop-only' as const, note: 'the signed-in desktop owns the private authoring session'}])),
+  ...Object.fromEntries('open close status beginLink inspectLink confirmLink reviewSource prepare edit inspectCandidate advance deliver resend cancel settle reconcile updateCard groupSourceIdentity operationSourceIdentity workflow answerField resumeContext'.split(' ').map(type => ['recipeAuthoring.' + type, {reason: 'desktop-only' as const, note: 'the signed-in desktop owns the private authoring session'}])),
   'command.setAgentBadgeNumber': { reason: 'client-only', note: 'the printed employee number on the home page badge' },
   'command.setResponse': { reason: 'superseded', note: 'settings.save.project response (settings set)' },
   'command.setPermission': { reason: 'superseded', note: 'settings.save.project permission (settings set)' },

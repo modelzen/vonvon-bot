@@ -114,7 +114,7 @@ export interface AgentSections {
 export interface ProjectSections {
   profile: GroupProfile;
   /** 补充职责：绑定行的 `supplement`（P4a 之前和 `profile.persona` 双写） */
-  role: { supplement: string };
+  role: { supplement: string; workRules?: string };
   modelAccess: ProjectModelAccess;
   workspace: ProjectWorkspace;
   smartRules: ProjectSmartRules;

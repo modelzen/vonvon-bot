@@ -87,8 +87,8 @@ const loginLines = (file: string) => readFileSync(join(UI, file), 'utf8').split(
 // main 必败: Provider pages said 登录 for what is an account or a custom API (devices 6.4)
 it('says 配置 rather than 登录 for Codex and Claude on every Provider page', () => {
   for (const file of PROVIDER_FILES) expect(loginLines(file), file).toEqual([]);
-  // Only the search alias stays, so typing 登录 still finds the Provider page.
-  const search = loginLines('search.ts');
+  // Provider search aliases retain 登录; the Vonvon account has its own login action.
+  const search = loginLines('search.ts').filter(line => !line.includes("page: 'account'"));
   expect(search).toHaveLength(1);
   expect(search[0]).toContain('aliases');
 });

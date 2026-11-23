@@ -17,6 +17,15 @@ export async function runFeishuGroups(options: { bot?: string; cursor?: string }
   print(io, rows, result);
 }
 
+export async function runFeishuGroupIdentity(chatId: string, options: {bot?: string}, io: Io, daemon: Daemon = withDaemon): Promise<void> {
+  if (!groupIdSchema.safeParse(chatId).success) throw badArgs('群 id 应该以 oc_ 开头。');
+  const result = await daemon(async call => {
+    const bot = pickBot((await call('读取快照', client => client.snapshot())).agents, options.bot);
+    return want('读取群名', await call('读取群名', client => client.run({type: 'readGroupIdentity', agentId: bot.id, groupId: groupIdSchema.parse(chatId)}), {feishu: true}), 'groupIdentity');
+  });
+  print(io, [`${result.name}  ${result.groupId}  ${result.agentId}`], result);
+}
+
 /** A `--filter`-like value: the shape is the tool's to check, the syntax is this command's. */
 export function jsonArgument(flag: string, text: string): unknown {
   try { return JSON.parse(text) as unknown; }
