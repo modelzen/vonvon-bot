@@ -141,7 +141,7 @@ async function home() {
     }
     if (!hero && !items.length) results.append(stableQuery ?
       empty('没有找到匹配的配方', null, button('清除搜索', () => { q.value = ''; load(); }, 'secondary')) :
-      empty('社区里还没有配方', '发布后，配方会出现在这里。', link('去创作中心', '/studio', 'secondary')));
+      empty('社区里还没有配方', '发布后，配方会出现在这里。', link('分享配方', '/studio', 'secondary')));
     if (cursor) results.append(button('加载更多', more, 'secondary more'));
   }
   const listUrl = (s, next) => {
