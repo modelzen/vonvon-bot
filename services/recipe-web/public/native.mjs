@@ -1,5 +1,7 @@
 if (document.documentElement.dataset.loginMode === 'app' || location.pathname.startsWith('/auth/native')) {
 const status = document.querySelector('#status'), choices = document.querySelector('#providers'), cancel = document.querySelector('#cancel');
+const configuredOrigin = document.documentElement.dataset.authOrigin;
+const authOrigin = configuredOrigin && !configuredOrigin.startsWith('__') ? configuredOrigin : '';
 const storageKey = 'vv-native-tab';
 const names = { github: 'GitHub', google: 'Google' };
 const fragment = new URLSearchParams(location.hash.slice(1));
@@ -13,8 +15,8 @@ const identity = document.querySelector('#native-identity'), confirm = document.
 let binding, active = true, deadline = 0, deciding = false;
 
 async function request(path, data) {
-  const response = await fetch('/auth/native/' + path, {
-    method: data === undefined ? 'GET' : 'POST', credentials: 'same-origin', cache: 'no-store',
+  const response = await fetch(authOrigin + '/auth/native/' + path, {
+    method: data === undefined ? 'GET' : 'POST', credentials: authOrigin ? 'include' : 'same-origin', cache: 'no-store',
     signal: AbortSignal.timeout(10_000), headers: { 'Content-Type': 'application/json', 'X-Vonvon-Native-Tab': binding },
     ...(data !== undefined && { body: JSON.stringify(data) }),
   });
@@ -63,8 +65,8 @@ function render(view) {
     status.textContent = '授权未返回有效结果。请取消本次登录，再回到 App 重试。'; return;
   }
   if (view.status === 'acknowledged') {
-    finish('App 已确认登录，请回到 App 继续。');
-    if (view.firstProfile) location.replace('/account');
+    finish('App 已确认登录，正在打开账号管理…');
+    location.replace('/account');
     return;
   }
   if (view.status === 'switching') return finish('正在重新选择账号，请在新的登录页继续。');
@@ -89,7 +91,7 @@ function render(view) {
   }
   if (view.status === 'selected') { choices.hidden = true; status.textContent = '正在连接 App，请稍候…'; return; }
   if (view.status === 'choosing' && choices.childElementCount === 0) {
-    status.textContent = '选择一种方式继续，完成后回到 App。'; choices.hidden = false;
+    status.textContent = ''; choices.hidden = false;
     for (const provider of Object.keys(names)) {
       const button = document.createElement('button');
       button.dataset.brand = names[provider];

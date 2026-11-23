@@ -1,47 +1,86 @@
 <!doctype html>
-<html lang="zh-CN" data-desktop-channel="__DESKTOP_CHANNEL__" data-recipe-create-url="__RECIPE_CREATE_URL__" data-recipe-drafts-url="__RECIPE_DRAFTS_URL__" data-community-url="__COMMUNITY_URL__" data-library-url="__LIBRARY_URL__" data-account-url="__ACCOUNT_URL__" data-login-back-to="__LOGIN_BACK_TO__" data-login-return-to="__LOGIN_RETURN_TO__" data-login-error="__LOGIN_ERROR__" data-login-mode="__LOGIN_MODE__"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="__LOGIN_REFERRER__"><meta name="color-scheme" content="light">
-<title>登录 · Vonvon 账号</title><link rel="icon" href="/mark.png"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/login.css"><link rel="stylesheet" href="/native.css"><script type="module" src="/login-promo.mjs"></script><script type="module" src="/login.mjs"></script><script type="module" src="/native.mjs"></script>
-</head><body class="login-page">
-<main class="auth-layout">
-<section class="auth-promo" aria-label="了解 Vonvon Bot">
-  <header class="auth-mast"><a href="__COMMUNITY_URL__" class="brand" aria-label="Vonvon 灵感社区首页"><img src="/community-logo.webp" width="32" height="32" alt=""><span>Vonvon Bot</span></a></header>
-  <div class="auth-story">
-    <p class="eyebrow">VONVON · 灵感社区</p>
-    <div aria-live="off">
-      <div data-slide>
-        <h2>让 Bot 加入你的日常</h2><p class="auth-promo-copy">连接飞书，在熟悉的对话里开始协作。</p>
-        <figure><img src="/login-join.webp" width="700" height="441" alt="添加飞书群，可以连接已有群聊。"></figure>
+<html lang="zh-CN" data-desktop-channel="__DESKTOP_CHANNEL__" data-recipe-create-url="__RECIPE_CREATE_URL__" data-recipe-drafts-url="__RECIPE_DRAFTS_URL__" data-community-url="__COMMUNITY_URL__" data-library-url="__LIBRARY_URL__" data-account-url="__ACCOUNT_URL__" data-auth-origin="__AUTH_ORIGIN__" data-login-back-to="__LOGIN_BACK_TO__" data-login-return-to="__LOGIN_RETURN_TO__" data-login-error="__LOGIN_ERROR__" data-login-mode="__LOGIN_MODE__">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="__LOGIN_REFERRER__">
+  <meta name="color-scheme" content="light">
+  <title>登录 · Vonvon 账号</title>
+  <link rel="icon" href="/mark.png">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/native.css">
+  <link rel="stylesheet" href="/login.css">
+  <script type="module" src="/login-promo.mjs"></script>
+  <script type="module" src="/login.mjs"></script>
+  <script type="module" src="/native.mjs"></script>
+</head>
+<body class="login-page">
+  <header class="auth-mast">
+    <a href="__COMMUNITY_URL__" class="brand" aria-label="Vonvon 灵感社区首页"><img src="/community-logo.webp" width="34" height="34" alt=""><span>Vonvon Bot</span></a>
+  </header>
+  <main class="auth-layout">
+    <section class="auth-shell" aria-label="Vonvon 账号">
+      <div class="auth-card" id="web-login-panel">
+        <h1 id="login-title">登录 Vonvon</h1>
+        <p class="auth-description">登录后即可获取和发布配方。</p>
+        <p id="login-status" class="auth-status" role="status" aria-live="polite">正在准备登录…</p>
+        <p id="login-error" class="auth-error" role="alert" hidden>这次登录没有完成，请重新选择登录方式。</p>
+        <div id="login-current" class="auth-current" hidden>
+          <span class="auth-avatar"><img id="login-avatar" alt="" hidden><span id="login-initials"></span></span>
+          <div><p class="auth-current-label">当前网页账号</p><p id="login-name"></p></div>
+        </div>
+        <div id="login-session-actions" class="auth-session-actions" hidden>
+          <a id="login-continue" class="button" href="__COMMUNITY_URL__">继续</a>
+          <button id="login-switch" type="button" class="secondary">切换账号</button>
+        </div>
+        <div id="login-providers" class="auth-providers" role="group" aria-label="选择登录方式" hidden></div>
+        <p id="login-first-use" class="fine" hidden>首次登录会自动创建 Vonvon 账号。</p>
+        <p id="login-switch-hint" class="fine" hidden>可在 GitHub 或 Google 的授权页面切换账号。</p>
+        <button id="login-retry" type="button" class="secondary" hidden>重新读取</button>
       </div>
-      <div data-slide hidden>
-        <h2>用你熟悉的模型，做事</h2><p class="auth-promo-copy">连接自己的 Provider，让 Bot 用上合适的能力。</p>
-        <figure><img src="/login-provider.webp" width="700" height="431" alt="准备 Provider，选择 Codex 或 Claude。"></figure>
+      <div class="auth-card" id="native-login-panel">
+        <h1 id="title">登录 Vonvon Bot App</h1>
+        <p class="auth-description native-purpose">完成登录后，回到 App 继续刚才的操作。</p>
+        <p id="status" class="native-status" role="status" aria-live="polite">正在准备登录…</p>
+        <div id="providers" class="auth-providers provider-list" role="group" aria-label="选择登录方式" hidden></div>
+        <section id="native-identity" aria-labelledby="native-identity-title" hidden>
+          <h2 id="native-identity-title">确认连接到 App</h2>
+          <div class="native-identity-card">
+            <span class="native-identity-avatar"><img id="native-avatar" alt="" hidden><span id="native-initials"></span></span>
+            <div><strong id="native-name"></strong><p>用户 ID</p><code id="native-account-id"></code></div>
+          </div>
+          <p class="native-identity-help">确认后，App 和当前浏览器中的灵感社区都会使用这个账号。</p>
+          <div id="native-decisions" class="native-decisions">
+            <button id="native-confirm" type="button" class="button">继续连接</button>
+            <button id="native-switch" type="button" class="secondary">切换账号</button>
+          </div>
+        </section>
+        <div id="login-help">
+          <p class="fine">首次登录会自动创建 Vonvon 账号。</p>
+          <p class="fine">可在 GitHub 或 Google 的授权页面切换账号。</p>
+        </div>
+        <button id="cancel" type="button" class="native-cancel" hidden>取消登录</button>
       </div>
-      <div data-slide hidden>
-        <h2>每一种场景，都聊得来</h2><p class="auth-promo-copy">独立话题、连续交谈或智能，按工作方式选择。</p>
-        <figure><img src="/login-product.webp" width="620" height="272" alt="Vonvon Bot 的聊天方式设置，可选择独立话题、连续交谈或智能。"></figure>
+      <noscript><p>请开启 JavaScript 后登录。</p></noscript>
+    </section>
+    <aside class="auth-promo" aria-label="了解 Vonvon Bot">
+      <div class="auth-story">
+        <div class="auth-carousel" role="tablist" aria-label="产品介绍" hidden>
+          <button id="promo-tab-feishu" type="button" role="tab" aria-label="连接飞书" aria-controls="promo-feishu" aria-selected="true"></button>
+          <button id="promo-tab-model" type="button" role="tab" aria-label="连接模型" aria-controls="promo-model" aria-selected="false" tabindex="-1"></button>
+          <button id="promo-tab-chat" type="button" role="tab" aria-label="聊天方式" aria-controls="promo-chat" aria-selected="false" tabindex="-1"></button>
+        </div>
+        <div id="promo-feishu" role="tabpanel" aria-labelledby="promo-tab-feishu">
+          <figure><img src="/login-join.webp" width="700" height="441" alt="添加飞书群，可以连接已有群聊。"></figure>
+        </div>
+        <div id="promo-model" role="tabpanel" aria-labelledby="promo-tab-model" hidden>
+          <figure><img src="/login-provider.webp" width="700" height="431" alt="准备 Provider，选择 Codex 或 Claude。"></figure>
+        </div>
+        <div id="promo-chat" role="tabpanel" aria-labelledby="promo-tab-chat" hidden>
+          <figure><img src="/login-product.webp" width="620" height="272" alt="Vonvon Bot 的聊天方式设置，可选择独立话题、连续交谈或智能。"></figure>
+        </div>
       </div>
-    </div>
-    <div class="auth-carousel" hidden>
-      <div class="auth-dots" role="group" aria-label="选择产品介绍">
-        <button type="button" aria-label="第 1 张：连接飞书" aria-pressed="true"></button>
-        <button type="button" aria-label="第 2 张：连接模型" aria-pressed="false"></button>
-        <button type="button" aria-label="第 3 张：选择聊天方式" aria-pressed="false"></button>
-      </div><span data-slide-caption aria-hidden="true">连接飞书</span>
-    </div>
-  </div>
-</section>
-<section class="auth-shell">
-<div class="auth-card" id="web-login-panel" aria-labelledby="login-title"><a id="login-cancel" class="auth-back" href="/">返回</a><p class="login-context">你的 Vonvon 账号</p><h1 id="login-title">登录 Vonvon</h1><p class="auth-description">继续使用你的配方与社区账号。</p>
-<p id="login-status" class="auth-status" role="status" aria-live="polite">正在准备登录…</p><p id="login-error" class="auth-error" role="alert" hidden>这次登录没有完成，请重新选择登录方式。</p>
-<div id="login-current" class="auth-current" hidden><span class="auth-avatar"><img id="login-avatar" alt="" hidden><span id="login-initials"></span></span><div><p class="auth-current-label">当前网页账号</p><p id="login-name"></p></div></div>
-<div id="login-session-actions" class="auth-session-actions" hidden><a id="login-continue" class="button" href="/">继续</a><button id="login-switch" type="button" class="secondary">切换账号</button></div>
-<div id="login-providers" class="auth-providers" aria-label="选择登录方式" hidden></div><p id="login-first-use" class="fine" hidden>首次授权会自动创建账号。</p><p id="login-switch-hint" class="fine" hidden>选择登录方式后，可在授权页面验证或切换账号。</p><button id="login-retry" type="button" class="secondary" hidden>重新读取</button></div>
-<div class="auth-card" id="native-login-panel" aria-labelledby="title"><button id="cancel" type="button" class="native-cancel" hidden>取消登录</button><p class="native-eyebrow">连接到 App</p><h1 id="title">登录 Vonvon Bot App</h1><p class="auth-description native-purpose">完成登录后，回到 App 继续刚才的操作。</p><p id="status" class="native-status" role="status" aria-live="polite">正在准备登录…</p>
-<div id="providers" class="auth-providers provider-list" aria-label="选择登录方式" hidden></div>
-<section id="native-identity" aria-labelledby="native-identity-title" hidden><h2 id="native-identity-title">确认连接到 App</h2><div class="native-identity-card"><span class="native-identity-avatar"><img id="native-avatar" alt="" hidden><span id="native-initials"></span></span><div><strong id="native-name"></strong><p>用户 ID</p><code id="native-account-id"></code></div></div><p class="native-identity-help">确认后，App 和当前浏览器中的灵感社区都会使用这个账号。</p><div id="native-decisions" class="native-decisions"><button id="native-confirm" type="button" class="button">继续连接</button><button id="native-switch" type="button" class="secondary">切换账号</button></div></section>
-<div id="login-help"><p class="native-account-note">首次授权会自动创建 Vonvon 账号。</p><p class="fine">退出 Vonvon 不会退出第三方网站账号。在授权页面可验证或切换 GitHub、Google 账号。</p></div>
-<p class="native-return-note">请保留 App 中的登录窗口，完成后回到 App。</p></div>
-<noscript><p>请开启 JavaScript 后登录。</p></noscript></section>
-</main>
-</body></html>
+    </aside>
+  </main>
+</body>
+</html>

@@ -1,34 +1,29 @@
-const promo = document.querySelector('.auth-promo');
-const frames = [...promo.querySelectorAll('[data-slide]')];
-const controls = promo.querySelector('.auth-carousel');
-const dots = [...controls.querySelectorAll('button')];
-const caption = controls.querySelector('[data-slide-caption]');
-let index = 0;
-let timer;
+const controls = document.querySelector('.auth-carousel');
+const tabs = [...controls.querySelectorAll('[role=tab]')];
+const panels = tabs.map(tab => document.getElementById(tab.getAttribute('aria-controls')));
 
-function show(next) {
-  index = (next + frames.length) % frames.length;
-  frames.forEach((frame, i) => { frame.hidden = i !== index; });
-  dots.forEach((dot, i) => dot.setAttribute('aria-pressed', String(i === index)));
-  caption.textContent = dots[index].getAttribute('aria-label').split('：')[1];
+function select(index) {
+  tabs.forEach((tab, i) => {
+    tab.setAttribute('aria-selected', String(i === index));
+    tab.tabIndex = i === index ? 0 : -1;
+    panels[i].hidden = i !== index;
+  });
 }
-function schedule() {
-  clearTimeout(timer);
-  if (!document.hidden) timer = setTimeout(() => { show(index + 1); schedule(); }, 6500);
-}
-dots.forEach((dot, i) => {
-  dot.addEventListener('click', () => { show(i); schedule(); });
-  dot.addEventListener('keydown', event => {
-    const next = {ArrowLeft: i - 1, ArrowRight: i + 1, Home: 0, End: frames.length - 1}[event.key];
-    if (next === undefined) return;
+
+tabs.forEach((tab, index) => {
+  tab.addEventListener('click', () => select(index));
+  tab.addEventListener('keydown', event => {
+    const next = {
+      ArrowLeft: (index + tabs.length - 1) % tabs.length,
+      ArrowRight: (index + 1) % tabs.length,
+      Home: 0,
+      End: tabs.length - 1,
+    }[event.key];
+    if (next === undefined || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     event.preventDefault();
-    show(next);
-    dots[index].focus();
-    schedule();
+    select(next);
+    tabs[next].focus();
   });
 });
+
 controls.hidden = false;
-document.addEventListener('visibilitychange', schedule);
-window.addEventListener('pagehide', () => clearTimeout(timer));
-window.addEventListener('pageshow', schedule);
-schedule();

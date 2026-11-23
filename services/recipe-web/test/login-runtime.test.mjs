@@ -7,16 +7,16 @@ const source=await readFile(new URL('../public/login.mjs',import.meta.url),'utf8
 const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
 const id='11111111-1111-4111-8111-111111111111',path='/recipes/'+id+'/versions/'+id;
 const settle=async()=>{for(let i=0;i<10;i++)await Promise.resolve();await new Promise(setImmediate);};
-async function runtime(t,{signedIn=false,providers=['github','google'],returnTo='/creators',pending,error=false,profileError,mode='web',route='/login'}={}){
-  const markup=html.replaceAll('__LOGIN_RETURN_TO__',encodeURIComponent(returnTo)).replaceAll('__LOGIN_ERROR__',String(error)).replaceAll('__COMMUNITY_URL__','/').replaceAll('__LIBRARY_URL__','/library').replaceAll('__ACCOUNT_URL__','/account');
+async function runtime(t,{signedIn=false,providers=['github','google'],returnTo='/creators',pending,error=false,profileError,mode='web',route='/login',authOrigin=''}={}){
+  const markup=html.replaceAll('__AUTH_ORIGIN__',authOrigin).replaceAll('__LOGIN_RETURN_TO__',encodeURIComponent(returnTo)).replaceAll('__LOGIN_ERROR__',String(error)).replaceAll('__COMMUNITY_URL__','/').replaceAll('__LIBRARY_URL__','/library').replaceAll('__ACCOUNT_URL__','/account');
   const dom=new JSDOM(markup,{url:'https://community.example'+route,pretendToBeVisual:true});t.after(()=>dom.window.close());const {window}=dom;window.document.documentElement.dataset.loginMode=mode;
   if(pending)window.sessionStorage.setItem('vv-recipe-login-continuation',JSON.stringify(pending));
   window.sessionStorage.setItem('vv-account-login-expected','preserve-account-match');
   const calls=[],state={signedIn,providers,displaySession:'session-A',profile:{authorId:id,displayName:'真实昵称',revision:1,avatarDataUrl:'data:image/webp;base64,YWJj'},profileError};
   const fetch=async(url,options={})=>{
     calls.push({url,options});
-    if(url==='/auth/session')return Response.json({signedIn:state.signedIn,displaySession:state.displaySession,providers:state.providers});
-    if(url==='/api/v2/me/account-profile'){
+    if(url===authOrigin+'/auth/session')return Response.json({signedIn:state.signedIn,displaySession:state.displaySession,providers:state.providers});
+    if(url===authOrigin+'/api/v2/me/account-profile'){
       if(options.headers['X-Vonvon-Session']!==state.displaySession)return Response.json({error:{code:'session_changed'}},{status:409});
       if(state.pending)return state.pending;
       if(state.profileError)return Response.json({error:{code:'session_changed'}},{status:state.profileError});
@@ -43,28 +43,40 @@ test('real signed-in profile offers local continue and account switch without lo
   assert.equal(h.document.querySelector('#login-continue').getAttribute('href'),'/?q=Alice+Bob');
   h.document.querySelector('#login-switch').click();assert.equal(h.document.querySelectorAll('#login-providers form').length,2);assert.equal(h.document.querySelector('#login-current').hidden,false);assert.equal(h.calls.length,2);assert.equal(h.document.querySelector('#login-switch-hint').hidden,false);
 });
-test('exact version continuation preserves allowed query context and cancel clears only matched intent',async t=>{
+test('exact version continuation preserves allowed query context',async t=>{
   const pending={path,nonce:'a'.repeat(64)},h=await runtime(t,{returnTo:path,pending});
   for(const form of h.document.querySelectorAll('#login-providers form')){assert.equal(form.querySelector('[name=continuation]').value,'acquire');assert.equal(form.querySelector('[name=continuationNonce]').value,pending.nonce);assert.equal(new URL(form.action).search,'');}
-  assert.equal(h.document.querySelector('#login-cancel').getAttribute('href'),path);
-  h.document.querySelector('#login-cancel').dispatchEvent(new h.window.Event('click'));assert.equal(h.window.sessionStorage.getItem('vv-recipe-login-continuation'),null);assert.equal(h.window.sessionStorage.getItem('vv-account-login-expected'),'preserve-account-match');
+  assert.equal(h.document.querySelector('#login-cancel'),null);
   const contextual=await runtime(t,{returnTo:path+'?from=library-all',pending});
   assert.equal(contextual.document.querySelector('[name=returnTo]').value,path+'?from=library-all');
   assert.equal(contextual.document.querySelector('[name=continuationNonce]').value,pending.nonce);
   for(const [returnTo,value] of [['/creators',pending],[path,{path,nonce:'invalid'}],[path,{path:path.replace('11111111','33333333'),nonce:pending.nonce}]]){
-    const mismatch=await runtime(t,{returnTo,pending:value});assert.equal(mismatch.document.querySelector('[name=continuation]'),null);mismatch.document.querySelector('#login-cancel').dispatchEvent(new mismatch.window.Event('click'));assert.ok(mismatch.window.sessionStorage.getItem('vv-recipe-login-continuation'));
+    const mismatch=await runtime(t,{returnTo,pending:value});assert.equal(mismatch.document.querySelector('[name=continuation]'),null);
   }
+});
+test('dedicated account login sends credentials only to the configured community and keeps the optional acquisition nonce out of the URL',async t=>{
+  const authOrigin='https://recipes.example',nonce='a'.repeat(64);
+  const h=await runtime(t,{authOrigin,returnTo:path+'?from=library-all',route:'/login#acquire='+nonce});
+  assert.equal(h.window.location.hash,'');
+  assert.equal(h.calls[0].url,authOrigin+'/auth/session');
+  assert.equal(h.calls[0].options.credentials,'include');
+  const form=h.document.querySelector('#login-providers form');
+  assert.equal(form.action,authOrigin+'/auth/start');
+  assert.equal(form.querySelector('[name=continuationNonce]').value,nonce);
+  assert.equal(h.document.querySelector('#login-continue').href,authOrigin+path+'?from=library-all');
+  const account=await runtime(t,{authOrigin,returnTo:'/account',route:'/login#wrong='+nonce});
+  assert.equal(account.document.querySelector('[name=continuationNonce]'),null);
+  assert.equal(account.document.querySelector('#login-continue').pathname,'/account');
 });
 test('untrusted or malformed injected return destinations cannot redirect or enter native/login flow',async t=>{
   for(const returnTo of ['https://evil.example','//evil.example','/\\evil','/login','/auth/native','/account?account=secret','/creators#fragment','/recipes/invalid','/?q=x&q=y','/%61ccount','/account\n',path+'?from=creator&author='+id]){
-    const h=await runtime(t,{returnTo});assert.equal(h.document.querySelector('[name=returnTo]').value,'/',returnTo);assert.equal(h.document.querySelector('#login-cancel').getAttribute('href'),'/');
+    const h=await runtime(t,{returnTo});assert.equal(h.document.querySelector('[name=returnTo]').value,'/',returnTo);
   }
 });
 test('login preserves only the four enumerated personal-library states',async t=>{
   for(const state of ['all','acquired','drafts','published']) {
     const path='/library?state='+state,h=await runtime(t,{returnTo:path});
     assert.equal(h.document.querySelector('[name=returnTo]').value,path);
-    assert.equal(h.document.querySelector('#login-cancel').getAttribute('href'),path);
   }
   for(const returnTo of ['/library?state=other','/library?state=published&state=drafts','/library?state=published&next=https://evil.example']) {
     const h=await runtime(t,{returnTo});assert.equal(h.document.querySelector('[name=returnTo]').value,'/');

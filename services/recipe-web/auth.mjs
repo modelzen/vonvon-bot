@@ -1,7 +1,9 @@
-import { createHash, randomBytes } from 'node:crypto';
-import {oauthCallback, oauthProviders} from './oauth-provider.mjs';
+import { randomBytes } from 'node:crypto';
+import { AuthClient } from '@supabase/auth-js';
+import {oauthCallback, oauthProviders, validOAuthAuthorizeUrl} from './oauth-provider.mjs';
 
 const minute = 60_000;
+const tokenRequestTimeout = 9_000;
 const providers = new Set(['github', 'google', 'apple']);
 const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 export const detailPath = new RegExp('^/recipes/' + uuid + '/versions/' + uuid + '$', 'i');
@@ -72,7 +74,7 @@ export function createLoginAdmission({ now = Date.now } = {}) {
   };
 }
 
-export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, providerNames, verifyIdentity }) {
+export function createLogin({ publicOrigin, accountOrigin, supabaseOrigin, publishableKey, providerNames, verifyIdentity }) {
   const available = supabaseOrigin && publishableKey ? oauthProviders(providerNames) : [];
   const flows = new Map(), sessions = new Map(), links = new Map();
   const admit = createLoginAdmission();
@@ -94,21 +96,44 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
   }, minute);
   purge.unref();
 
-  async function tokenRequest(grant, data) {
-    const response = await fetch(supabaseOrigin + '/auth/v1/token?grant_type=' + grant, {
-      method: 'POST', redirect: 'error', signal: AbortSignal.timeout(9000),
-      headers: { 'Content-Type': 'application/json', apikey: publishableKey },
-      body: JSON.stringify(data),
+  function authClient(deadline) {
+    return new AuthClient({
+      url: supabaseOrigin + '/auth/v1', headers: {apikey: publishableKey},
+      flowType: 'pkce', persistSession: false, detectSessionInUrl: false, autoRefreshToken: false, skipAutoInitialize: true,
+      fetch: (url, options) => {
+        // A timed-out refresh may still be in the SDK's retry delay. Don't send it again.
+        if (deadline?.aborted) return Promise.resolve(Response.json({message: 'Login request timed out'}, {status: 408}));
+        return fetch(url, {...options, redirect: 'error', credentials: 'omit', cache: 'no-store',
+          signal: deadline ?? AbortSignal.timeout(tokenRequestTimeout)});
+      },
     });
-    if (!response.ok) throw new WebError([400, 401, 403].includes(response.status) ? 401 : 503, 'login_unavailable');
-    const token = await response.json();
-    if (typeof token.access_token !== 'string' || !token.access_token ||
+  }
+
+  function sessionTokens({ data, error }) {
+    if (error) throw new WebError([400, 401, 403].includes(error.status) ? 401 : 503, 'login_unavailable');
+    const token = data?.session;
+    if (typeof token?.access_token !== 'string' || !token.access_token ||
         typeof token.refresh_token !== 'string' || !token.refresh_token ||
-        !Number.isFinite(token.expires_in) || token.expires_in <= 0) {
+        !Number.isFinite(token.expires_in) || token.expires_in <= 0 ||
+        !Number.isFinite(token.expires_at) || token.expires_at <= 0) {
       throw new WebError(503, 'login_unavailable');
     }
-    return { access: token.access_token, refresh: token.refresh_token,
-      accessUntil: Date.now() + token.expires_in * 1000 };
+    return { access: token.access_token, refresh: token.refresh_token, accessUntil: token.expires_at * 1000 };
+  }
+
+  async function refreshSession(refresh) {
+    const deadline = AbortSignal.timeout(tokenRequestTimeout);
+    const auth = authClient(deadline);
+    let onTimeout;
+    const timeout = new Promise((_, reject) => {
+      onTimeout = () => reject(new WebError(503, 'login_unavailable'));
+      deadline.addEventListener('abort', onTimeout, {once: true});
+    });
+    try {
+      return sessionTokens(await Promise.race([auth.refreshSession({refresh_token: refresh}), timeout]));
+    } finally {
+      deadline.removeEventListener('abort', onTimeout);
+    }
   }
 
   function verifiedExpiry(access) {
@@ -169,27 +194,39 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
       delete session.continuationNonce;
       return { consumed: true };
     },
-    start(req, res, form) {
+    async start(req, res, form) {
       const provider = form.get('provider');
       if (!available.includes(provider)) throw new WebError(400, 'provider_unavailable');
       admit();
       if (flows.size >= 1024) throw new WebError(429, 'busy');
-      const key = random(), verifier = random();
+      const key = random();
       flows.delete(cookieValue(req, flowName));
       const returnTo = returnPath(form.get('returnTo'));
       const backTo = returnPath(form.get('backTo') || returnTo);
       const continuationNonce = form.get('continuationNonce');
       const destinationPath = new URL(returnTo, publicOrigin).pathname;
       const continuation = form.get('continuation') === 'acquire' && detailPath.test(destinationPath) && /^[a-f0-9]{64}$/.test(continuationNonce || '') ? destinationPath : undefined;
-      flows.set(key, { verifier, provider, returnTo, backTo, continuation, continuationNonce: continuation ? continuationNonce : undefined, deadline: Date.now() + 10 * minute });
-      const authorize = new URL('/auth/v1/authorize', supabaseOrigin);
-      authorize.searchParams.set('provider', provider);
-      if (['github', 'google'].includes(provider)) authorize.searchParams.set('prompt', 'select_account');
-      authorize.searchParams.set('redirect_to', publicOrigin + '/auth/callback');
-      authorize.searchParams.set('code_challenge', createHash('sha256').update(verifier).digest('base64url'));
-      authorize.searchParams.set('code_challenge_method', 's256');
-      res.writeHead(303, { Location: authorize.href, 'Set-Cookie': cookie(flowName, key, 600) });
-      res.end();
+      // Each flow has its own SDK memory store for its PKCE verifier. Only the opaque key leaves the server.
+      const auth = authClient();
+      const flow = {auth, provider, returnTo, backTo, continuation, continuationNonce: continuation ? continuationNonce : undefined, deadline: Date.now() + 10 * minute};
+      flows.set(key, flow);
+      try {
+        const callbackUrl = publicOrigin + '/auth/callback';
+        const {data, error} = await auth.signInWithOAuth({provider, options: {
+          redirectTo: callbackUrl,
+          skipBrowserRedirect: true,
+          ...(['github', 'google'].includes(provider) && {queryParams: {prompt: 'select_account'}}),
+        }});
+        if (error || !data?.flowId || !validOAuthAuthorizeUrl(data.url, {provider, supabaseOrigin, callbackUrl}) || flows.get(key) !== flow) {
+          throw new WebError(503, 'login_unavailable');
+        }
+        flow.sdkFlowId = data.flowId;
+        res.writeHead(303, { Location: data.url, 'Set-Cookie': cookie(flowName, key, 600) });
+        res.end();
+      } catch (error) {
+        flows.delete(key);
+        throw error;
+      }
     },
     async callback(req, res, url) {
       const key = cookieValue(req, flowName), flow = flows.get(key);
@@ -203,7 +240,7 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
       if (flow?.deadline > Date.now() && !flow.exchanging && result.kind === 'code') {
         flow.exchanging = true;
         try {
-          const token = await tokenRequest('pkce', { auth_code: result.code, code_verifier: flow.verifier });
+          const token = sessionTokens(await flow.auth.exchangeCodeForSession(result.code, {flowId: flow.sdkFlowId}));
           if (flow.deadline > Date.now() && consume() && sessions.size < 4096) {
             sessions.delete(cookieValue(req, sessionName));
             const id = random();
@@ -226,7 +263,10 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
         if (flow.deadline > Date.now() && result.kind === 'cancelled') location = '/login?' + new URLSearchParams({returnTo: flow.returnTo, ...(flow.backTo !== flow.returnTo && {backTo: flow.backTo}), auth: 'cancelled'});
         consume();
       }
-      res.writeHead(303, { Location: location + '#', ...(cookies.length && { 'Set-Cookie': cookies }) }); res.end();
+      const loginPage = location.startsWith('/login?');
+      const websiteOrigin = (loginPage || location === '/account' || location.startsWith('/account?')) ? accountOrigin || '' : '';
+      const fragment = accountOrigin && loginPage && flow?.continuationNonce ? '#acquire=' + flow.continuationNonce : '#';
+      res.writeHead(303, { Location: websiteOrigin + location + fragment, ...(cookies.length && { 'Set-Cookie': cookies }) }); res.end();
     },
     async access(req, { write = false } = {}) {
       const session = getSession(req);
@@ -235,7 +275,7 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
       if (session.accessUntil > Date.now() + 15_000) return session.access;
       if (!session.refresh) throw new WebError(401, 'login_required');
       if (!session.refreshing) {
-        session.refreshing = tokenRequest('refresh_token', { refresh_token: session.refresh })
+        session.refreshing = refreshSession(session.refresh)
           .then(values => {
             if (getSession(req) !== session) throw new WebError(409, 'session_changed');
             Object.assign(session, values); return session.access;
@@ -256,12 +296,18 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
         throw new WebError(409, 'session_changed');
       }
     },
-    logout(req, res) {
+    logout(req, res, crossOrigin = false) {
       const expected = req.headers['x-vonvon-session'];
-      if (expected !== undefined && expected !== getSession(req)?.displaySession) throw new WebError(409, 'session_changed');
+      if ((crossOrigin || expected !== undefined) && (!expected || expected !== getSession(req)?.displaySession)) {
+        throw new WebError(409, 'session_changed');
+      }
       sessions.delete(cookieValue(req, sessionName));
       flows.delete(cookieValue(req, flowName));
-      res.writeHead(303, { Location: '/', 'Set-Cookie': [cookie(sessionName, '', 0), cookie(flowName, '', 0)] }); res.end();
+      res.writeHead(crossOrigin ? 204 : 303, {
+        ...(!crossOrigin && { Location: '/' }),
+        'Set-Cookie': [cookie(sessionName, '', 0), cookie(flowName, '', 0)],
+      });
+      res.end();
     },
   };
 }

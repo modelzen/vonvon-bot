@@ -88,7 +88,12 @@ function openLogin(next = appGuide ? '/studio' : location.pathname + location.se
       window.sessionStorage.setItem(continuationStorageKey, JSON.stringify({path: next.split('?')[0], nonce: continuationNonce}));
     } catch { continuationNonce = undefined; }
   }
-  location.assign('/login?' + new URLSearchParams({returnTo: next}));
+  const loginPath = '/login?' + new URLSearchParams({returnTo: next});
+  const accountUrl = siteTarget('accountUrl', '/account');
+  if (accountUrl.startsWith('/')) {location.assign(loginPath); return;}
+  const login = new URL(loginPath, accountUrl);
+  if (login.origin !== location.origin && continuationNonce) login.hash = 'acquire=' + continuationNonce;
+  location.assign(login.href);
 }
 function account() {
   if (!session?.signedIn) return openLogin();

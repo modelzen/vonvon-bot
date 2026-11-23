@@ -47,7 +47,7 @@ test('same-origin PKCE login and claim use opaque session cookies', async t => {
   const issuer = await listen(createServer(async (req,res) => {
     const pieces=[]; for await (const c of req) pieces.push(c);
     exchanges.push({path:req.url, body:JSON.parse(Buffer.concat(pieces).toString()), apiKey:req.headers.apikey});
-    toJson(res, {access_token:'synthetic-ac',refresh_token:'synthetic-rf',expires_in:3600});
+    toJson(res, {access_token:'synthetic-ac',refresh_token:'synthetic-rf',expires_in:3600, user: {id: r}});
   }),t);
   // The configured origin models the external HTTPS host when running behind Nginx.
   const origin = 'https://recipes.example';
@@ -99,7 +99,7 @@ test('logout while a write body is pending prevents API forwarding', async t => 
   let forwarded = 0;
   const api = await listen(createServer((req, res) => { if (req.method === 'POST') forwarded++; toJson(res, { ok: true }); }), t);
   const issuer = await listen(createServer((req, res) => toJson(res,
-    { access_token: 'synthetic-access', refresh_token: 'synthetic-refresh', expires_in: 3600 })), t);
+    { access_token: 'synthetic-access', refresh_token: 'synthetic-refresh', expires_in: 3600, user: {id: r} })), t);
   const origin = 'https://recipes.example';
   const server = createRecipeWeb({ RECIPE_WEB_ORIGIN: origin, RECIPE_API_ORIGIN: api,
     SUPABASE_URL: issuer, SUPABASE_PUBLISHABLE_KEY: 'test-publishable', RECIPE_WEB_PROVIDERS: 'github' });
@@ -136,7 +136,7 @@ test('reconciliation detail binds the displayed session, blocks changed cookies 
     toJson(res,{owned:!!req.headers.authorization});
   }),t);
   let identity=0;
-  const issuer=await listen(createServer((_req,res)=>toJson(res,{access_token:'synthetic-'+ ++identity,refresh_token:'synthetic-refresh',expires_in:3600})),t);
+  const issuer=await listen(createServer((_req,res)=>toJson(res,{access_token:'synthetic-'+ ++identity,refresh_token:'synthetic-refresh',expires_in:3600, user: {id: r}})),t);
   const origin='https://recipes.example';
   const host=await listen(createRecipeWeb({RECIPE_WEB_ORIGIN:origin,RECIPE_API_ORIGIN:api,SUPABASE_URL:issuer,SUPABASE_PUBLISHABLE_KEY:'fixture',RECIPE_WEB_PROVIDERS:'github'}),t);
   async function login() {

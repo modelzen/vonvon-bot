@@ -16,6 +16,10 @@ npm start
 
 开发入口为 `http://127.0.0.1:49151/`。服务监听本机端口。Web 到 API 的默认连接是 `http://127.0.0.1:4317`，到 broker 的默认连接是 `http://127.0.0.1:4318`。`RECIPE_API_ORIGIN` 和 `RECIPE_BROKER_ORIGIN` 只接受固定 loopback origin。若修改 `RECIPE_WEB_PORT`，相应设置 `RECIPE_WEB_ORIGIN`；从 Nginx 暴露时，后者必须等于浏览器实际打开的 HTTPS origin。
 
+当前生产社区使用 `https://recipes.vonvon.cc`，登录及账号设置使用 `https://account.vonvon.cc`。新域名计划为 `https://community.vonvon.bot` 和 `https://account.vonvon.bot`，两者在托管环境验收通过后一起切换。共用 Web 服务的 `RECIPE_WEB_ORIGIN` 和 `RECIPE_COMMUNITY_ORIGIN` 设为社区 origin，`RECIPE_ACCOUNT_ORIGIN` 设为账号 origin。保持两个入口同站，以便账号页使用社区的 host-only 会话 cookie。Supabase 登记社区 origin 下网页及 App 的精确回程。
+
+切换后，旧 `recipes.vonvon.cc` 上的普通网页链接跳转至新社区，并保留路径和查询参数。仍固定使用旧 origin 的 App 通过旧地址访问必要的 API 及原生登录流程，包括对应的 OAuth 回程。客户端迁移完成后再撤掉这些兼容路由。
+
 登录需设置 `SUPABASE_URL`、`SUPABASE_PUBLISHABLE_KEY`，并在 Supabase 控制台给该环境登记精确回程 `<RECIPE_WEB_ORIGIN>/auth/callback`。测试和生产各用自己的应用配置。本轮 UI 仅提供 GitHub 与 Google，用 `RECIPE_WEB_PROVIDERS=github,google` 按该项目实际启用情况配置；缺少凭据的方式必须保持禁用。通用协议仍保留 Apple 的历史兼容，本轮不展示或接入。缺少配置时网页提供公开浏览，真实登录按钮会提示当前不可用。社交认证走 PKCE，浏览器持有 HttpOnly 会话 cookie。一次性票据与上游会话保存在服务进程内存，部署时仅运行一个实例。重启此服务后，用户需要再次登录。Nginx 对 `/auth/` 关闭带查询串的访问日志。
 
 浏览器在同一 origin 发起 `/api/v1/…` 和 `/api/v2/…` 请求。公开入口必须将两个前缀都交给这个 Web BFF，由它检查会话、Origin 和 CSRF 绑定，再转交 API。原生 App 的 `/v2/…` Bearer 请求继续路由到 API 或 broker；不能把浏览器的 `/api/v2/…` 直接转到它们。
@@ -37,7 +41,7 @@ OAuth 回程会立即跳转到干净的原始版本页面，登录本身不会�
 
 桌面 App 使用独立的 `/auth/native/flows` 中转，浏览器选择页为 `/auth/native`。该入口要求显式的 `sb_publishable_…` 公钥，并在 Supabase 另登记精确回程 `<RECIPE_WEB_ORIGIN>/auth/native/callback`。原有 `/auth/callback` 登记继续保留。缺少公钥或提供方配置时，原生中转返回不可用，不将秘密密钥或旧版 JWT 配置发送给 App。
 
-原生 flow 的期限为五分钟，服务仅保存有界的进程内状态。原生端持有 PKCE verifier 和独立 Bearer 轮询凭据，浏览器只持有一次性启动票据、独立 HttpOnly cookie 及当前 tab 的随机绑定。回程先生成不透明 receipt，浏览器确认 tab 绑定后才允许原生取码。待取授权码以进程随机密钥加密，ACK、取消或过期后清除。此过程不会创建社区 BFF 会话；服务重启后原生端重新登录。
+原生 flow 的期限为五分钟，服务仅保存有界的进程内状态。原生端持有 PKCE verifier 和独立 Bearer 轮询凭据，浏览器只持有一次性启动票据、独立 HttpOnly cookie 及当前 tab 的随机绑定。回程先生成不透明 receipt，浏览器确认 tab 绑定后才允许原生取码。待取授权码以进程随机密钥加密，ACK、取消或过期后清除。用户明确确认连接时建立社区 BFF 浏览器会话，App 回执到达后浏览器跳转到账号设置。Web 服务重启会结束进行中的流程和现有网站会话。
 
 网页登录和原生创建入口分别限制为最多 32 次突发请求，每秒恢复一次名额，避免单次匿名突发占满 flow 表。部署时还应由 Nginx 按可信代理解析的真实来源设置入口限流。应用内的全局预算不区分访客，不能阻止持续抢占额度影响其他用户。`Origin` 只用于浏览器同源检查，不能代表可信访客身份。
 

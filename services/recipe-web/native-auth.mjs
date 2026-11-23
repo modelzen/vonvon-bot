@@ -40,7 +40,7 @@ async function object(req, required, optional = [], limit = 4096) {
   return value;
 }
 
-export function createNativeLogin({ publicOrigin, supabaseOrigin, publishableKey, providerNames, verifyIdentity, confirmWebSession, now = Date.now }) {
+export function createNativeLogin({ publicOrigin, accountOrigin, supabaseOrigin, publishableKey, providerNames, verifyIdentity, confirmWebSession, now = Date.now }) {
   const available = supabaseOrigin && /^sb_publishable_[A-Za-z0-9_-]+$/.test(publishableKey || '')
     ? oauthProviders(providerNames) : [];
   const flows = new Map(), tickets = new Map(), browsers = new Map();
@@ -147,7 +147,7 @@ export function createNativeLogin({ publicOrigin, supabaseOrigin, publishableKey
 
   return {
     stop() { clearInterval(purge); for(const flow of flows.values()){flow.status='cancelled';clearSecrets(flow);} flows.clear(); tickets.clear(); browsers.clear(); key.fill(0); },
-    async handle(req, res, url) {
+    async handle(req, res, url, fromAccount = false) {
       const route = flowRoute.exec(url.pathname), create = url.pathname === '/auth/native/flows';
       if (route || create) {
         if (req.headers.origin !== undefined || req.headers.cookie !== undefined) throw new WebError(403, 'invalid_native_request');
@@ -248,10 +248,10 @@ export function createNativeLogin({ publicOrigin, supabaseOrigin, publishableKey
         if (flow?.status === 'authorized' && flow.expiresAt > now()) {
           if (result.kind === 'code' || url.searchParams.has('error')) location = '/login?mode=app#receipt=' + sealReceipt(result, flow);
         }
-        res.writeHead(303, { Location: location }); res.end(); return true;
+        res.writeHead(303, { Location: (accountOrigin || '') + location }); res.end(); return true;
       }
       if (!browserRoutes.has(url.pathname) || req.method === 'GET' && url.pathname === '/auth/native/complete') return false;
-      if (req.method === 'POST' && req.headers.origin !== publicOrigin) throw new WebError(403, 'invalid_origin');
+      if (req.method === 'POST' && req.headers.origin !== publicOrigin && !fromAccount) throw new WebError(403, 'invalid_origin');
       if (url.pathname === '/auth/native/launch' && req.method === 'POST') {
         const data = await object(req, ['ticket', 'binding']);
         if (!canonicalToken(data.ticket) || !canonicalToken(data.binding)) throw new WebError(400, 'invalid_body');

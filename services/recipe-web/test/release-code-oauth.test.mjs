@@ -300,7 +300,7 @@ test('existing website clears its login cookie and session during an OAuth Postg
   );
   const upstream = createServer((_, res) => {
     res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ access_token: 'test-access', refresh_token: 'test-refresh', expires_in: 3600 }));
+    res.end(JSON.stringify({ access_token: 'test-access', refresh_token: 'test-refresh', expires_in: 3600, user: {id: '11111111-1111-4111-8111-111111111111'} }));
   });
   await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise((resolve) => upstream.close(resolve)));

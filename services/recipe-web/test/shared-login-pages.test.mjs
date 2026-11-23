@@ -10,7 +10,7 @@ async function fixture(t){
  const page=async path=>{const response=await fetch(origin+path);assert.equal(response.status,200);const text=await response.text();const dom=new JSDOM(text);t.after(()=>dom.window.close());return {response,text,document:dom.window.document};};
  return {origin,page};
 }
-test('ordinary and App login plus legacy aliases serve one real two-panel template and product image',async t=>{
+test('ordinary and App login plus legacy aliases serve one real two-panel template and product previews',async t=>{
  const f=await fixture(t);let body;
  for(const [path,mode,referrer] of [['/login','web','same-origin'],['/login?mode=app','app','no-referrer'],['/auth/native','app','no-referrer'],['/auth/native/complete','app','no-referrer']]){
   const p=await f.page(path);
@@ -24,7 +24,7 @@ test('ordinary and App login plus legacy aliases serve one real two-panel templa
   const csp=p.response.headers.get('content-security-policy');assert.match(csp,/script-src 'self'/);assert.match(csp,/object-src 'none'/);assert.match(csp,/frame-ancestors 'none'/);assert.doesNotMatch(csp,/unsafe-inline/);assert.equal(p.response.headers.get('cache-control'),'no-store');
  }
  const css=await fetch(f.origin+'/login.css').then(r=>r.text());assert.match(css,/html\[data-login-mode=app\] #web-login-panel/);assert.match(css,/#native-login-panel/);
- for(const name of ['login-product.webp','community-logo.webp']){
+ for(const name of ['login-join.webp','login-provider.webp','login-product.webp','community-logo.webp']){
   const response=await fetch(f.origin+'/'+name);assert.equal(response.status,200);assert.equal(response.headers.get('content-type'),'image/webp');
   const actual=Buffer.from(await response.arrayBuffer()),expected=await readFile(new URL('../public/'+name,import.meta.url));
   const sha=bytes=>createHash('sha256').update(bytes).digest('hex');assert.equal(sha(actual),sha(expected));assert.ok(actual.length>100);

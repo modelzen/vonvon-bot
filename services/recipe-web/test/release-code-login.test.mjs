@@ -57,10 +57,10 @@ async function fixture(t) {
     for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw);
     assert.equal(body.auth_code, 'synthetic-success');
-    assert.match(body.code_verifier, /^[A-Za-z0-9_-]{43}$/);
+    assert.match(body.code_verifier, /^[A-Za-z0-9._~-]{43,128}$/);
     exchanges++;
     res.writeHead(200, {'content-type': 'application/json'});
-    res.end(JSON.stringify({access_token: 'synthetic-access', refresh_token: 'synthetic-refresh', expires_in: 3600}));
+    res.end(JSON.stringify({access_token: 'synthetic-access', refresh_token: 'synthetic-refresh', expires_in: 3600, user: {id: '11111111-1111-4111-8111-111111111111'}}));
   });
   const supabaseOrigin = await listen(supabase);
   t.after(() => close(supabase));
@@ -90,6 +90,7 @@ async function fixture(t) {
     if (req.method === 'GET' && url.pathname === '/login') {
       res.writeHead(200, {'content-type': 'text/html', 'cache-control': 'no-store'});
       return res.end(html.replaceAll('__LOGIN_RETURN_TO__', encodeURIComponent(returnPath(url.searchParams.get('returnTo'))))
+        .replaceAll('__COMMUNITY_URL__', '/')
         .replaceAll('__LOGIN_ERROR__', url.searchParams.get('auth') === 'cancelled' ? 'cancelled' : 'false')
         .replaceAll('__LOGIN_MODE__', 'web'));
     }
@@ -162,11 +163,11 @@ for (const provider of ['github', 'google']) test(provider + ' source approval r
   const loginPath = '/login?' + new URLSearchParams({returnTo: path});
   assert.equal(first.headers.get('location'), loginPath);
   const document = await f.renderedLogin(loginPath);
-  assert.equal(document.querySelector('#login-cancel').getAttribute('href'), '/');
+  assert.equal(document.querySelector('#login-cancel'), null);
   assert.equal(document.querySelector('#login-continue').getAttribute('href'), path);
-  const cancelled = await f.request(document.querySelector('#login-cancel').getAttribute('href'));
+  const cancelled = await f.request(document.querySelector('.auth-mast .brand').getAttribute('href'));
   assert.equal(cancelled.status, 200);
-  assert.equal(cancelled.headers.get('location'), null, 'return exits the login flow without redirecting to confirmation again');
+  assert.equal(cancelled.headers.get('location'), null, 'the brand links to the community outside the authorization flow');
   const forms = [...document.querySelectorAll('#login-providers form')];
   assert.equal(forms.length, 2);
   for (const form of forms) {
@@ -225,7 +226,6 @@ test('source approval return allowlists reject query, fragment, encoded paths an
       async () => Response.json({signedIn: false, providers: ['github', 'google']}), undefined, AbortSignal);
     await settle();
     assert.equal(dom.window.document.querySelector('[name=returnTo]').value, expected, value);
-    assert.equal(dom.window.document.querySelector('#login-cancel').getAttribute('href'), '/', value);
     assert.equal(dom.window.document.querySelector('#login-continue').getAttribute('href'), expected, value);
   }
 });

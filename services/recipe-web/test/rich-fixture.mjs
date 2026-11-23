@@ -68,7 +68,7 @@ export async function richFixture(t) {
     const body = JSON.parse(Buffer.concat(chunks));
     const subject = accounts[body.auth_code];
     assert.ok(subject);
-    res.end(JSON.stringify({access_token: jwt(subject), refresh_token: 'synthetic-refresh', expires_in: 900}));
+    res.end(JSON.stringify({access_token: jwt(subject), refresh_token: 'synthetic-refresh', expires_in: 900, user: {id: subject}}));
   });
   await listen(issuerServer); issuer = host(issuerServer) + '/auth/v1';
   const tokens = Object.fromEntries(Object.entries(accounts).map(([name, subject]) => [name, jwt(subject)]));

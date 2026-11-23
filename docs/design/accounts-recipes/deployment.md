@@ -7,8 +7,10 @@
 | 运行在哪 | 需要交付什么 | 不在那里做什么 |
 | --- | --- | --- |
 | 一个独立的 Supabase 托管项目／环境 | Auth（三种社交登录）、PostgreSQL（目录、授权、草稿、幂等回执）、Storage 私有桶（暂存、已验证清单、正文和 Logo）、由受限数据库角色执行发布、兑换和版本授权事务；用库内定时作业清理过期工单与无引用资产。不另起 Redis、消息队列或常驻 LLM 服务。 | 不把 service-role 凭证发给网页、桌面或用户设备；云不保存飞书应用密钥、整群聊天记录、未选本机记忆。 |
-| Vonvon 自有 HTTPS Web 入口 | 登录选择/完成页、公开分享落地页。可复用 `vonvon-site` 的静态构建与既有 Web 前置，新设独立 host（例如测试 `recipes-test.vonvon.cc`、正式 `recipes.vonvon.cc`，均为**建议名，尚未配置**）。同一台腾讯云主机上，独立 Nginx vhost 转发到本机 recipe-web，由它处理网页登录、分享页与同源会话；recipe-api 只监听回环，验证 JWT 后连接 Supabase。账号和数据库仍托管，首片不另上一套 Edge Functions。配置独立 TLS、Origin、CSRF 和精确 redirect allowlist。 | 不把私有 API 响应混入静态站或 CDN 公共缓存；现有下载、stable 与 bridge 服务不动。无需为本期另租一台 Bot 主机。 |
+| Vonvon 自有 HTTPS Web 入口 | 登录选择/完成页、公开分享落地页。现有生产社区和账号分别使用 `recipes.vonvon.cc`、`account.vonvon.cc`。新域名计划为 `community.vonvon.bot` 和 `account.vonvon.bot`，测试环境使用独立 host。两个 HTTPS 入口由同一个 recipe-web 处理网页登录、分享页与同源会话。recipe-web 经固定回环地址访问生产 API 和 broker；recipe-api 验证 JWT 后访问 Supabase。账号和数据库仍托管，首片不另上一套 Edge Functions。配置独立 TLS、Origin、CSRF 和精确 redirect allowlist。 | 不把私有 API 响应混入静态站或 CDN 公共缓存；现有下载、stable 与 bridge 服务不动。无需为本期另租一台 Bot 主机。 |
 | 用户已安装的桌面／目标设备 daemon | 桌面在浏览器发起登录，目标 daemon 走**已有授权的设备连接**、持本地 Bot 身份，通过飞书发送/接收、挑本机内容，在本机安装/更新。飞书长连接仍使用现有链路。 | 安装 App 不替用户启用远程管理；租用的 Bot、运营服务器、他人的账号不是本机操作凭据。 |
+
+正式域名的配置及旧地址兼容范围见 [Web 服务部署说明](../../../services/recipe-web/README.md)。
 
 地域建议：先在独立 staging 选择**具体的新加坡 region**（若控制台可选，且用户的数据位置要求允许），用用户实际网络测 Auth、API、图像和包下载后，再决定生产。不要只选泛 APAC 却宣称数据固定在特定城市；也不要把新加坡视为从中国大陆所有网络都可用的保证。若存在只允许特定地区存储的数据约束，先按约束调整。初期本地开发 + 一个 staging 即可；公测时另建 production，不能共用账号库、飞书测试群、密钥、OAuth client 或对象桶。免费套餐有暂停、额度及备份限制，能否用于稳定公开服务另验。[地域规则](https://supabase.com/docs/guides/platform/regions) · [本地开发](https://supabase.com/docs/guides/local-development) · [Edge 运行限制](https://supabase.com/docs/guides/functions/limits)
 

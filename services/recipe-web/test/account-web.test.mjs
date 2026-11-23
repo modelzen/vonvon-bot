@@ -16,7 +16,7 @@ async function fixture(t){
     if(controls.pending)await new Promise(resolve=>{controls.release=resolve;});
     json(res,{authorId:accountId,displayName:'昵称',revision:1});
   }),t);
-  const issuer=await listen(createServer((req,res)=>json(res,{access_token:'account-access',refresh_token:'account-refresh',expires_in:3600})),t);
+  const issuer=await listen(createServer((req,res)=>json(res,{access_token:'account-access',refresh_token:'account-refresh',expires_in:3600, user: {id: accountId}})),t);
   const origin='https://recipes.example';
   const host=await listen(createRecipeWeb({RECIPE_WEB_ORIGIN:origin,RECIPE_API_ORIGIN:api,SUPABASE_URL:issuer,SUPABASE_PUBLISHABLE_KEY:'test',RECIPE_WEB_PROVIDERS:'github'}),t);
   const start=await fetch(host+'/auth/start',{method:'POST',redirect:'manual',headers:{origin},body:new URLSearchParams({provider:'github',returnTo:'/account'})});

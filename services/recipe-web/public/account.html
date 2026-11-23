@@ -1,37 +1,75 @@
 <!doctype html>
-<html lang="zh-CN" data-after="__ACCOUNT_AFTER__" data-desktop-channel="__DESKTOP_CHANNEL__" data-recipe-create-url="__RECIPE_CREATE_URL__" data-recipe-drafts-url="__RECIPE_DRAFTS_URL__" data-community-url="__COMMUNITY_URL__" data-library-url="__LIBRARY_URL__" data-account-url="__ACCOUNT_URL__"><head>
+<html lang="zh-CN" data-after="__ACCOUNT_AFTER__" data-auth-origin="__AUTH_ORIGIN__"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="same-origin"><meta name="color-scheme" content="light">
 <title>账号设置 · Vonvon Bot</title><link rel="icon" href="/mark.png">
 <link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/account.css">
-<script type="module" src="/account.mjs"></script>
-<script type="module" src="/create.mjs"></script>
-<script type="module" src="/header.mjs"></script></head><body>
-<header class="mast community-mast"><div class="site-header-inner">
-<a href="__COMMUNITY_URL__" class="brand" aria-label="Vonvon 灵感社区首页"><img src="/community-logo.webp" width="30" height="30" alt=""><span>Vonvon 灵感社区</span></a>
-<nav class="actions" aria-label="社区导航"><div class="publish-entry"><a class="button" href="__GUARDED_CREATE_URL__" data-create-site title="在 App 中创作，确认后发布；可分享或自行售卖分享码">创作配方</a></div><div id="site-account" aria-live="polite"></div></nav>
-</div></header>
-<main class="account-shell">
-  <header class="account-heading"><p class="eyebrow">VONVON BOT</p><h1>账号设置</h1><p>管理你的昵称和头像。修改后，所有配方都会显示你的当前昵称。</p></header>
+<script type="module" src="/account.mjs"></script></head><body class="account-page">
+<header class="account-mast">
+  <a href="__COMMUNITY_URL__" class="brand" aria-label="Vonvon 灵感社区首页"><img src="/community-logo.webp" width="32" height="32" alt="">Vonvon Bot</a>
+</header>
+<main class="account-shell" aria-labelledby="account-title">
+  <header class="account-heading"><h1 id="account-title">账号设置</h1><p>管理你在 Vonvon Bot 和灵感社区中显示的资料。</p></header>
   <p id="account-status" class="notice" role="status" aria-live="polite">正在读取账号信息…</p>
-  <section id="account-login" class="panel" aria-labelledby="login-title" hidden><h2 id="login-title">登录后管理账号</h2><p class="notice">社区、我的配方和 App 使用同一个 Vonvon 账号。</p><a id="account-login-link" class="button" href="/login?returnTo=%2Faccount">登录</a></section>
-  <section id="account-mismatch" class="panel" aria-labelledby="mismatch-title" hidden><h2 id="mismatch-title">请切换到 App 中的账号</h2><p class="notice">当前网站账号与 App 中的账号不同。请退出网站账号，再选择 App 使用的登录账号。</p><p class="fine">退出网站不会退出 App 或浏览器里的 GitHub、Google 等账号。</p></section>
-  <form id="account-profile" class="panel account-form" hidden>
-    <div class="account-avatar-row"><span id="avatar-preview" class="account-avatar" aria-label="头像预览"><span id="avatar-initials"></span><img id="avatar-image" alt="" hidden></span><div><label for="account-avatar">头像</label><input id="account-avatar" type="file" accept="image/png,image/jpeg,image/webp" aria-describedby="avatar-help avatar-error"><p id="avatar-help" class="fine">PNG、JPEG 或 WebP 静态图片，最大 2 MiB。选择后可拖动和缩放，裁出方形头像。</p><p id="avatar-error" class="avatar-error" role="alert"></p><button id="avatar-remove" type="button" class="secondary" hidden>恢复默认头像</button></div></div>
-    <div class="account-field"><label for="account-name">昵称</label><input id="account-name" type="text" maxlength="120" autocomplete="nickname" required aria-describedby="name-help name-error"><p id="name-help" class="fine">1–60 个字，全局唯一。App 和社区中的配方使用同一个昵称。</p><p id="name-error" class="error" role="status"></p></div>
-    <div class="account-field"><label for="account-id">用户 ID</label><div class="account-id-row"><input id="account-id" type="text" readonly><button id="account-copy" type="button" class="secondary">复制</button></div><p class="fine">账号的固定标识，修改昵称和头像不会改变它。</p></div>
-    <p id="account-feedback" class="account-feedback" role="status" aria-live="polite"></p>
-    <div class="account-form-actions"><button id="account-save" type="submit" class="button" disabled>保存资料</button><a id="account-continue" class="secondary" hidden>稍后设置，继续</a><button id="account-recover" type="button" class="secondary" hidden>重新读取</button></div>
+  <section id="account-login" class="account-section account-state" aria-labelledby="login-title" hidden>
+    <h2 id="login-title">登录后管理账号</h2>
+    <p class="notice">社区、我的配方和 App 使用同一个 Vonvon 账号。</p>
+    <a id="account-login-link" class="button" href="/login?returnTo=%2Faccount">登录</a>
+  </section>
+  <section id="account-mismatch" class="account-section account-state" aria-labelledby="mismatch-title" hidden>
+    <h2 id="mismatch-title">请切换到 App 中的账号</h2>
+    <p class="notice">请退出当前网站账号，再选择 App 使用的登录账号。</p>
+  </section>
+  <form id="account-profile" class="account-form" hidden>
+    <section class="account-section" aria-labelledby="profile-title">
+      <h2 id="profile-title">个人资料</h2>
+      <div class="account-avatar-row">
+        <span id="avatar-preview" class="account-avatar" aria-hidden="true"><span id="avatar-initials"></span><img id="avatar-image" alt="" hidden></span>
+        <div class="account-avatar-tools">
+          <span class="account-label">头像</span>
+          <div class="account-avatar-actions">
+            <button id="avatar-pick" type="button" class="secondary" aria-describedby="avatar-help avatar-error">更换头像</button>
+            <button id="avatar-remove" type="button" class="secondary" hidden>恢复默认头像</button>
+          </div>
+          <input id="account-avatar" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+          <p id="avatar-help" class="fine">PNG、JPEG 或 WebP 静态图片，最大 2 MiB。</p>
+          <p id="avatar-error" class="avatar-error" role="alert"></p>
+        </div>
+      </div>
+      <div class="account-field account-name-field">
+        <label class="account-label" for="account-name">昵称</label>
+        <input id="account-name" type="text" maxlength="120" autocomplete="nickname" required aria-describedby="name-help name-error">
+        <p id="name-help" class="fine">App 和灵感社区都会使用这个昵称。</p>
+        <p id="name-error" class="error" role="status"></p>
+      </div>
+      <div class="account-form-actions">
+        <button id="account-save" type="submit" class="button" disabled>保存资料</button>
+        <a id="account-continue" class="secondary" hidden>稍后设置，继续</a>
+        <button id="account-recover" type="button" class="secondary" hidden>重新读取</button>
+        <p id="account-feedback" class="account-feedback" role="status" aria-live="polite"></p>
+      </div>
+    </section>
   </form>
+  <section id="account-session-actions" class="account-section" aria-labelledby="session-title" hidden>
+    <h2 id="session-title">账号与登录</h2>
+    <div id="account-identity" class="account-field" hidden>
+      <label class="account-label" for="account-id">用户 ID</label>
+      <div class="account-id-row"><input id="account-id" type="text" readonly aria-describedby="account-id-feedback"><button id="account-copy" type="button" class="secondary" aria-label="复制用户 ID">复制</button></div>
+      <p id="account-id-feedback" class="fine" role="status">账号的固定标识。</p>
+    </div>
+    <div class="account-session-row">
+      <div><span class="account-label">当前会话</span><p id="account-session-method" class="fine">当前浏览器已登录</p></div>
+      <button id="account-logout" type="button" class="secondary" aria-describedby="account-logout-help">退出登录</button>
+    </div>
+    <p id="account-logout-help" class="fine">仅退出当前网站会话。</p>
+  </section>
   <dialog id="avatar-crop" aria-labelledby="avatar-crop-title">
     <h2 id="avatar-crop-title">裁切头像</h2>
     <canvas id="avatar-canvas" width="320" height="320" tabindex="0" aria-label="头像裁切范围，可拖动或用方向键移动图片"></canvas>
     <label for="avatar-zoom">缩放</label><input id="avatar-zoom" type="range" min="1" max="4" step="0.05" value="1">
     <form method="dialog"><button class="secondary" value="cancel">取消</button><button class="button" value="confirm">使用此头像</button></form>
   </dialog>
-  <div id="account-session-actions" class="account-session-actions" hidden><button id="account-logout" type="button" class="secondary">退出网站账号</button><p class="fine">只退出当前网站会话，不会退出 App 或第三方网站账号。</p></div>
   <button id="account-retry" type="button" class="secondary" hidden>重新读取账号</button>
   <noscript><p class="notice">请开启 JavaScript 后管理账号。</p></noscript>
 </main>
-<footer class="site-footer"><div class="shell"><p>Vonvon 灵感社区 · 好的配置，值得分享</p><a href="/studio">发布指南</a></div></footer>
 </body></html>
