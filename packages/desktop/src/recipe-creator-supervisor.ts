@@ -1,5 +1,6 @@
 import {isDeepStrictEqual} from 'node:util';
 import {randomUUID} from 'node:crypto';
+import {z} from 'zod';
 import {deviceReplySchema,recipeAuthoringReplySchema,type DesktopAuthoringReply,type DesktopAuthoringRequest,type RecipeAuthoringRequest,type RecipeAuthoringReply,type RecipeDraft,type CreatorWork,type CreatorAnswer,type CreatorJob,type GroupId} from '@vonvon/protocol';
 import type {NativeAccount} from './account-session.js';
 import type {RecipeDeviceLease} from './recipe-use.js';
@@ -15,6 +16,9 @@ export interface CreatorSourceLease extends RecipeDeviceLease {signal:AbortSigna
 type Worker={botName:string;contextHandle:string;association:CreatorAssociation;source:CreatorSourceLease;session:string;stop:()=>void;context:CreatorContext;busy:boolean;queue:Promise<void>;timer:ReturnType<typeof setInterval>};
 type DraftSource={kind:'resolved';work:CreatorWork;selected?:Pick<CreatorAssociation,'viewId'|'botId'>;original?:NonNullable<ReturnType<AuthoringJournal['history']['locator']>>};
 type PublicationReview={worker:Worker;signal:AbortSignal;draft:RecipeDraft;job:CreatorJob;snapshotDigest:string;confirmationId:string;expiresAt:number;sent:boolean};
+type PublicationPreparationStage='account'|'source'|'association'|'worker'|'workerSource'|'queue'|'daemonPreview'|'prepareExecution'|'existingExecution'|'freezePreview'|'compareDraft'|'review';
+const diagnosticErrorNames=new Set(['Error','TypeError','RangeError','ZodError','AuthoringError','AbortError','TimeoutError']);
+const diagnosticFields=new Set(['kind','type','job','task','command','snapshot','work','draftId','source','preparationId','groupId','identity','revision','public','name','version','summary','overview','access','format','recipeId','parent','contentSha256','parts','sections','title','pageHashes','appPreviewUrl','result','state','mode','approval','expiresAt','confirmation','confirmationId','id','binding','scope']);
 const unavailable=()=>new Error('请先在 App 关联原来源 Bot，并保持原账号和设备在线。');
 function expect<K extends RecipeAuthoringReply['kind']>(reply:RecipeAuthoringReply,kind:K){if(reply.kind!==kind)throw unavailable();return reply as Extract<RecipeAuthoringReply,{kind:K}>;}
 export class RecipeCreatorSupervisor {
@@ -215,13 +219,16 @@ export class RecipeCreatorSupervisor {
     }catch{throw new AuthoringError('发布结果尚未确认，请在原账号中重试核对同一次请求。');}
   }
   async preparePublication(input:Extract<DesktopAuthoringRequest,{type:'preparePublication'}>):Promise<DesktopAuthoringReply>{
+    let stage:PublicationPreparationStage='account';
     try {
       const signal=this.account.lease?.(input.accountId);if(!signal)throw unavailable();
       const check=()=>{if(signal.aborted||this.account.lease?.(input.accountId)!==signal)throw unavailable();};
       const draft=input.draft;
+      stage='source';
       const resolved=await this.draftSource(input.accountId,draft,check);
       if(resolved.kind!=='resolved')throw unavailable();
       let selected=resolved.selected;
+      stage='association';
       if(!selected){
         await this.restoring;check();
         const options=this.journal.associations(input.accountId);
@@ -230,25 +237,37 @@ export class RecipeCreatorSupervisor {
       }
       if(!selected)throw unavailable();
       const expected=this.journal.associations(input.accountId).find(row=>row.viewId===selected.viewId&&row.botId===selected.botId);
+      stage='worker';
       const worker=await this.open(input.accountId,selected.viewId,selected.botId,expected);if(!worker)throw unavailable();check();
+      stage='workerSource';
       if(resolved.original&&(worker.association.deviceId!==resolved.original.deviceId||worker.association.deviceKey!==resolved.original.deviceKey||worker.association.botId!==resolved.original.botId))throw unavailable();
+      stage='queue';
       return await this.publicationWait(this.exclusive(worker,async()=>{
         const deadline=Date.now()+15000;
+        stage='daemonPreview';
         let state=await this.previewState(worker,resolved.work,draft.revision);
         for(let attempt=0;attempt<3&&Date.now()<deadline&&state.state==='preparing';attempt++){
+          stage='prepareExecution';
           await this.executor.run(worker.context,state.job);check();
+          stage='daemonPreview';
           state=await this.previewState(worker,resolved.work,draft.revision);
         }
         if(state.state==='preparing')throw new AuthoringError('发布准备尚未完成，请稍后重试。');
         if(state.state==='active'||state.state==='unknown'){
+          stage='existingExecution';
           await this.executor.run(worker.context,state.job);check();
+          stage='daemonPreview';
           state=await this.previewState(worker,resolved.work,draft.revision);
         }
+        stage='existingExecution';
         if(state.state==='finished'||state.state==='active')return this.publicationResult(worker,state.job,state.result);
+        stage='freezePreview';
         const frozen=await this.executor.preview(worker.context,state.job);check();
+        stage='compareDraft';
         if(!isDeepStrictEqual(frozen.draft,input.draft))throw new AuthoringError('草稿内容或修订已改变，请重新读取后确认发布。');
         if(state.job.task.kind!=='command'||state.job.task.command.kind!=='publish')throw unavailable();
         const snapshotDigest=state.job.task.command.snapshotDigest;
+        stage='review';
         for(const [id,review] of this.reviews){
           if(review.expiresAt<=Date.now()||review.signal.aborted)this.reviews.delete(id);
           else if(!review.sent&&review.worker===worker&&review.signal===signal&&review.job.id===state.job.id&&review.snapshotDigest===snapshotDigest&&isDeepStrictEqual(review.draft,frozen.draft))
@@ -260,6 +279,11 @@ export class RecipeCreatorSupervisor {
         return {kind:'publicationReady',reviewId,draftId:draft.draftId,revision:draft.revision,public:draft.public};
       }));
     }catch(error){
+      console.warn('recipe.publication.prepare.failed',{
+        code:'prepare_failed',stage,errorName:error instanceof Error&&diagnosticErrorNames.has(error.name)?error.name:'UnknownError',
+        ...(error instanceof z.ZodError&&{issues:error.issues.slice(0,8).map(issue=>({code:issue.code,
+          path:issue.path.slice(0,16).map(part=>typeof part==='number'?part:diagnosticFields.has(part)?part:'*')}))}),
+      });
       if(error instanceof AuthoringError)throw error;
       throw new AuthoringError('发布准备尚未完成。请保持原来源 Bot 在线，完成草稿保存，并重新读取草稿后核对原请求。');
     }
