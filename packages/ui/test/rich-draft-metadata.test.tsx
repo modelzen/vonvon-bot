@@ -347,3 +347,21 @@ it('cold recovery leaves an absent publication as a normal read failure and igno
   expect(published).not.toHaveBeenCalled();
   expect(document.body.textContent).toContain('新账号作品');
 });
+
+it('INCREMENT readable draft stays stuck on receipt GET when the first publish was never delivered',async()=>{
+  const prepared=authoringSend;
+  authoringSend=async request=>{
+    if(request.type==='confirmPublication')return {kind:'publicationResult',result:{kind:'pending'}};
+    if(request.type==='recoverPublication')return {kind:'publicationRecovery',result:{kind:'pending'}};
+    return prepared(request);
+  };
+  await draw();
+  await click('发布到社区');await click('确认发布');
+  await click('核对发布结果');await click('核对发布结果');
+  expect(document.querySelector('h1')?.textContent).toBe(draft.public.name);
+  expect(button('发布到社区').disabled).toBe(true);
+  expect(button('在飞书继续创作').disabled).toBe(true);
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(authoringRequests.map(row=>row.type)).toEqual(['preparePublication','confirmPublication','recoverPublication','recoverPublication']);
+  expect(requests.map(row=>row.type)).toEqual(['draft']);
+});

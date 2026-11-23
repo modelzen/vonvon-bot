@@ -363,3 +363,30 @@ it('APP PUBLICATION gives controlled source recovery guidance without exposing t
   if(!(error instanceof AuthoringError))throw Error('expected safe authoring failure');
   expect(error.message).toContain('保持原来源 Bot 在线');expect(error.message).not.toContain('private-secret');
 });
+
+it('INCREMENT network drops first request before delivery and same-job warm review can complete it', async () => {
+  const f=await publicationFixture();
+  const transport=f.request.getMockImplementation()!;
+  let attempts=0, committed=false;
+  const keys:string[]=[];
+  f.request.mockImplementation(async(id,path,init)=>{
+    if(path.endsWith('/publish')){
+      keys.push(new Headers(init?.headers).get('idempotency-key')!);
+      if(++attempts===1)throw Error('connection unavailable before delivery');
+      committed=true;
+    }
+    if(path.includes('/receipts/publications/')&&!committed)return Response.json({status:'unknown'});
+    return transport(id,path,init);
+  });
+  const ready=await f.prepare();if(ready.kind!=='publicationReady')throw Error('no original review');
+  expect(await f.confirm(ready.reviewId)).toMatchObject({kind:'publicationResult',result:{kind:'pending'}});
+  const jobId=f.current()!.id;
+  const lookup={type:'recoverPublication' as const,accountId:f.accountId,draftId:f.draft.draftId};
+  for(let i=0;i<2;i++)expect(await f.supervisor.recoverPublication(lookup)).toMatchObject({kind:'publicationRecovery',result:{kind:'pending'}});
+  expect(attempts).toBe(1);
+  const renewal=await f.prepare();if(renewal.kind!=='publicationReady')throw Error('no same-job review');
+  expect(renewal.reviewId).not.toBe(ready.reviewId);expect(f.current()!.id).toBe(jobId);
+  expect(attempts).toBe(1);
+  expect(await f.confirm(renewal.reviewId)).toMatchObject({kind:'publicationResult',result:{kind:'published',publication:{draftId:f.draft.draftId,versionId:f.versionId}}});
+  expect(keys).toEqual([jobId,jobId]);
+});
