@@ -71,6 +71,12 @@ describe('createProject for a person named by union_id', () => {
     expect(fake.requests.some(r => r.path.endsWith('/managers/add_managers'))).toBe(false);
   });
 
+  it('retains an uncertain result when the created group could not be confirmed disbanded', async () => {
+    const fake = fakeLark(request => request.method === 'DELETE' ? {code:999, msg:'unknown'} : membersOf(members([]))(request));
+    await expect(createProject({rawClient:fake.client}, input('Unknown disband',union))).rejects.toBeInstanceOf(CreationOutcomeUnknownError);
+    expect(fake.creates()).toHaveLength(1);
+  });
+
   it.each([['the check fails', { code: 232011, msg: 'no' }], ['the list is cut off', members([], { has_more: true })]])('keeps the group when %s: nothing says the person is out', async (_case, answer) => {
     const fake = fakeLark(membersOf(answer));
     const project = await createProject({ rawClient: fake.client }, input(`Kept ${String(_case)}`, union));

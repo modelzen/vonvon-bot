@@ -73,8 +73,8 @@ it('shows discovered skills and no fabricated tool authorization state', () => {
   expect(render('capabilities', failed)).toContain(failed.skillsError);
   expect(render('capabilities', failed)).not.toContain('尚未发现技能');
 });
-it('orders five group tabs, keeps compact model and permission settings together, and preserves legacy routes', () => {
-  expect(groupDesignTabs.map(([, label]) => label)).toEqual(['模型与权限', '能力', '沟通方式', '记忆', '任务']);
+it('orders the group tabs with sharing, keeps compact model and permission settings together, and preserves legacy routes', () => {
+  expect(groupDesignTabs.map(([, label]) => label)).toEqual(['模型与权限', '能力', '沟通方式', '记忆', '任务', '分享']);
   for (const section of ['任务', '定时任务']) expect(groupTabForSection(section)).toBe('schedule');
   expect(groupDesignTabs.map(([value]) => value)).not.toContain('workspace');
   for (const section of ['权限', '执行模型', '执行权限', '能挡到什么', '高级设置', '工作目录权限']) expect(groupTabForSection(section)).toBe('model');

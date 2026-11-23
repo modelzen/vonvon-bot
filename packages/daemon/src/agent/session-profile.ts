@@ -9,8 +9,7 @@ export interface SessionProfile {
   env: Readonly<Record<string, string>>;
   nativeSettings: { automaticMemory: false };
   additionalRoots: readonly { path: string; access: 'read' | 'write' }[];
-  /** Plugin-shaped directories handed over natively; today only vonvon's builtin package (T4b), s39d adds `'user'`. */
-  capabilityPackages: readonly { path: string; kind: 'builtin' }[];
+  capabilityPackages: readonly ({ path:string; kind:'builtin' } | {path:string; kind:'recipe'; pluginId:string; skills:readonly {qualifiedName:string}[]})[];
   /** Explicit MCP delivery is added with capability packages in s39. */
   mcpServers: readonly { name: string }[];
   /**
@@ -19,7 +18,7 @@ export interface SessionProfile {
    * comment's session, whose Feishu tools are the document column only (7.4). `feishuApi` adds feishu_api, a private
    * chat's only (7.6). `acrossBots`: a private chat's, whose read tools take a `bot` (7.3).
    */
-  tools?: { schedule: boolean; feishu?: boolean; feishuEdit?: boolean; feishuApi?: boolean; documentsOnly?: boolean; acrossBots?: boolean };
+  tools?: { schedule: boolean; feedback?: boolean; feishu?: boolean; feishuEdit?: boolean; feishuApi?: boolean; documentsOnly?: boolean; acrossBots?: boolean };
 }
 
 export interface SessionProfileCapabilities {

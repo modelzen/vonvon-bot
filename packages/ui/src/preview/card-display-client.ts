@@ -108,6 +108,7 @@ export function createCardDisplayPreviewClient(): VonvonClient {
     directory: unavailable,
     library: unavailable,
     contextPreview: unavailable,
+    recipeInstall: unavailable,
     onLog: noEvents,
     onBackendInstall: noEvents,
     onDevice: noEvents,

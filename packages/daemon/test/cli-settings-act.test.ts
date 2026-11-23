@@ -462,3 +462,18 @@ describe('vonvon settings act through the CLI entry', () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 });
+
+
+it('reads and patches ordinary work rules through the generic role command with the original revision', async () => {
+  const role = section({ supplement: '现有职责', workRules: '现有工作规则' });
+  const h = harness(request => request.type === 'read'
+    ? { kind: 'view', view: projectView([], { sections: { role } }) }
+    : request.type === 'sessions' ? { kind: 'sessions', sessions: [] } : { kind: 'saved', result: { kind: 'saved', section: {}, effects: [] } });
+  await runSettingsGet('role', { group: '研发' }, h.io(true), h.daemon);
+  expect(h.out()).toContain('现有工作规则');
+  h.clear();
+  await runSettingsSet(['role.workRules="先核对\\n再执行"'], { group: '研发', revision: 'original-snapshot' }, h.io(), h.daemon);
+  expect(h.send).toHaveBeenLastCalledWith({ type: 'save', edit: {
+    scope: { kind: 'project', botId: 'cli_a', projectName: '研发' }, section: 'role', revision: 'original-snapshot', patch: { workRules: '先核对\n再执行' },
+  } });
+});

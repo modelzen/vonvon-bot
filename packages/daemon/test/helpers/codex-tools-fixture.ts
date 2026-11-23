@@ -1,11 +1,12 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { vi } from 'vitest';
 import type { ScheduleCommands } from '../../src/admin/schedule-commands';
 import { CodexAppServerBackend } from '../../src/agent/codex-appserver/backend';
 import { shutdownResidentClients } from '../../src/agent/codex-appserver/client-pool';
-import { createAgentEntries, type TurnFacts } from '../../src/agent/entry/registry';
+import { createAgentEntries, type AgentPlace, type TurnFacts } from '../../src/agent/entry/registry';
+import { feedbackTool } from '../../src/agent/entry/feedback-tool';
 import { createScheduleTools } from '../../src/agent/entry/schedule-tools';
 import { sessionInfoTool } from '../../src/agent/entry/tools';
 import type { SessionProfile } from '../../src/agent/session-profile';
@@ -26,7 +27,16 @@ const note = (file, value) => fs.appendFileSync(path.join(__dirname, file), JSON
 const waiting = new Map();
 let turns = 0, calls = 0;
 function script(threadId, turnId, text, done) {
-  const { calls: list, early } = JSON.parse(text);
+  let instruction;
+  try { instruction = JSON.parse(text); } catch {
+    note('inputs', {threadId, text});
+    // Ordinary orchestrator prompts ask the fake model to use only a tool its native rollout advertised.
+    const rollout = path.join(__dirname, 'tools-' + threadId);
+    const tools = fs.existsSync(rollout) ? JSON.parse(fs.readFileSync(rollout, 'utf8')) : [];
+    instruction = {calls: text.includes('反馈测试') && tools.some(ns => ns.tools.some(t => t.name === 'feedback_prepare'))
+      ? [{tool: 'feedback_prepare', args: {summary: {kind: 'bug', title: '标题', description: '说明'}}}] : []};
+  }
+  const { calls: list, early } = instruction;
   let open = list.length;
   const requests = list.map(c => {
     const id = 'call-' + ++calls;
@@ -34,7 +44,15 @@ function script(threadId, turnId, text, done) {
     return { id, method: 'item/tool/call', params: { threadId: c.threadId || threadId, turnId: c.turnId || turnId,
       callId: 'c' + calls, namespace: 'vonvon_bot', tool: c.tool, arguments: c.args || {} } };
   });
-  return { early, send: () => requests.forEach(send) };
+  return { early, send: () => {
+    if (requests.length) return requests.forEach(send);
+    if (!text.includes('hold-old-turn')) return done();
+    const timer = setInterval(() => {
+      if (!fs.existsSync(path.join(__dirname, 'release-turn'))) return;
+      clearInterval(timer);
+      done();
+    }, 10);
+  } };
 }
 require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
   const m = JSON.parse(line), p = m.params || {};
@@ -42,6 +60,7 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', li
   if (m.id === undefined) return;
   if (m.method === 'thread/start' || m.method === 'thread/resume') {
     if (!p.ephemeral) note(m.method === 'thread/start' ? 'starts' : 'resumes', p); // not the warm pool's thread
+    if (m.method === 'thread/start' && !p.ephemeral) fs.writeFileSync(path.join(__dirname, 'tools-th'), JSON.stringify(p.dynamicTools || []));
     send({ id: m.id, result: { thread: { id: p.threadId || 'th' }, cwd: p.cwd, runtimeWorkspaceRoots: p.runtimeWorkspaceRoots,
       approvalPolicy: p.approvalPolicy, sandbox: { type: 'dangerFullAccess' } } });
   } else if (m.method === 'turn/start') {
@@ -91,20 +110,20 @@ export async function closeCodexToolFixtures(): Promise<void> {
 }
 
 /** A real Codex backend and transport on the fake; the real registry with T3's schedule tools over a spied command core, and session_info, which Codex is not offered. */
-export function codexToolsFixture() {
+export function codexToolsFixture(feedbackEnabled?: (chatId: string) => boolean) {
   const dir = mkdtempSync(join(tmpdir(), 'codex-tools-'));
   dirs.push(dir);
   vi.stubEnv('CODEX_BIN', writeNodeExecutable(dir, 'codex', FAKE).bin);
   const execute = vi.fn<ScheduleCommands['execute']>(async () => ({ kind: 'tasks', tasks: [], now: 0, timeZone: 'Asia/Shanghai' }));
-  const entries = createAgentEntries({ appId: 'bot', isAdmin: id => id === OWNER,
-    tools: [sessionInfoTool, ...createScheduleTools({ commands: { execute }, now: () => 0, hostTimeZone: () => 'Asia/Shanghai' })] });
+  const entries = createAgentEntries({ appId: 'bot', isAdmin: id => id === OWNER, feedbackEnabled,
+    tools: [sessionInfoTool, ...(feedbackEnabled ? [feedbackTool] : []), ...createScheduleTools({ commands: { execute }, now: () => 0, hostTimeZone: () => 'Asia/Shanghai' })] });
   const read = (file: string): Record<string, unknown>[] => {
     try { return readFileSync(join(dir, file), 'utf8').trim().split('\n').map(line => JSON.parse(line)); } catch { return []; }
   };
   async function drain(run: AgentRun) { for await (const _ of run.events) { /* the fake completes once its calls are answered */ } }
-  async function open(how: 'start' | 'resume' = 'start', schedule = true) {
-    const entry = entries.issue({ kind: 'group', chatId: 'oc_group' });
-    const backend = new CodexAppServerBackend(), opts = { cwd: dir, entry, profile: profile(schedule) };
+  async function open(how: 'start' | 'resume' = 'start', schedule = true, place: AgentPlace = { kind: 'group', chatId: 'oc_group' }) {
+    const entry = entries.issue(place);
+    const backend = new CodexAppServerBackend(), opts = { cwd: dir, entry, profile: { ...profile(schedule), tools: { schedule, feedback: Boolean(feedbackEnabled) } } };
     const thread = how === 'start' ? await backend.startThread(opts) : await backend.resumeThread({ ...opts, sessionId: 'th' });
     entry.attach(thread);
     threads.push(() => thread.close());
@@ -120,7 +139,7 @@ export function codexToolsFixture() {
     };
   }
   return {
-    execute, open, starts: () => read('starts'), resumes: () => read('resumes'),
+    execute, open, releaseTurn: () => writeFileSync(join(dir, 'release-turn'), ''), inputs: () => read('inputs'), starts: () => read('starts'), resumes: () => read('resumes'),
     /** The process that ran the latest turn. */
     pid: () => read('pids').at(-1)?.pid as number | undefined,
     /** The answers to the calls so far, in the order the calls were made: what the model read, and whether it failed. */

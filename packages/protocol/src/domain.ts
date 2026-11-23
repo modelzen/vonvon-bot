@@ -68,26 +68,7 @@ const empty = <T extends string>(type: T) =>
   z.object({ type: z.literal(type) }).strict();
 export const MAX_BADGE_NUMBER_LENGTH = 7;
 export const badgeNumberSchema = z.string().min(1).max(MAX_BADGE_NUMBER_LENGTH).regex(/^\d+$/);
-export const commandSchema = z.discriminatedUnion("type", [
-  z.object({type: z.literal("refresh"), tools: z.boolean().optional()}).strict(),
-  z.object({type: z.literal("listPendingGroups"), agentId: agentIdSchema}).strict(),
-  empty("registerAgent"),
-  z.object({type: z.literal("refreshAgentCredentials"), agentId: agentIdSchema}).strict(),
-  empty("restartHost"),
-  z
-    .object({
-      type: z.literal("listJoinedGroups"),
-      agentId: agentIdSchema,
-      cursor: z.string().min(1).max(2048).optional(),
-    })
-    .strict(),
-  z.object({ type: z.literal("listGroupMembers"), agentId: agentIdSchema, groupId: groupIdSchema, cursor: z.string().min(1).max(2048).optional() }).strict(),
-  /**
-   * dm-agent 7.3: a read of a Bot's Feishu tools, by the tool's name and its arguments, which the daemon checks as the tool
-   * does. No `agentId`: the daemon picks the Bot, the session's or the one bound to the chat asked about.
-   */
-  z.object({ type: z.literal("feishuRead"), agentId: agentIdSchema.optional(), tool: z.string().min(1).max(100), args: z.record(z.string(), z.unknown()) }).strict(),
-  z
+export const bindGroupCommandSchema = z
     .object({
       type: z.literal("bindGroup"),
       agentId: agentIdSchema,
@@ -106,7 +87,29 @@ export const commandSchema = z.discriminatedUnion("type", [
       judge: groupDecisionSchema.optional(),
       response: replyModeSchema.optional(),
     })
+    .strict();
+
+export const commandSchema = z.discriminatedUnion("type", [
+  z.object({type: z.literal("refresh"), tools: z.boolean().optional()}).strict(),
+  z.object({type: z.literal("listPendingGroups"), agentId: agentIdSchema}).strict(),
+  empty("registerAgent"),
+  z.object({type: z.literal("refreshAgentCredentials"), agentId: agentIdSchema}).strict(),
+  empty("restartHost"),
+  z
+    .object({
+      type: z.literal("listJoinedGroups"),
+      agentId: agentIdSchema,
+      cursor: z.string().min(1).max(2048).optional(),
+    })
     .strict(),
+  z.object({type: z.literal("readGroupIdentity"), agentId: agentIdSchema, groupId: groupIdSchema}).strict(),
+  z.object({ type: z.literal("listGroupMembers"), agentId: agentIdSchema, groupId: groupIdSchema, cursor: z.string().min(1).max(2048).optional() }).strict(),
+  /**
+   * dm-agent 7.3: a read of a Bot's Feishu tools, by the tool's name and its arguments, which the daemon checks as the tool
+   * does. No `agentId`: the daemon picks the Bot, the session's or the one bound to the chat asked about.
+   */
+  z.object({ type: z.literal("feishuRead"), agentId: agentIdSchema.optional(), tool: z.string().min(1).max(100), args: z.record(z.string(), z.unknown()) }).strict(),
+  bindGroupCommandSchema,
   z
     .object({
       type: z.literal("setResponse"),
@@ -153,6 +156,7 @@ export type DirectoryProblem = z.infer<typeof directoryProblemSchema>;
 export const membershipSchema = z.object({
   avatarDataUrl: z.string().optional(), avatarRef, id: membershipIdSchema, agentId: agentIdSchema,
   groupId: groupIdSchema, name: z.string(), directory: z.string(), backend: z.string(),
+  bindingIncarnation: z.string().uuid().optional(),
   /** The library project this binding belongs to; absent until the daemon has linked the row (daemon start), and from older daemons. */
   projectId: projectIdSchema.optional(),
   /** Absent when the directory is fine, and from daemons before s36c2d. */
@@ -183,6 +187,7 @@ export const agentSchema = z.object({
   lockHeld: lockHeldSchema.optional(),
   /** Local registration date and the display name of the confirmed Feishu application owner. */
   registeredAt: z.number().finite().nonnegative().optional(),
+  registrationId: z.string().max(128).optional(),
   ownerName: z.string().optional(),
   /** Which client opens this Bot; absent from older daemons, read as Feishu. */
   tenant: z.enum(["feishu", "lark"]).optional(),
@@ -292,7 +297,10 @@ export type FolderChoice = z.infer<typeof folderChoiceSchema>;
 export const pendingGroupSchema = z.object({chatId: groupIdSchema, name: z.string().min(1).max(1000), addedAt: z.number().finite().nonnegative(), topic: z.boolean().optional(), hasOtherBots: z.boolean().optional()});
 export const pendingGroupsSchema = z.object({groups: z.array(pendingGroupSchema).max(1000)});
 export type PendingGroup = z.infer<typeof pendingGroupSchema>;
+export const groupIdentitySchema = z.object({kind: z.literal("groupIdentity"), agentId: agentIdSchema, groupId: groupIdSchema, name: z.string().trim().min(1).max(1000)}).strict();
+export type GroupIdentity = z.infer<typeof groupIdentitySchema>;
 export const commandResultSchema = z.discriminatedUnion("kind", [
+  groupIdentitySchema,
   z.object({ kind: z.literal("pendingGroups"), groups: z.array(pendingGroupSchema) }),
   z.object({ kind: z.literal("applied"), revision: z.number() }),
   z.object({ kind: z.literal("started"), jobId: jobIdSchema }),

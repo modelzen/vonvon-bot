@@ -1,8 +1,10 @@
 import {
-  adminReplySchema, collaborationReplySchema, commandResultSchema,
+  RESOURCE_CONTEXT_CAPABILITY, NATIVE_RECIPE_PREVIEW_CAPABILITY, adminReplySchema, collaborationReplySchema, commandResultSchema,
   desktopSnapshotSchema, directoryReplySchema, environmentReplySchema, memoryReplySchema, contextPreviewReplySchema,
   errorEnvelopeSchema, eventSchema, machineReplySchema, requestSchema,
-  libraryReplySchema, scheduleReplySchema, settingsReplySchema, deviceReplySchema,
+  libraryReplySchema, scheduleReplySchema, settingsReplySchema, deviceReplySchema, recipeInstallReplySchema,
+  recipeAuthoringReplySchema, type RecipeAuthoringRequest, type RecipeAuthoringReply,
+  type RecipeInstallRequest, type RecipeInstallReply,
   type AdminReply, type DeviceReply, type DeviceRequest, type AdminRequest, type BackendInstallEventPayload,
   type CollaborationReply, type CollaborationRequest, type Command,
   type CommandResult, type DesktopSnapshot, type DirectoryReply,
@@ -33,7 +35,9 @@ export class ConnectionError extends Error {
 
 export interface VonvonClient {
   snapshot(): Promise<DesktopSnapshot>;
-  watchSnapshots(listener: (value: DesktopSnapshot) => void): () => void;
+  /** A desktop view can replace its underlying connection. Notify before its first snapshot;
+   * a client bound to a single transport never reattaches. */
+  watchSnapshots(listener: (value: DesktopSnapshot) => void, onReattached?: () => void): () => void;
   run(command: Command): Promise<CommandResult>;
   settings(request: SettingsRequest): Promise<SettingsReply>;
   collaboration(request: CollaborationRequest): Promise<CollaborationReply>;
@@ -46,6 +50,9 @@ export interface VonvonClient {
   contextPreview(request: ContextPreviewRequest): Promise<ContextPreviewReply>;
   schedule(botId: string, request: ScheduleRequest): Promise<ScheduleReply>;
   device(request: DeviceRequest): Promise<DeviceReply>;
+  readonly supportsResourceContext?:boolean;
+  recipeAuthoring?(request: RecipeAuthoringRequest): Promise<RecipeAuthoringReply>;
+  recipeInstall?(request: RecipeInstallRequest): Promise<RecipeInstallReply>;
   onLog(listener: (payload: LogEventPayload) => void): () => void;
   onBackendInstall(listener: (payload: BackendInstallEventPayload) => void): () => void;
   /** A client paired with or revoked from this device (devices 4.3); only the owner's connections hear it. */
@@ -62,7 +69,7 @@ const replySchemas = {
   settings: settingsReplySchema, collaboration: collaborationReplySchema,
   environment: environmentReplySchema, machine: machineReplySchema,
   admin: adminReplySchema, directory: directoryReplySchema, memory: memoryReplySchema,
-  library: libraryReplySchema, contextPreview: contextPreviewReplySchema, schedule: scheduleReplySchema, device: deviceReplySchema,
+  library: libraryReplySchema, contextPreview: contextPreviewReplySchema, schedule: scheduleReplySchema, device: deviceReplySchema, recipeInstall: recipeInstallReplySchema, recipeAuthoring: recipeAuthoringReplySchema,
 } satisfies Record<z.infer<typeof requestSchema>["method"], z.ZodTypeAny>;
 type Method = keyof typeof replySchemas;
 type Payload<M extends Method> = Extract<z.input<typeof requestSchema>, { method: M }>["payload"];
@@ -179,6 +186,7 @@ export function createClient(socket: ClientConnection, capabilities: readonly st
   const snapshot = () => send("snapshot", {type:"get", ...(capabilities.includes("attention.group") ? {groupAttention: true as const} : {})});
   return {
     snapshot,
+    supportsResourceContext:capabilities.includes(RESOURCE_CONTEXT_CAPABILITY),
     watchSnapshots(listener) {
       let active = true;
       let revision = -1;
@@ -208,6 +216,16 @@ export function createClient(socket: ClientConnection, capabilities: readonly st
     contextPreview: request => send("contextPreview", request),
     schedule: (botId, request) => send("schedule", { botId, request }),
     device: request => send("device", request),
+    recipeAuthoring: request => {
+      if (request.type === 'resourceHandoff' && !capabilities.includes(RESOURCE_CONTEXT_CAPABILITY)) return Promise.reject(new Error('此设备尚不支持配方资源交付。'));
+      if (request.type === 'creatorOpen') {
+        const {nativePreview, resourceContext, ...base} = request;
+        return send('recipeAuthoring', {...base, ...(nativePreview && capabilities.includes(NATIVE_RECIPE_PREVIEW_CAPABILITY) && {nativePreview}),
+          ...(resourceContext && capabilities.includes(RESOURCE_CONTEXT_CAPABILITY) && {resourceContext})});
+      }
+      return send('recipeAuthoring', request);
+    },
+    recipeInstall: request => send('recipeInstall', request),
     onLog(listener) { logs.add(listener); return () => { logs.delete(listener); }; },
     onBackendInstall(listener) { installs.add(listener); return () => { installs.delete(listener); }; },
     onDevice(listener) { devices.add(listener); return () => { devices.delete(listener); }; },

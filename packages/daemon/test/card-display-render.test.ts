@@ -17,6 +17,21 @@ const running:RunState={...initialState,startedAt:0,usage:{used:371000,window:47
 ]};
 
 describe('native card display compiler',()=>{
+  it.each([
+    ['actions-right','available'],['actions-right','requested'],
+    ['top-right','available'],['top-right','requested'],
+  ] as const)('uses valid unique Feishu element IDs with stop at %s and %s reminders across run phases',(stopSlot,completionReminder)=>{
+    const config=defaultCardDisplay();
+    config.blocks.find(block=>block.kind==='stop')!.slot=stopSlot;
+    for(const rs of [initialState,running,{...running,terminal:'done' as const,completedAt:9000}]){
+      const card=buildRunCard({rs,cardKey:'om_ids',completionReminder,cardDisplay:config,strictCardDisplay:true});
+      const ids=nodes(card).filter(node=>'element_id' in node).map(node=>node.element_id);
+      if(rs.terminal==='running')expect(ids).toContain(CARD_DISPLAY_REMINDER_EID);
+      for(const id of ids)expect(id).toMatch(/^[A-Za-z][A-Za-z0-9_]{0,19}$/);
+      expect(new Set(ids).size).toBe(ids.length);
+    }
+  });
+
   it('uses the same native parts and keeps the streamed answer and controls IDs',()=>{
     const config=defaultCardDisplay();
     const rc={rs:running,cardKey:'om_1',cardDisplay:config,strictCardDisplay:true,completionReminder:'available' as const};

@@ -8,6 +8,7 @@ import { sessionInfoTool, TOOL_RESULT_BYTES, ToolRefusal, type AgentTool, type T
 
 export interface AgentPlace { kind: 'group' | 'p2p' | 'doc'; chatId?: string; docId?: string }
 export interface TurnFacts {
+  feedback?: import('./feedback-tool').FeedbackSource;
   requesterOpenId?: string;
   requesterKind?: 'user' | 'bot' | 'unknown';
   triggerMessageId?: string;
@@ -34,7 +35,7 @@ export type TurnPresence = 'human' | 'scheduled' | 'none';
 /** 隐藏块在 `done` 前要用的这一轮的事实：现取，不是开轮时的快照 */
 export interface TurnMemory { turn(): MemoryTurn | undefined; place: AgentPlace; triggerMessageId?: string }
 /** 开轮时定下的这一轮：`presence`、`scheduled` 不随插话变（插话看 `steered`） */
-export interface TurnScope { readonly id: number; readonly presence: TurnPresence; readonly scheduled?: { taskId: string; runId: string }; close(): void }
+export interface TurnScope { readonly sessionId?:string; readonly id: number; readonly presence: TurnPresence; readonly scheduled?: { taskId: string; runId: string }; close(): void }
 export interface AgentEntries {
   issue(place: AgentPlace): AgentEntry;
   openTurn(thread: AgentThread, facts: TurnFacts): TurnScope;
@@ -121,6 +122,7 @@ function feishuApiRefused(reason: keyof typeof feishuApiMessages): Failure {
 interface TurnAuth {
   id: number;
   facts: TurnFacts;
+  feedbackSteer: AbortController;
   human: boolean;
   /** 开轮时的事实：这一轮是谁触发的（记忆的 `turn.kind`），不随插话变 */
   kind: MemoryTurn['kind'];
@@ -164,6 +166,7 @@ export function createAgentEntries(opts: {
   appId: string;
   isAdmin(openId: string): boolean;
   tools?: readonly AgentTool[];
+  feedbackEnabled?(chatId: string): boolean;
   /** devices-4a 4.3: told once when a session ends, so the host drops its token (best effort: it never throws). */
   sessions?: { revoke(sessionId: string): void };
   /** devices-4b 4.5: a turn's place for memory (the memory writer's own), where a session's command-line write lands. */
@@ -240,6 +243,17 @@ export function createAgentEntries(opts: {
     if (grant.place.kind === 'doc') return failure('unknown-tool');
     if (!auth) return refused('unknown-origin');
     if (!auth.active || grant.turn !== auth) return refused('turn-ended');
+  }
+  function authorizeFeedback(grant: Grant, auth: TurnAuth | undefined): Failure | undefined {
+    const refusal = authorizeMemory(grant, auth);
+    const source = auth?.facts.feedback;
+    if (refusal) return refusal;
+    if (auth?.human && !auth.feedbackSteer.signal.aborted && grant.place.kind === 'group' && grant.place.chatId
+      && !opts.feedbackEnabled?.(grant.place.chatId))
+      return { ok: false, code: 'refused', message: '本群反馈尚不可用。请让 Bot 管理员检查工具并用 /feedback setup 配置接收目标。' };
+    if (!auth?.human || auth.feedbackSteer.signal.aborted || !source || grant.place.kind !== 'group'
+      || source.chatId !== grant.place.chatId || source.openId !== auth.facts.requesterOpenId || source.messageId !== auth.facts.triggerMessageId)
+      return { ...refused('not-human-turn'), message: '这次调用没有对应的本人群消息。请在原群重新发起反馈。' };
   }
   /**
    * schedule 类的授权（3.13 的表、总设计第 8 节"在场"）：这一层先查，拒绝不进命令核；命令核按 actor 再查一遍，
@@ -354,11 +368,13 @@ export function createAgentEntries(opts: {
       const schedule = tool.class === 'schedule';
       const document = tool.class === 'document' && (tool.writes === true || grant.place.kind === 'doc');
       const feishuApi = tool.class === 'feishu-api';
-      const gated = settings || memory || schedule || document || feishuApi;
+      const feedback = tool.class === 'feedback';
+      const resource=tool.class==='resource';
+      const gated = resource || feedback || settings || memory || schedule || document || feishuApi;
       const taskId = schedule && args && typeof args === 'object' && 'taskId' in args ? args.taskId : undefined;
       // Claude's tool-use id, or the Codex turn id its turn/start answered with (定时任务 T3b): both noted by noteToolUse.
       const auth = origin?.toolUseId ? grant.origins.get(origin.toolUseId) : undefined;
-      const authNow = (): Failure | undefined => memory ? authorizeMemory(grant, auth)
+      const authNow = (): Failure | undefined => resource ? (authorizeNow(grant,auth)??(auth?.presence!=='human'||auth.steered?refused('not-human-turn'):undefined)) : feedback ? authorizeFeedback(grant, auth) : memory ? authorizeMemory(grant, auth)
         : schedule ? authorizeSchedule(grant, auth, tool.action, taskId)
           : document ? authorizeFeishu(grant, auth) : feishuApi ? authorizeFeishuApi(grant, auth) : authorizeNow(grant, auth);
       if (gated) {
@@ -382,6 +398,7 @@ export function createAgentEntries(opts: {
           settled = true;
           clearTimeout(timer);
           grant.controller.signal.removeEventListener('abort', onGrantAbort);
+          if (feedback) auth?.feedbackSteer.signal.removeEventListener('abort', onTurnAbort);
           auth?.controller.signal.removeEventListener('abort', onTurnAbort);
           const index = grant.queue.indexOf(run);
           if (index >= 0) grant.queue.splice(index, 1);
@@ -407,6 +424,7 @@ export function createAgentEntries(opts: {
         };
         const timer = setTimeout(() => stop(failure('timeout')), Math.max(0, deadline - Date.now()));
         grant.controller.signal.addEventListener('abort', onGrantAbort, { once: true });
+        if (feedback) auth?.feedbackSteer.signal.addEventListener('abort', onTurnAbort, { once: true });
         if (gated) auth?.controller.signal.addEventListener('abort', onTurnAbort, { once: true });
         const check = (reserveMs: number) => {
           if (interruption) throw new ToolRefusal(interruption);
@@ -417,6 +435,11 @@ export function createAgentEntries(opts: {
         };
         async function execute() {
           const ctx: ToolContext = { signal: controller.signal, place: grant.place, sessionId: grant.sessionId, notAfter: deadline, get admin() { return !adminTurn(grant); }, get writeRefusal() { return authorizeNow(grant, auth); } };
+          if(resource&&auth)ctx.resourceCaller=()=>{
+            const {requesterOpenId:openId,triggerMessageId:messageId}=auth.facts,chatId=grant.place.chatId;
+            if(authNow()||grant.place.kind!=='p2p'||!openId||!messageId||!chatId||controller.signal.aborted)return;
+            return {sessionId:grant.sessionId,openId,messageId,chatId};
+          };
           if (memory && auth) {
             ctx.turn = { id: auth.id, requesterOpenId: auth.facts.requesterOpenId ?? '', triggerMessageId: auth.facts.triggerMessageId ?? '', role: roleOf(auth) };
             ctx.memoryTurn = () => memoryTurnOf(grant, auth);
@@ -424,7 +447,11 @@ export function createAgentEntries(opts: {
             ctx.releaseBotWrite = () => { auth.botWrites = Math.max(0, auth.botWrites - 1); };
           }
           if (schedule && auth) ctx.schedule = () => ({ actor: scheduleActor(grant, auth), where: auth.facts.where?.() ?? { inTopic: false }, steered: auth.steered });
-          if (gated && auth) {
+          if (feedback && auth?.facts.feedback) {
+            const source = auth.facts.feedback;
+            ctx.feedback = input => source.prepare(input, controller.signal, () => check(0));
+          }
+          if (gated && !feedback && auth) {
             if (settings) ctx.turn = { id: auth.id, requesterOpenId: auth.facts.requesterOpenId ?? '', triggerMessageId: auth.facts.triggerMessageId ?? '', role: 'admin' };
             ctx.commit = async write => {
               check(0);
@@ -492,8 +519,12 @@ export function createAgentEntries(opts: {
         if (grant.phase === 'revoked') throw new ToolRefusal(failure('revoked'));
         if (grant.phase === 'capacity') return [];
         // 评论会话（doc）只给读类和文档这一列的工具；写记忆的和任务的在群和私聊里给；只为设置服务的读工具只在私聊里给
-        return tools.filter(tool => placed(tool, grant.place) && (tool.class === 'read' || tool.class === 'document'
-          || (tool.class === 'memory' || tool.class === 'schedule' ? grant.place.kind !== 'doc' : grant.place.kind === 'p2p')))
+        return tools.filter(tool => {
+          if (!placed(tool, grant.place)) return false;
+          if (tool.class === 'feedback') return !!grant.place.chatId;
+          return tool.class === 'read' || tool.class === 'document'
+            || (tool.class === 'memory' || tool.class === 'schedule' ? grant.place.kind !== 'doc' : grant.place.kind === 'p2p');
+        })
           .map(tool => ({ name: tool.name, description: tool.description, input: inputAt(tool, grant.place) }));
       },
       call,
@@ -619,7 +650,7 @@ export function createAgentEntries(opts: {
       const kind: MemoryTurn['kind'] = scheduled ? 'initiative' : facts.wake ? 'wake' : facts.initiative ? 'initiative' : facts.retry ? 'retry'
         : facts.requesterKind === 'user' && !!facts.requesterOpenId && !!facts.triggerMessageId ? 'human' : 'bot';
       const presence: TurnPresence = scheduled ? 'scheduled' : kind === 'human' ? 'human' : 'none';
-      const auth: TurnAuth = { id: ++nextTurn, facts: { ...facts, ...(scheduled ? { scheduled } : {}) }, active: true, controller: new AbortController(), human: kind === 'human',
+      const auth: TurnAuth = { id: ++nextTurn, facts: { ...facts, ...(scheduled ? { scheduled } : {}) }, active: true, controller: new AbortController(), feedbackSteer: new AbortController(), human: kind === 'human',
         steered: false, botWrites: 0, kind, presence };
       if (grant && grant.phase === 'attached') {
         if (grant.turn?.active) log.warn('agent', 'turn-overlap', {});
@@ -627,7 +658,7 @@ export function createAgentEntries(opts: {
         grant.previous = grant.turn;
         grant.turn = auth;
       } else end(auth);
-      return { id: auth.id, presence, ...(scheduled ? { scheduled: { ...scheduled } } : {}), close() { end(auth); } };
+      return { ...(grant?.phase==='attached'&&{sessionId:grant.sessionId}),id: auth.id, presence, ...(scheduled ? { scheduled: { ...scheduled } } : {}), close() { end(auth); } };
     },
     memoryTurn(thread) {
       const grant = threads.get(thread);
@@ -637,6 +668,7 @@ export function createAgentEntries(opts: {
     },
     noteSteer(thread, sender) {
       const auth = threads.get(thread)?.turn;
+      auth?.feedbackSteer.abort();
       if (auth && !(sender.kind === 'user' && sender.openId && sender.openId === auth.facts.requesterOpenId)) {
         auth.human = false;
         auth.steered = true;

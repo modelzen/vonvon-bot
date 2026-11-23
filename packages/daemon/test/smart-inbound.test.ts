@@ -1,3 +1,4 @@
+import { legacyWorkRules } from './helpers/work-rules-fixture';
 import { FocusEverywhere } from './helpers/focus-everywhere';
 import { Attention } from '../src/bot/attention';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -494,7 +495,9 @@ describe('smart rules from group settings', () => {
   }
 
   it('sends both saved group rules to the model ahead of legacy prompts and executes a reply decision', async () => {
-    fake.project = { ...base, smartRules: { respond: '遇到需要协助的技术问题就回复', newTopic: '独立的问题创建新话题' } };
+    const richRecipe = legacyWorkRules();
+    richRecipe.resolved.push({kind: 'rules', itemId: 'old', originId: 'old', value: {purpose: 'smartRespond', text: 'Retired judge instruction'}});
+    fake.project = { ...base, richRecipe, smartRules: { respond: '遇到需要协助的技术问题就回复', newTopic: '独立的问题创建新话题' } };
     const judge = await useRealJudge('bot', 'main');
     await send(says('登录接口报错，请帮忙看一下'));
     await vi.waitFor(() => expect(fake.inputs).toHaveLength(1));
@@ -502,6 +505,7 @@ describe('smart rules from group settings', () => {
     expect(judge.calls[0]!.system).toContain('遇到需要协助的技术问题就回复');
     expect(judge.calls[0]!.system).toContain('独立的问题创建新话题');
     expect(judge.calls[0]!.system).not.toContain('LEGACY_SMART_PROMPT');
+    expect(judge.calls[0]!.system).not.toContain('Retired judge instruction');
     expect(judge.readPrompt).not.toHaveBeenCalled();
     expect(fake.inputs[0]).toContain('登录接口报错，请帮忙看一下');
   });
@@ -1989,6 +1993,30 @@ describe('attention (s25g)', () => {
     expect(fake.judge).not.toHaveBeenCalled(); await advance(s(20));
     const { req } = await judged(msgs[9]!); expect(req.context.filter(l => l.fresh)).toHaveLength(9);
     expect(req.message.fresh).toBe(true); expect(logged('attention')).toContainEqual(expect.objectContaining({ n: 10 }));
+  });
+  it.each(['direct', 'anchored', 'batch'] as const)('only binds the direct explicit feedback source during smart intake (%s)', async mode => {
+    await orchestrator.shutdown();
+    const entries = createAgentEntries({appId: APP, isAdmin: () => false});
+    const open = vi.spyOn(entries, 'openTurn');
+    orchestrator = createOrchestrator(channel as never, cfg, workspace, undefined, {time, entries, feedback: {
+      enabled: () => true, close: async () => {}, onMessage: async () => false, onAction: async () => {},
+      bind: msg => ({messageId: msg.messageId, chatId: msg.chatId, openId: msg.senderId, attachments: [],
+        prepare: async () => {throw new Error('unused');}}),
+    }});
+    const first = says('整理反馈', {at: mode !== 'batch'});
+    await send(first, {openId: 'ou_first'});
+    if (mode === 'batch') {
+      const last = says('另一个人的内容');
+      await send(last, {openId: 'ou_second'});
+      await advance(s(20));
+      await decide(last, result('main', {anchor: idOf(first)}));
+    } else {
+      await decide(first, result('main', mode === 'anchored' ? {anchor: 'om_untrusted'} : {}));
+    }
+    await vi.waitFor(() => expect(open).toHaveBeenCalledOnce());
+    const facts = open.mock.calls[0]![1];
+    if (mode === 'direct') expect(facts.feedback).toMatchObject({messageId: idOf(first), openId: 'ou_first'});
+    else expect(facts.feedback).toBeUndefined();
   });
   it('46, 62. replies to the batch anchor and then judges focused messages immediately, with private logs', async () => {
     const a = says('导出接口 500 有人看吗'), b = says('顺便'), c = says('是生产环境');
