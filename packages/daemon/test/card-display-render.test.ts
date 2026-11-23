@@ -17,6 +17,41 @@ const running:RunState={...initialState,startedAt:0,usage:{used:371000,window:47
 ]};
 
 describe('native card display compiler',()=>{
+  it.each([
+    {terminal:'running', footer:'thinking'},
+    {terminal:'running', footer:'tool_running'},
+    {terminal:'running', footer:'streaming'},
+    {terminal:'running', footer:'retrying'},
+    {terminal:'done', footer:null},
+    {terminal:'error', footer:null},
+    {terminal:'interrupted', footer:null},
+    {terminal:'idle_timeout', footer:null},
+  ] satisfies Pick<RunState, 'terminal' | 'footer'>[])(
+    'emits valid CardKit element IDs for $terminal/$footer',
+    (phase) => {
+      const movedStop = defaultCardDisplay();
+      movedStop.blocks = movedStop.blocks.map(block =>
+        block.kind === 'stop' ? {...block, slot:'top-right'} : block,
+      );
+      for (const cardDisplay of [undefined, defaultCardDisplay(), movedStop]) {
+        for (const completionReminder of ['available', 'requested'] as const) {
+          const card = buildRunCard({
+            rs:{...running, ...phase},
+            cardKey:'om_cardkit',
+            completionReminder,
+            cardDisplay,
+            strictCardDisplay:true,
+          });
+          for (const node of nodes(card)) {
+            if ('element_id' in node) {
+              expect(node.element_id).toMatch(/^[A-Za-z][A-Za-z0-9_]{0,19}$/);
+            }
+          }
+        }
+      }
+    },
+  );
+
   it('uses the same native parts and keeps the streamed answer and controls IDs',()=>{
     const config=defaultCardDisplay();
     const rc={rs:running,cardKey:'om_1',cardDisplay:config,strictCardDisplay:true,completionReminder:'available' as const};
