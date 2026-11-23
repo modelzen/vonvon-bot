@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {codeNamespace, codeTool} from '../entry/release-code-tools';
 import {FEEDBACK_PREPARE} from '../entry/feedback-tool';
 import {resourceToolNames} from '../entry/resource-tools';
 import { FEISHU_API, FEISHU_DOC_EDIT, feishuToolNames, feishuToolSpecs } from '../entry/feishu-tools';
@@ -18,7 +19,7 @@ import type { ThreadStartParams } from './protocol';
  */
 export interface DynamicToolNamespace {
   type: 'namespace';
-  name: 'vonvon_bot';
+  name: 'vonvon_bot' | typeof codeNamespace;
   description: string;
   tools: { type: 'function'; name: string; description: string; inputSchema: object; deferLoading?: boolean }[];
 }
@@ -45,7 +46,15 @@ export function startDynamicTools(opts: Pick<StartThreadOptions, 'entry' | 'prof
       if (offered) namespace.tools.push({type: 'function', name: spec.name, description: spec.description, inputSchema: z.toJSONSchema(spec.input)});
     }
   }
-  return { dynamicTools: [namespace] };
+  if (!tools.releaseCode) return {dynamicTools: [namespace]};
+  const codeSpecs = opts.entry.tools().filter(spec => codeTool(spec.name));
+  const code: DynamicToolNamespace = {
+    type: 'namespace', name: codeNamespace, description: '查询 VonVon 最新正式版的代码。',
+    tools: codeSpecs.map(spec => ({
+      type: 'function', name: spec.name, description: spec.description, inputSchema: z.toJSONSchema(spec.input),
+    })),
+  };
+  return {dynamicTools: code.tools.length ? [namespace, code] : [namespace]};
 }
 
 /**
@@ -53,5 +62,6 @@ export function startDynamicTools(opts: Pick<StartThreadOptions, 'entry' | 'prof
  * thread older than feishu_doc_edit simply does not have it; one whose tier dropped since is refused by the tool itself.
  */
 export function offeredTool(namespace: string | null | undefined, tool: string): boolean {
+  if (namespace === codeNamespace) return codeTool(tool);
   return (namespace ?? 'vonvon_bot') === 'vonvon_bot' && (tool === FEEDBACK_PREPARE || resourceToolNames.has(tool) || scheduleToolNames.has(tool) || feishuToolNames.has(tool) || tool === FEISHU_DOC_EDIT || tool === FEISHU_API);
 }

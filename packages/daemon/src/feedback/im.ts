@@ -73,10 +73,10 @@ export class NativeFeedbackIm implements FeedbackChatIm {
     return result.data.message_id;
   }
 
-  async reply(input: FeedbackActor, text: string, beforeSend?: () => Promise<void>): Promise<void> {
+  async reply(input: FeedbackActor, text: string, beforeSend?: () => Promise<void>, verifyAuthor = false): Promise<void> {
     try {
       const actor = this.actor(input);
-      await this.verifyMessage(actor);
+      await this.verifyMessage(actor, verifyAuthor);
       await beforeSend?.();
       await this.send(actor, 'text', {text: z.string().min(1).parse(text)});
     } catch {throw new Error('反馈消息尚未确认送达，请稍后重试。');}

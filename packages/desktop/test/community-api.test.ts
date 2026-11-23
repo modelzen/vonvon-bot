@@ -50,9 +50,9 @@ describe('native community boundary', () => {
     const profile = {authorId: accountId, displayName: '社区作者'};
     vi.mocked(f.account.request).mockImplementation(async () => Response.json(profile));
     expect(await communityRequest(f.account, {type: 'profile', accountId})).toEqual(profile);
-    expect(f.account.request).toHaveBeenLastCalledWith(accountId, '/v2/me/profile', {method: 'GET', headers: {}, body: undefined});
+    expect(f.account.request).toHaveBeenLastCalledWith(accountId, '/v2/me/account-profile', {method: 'GET', headers: {}, body: undefined});
     await communityRequest(f.account, {type: 'saveProfile', accountId, requestId, displayName: '  社区作者  '});
-    expect(f.account.request).toHaveBeenLastCalledWith(accountId, '/v2/me/profile', {method: 'POST', headers: {'Idempotency-Key': requestId, 'Content-Type': 'application/json'}, body: JSON.stringify({displayName: '社区作者'})});
+    expect(f.account.request).toHaveBeenLastCalledWith(accountId, '/v2/me/account-profile', {method: 'POST', headers: {'Idempotency-Key': requestId, 'Content-Type': 'application/json'}, body: JSON.stringify({displayName: '社区作者'})});
     f.emit({kind: 'signedOut'});
     await expect(communityRequest(f.account, {type: 'saveProfile', accountId, requestId, displayName: '社区作者'})).rejects.toThrow('账号已切换');
     expect(f.account.request).toHaveBeenCalledTimes(2);
@@ -129,6 +129,20 @@ describe('native community boundary', () => {
     await expect(shell.community.request(request)).rejects.toThrow();
     expect(() => shell.community.request({type: 'catalog', origin: 'https://attacker.example'} as never)).toThrow();
   });
+});
+
+it('allows anonymous compact previews and public logos while refusing raw member downloads', async () => {
+  const transport = vi.fn<typeof fetch>(async () => Response.json({}));
+  const account = createAccountSession({deployment: accountDeployment('https://community.example', 'https://api.example', false),
+    store: {read: async () => undefined, save: async () => 'memory', clear: async () => {}}, transport, openBrowser: async () => {}});
+  const recipe = '22222222-2222-4222-8222-222222222222', version = '33333333-3333-4333-8333-333333333333';
+  try {
+    await account.publicRequest!(`/v2/recipes/${recipe}/versions/${version}/preview`);
+    await account.publicRequest!(`/v2/versions/${version}/display-logo`);
+    await expect(account.publicRequest!(`/v2/versions/${version}/objects/${recipe}`)).rejects.toThrow();
+    expect(transport).toHaveBeenCalledTimes(2);
+    for (const [, init] of transport.mock.calls) expect(new Headers(init?.headers).has('Authorization')).toBe(false);
+  } finally {await account.dispose();}
 });
 
 it('uses the configured public API origin without auth, cookies or redirects and rejects every nonpublic path', async () => {

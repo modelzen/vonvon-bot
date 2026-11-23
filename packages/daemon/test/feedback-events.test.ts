@@ -59,6 +59,18 @@ describe('feedback review card', () => {
     expect(content).toContain('plain_text');
     expect(content).not.toContain('"tag":"markdown"');
   });
+  it('shows every populated detail in full and omits absent ones', () => {
+    const data = review();
+    const details = {checks: '第一行\n第二行', sourceEvidence: '0.10.1 packages/ui/src/app.ts:33 路由匹配',
+      openQuestions: '另一个设备待复验', useCase: '群讨论后整理', acceptanceCriteria: '切换后保留选择'};
+    const body = feedbackReviewCard({...data, summary: {...data.summary, ...details}});
+    const text = JSON.stringify(body);
+    for (const [index, label] of ['排查记录','源码依据','待验证问题','使用场景与现有做法','验收标准'].entries()) {
+      expect(text).toContain(JSON.stringify(label + '\n' + Object.values(details)[index]));
+    }
+    expect(JSON.stringify(feedbackReviewCard(data))).not.toContain('待验证问题');
+  });
+
   it('refuses confirmation if the complete reviewed content cannot fit the card', () => {
     const input = review();
     input.summary.description = '图片'.repeat(15000);

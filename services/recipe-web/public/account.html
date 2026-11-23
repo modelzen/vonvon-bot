@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN" data-desktop-channel="__DESKTOP_CHANNEL__" data-recipe-create-url="__RECIPE_CREATE_URL__"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="same-origin"><meta name="color-scheme" content="light">
+<title>账号设置 · Vonvon Bot</title><link rel="icon" href="/mark.png">
+<link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/account.css">
+<script type="module" src="/account.mjs"></script>
+<script type="module" src="/create.mjs"></script>
+</head><body>
+<header class="mast"><div class="bar shell">
+<a href="/" class="brand"><img src="/mark.png" width="28" height="28" alt="">Vonvon Bot</a>
+<nav class="actions" aria-label="社区导航"><a href="https://vonvon.cc/">官网</a><a href="/" data-community-link>社区</a><a href="https://vonvon.cc/docs/">文档</a><a href="https://vonvon.cc/get/">下载</a><a class="secondary" href="/account" aria-current="page">账号</a></nav>
+</div></header>
+<main class="account-shell">
+  <header class="account-heading"><p class="eyebrow">VONVON BOT</p><h1>账号设置</h1><p>管理你的昵称和头像。修改后，所有配方都会显示你的当前昵称。</p></header>
+  <p id="account-status" class="notice" role="status" aria-live="polite">正在读取账号信息…</p>
+  <section id="account-login" class="panel" aria-labelledby="login-title" hidden><h2 id="login-title">注册或登录</h2><p class="notice">使用同一个 Vonvon 账号，在社区获取配方，在 App 中使用。首次授权会自动创建账号。</p><div id="account-providers" class="account-providers"></div></section>
+  <section id="account-mismatch" class="panel" aria-labelledby="mismatch-title" hidden><h2 id="mismatch-title">请切换到 App 中的账号</h2><p class="notice">当前网站账号与 App 中的账号不同。请退出网站账号，再选择 App 使用的登录账号。</p><p class="fine">退出网站不会退出 App 或浏览器里的 GitHub、Google 等账号。</p></section>
+  <form id="account-profile" class="panel account-form" hidden>
+    <div class="account-avatar-row"><span id="avatar-preview" class="account-avatar" aria-label="头像预览"><span id="avatar-initials"></span><img id="avatar-image" alt="" hidden></span><div><label for="account-avatar">头像</label><input id="account-avatar" type="file" accept="image/png,image/jpeg,image/webp" aria-describedby="avatar-help"><p id="avatar-help" class="fine">PNG、JPEG 或 WebP 静态图片，最大 2048 × 2048 像素、2 MiB。保存时居中裁成方形。</p><button id="avatar-remove" type="button" class="secondary" hidden>恢复默认头像</button></div></div>
+    <div class="account-field"><label for="account-name">昵称</label><input id="account-name" type="text" maxlength="120" autocomplete="nickname" required aria-describedby="name-help name-error"><p id="name-help" class="fine">1–60 个字，全局唯一。App 和社区中的配方使用同一个昵称。</p><p id="name-error" class="error" role="status"></p></div>
+    <div class="account-field"><label for="account-id">用户 ID</label><div class="account-id-row"><input id="account-id" type="text" readonly><button id="account-copy" type="button" class="secondary">复制</button></div><p class="fine">账号的固定标识，修改昵称和头像不会改变它。</p></div>
+    <p id="account-feedback" class="account-feedback" role="status" aria-live="polite"></p>
+    <div class="account-form-actions"><button id="account-save" type="submit" class="button" disabled>保存资料</button><button id="account-recover" type="button" class="secondary" hidden>重新读取</button></div>
+  </form>
+  <div id="account-session-actions" class="account-session-actions" hidden><button id="account-logout" type="button" class="secondary">退出网站账号</button><p class="fine">只退出当前网站会话，不会退出 App 或第三方网站账号。</p></div>
+  <button id="account-retry" type="button" class="secondary" hidden>重新读取账号</button>
+  <noscript><p class="notice">请开启 JavaScript 后管理账号。</p></noscript>
+</main>
+<footer class="site-footer"><div class="shell"><p>Vonvon Bot · 把好用的配方带回自己的 Bot</p><nav aria-label="相关页面"><a href="https://vonvon.cc/">官网</a><a href="https://vonvon.cc/docs/">使用文档</a><a href="/">配方社区</a><a href="__RECIPE_CREATE_URL__" data-create-recipe>分享我的配方</a><a href="/studio">创作指引</a></nav></div></footer>
+</body></html>

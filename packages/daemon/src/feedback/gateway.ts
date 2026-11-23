@@ -2,7 +2,7 @@ import {readFile, stat} from 'node:fs/promises';
 import {join} from 'node:path';
 import {z} from 'zod';
 import {feedbackCliIdentity, type FeedbackCliPort} from './lark-cli.js';
-import {type FeedbackActor, type FeedbackDestination, type FeedbackDraft, type FeedbackGateway, type FeedbackLookup, type FeedbackStore} from './types.js';
+import {feedbackDetailFields, feedbackDetails, type FeedbackActor, type FeedbackDestination, type FeedbackDraft, type FeedbackGateway, type FeedbackLookup, type FeedbackStore} from './types.js';
 
 const resultSchema = z.object({ok: z.literal(true), identity: z.literal('user'), data: z.unknown()});
 const questionSchema = z.object({id: z.string(), title: z.string(), type: z.string(), required: z.boolean(), filter: z.unknown().optional(), multiple: z.boolean().nullish(), options: z.array(z.object({name: z.string()})).nullish()});
@@ -28,7 +28,7 @@ export class NativeFeedbackGateway implements FeedbackGateway {
     return feedbackCliIdentity(await this.cli.run(actor, ['auth', 'status', '--json', '--verify']), actor);
   }
 
-  async validate(actor: FeedbackActor, destination: FeedbackDestination): Promise<void> {
+  async validate(actor: FeedbackActor, destination: FeedbackDestination): Promise<'detail-fields' | void> {
     const form = formSchema.parse(data(await this.cli.run(actor, ['base', '+form-detail', '--share-token', destination.shareToken, '--as', 'user'])));
     if (form.base_token !== destination.baseToken) throw new Error('反馈入口与目标不一致，请重新核对。');
     const table = fieldsSchema.parse(data(await this.cli.run(actor, ['base', '+field-list', '--base-token', destination.baseToken, '--table-id', destination.tableId, '--as', 'user'])));
@@ -59,6 +59,14 @@ export class NativeFeedbackGateway implements FeedbackGateway {
         throw new Error('反馈选项与当前入口不一致，请更新反馈助手。');
       }
     }
+    const complete = feedbackDetailFields.every(([, label]) => {
+      const questions = form.questions.filter(item => item.title === label);
+      const fields = table.fields.filter(item => item.name === label);
+      const question = questions[0];
+      return questions.length === 1 && fields.length === 1 && question?.type === 'text' && !question.required &&
+        question.filter == null && fields[0]?.type === 'text' && fields[0].id === question.id;
+    });
+    if (complete) return 'detail-fields';
   }
 
   async lookup(draft: FeedbackDraft): Promise<FeedbackLookup> {
@@ -92,6 +100,7 @@ export class NativeFeedbackGateway implements FeedbackGateway {
         '如何重现': summary.steps, '期望效果': summary.expected, '使用环境': summary.environment,
         '涉及功能': summary.areas, '跟进编号': draft.trackingCode,
         ...(summary.impact && {'影响程度': summary.impact}),
+        ...Object.fromEntries(feedbackDetails(summary).map(({label, value}) => [label, value])),
       },
       ...(draft.attachments.length && {attachments: {'截图与附件': draft.attachments.map(file => file.relativePath)}}),
     };

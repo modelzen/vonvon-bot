@@ -3,6 +3,7 @@ import {recipeRichDraftChangeSchema,type RecipeRichDraftChange} from '@vonvon/pr
 import {safeEditValue} from '../../../../services/recipe-api/src/draft-model-text.mjs';
 import {checkModelText} from './draft-instruction';
 import {wireJson} from './authoring-rich-snapshot';
+import {recipeSetupAuthoringGuidance} from './setup-authoring-guidance';
 
 const kinds=['publicText','role','setting','cardBlock','rule','skill','file','task','memory','finalLogo'] as const;
 type ItemKind=typeof kinds[number];
@@ -28,6 +29,7 @@ export const richModelPrompt='你帮助作者设计或编辑私人配方。群�
  +'其他配置用 edit，valueJson 是替代的 JSON：role 是 {kind:"inline",value:"…"}；setting 是 {field,value}；其他类型保留可编辑字段，禁止身份字段。'
  +'创建阶段希望排除某个已勾选项目时使用 omit，valueJson 用 null。'
  +'copy 或 remove 不带新值，valueJson 用 "null"。setup 是普通技能；需要初始化时，由作者在配方介绍说明何时、如何运行该技能。'
+ +'作者明确要求整理依赖、编写初始化技能或补充其介绍时，遵循以下创作规范；仅检查本轮选中的字段，不能为此读取额外数据或改动未选择的项目：'+recipeSetupAuthoringGuidance
  +'请求执行命令、访问其他数据、发布或提升权限时返回 refuse。仅输出约定的 JSON，不使用工具。';
 export function checkedRichInput(input:RichModelInput){
   checkModelText(input.instruction);

@@ -56,12 +56,14 @@ async function sourceFile(repo, sha, path) {
   return stdout;
 }
 function runtime(dependencies) {
-  return { env: process.env, download: downloadBuild, planWindowsUpdates, promoteWindowsUpdates, verifyMac: validateReleaseInventory, planMac: planPublish,
+  const { VONVON_RELEASE_CODE_SSH: releaseCodeHost, ...env } = dependencies.env ?? process.env;
+  return { download: downloadBuild, planWindowsUpdates, promoteWindowsUpdates, verifyMac: validateReleaseInventory, planMac: planPublish,
     planServer: planServerPublication, uploadServer: publishServerObjects, promoteServer: promoteServerStable, readSource: sourceFile,
     serverConfigPath: join(homedir(), '.config/vonvon-release/cos-server.json'),
+    releaseCodeConfigPath: join(homedir(), '.config/vonvon-release/release-code.json'),
     r2ConfigPath: join(homedir(), '.config/vonvon-release/r2-linux.json'), planR2: planR2Mirror, syncR2: syncR2Mirror,
     uploadMac: uploadRelease, promoteMac: promoteRelease, reverifyMac: reverifyRelease,
-    verifyPublicMac: verifyPublicRelease, readLiveManifest: readStableManifest, collect: collectRelease, execute: runReleaseChild, log: console.log, ...dependencies };
+    verifyPublicMac: verifyPublicRelease, readLiveManifest: readStableManifest, collect: collectRelease, execute: runReleaseChild, log: console.log, ...dependencies, env, releaseCodeHost };
 }
 async function context(options, r, saved) {
   assertSecureTransport(r.env);
@@ -235,7 +237,7 @@ export async function uploadPublication(options, dependencies = {}) {
 }
 export async function promotePublication(options, dependencies = {}) {
   const r = runtime(dependencies), out = await outputRoot(options.out);
-  return locked(out, async () => {
+  return locked(out, async signal => {
     await cancelled(out);
     const c = await reviewed(options, r), uploaded = await receipts(c);
     if (!uploaded.mac || !uploaded.windows || (c.candidate.server && !uploaded.server) || (c.candidate.r2 && !uploaded.r2)) throw new Error('Both versioned public receipts (and the server\'s, when planned) are required before stable');
@@ -280,7 +282,26 @@ export async function promotePublication(options, dependencies = {}) {
     const handoff = await r.collect({ out }, c.collectDependencies);
     if (handoff.readyForWebsite !== true) throw new Error('Publication receipts did not produce a complete website handoff');
     r.log('Stable publicly verified. release-handoff.json is ready for the existing website workflow.');
-    return handoff;
+    await cancelled(out);
+    let host = r.releaseCodeHost;
+    try {
+      if (host === undefined) {
+        const config = await optional(r.releaseCodeConfigPath);
+        if (config === undefined) return handoff;
+        host = config?.sshHost;
+      } else if (host === '') {
+        return handoff;
+      }
+      if (typeof host !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.@-]*$/.test(host)) throw new Error('Invalid source upload host');
+      const syncEnv = Object.fromEntries(['PATH', 'HOME', 'SSH_AUTH_SOCK']
+        .filter(name => r.env[name]).map(name => [name, r.env[name]]));
+      await r.execute('python3', [join(scripts, 'release-code.py'), 'send', '--out', out, '--host', host], { env: syncEnv, signal });
+      return { ...handoff, releaseCodeSync: 'verified' };
+    } catch {
+      // This auxiliary copy can be retried independently after the website handoff.
+      r.log('Release-code sync pending. Check the upload host, then run python3 scripts/release-code.py send --out <release-output> --host <ssh-alias>.');
+      return { ...handoff, releaseCodeSync: 'pending' };
+    }
   });
 }
 export async function publicationStatus({ out }) {

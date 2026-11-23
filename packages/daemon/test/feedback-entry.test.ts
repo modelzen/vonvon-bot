@@ -1,4 +1,6 @@
 import {expect, it, vi} from 'vitest';
+import {FeedbackPrivacyError} from '../src/feedback/privacy';
+import {feedbackTooLongMessage} from '../src/feedback/types';
 import type {AgentThread} from '../src/agent/types';
 import {createAgentEntries, type TurnFacts, type AgentPlace} from '../src/agent/entry/registry';
 import {feedbackTool, type FeedbackSource} from '../src/agent/entry/feedback-tool';
@@ -54,4 +56,16 @@ it.each(['ou_caller', 'ou_other'])('revokes pending and future prepare on steer 
   expect(signal!.aborted).toBe(true);
   resolve();
   expect(await f.call()).toMatchObject({ok: false});
+});
+
+it.each([new FeedbackPrivacyError('排查记录'), new Error(feedbackTooLongMessage)])('returns a safe, actionable feedback refusal for %s', async error => {
+  const f = setup({feedback: {...source, prepare: async () => {throw error;}}});
+  expect(await f.call()).toMatchObject({ok: false, code: 'refused', message: error.message});
+});
+
+it('tells the caller which feedback text exceeds its limit without echoing that text', async () => {
+  const f = setup();
+  const result = await f.entry.call('feedback_prepare', {summary: {...args.summary, checks: '长'.repeat(6001)}}, {toolUseId:'one'});
+  expect(result).toMatchObject({ok: false, code:'bad-args', message:expect.stringContaining('summary.checks 最多 6000 个字符')});
+  expect(JSON.stringify(result)).not.toContain('长长');
 });

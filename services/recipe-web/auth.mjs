@@ -6,7 +6,7 @@ const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 export const detailPath = new RegExp('^/recipes/' + uuid + '/versions/' + uuid + '$', 'i');
 
 export function returnPath(value) {
-  if (['/library', '/studio'].includes(value) || (typeof value === 'string' && detailPath.test(value))) return value;
+  if (['/library', '/publications', '/studio', '/account'].includes(value) || (typeof value === 'string' && (detailPath.test(value) || /^\/release-code\/confirm\/[A-Za-z0-9_-]{8,128}$/.test(value) || /^\/authors\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value)))) return value;
   return '/';
 }
 
@@ -98,6 +98,7 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
       flows.set(key, { verifier, returnTo, continuation, continuationNonce: continuation ? continuationNonce : undefined, deadline: Date.now() + 10 * minute });
       const authorize = new URL('/auth/v1/authorize', supabaseOrigin);
       authorize.searchParams.set('provider', provider);
+      if (['github', 'google'].includes(provider)) authorize.searchParams.set('prompt', 'select_account');
       authorize.searchParams.set('redirect_to', publicOrigin + '/auth/callback');
       authorize.searchParams.set('code_challenge', createHash('sha256').update(verifier).digest('base64url'));
       authorize.searchParams.set('code_challenge_method', 's256');
@@ -156,6 +157,8 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
       }
     },
     logout(req, res) {
+      const expected = req.headers['x-vonvon-session'];
+      if (expected !== undefined && expected !== getSession(req)?.displaySession) throw new WebError(409, 'session_changed');
       sessions.delete(cookieValue(req, sessionName));
       flows.delete(cookieValue(req, flowName));
       res.writeHead(303, { Location: '/', 'Set-Cookie': [cookie(sessionName, '', 0), cookie(flowName, '', 0)] }); res.end();

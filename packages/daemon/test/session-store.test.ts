@@ -102,6 +102,30 @@ describe('session-store', () => {
     expect(await listSessions()).toHaveLength(1);
   });
 
+  it('keeps a verified resource catalog only with its native session and does not upgrade a legacy marker', async () => {
+    await upsertSession({...rec('dm', 'legacy'), resourceToolSessionId: 'legacy'});
+    await upsertSession(rec('dm', 'legacy'));
+    expect((await getSession('dm'))?.resourceToolCatalog).toBeUndefined();
+    await upsertSession({...rec('dm', 'current'), resourceToolCatalog: {sessionId: 'current', version: 2}});
+    await upsertSession(rec('dm', 'current'));
+    expect((await getSession('dm'))?.resourceToolCatalog).toEqual({sessionId: 'current', version: 2});
+    await upsertSession({...rec('dm', 'current'), resourceToolCatalog: {sessionId: 'current', version: 3}});
+    expect((await getSession('dm'))?.resourceToolCatalog).toEqual({sessionId: 'current', version: 3});
+    await upsertSession(rec('dm', 'next'));
+    expect((await getSession('dm'))?.resourceToolCatalog).toBeUndefined();
+    expect((await getSession('dm'))?.earlier).toEqual(['legacy', 'current']);
+  });
+
+  it('preserves accepted skills on the same native session and keeps the previous session in history after refresh', async () => {
+    await upsertSession({...rec('skills', 'old-skills'), skillProfile: {sessionId: 'old-skills', key: 'enabled'}});
+    await upsertSession(rec('skills', 'old-skills'));
+    expect((await getSession('skills'))?.skillProfile).toEqual({sessionId: 'old-skills', key: 'enabled'});
+    await upsertSession({...rec('skills', 'new-skills'), skillProfile: {sessionId: 'new-skills', key: 'disabled'}});
+    expect(await getSession('skills')).toMatchObject({skillProfile: {sessionId: 'new-skills', key: 'disabled'}, earlier: ['old-skills']});
+    await upsertSession(rec('skills', 'manual-resume'));
+    expect((await getSession('skills'))?.skillProfile).toBeUndefined();
+  });
+
   // F3 核心：并发 upsert 不同 threadId，无锁版会基于同一旧快照后写覆盖前写丢绑定。
   it('20 concurrent upserts of distinct threadIds all survive', async () => {
     await Promise.all(Array.from({ length: 20 }, (_, i) => upsertSession(rec(`t${i}`, `cx${i}`))));

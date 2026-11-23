@@ -381,9 +381,18 @@ it.each(['submitted', 'uncertain'].flatMap(state => ['allowedChats', 'allowedUse
     } finally {release();}
     await pending;
     await closing;
-    const receipts = reply.mock.calls.filter(([request]) => request?.data.content.includes('https://my.feishu.cn/record/'));
+    const receipts = reply.mock.calls.filter(([request]) => request?.data.content.includes('https://'));
     expect(receipts).toHaveLength(policy === 'retained' ? 1 : 0);
-    if (policy === 'retained') expect(receipts[0]?.[0]?.path.message_id).toBe('om_review');
+    if (policy === 'retained') {
+      const receipt = receipts[0]?.[0];
+      expect(receipt?.path.message_id).toBe('om_review');
+      const recordId = state === 'submitted' ? 'recOne' : 'recLater';
+      expect(JSON.parse(receipt!.data.content).text.split('\n')).toContain(
+        `查看这条反馈：https://my.feishu.cn/base/${destination.baseToken}?table=${destination.tableId}&record=${recordId}`,
+      );
+      expect(receipt?.data.content).toContain('https://my.feishu.cn/share/base/' + destination.shareToken);
+      expect(receipt?.data.content).not.toMatch(/BaseTwo|tblTwo|shrTwo/);
+    }
     if (state === 'uncertain') expect(f.gateway.lookup).toHaveBeenLastCalledWith(expect.objectContaining({destination}));
     expect((await f.store.read(operationId)).state).toBe('submitted');
     expect(f.gateway.submit).toHaveBeenCalledTimes(1);

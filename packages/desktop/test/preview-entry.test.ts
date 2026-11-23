@@ -34,11 +34,12 @@ describe('isolated Preview entry', () => {
   });
 
   test('uses a separate macOS root regardless of inherited production or testing overrides', () => {
-    const env = { VONVON_HOME: '/owner/production', VONVON_DESKTOP_TEST_HOME: '/old/testing' };
+    const env = { VONVON_HOME: '/owner/production', VONVON_DESKTOP_TEST_HOME: '/old/testing', VONVON_APP_SCHEME: 'vonvon' };
     applyPreviewEnvironment(env, '/Users/example', 'darwin');
     expect(env).toEqual({
       VONVON_HOME: '/Users/example/Library/Application Support/Vonvon Bot Preview/data',
       VONVON_DESKTOP_TEST_HOME: '/Users/example/Library/Application Support/Vonvon Bot Preview/desktop',
+      VONVON_APP_SCHEME: 'vonvon-preview',
     });
     expect(() => applyPreviewEnvironment({}, 'relative', 'darwin')).toThrow('absolute');
   });
@@ -63,6 +64,7 @@ describe('isolated Preview entry', () => {
     expect(context.captured).toEqual({
       VONVON_HOME: '/Users/example/Library/Application Support/Vonvon Bot Preview/data',
       VONVON_DESKTOP_TEST_HOME: '/Users/example/Library/Application Support/Vonvon Bot Preview/desktop',
+      VONVON_APP_SCHEME: 'vonvon-preview',
     });
   });
 });

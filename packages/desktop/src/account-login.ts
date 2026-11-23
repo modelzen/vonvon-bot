@@ -92,7 +92,10 @@ export async function nativeLogin(options: {
         if (!poll.provider || (selected && selected.provider !== poll.provider)) throw new AccountFault('invalid');
         if (!selected) {
           const { data, error } = await auth.signInWithOAuth({
-            provider: poll.provider, options: { redirectTo: deployment.webOrigin + '/auth/native/callback', skipBrowserRedirect: true },
+            provider: poll.provider, options: {
+              redirectTo: deployment.webOrigin + '/auth/native/callback', skipBrowserRedirect: true,
+              ...(['github', 'google'].includes(poll.provider) && { queryParams: { prompt: 'select_account' } }),
+            },
           });
           checkAuth(error);
           if (!data.url) throw new AccountFault('invalid');

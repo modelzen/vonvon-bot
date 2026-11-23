@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,7 +8,7 @@ import { SessionInUseError, type AgentEvent, type AgentInput } from '../src/agen
 const fake = vi.hoisted(() => ({
   records: new Map<string, any>(),
   project: { name: 'test', chatId: 'chat', cwd: '/test', kind: 'single' } as Record<string, unknown>,
-  backend: { capabilities: { steer: true }, id: 'codex', listModels: vi.fn(async () => []), resumeThread: vi.fn(), startThread: vi.fn() },
+  backend: { capabilities: { steer: true }, id: 'codex', listModels: vi.fn(async () => []), listSkills: vi.fn(async () => []), resumeThread: vi.fn(), startThread: vi.fn() },
   final: vi.fn(async () => true),
   createCard: vi.fn(async () => 'card'),
   send: vi.fn(async () => ({})),
@@ -73,6 +73,9 @@ vi.mock('../src/card/run-card-stream', () => ({
 import { createOrchestrator } from '../src/bot/handle-message';
 import { createTopicRegistry, type TopicRegistry } from '../src/bot/topic-registry';
 import type { AppConfig } from '../src/config/schema';
+import {projectSkillKey} from '../src/bot/skill-profile';
+import {CodexAppServerBackend} from '../src/agent/codex-appserver/backend';
+import {shutdownResidentClients, utilityRequest} from '../src/agent/codex-appserver/client-pool';
 
 // s15b: a live session is checked against its native file before a turn, a native
 // compaction makes the recent-topics table due, and a Codex session is let go after a run.
@@ -111,20 +114,20 @@ function message(text: string, threadId?: string, extra: Partial<NormalizedMessa
   return { messageId: `msg-${++seq}`, chatId: 'chat', chatType: 'group', ...(threadId ? { threadId } : {}),
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false, ...extra };
 }
-function setup(topics?: TopicRegistry) {
+function setup(topics?: TopicRegistry, create = createOrchestrator) {
   const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['owner'] } } };
   const channel = { send: fake.send, rawClient: { appId: 'cli_me', im: { v1: { message: { get: fake.get, list: fake.list }, chat: { get: fake.chatGet }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
-  orchestrator = createOrchestrator(channel as never, cfg, '/test', topics);
+  orchestrator = create(channel as never, cfg, '/test', topics);
   return orchestrator;
 }
 const record = (key: string, extra: object = {}) => ({ threadId: key, chatId: 'chat', sessionId: `old-${key}`, backend: 'codex', cwd: '/test', summary: '', model: 'm', effort: 'medium', lastSeenAt: 5, ...extra });
 const finals = () => (fake.log.info.mock.calls as unknown[][]).filter((c) => c[0] === 'card' && c[1] === 'final').length;
-async function turn(o: ReturnType<typeof setup>, msg: NormalizedMessage) {
+async function turn(o: ReturnType<typeof setup>, msg: NormalizedMessage, timeout = 1000) {
   const before = finals();
   await o.onMessage(msg);
-  await vi.waitFor(() => expect(finals()).toBe(before + 1));
+  await vi.waitFor(() => expect(finals()).toBe(before + 1), {timeout});
 }
 const sent = () => JSON.stringify([fake.send.mock.calls, fake.createCard.mock.calls, fake.final.mock.calls]);
 
@@ -146,6 +149,62 @@ beforeEach(() => {
   fake.bots = [];
   fake.backend.resumeThread.mockReset();
   fake.backend.startThread.mockReset();
+  fake.backend.id = 'codex';
+});
+
+it.runIf(process.env.GROUP_SKILLS_NATIVE_LIVE === '1')('refreshes actual native skills on a stored session, after restart, and when re-enabled', {timeout: 180_000}, async () => {
+  const home = process.env.HOME;
+  if (!home?.startsWith(tmpdir()) || !process.env.CODEX_HOME || !process.env.VONVON_HOME?.startsWith(home)) throw new Error('Use an isolated native verification HOME');
+  const cwd = mkdtempSync(join(home, 'orchestrator-skills-'));
+  const name = `vonvon-orchestrator-${Date.now()}`;
+  const path = join(cwd, '.agents', 'skills', name, 'SKILL.md');
+  mkdirSync(join(path, '..'), {recursive: true});
+  writeFileSync(path, `---\nname: ${name}\ndescription: Native orchestrator skill visibility verification.\n---\nOnly say SKILL_VERIFICATION.\n`);
+  fake.project.cwd = cwd; fake.backend.id = 'codex-appserver';
+  fake.backend.listModels.mockResolvedValue([{id: 'gpt-6-luna', displayName: 'Native test', description: '', supportedEfforts: ['medium'], defaultEffort: 'medium', isDefault: true, hidden: false}] as never);
+  let native = new CodexAppServerBackend();
+  let nativeUtility = utilityRequest;
+  let shutdownNative = shutdownResidentClients;
+  fake.backend.startThread.mockImplementation(opts => native.startThread(opts));
+  fake.backend.resumeThread.mockImplementation(opts => native.resumeThread(opts));
+  const evidence: {phase: string; sessionId: string; loaded: boolean}[] = [];
+  async function context(phase: string) {
+    const sessionId: string = fake.records.get('chat').sessionId;
+    const result = await nativeUtility<{thread: {path: string}}>('thread/read', {threadId: sessionId, includeTurns: false});
+    const records = readFileSync(result.thread.path, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
+    const instructions = records.filter(row => row.type === 'response_item' && row.payload.type === 'message' && ['developer', 'user'].includes(row.payload.role))
+      .flatMap(row => row.payload.content.map((item: {text?: string}) => item.text ?? '')).filter((text: string) => text.includes('Skills')).join('\n');
+    const observed = {phase, sessionId, loaded: instructions.includes(name)}; evidence.push(observed);
+    if (process.env.GROUP_SKILLS_EVIDENCE) writeFileSync(process.env.GROUP_SKILLS_EVIDENCE.replace(/\.json$/, '-orchestrator.json'), JSON.stringify(evidence, null, 2));
+    return observed;
+  }
+  try {
+    const first = setup();
+    await turn(first, message('Reply only SKILLS_READY. Do not invoke skills or tools.'), 45_000);
+    const enabled = await context('enabled'); expect(enabled.loaded).toBe(true);
+    fake.project.skills = {disabledPaths: [path]};
+    await turn(first, message('Reply only SKILLS_READY. Do not invoke skills or tools.'), 45_000);
+    const disabled = await context('disabled'); expect(disabled.loaded).toBe(false); expect(disabled.sessionId).not.toBe(enabled.sessionId);
+    expect(sent()).toContain('本群技能已更新');
+    expect(readFileSync((await nativeUtility<{thread: {path: string}}>('thread/read', {threadId: enabled.sessionId, includeTurns: false})).thread.path, 'utf8')).toContain(name);
+    await first.shutdown();
+    // A daemon shutdown permanently closes its process registries. Reload modules like a fresh daemon process.
+    vi.resetModules();
+    const freshBackend = await import('../src/agent/codex-appserver/backend');
+    const freshPool = await import('../src/agent/codex-appserver/client-pool');
+    const freshOrchestrator = await import('../src/bot/handle-message');
+    native = new freshBackend.CodexAppServerBackend(); nativeUtility = freshPool.utilityRequest; shutdownNative = freshPool.shutdownResidentClients;
+    const restarted = setup(undefined, freshOrchestrator.createOrchestrator);
+    await turn(restarted, message('Reply only SKILLS_READY. Do not invoke skills or tools.'), 45_000);
+    const resumed = await context('restart-disabled'); expect(resumed.loaded).toBe(false); expect(resumed.sessionId).toBe(disabled.sessionId);
+    fake.project.skills = {disabledPaths: []};
+    await turn(restarted, message('Reply only SKILLS_READY. Do not invoke skills or tools.'), 45_000);
+    const reenabled = await context('reenabled'); expect(reenabled.loaded).toBe(true); expect(reenabled.sessionId).not.toBe(disabled.sessionId);
+    if (process.env.GROUP_SKILLS_EVIDENCE) writeFileSync(process.env.GROUP_SKILLS_EVIDENCE.replace(/\.json$/, '-orchestrator.json'), JSON.stringify(evidence, null, 2));
+  } catch (error) {
+    if (process.env.GROUP_SKILLS_EVIDENCE) writeFileSync(process.env.GROUP_SKILLS_EVIDENCE.replace(/\.json$/, '-orchestrator-errors.json'), JSON.stringify(fake.log.fail.mock.calls.map(args => args.map(value => value instanceof Error ? value.message : value)), null, 2));
+    throw error;
+  } finally {await orchestrator?.shutdown(); await shutdownNative();}
 });
 afterEach(async () => {
   await orchestrator?.shutdown();
@@ -190,6 +249,90 @@ describe('a live session written elsewhere (checkNative)', () => {
 });
 
 describe('live permission binding', () => {
+  it('keeps the clear-history floor after desktop skill refresh and does not weave older messages back in', async () => {
+    fake.project.skills = {disabledPaths: ['/work/feedback/SKILL.md']};
+    fake.records.set('chat', record('chat', {from: 1000, lastSeenAt: 1500, seen: [{id: 'before-clear', at: 900}], streaming: [{id: 'before-clear', at: 900}], recalls: [{id: 'before-clear', at: 900, kind: 'recalled'}], titleJobKey: 'old-title'}));
+    const old = thread('old-chat'), fresh = thread('fresh');
+    fake.backend.resumeThread.mockResolvedValueOnce(old.t); fake.backend.startThread.mockResolvedValueOnce(fresh.t);
+    const o = setup();
+    expect(await o.collaboration({action: 'compact', projectName: 'test', chatId: 'chat', threadId: 'chat'})).toMatchObject({ok: true});
+    expect(fake.records.get('chat')).toMatchObject({sessionId: 'fresh', from: 1000, lastSeenAt: 1000, seen: [], streaming: [], recalls: []});
+    expect(fake.records.get('chat').titleJobKey).not.toBe('old-title');
+    fake.chat.mockResolvedValue({messages: [
+      {messageId: 'before-clear', senderName: 'Owner', from: 'user', text: 'BEFORE_CLEAR_PRIVATE', createTime: 900},
+      {messageId: 'after-clear', senderName: 'Owner', from: 'user', text: 'AFTER_CLEAR_CONTEXT', createTime: 1100},
+    ], ok: true, complete: true});
+    await turn(o, message('下一条任务'));
+    expect(fresh.consumed[0]?.text).toContain('AFTER_CLEAR_CONTEXT');
+    expect(fresh.consumed[0]?.text).not.toContain('BEFORE_CLEAR_PRIVATE');
+  });
+  it('does not send a prepared first turn when skill settings change while chat history is being woven', async () => {
+    let release!: () => void;
+    const held = new Promise<void>(resolve => {release = resolve;});
+    fake.chat.mockImplementationOnce(async () => {await held; return {messages: [], ok: true, complete: true};});
+    fake.records.set('chat', record('chat'));
+    const first = thread('old-chat'); fake.backend.resumeThread.mockResolvedValueOnce(first.t);
+    const o = setup();
+    await o.onMessage(message('准备任务'));
+    await vi.waitFor(() => expect(fake.backend.resumeThread).toHaveBeenCalledOnce());
+    fake.project.skills = {disabledPaths: ['/work/feedback/SKILL.md']};
+    release();
+    await vi.waitFor(() => expect(first.t.close).toHaveBeenCalled());
+    expect(first.consumed).toHaveLength(0);
+    await vi.waitFor(() => expect(sent()).toContain('本群技能在准备任务时已更新'));
+  });
+  it('recreates a live session after a skill is disabled and re-enables it on a later fresh session', async () => {
+    fake.records.set('chat', record('chat'));
+    const first = thread('old-chat'), disabled = thread('disabled-chat'), enabled = thread('enabled-chat');
+    fake.backend.resumeThread.mockResolvedValueOnce(first.t);
+    fake.backend.startThread.mockResolvedValueOnce(disabled.t).mockResolvedValueOnce(enabled.t);
+    const o = setup(); await turn(o, message('启用时的任务'));
+    fake.project.skills = {disabledPaths: ['/work/feedback/SKILL.md']};
+    await turn(o, message('关闭后的任务'));
+    expect(first.t.close).toHaveBeenCalledOnce(); expect(first.consumed).toHaveLength(1);
+    expect(disabled.consumed).toHaveLength(1);
+    expect(fake.backend.startThread).toHaveBeenLastCalledWith(expect.objectContaining({profile: expect.objectContaining({skills: expect.objectContaining({disabledPaths: ['/work/feedback/SKILL.md']})})}));
+    expect(sent()).toContain('本群技能已更新');
+    expect(fake.records.get('chat')).toMatchObject({sessionId: 'disabled-chat', skillProfile: {sessionId: 'disabled-chat'}});
+    fake.project.skills = {disabledPaths: []};
+    await turn(o, message('重新启用后的任务'));
+    expect(disabled.t.close).toHaveBeenCalledOnce(); expect(disabled.consumed).toHaveLength(1);
+    expect(enabled.consumed).toHaveLength(1);
+    expect(fake.backend.startThread.mock.calls.at(-1)?.[0].profile.skills).toBeUndefined();
+  });
+  it('refreshes an old stored session with disabled skills after restart before running any new input', async () => {
+    fake.project.skills = {disabledPaths: ['/work/feedback/SKILL.md']};
+    fake.records.set('chat', record('chat'));
+    const old = thread('old-chat'), fresh = thread('fresh-chat');
+    fake.backend.resumeThread.mockResolvedValueOnce(old.t); fake.backend.startThread.mockResolvedValueOnce(fresh.t);
+    await turn(setup(), message('重启后继续'));
+    expect(old.t.close).toHaveBeenCalledOnce(); expect(old.consumed).toHaveLength(0);
+    expect(fresh.consumed).toHaveLength(1);
+    expect(fake.records.get('chat')).toMatchObject({sessionId: 'fresh-chat', skillProfile: {sessionId: 'fresh-chat'}});
+  });
+  it('keeps an unchanged skill policy on stored resume', async () => {
+    fake.project.skills = {disabledPaths: ['/work/feedback/SKILL.md']};
+    fake.records.set('chat', record('chat', {skillProfile: {sessionId: 'old-chat', key: projectSkillKey({skills: {disabledPaths: ['/work/feedback/SKILL.md']}})}}));
+    const resumed = thread('old-chat'); fake.backend.resumeThread.mockResolvedValueOnce(resumed.t);
+    const o = setup(); await turn(o, message('配置未变'));
+    expect(resumed.consumed).toHaveLength(1); expect(fake.backend.startThread).not.toHaveBeenCalled();
+  });
+  it.each(['start', 'resume'])('closes an in-flight %s made with stale skill policy before sending input', async method => {
+    if (method === 'resume') fake.records.set('chat', record('chat'));
+    const stale = thread(method === 'resume' ? 'old-chat' : 'stale'), refreshed = thread('old-chat'), fresh = thread('fresh');
+    let finish!: (value: typeof stale.t) => void;
+    const create = method === 'resume' ? fake.backend.resumeThread : fake.backend.startThread;
+    create.mockImplementationOnce(() => new Promise(resolve => {finish = resolve;})).mockResolvedValueOnce(method === 'resume' ? refreshed.t : fresh.t);
+    if (method === 'resume') fake.backend.startThread.mockResolvedValueOnce(fresh.t);
+    const o = setup(), before = finals(); await o.onMessage(message('准备中的任务'));
+    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce());
+    fake.project.skills = {disabledPaths: ['/work/feedback/SKILL.md']};
+    finish(stale.t);
+    await vi.waitFor(() => expect(finals()).toBe(before + 1));
+    expect(stale.t.close).toHaveBeenCalledOnce(); expect(stale.consumed).toHaveLength(0); expect(fresh.consumed).toHaveLength(1);
+    if (method === 'resume') {expect(refreshed.t.close).toHaveBeenCalledOnce(); expect(refreshed.consumed).toHaveLength(0);}
+    expect(create).toHaveBeenLastCalledWith(expect.objectContaining({profile: expect.objectContaining({skills: expect.objectContaining({disabledPaths: ['/work/feedback/SKILL.md']})})}));
+  });
   it('rebinds a cached full thread after the group becomes read-only even without eviction', async () => {
     fake.project.mode = 'full'; fake.project.network = true;
     fake.records.set('chat', record('chat'));

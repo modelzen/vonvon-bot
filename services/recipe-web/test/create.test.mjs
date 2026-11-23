@@ -1,0 +1,43 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {JSDOM} from 'jsdom';
+import {recipeCreationUrl} from '../public/create.mjs';
+import {createRecipeWeb} from '../server.mjs';
+const source=(await readFile(new URL('../public/create.mjs',import.meta.url),'utf8')).replace('export function','function');
+async function listen(t,channel){const server=createRecipeWeb({RECIPE_DESKTOP_CHANNEL:channel});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>{server.closeAllConnections();return new Promise(resolve=>server.close(resolve));});return 'http://127.0.0.1:'+server.address().port;}
+
+test('creation links use only the server-selected exact desktop channel',()=>{
+ assert.equal(recipeCreationUrl('preview'),'vonvon-preview://recipes/create');assert.equal(recipeCreationUrl('stable'),'vonvon://recipes/create');
+ for(const channel of ['','evil','preview?next=other',null,undefined])assert.equal(recipeCreationUrl(channel),undefined);
+});
+
+test('community, creation guide and account share the same navigation and trusted App link',async t=>{
+ for(const channel of ['preview','stable']){
+  const host=await listen(t,channel);let common;
+  for(const path of ['/?channel=evil','/studio','/account']){
+   const response=await fetch(host+path);assert.equal(response.status,200);const html=await response.text();
+   assert.ok(!html.includes('__DESKTOP_CHANNEL__'));assert.ok(!html.includes('__RECIPE_CREATE_URL__'));
+   const dom=new JSDOM(html);t.after(()=>dom.window.close());const {document}=dom.window;
+   assert.equal(document.documentElement.dataset.recipeCreateUrl,recipeCreationUrl(channel));
+   const links=[...document.querySelectorAll('header nav a')].filter(a=>a.getAttribute('href')!=='/account').map(a=>[a.textContent,a.getAttribute('href')]);
+   if(common)assert.deepEqual(links,common);else common=links;
+   assert.equal(document.querySelector('header nav a[href="/studio"]'),null);
+   for(const action of document.querySelectorAll('[data-create-recipe]'))assert.equal(action.getAttribute('href'),recipeCreationUrl(channel));
+  }
+  assert.equal((await fetch(host+'/create.mjs')).status,200);
+ }
+});
+
+test('opening creation is user-driven and offers a download fallback without website authoring or writes',t=>{
+ const dom=new JSDOM('<html data-desktop-channel="preview"><body><a data-create-recipe href="vonvon-preview://recipes/create">分享我的配方</a></body></html>',{url:'https://recipes.example',runScripts:'outside-only'});t.after(()=>dom.window.close());
+ const {window}=dom;let writes=0;window.fetch=()=>{writes++;throw Error('no network expected');};
+ window.HTMLDialogElement.prototype.showModal=function(){this.open=true;};window.HTMLDialogElement.prototype.close=function(){this.open=false;};
+ window.eval(source);assert.equal(window.document.querySelector('dialog'),null);
+ window.document.addEventListener('click',e=>e.preventDefault());window.document.querySelector('a').click();
+ const dialog=window.document.querySelector('dialog');assert.equal(dialog.open,true);assert.match(dialog.textContent,/选择已有 Bot 和群聊/);
+ assert.match(dialog.textContent,/需要使用本轮验收的 Vonvon Bot Preview/);
+ assert.equal(dialog.querySelector('a[href="https://vonvon.cc/get/"]').textContent,'了解正式版');
+ assert.equal(dialog.querySelector('a[href="vonvon-preview://recipes/create"]').textContent,'重新打开 Preview');
+ assert.equal(dialog.querySelector('form,input,textarea'),null);assert.equal(writes,0);
+});

@@ -8,6 +8,7 @@ import { sessionInfoTool, TOOL_RESULT_BYTES, ToolRefusal, type AgentTool, type T
 
 export interface AgentPlace { kind: 'group' | 'p2p' | 'doc'; chatId?: string; docId?: string }
 export interface TurnFacts {
+  releaseCode?: import('../../release-code/host').CodeSource;
   feedback?: import('./feedback-tool').FeedbackSource;
   requesterOpenId?: string;
   requesterKind?: 'user' | 'bot' | 'unknown';
@@ -166,6 +167,7 @@ export function createAgentEntries(opts: {
   appId: string;
   isAdmin(openId: string): boolean;
   tools?: readonly AgentTool[];
+  codeEnabled?(chatId:string):boolean;
   feedbackEnabled?(chatId: string): boolean;
   /** devices-4a 4.3: told once when a session ends, so the host drops its token (best effort: it never throws). */
   sessions?: { revoke(sessionId: string): void };
@@ -244,11 +246,12 @@ export function createAgentEntries(opts: {
     if (!auth) return refused('unknown-origin');
     if (!auth.active || grant.turn !== auth) return refused('turn-ended');
   }
-  function authorizeFeedback(grant: Grant, auth: TurnAuth | undefined): Failure | undefined {
+  function authorizeFeedback(grant: Grant, auth: TurnAuth | undefined, code = false): Failure | undefined {
     const refusal = authorizeMemory(grant, auth);
-    const source = auth?.facts.feedback;
+    const source = code ? auth?.facts.releaseCode : auth?.facts.feedback;
     if (refusal) return refusal;
-    if (auth?.human && !auth.feedbackSteer.signal.aborted && grant.place.kind === 'group' && grant.place.chatId
+    if (code && (!grant.place.chatId || !opts.codeEnabled?.(grant.place.chatId))) return failure('unknown-tool');
+    if (!code && auth?.human && !auth.feedbackSteer.signal.aborted && grant.place.kind === 'group' && grant.place.chatId
       && !opts.feedbackEnabled?.(grant.place.chatId))
       return { ok: false, code: 'refused', message: '本群反馈尚不可用。请让 Bot 管理员检查工具并用 /feedback setup 配置接收目标。' };
     if (!auth?.human || auth.feedbackSteer.signal.aborted || !source || grant.place.kind !== 'group'
@@ -368,13 +371,14 @@ export function createAgentEntries(opts: {
       const schedule = tool.class === 'schedule';
       const document = tool.class === 'document' && (tool.writes === true || grant.place.kind === 'doc');
       const feishuApi = tool.class === 'feishu-api';
-      const feedback = tool.class === 'feedback';
+      const code = tool.class === 'release-code';
+      const feedback = tool.class === 'feedback' || code;
       const resource=tool.class==='resource';
       const gated = resource || feedback || settings || memory || schedule || document || feishuApi;
       const taskId = schedule && args && typeof args === 'object' && 'taskId' in args ? args.taskId : undefined;
       // Claude's tool-use id, or the Codex turn id its turn/start answered with (定时任务 T3b): both noted by noteToolUse.
       const auth = origin?.toolUseId ? grant.origins.get(origin.toolUseId) : undefined;
-      const authNow = (): Failure | undefined => resource ? (authorizeNow(grant,auth)??(auth?.presence!=='human'||auth.steered?refused('not-human-turn'):undefined)) : feedback ? authorizeFeedback(grant, auth) : memory ? authorizeMemory(grant, auth)
+      const authNow = (): Failure | undefined => resource ? (authorizeNow(grant,auth)??(auth?.presence!=='human'||auth.steered?refused('not-human-turn'):undefined)) : feedback ? authorizeFeedback(grant, auth, code) : memory ? authorizeMemory(grant, auth)
         : schedule ? authorizeSchedule(grant, auth, tool.action, taskId)
           : document ? authorizeFeishu(grant, auth) : feishuApi ? authorizeFeishuApi(grant, auth) : authorizeNow(grant, auth);
       if (gated) {
@@ -385,7 +389,16 @@ export function createAgentEntries(opts: {
         if (settings && grant.settingRunning && grant.queue.length >= 8) return finishLog(failure('busy'));
       }
       const parsed = inputAt(tool, grant.place).safeParse(args);
-      if (!parsed.success) return finishLog({ ok: false, code: 'bad-args', message: `参数不对：${parsed.error.issues.map(i => `${i.path.join('.') || '<root>'}：${i.code}`).join('；')}。` });
+      if (!parsed.success) {
+        const messages = parsed.error.issues.map(issue => {
+          const path = issue.path.join('.') || '<root>';
+          if (tool.class === 'feedback' && issue.path[0] === 'summary' && issue.code === 'too_big' && issue.origin === 'string') {
+            return `${path} 最多 ${issue.maximum} 个字符，请精简后重试`;
+          }
+          return `${path}：${issue.code}`;
+        });
+        return finishLog({ ok: false, code: 'bad-args', message: `参数不对：${messages.join('；')}。` });
+      }
       if ((!settings || !grant.settingRunning) && grant.active >= 4) return finishLog(failure('busy'));
       return new Promise<AgentToolReply>(resolve => {
         const controller = new AbortController();
@@ -447,7 +460,11 @@ export function createAgentEntries(opts: {
             ctx.releaseBotWrite = () => { auth.botWrites = Math.max(0, auth.botWrites - 1); };
           }
           if (schedule && auth) ctx.schedule = () => ({ actor: scheduleActor(grant, auth), where: auth.facts.where?.() ?? { inTopic: false }, steered: auth.steered });
-          if (feedback && auth?.facts.feedback) {
+          if (code && auth?.facts.releaseCode) {
+            const source = auth.facts.releaseCode;
+            ctx.codeSource=(name,args)=>source.call(name,args,controller.signal,()=>check(0));
+          }
+          if (feedback && !code && auth?.facts.feedback) {
             const source = auth.facts.feedback;
             ctx.feedback = input => source.prepare(input, controller.signal, () => check(0));
           }
@@ -521,6 +538,7 @@ export function createAgentEntries(opts: {
         // 评论会话（doc）只给读类和文档这一列的工具；写记忆的和任务的在群和私聊里给；只为设置服务的读工具只在私聊里给
         return tools.filter(tool => {
           if (!placed(tool, grant.place)) return false;
+          if (tool.class === 'release-code') return !!grant.place.chatId && !!opts.codeEnabled?.(grant.place.chatId);
           if (tool.class === 'feedback') return !!grant.place.chatId;
           return tool.class === 'read' || tool.class === 'document'
             || (tool.class === 'memory' || tool.class === 'schedule' ? grant.place.kind !== 'doc' : grant.place.kind === 'p2p');

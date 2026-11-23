@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { parse as parseToml } from 'smol-toml';
 import { claudeConfigDir } from './claude-agent/configured-model';
 import { NATIVE_SCHEDULING_SKILLS } from './claude-agent/thread';
+import {log} from '../core/logger';
 
 /** A partial, read-only inventory for stopped Bots. Native plugins need a running provider. */
 export async function discoverLocalGroupSkills(input: {
@@ -82,11 +83,19 @@ export async function discoverLocalGroupSkills(input: {
 /** Uses the provider's own inventory, including plugins and user configuration. */
 export async function discoverGroupSkills(input: {
   backend: AgentBackend; cwd: string; directories?: string[]; disabledPaths?: readonly string[];
+  home?: string; env?: NodeJS.ProcessEnv;
 }): Promise<AgentSkill[]> {
   if (!input.backend.listSkills) throw new Error('当前 Provider 无法读取技能目录');
   const skills = await input.backend.listSkills({ cwd: input.cwd, directories: input.directories });
+  // Claude's native catalog has qualified selectors but no source metadata. Only annotate entries the SDK actually offers.
+  const local = input.backend.id === 'claude-agent'
+    ? await discoverLocalGroupSkills({...input, backendId: input.backend.id}).catch(error => {
+      log.fail('agent', error, {phase: 'skill-source-discovery', backend: input.backend.id});
+      return [];
+    }) : [];
+  const sources = new Map(local.map(skill => [skill.path, skill.source]));
   const disabled = new Set(input.disabledPaths ?? []);
-  return skills.map(skill => ({ ...skill, enabled: skill.enabled && !disabled.has(skill.path) }));
+  return skills.map(skill => ({ ...skill, source: sources.get(skill.path) ?? skill.source, enabled: skill.enabled && !disabled.has(skill.path) }));
 }
 
 /** Omitted when no per-group override exists, preserving provider-native dynamic discovery. */

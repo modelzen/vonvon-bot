@@ -8,6 +8,8 @@ type AccountContextValue = {
   login: () => Promise<void>;
   cancelLogin: () => Promise<void>;
   logout: () => Promise<void>;
+  manage?: () => Promise<void>;
+  refresh?: () => Promise<void>;
 };
 const unsupported: AccountContextValue = {
   supported: false, login: async () => {}, cancelLogin: async () => {}, logout: async () => {},
@@ -23,20 +25,40 @@ export function AccountProvider({account, children}: {account?: AccountShell; ch
     if (!account) return;
     let active = true;
     let received = false;
+    let accountId: string | undefined;
+    let generation = 0;
+    let refreshAttempt: Promise<AccountStatus> | undefined;
+    const accept = (next: AccountStatus) => {
+      const nextId = next.kind === 'signedIn' ? next.accountId : undefined;
+      if (nextId !== accountId) {accountId = nextId; ++generation; refreshAttempt = undefined;}
+      if (active) {setStatus(next); setError(undefined);}
+    };
     const unsubscribe = account.onStatus(next => {
       received = true;
-      if (active) {setStatus(next); setError(undefined);}
+      accept(next);
     });
     void account.status().then(next => {
-      if (active && !received) setStatus(next);
+      if (active && !received) accept(next);
     }, () => {
       if (active && !received) setError('账户状态暂时无法读取，请稍后重试。');
     });
-    return () => {active = false; unsubscribe();};
+    const onFocus = () => {
+      if (!active || !accountId || !account.refresh || refreshAttempt) return;
+      const current = generation;
+      const attempt = account.refresh();
+      refreshAttempt = attempt;
+      void attempt.then(next => {
+        if (active && current === generation) accept(next);
+      }, () => {
+        if (active && current === generation) setError('暂时无法更新账号资料，请重试。');
+      }).finally(() => {if (refreshAttempt === attempt) refreshAttempt = undefined;});
+    };
+    if (typeof window !== 'undefined') window.addEventListener('focus', onFocus);
+    return () => {active = false; unsubscribe(); if (typeof window !== 'undefined') window.removeEventListener('focus', onFocus);};
   }, [account]);
   const value = useMemo<AccountContextValue>(() => {
     if (!account) return unsupported;
-    const run = async (action: () => Promise<AccountStatus>, failure: string) => {
+    const run = async (action: () => Promise<unknown>, failure: string) => {
       setError(undefined);
       try {await action();} catch {setError(failure);}
     };
@@ -44,6 +66,8 @@ export function AccountProvider({account, children}: {account?: AccountShell; ch
       login: () => run(() => account.login(), '登录未完成，请重试。'),
       cancelLogin: () => run(() => account.cancelLogin(), '未能取消登录，请重试。'),
       logout: () => run(() => account.logout(), '未能退出登录，请重试。'),
+      ...(account.manage && {manage: () => run(async () => {await account.manage?.();}, '未能打开账号设置，请重试。')}),
+      ...(account.refresh && {refresh: () => run(async () => {await account.refresh?.();}, '暂时无法更新账号资料，请重试。')}),
     };
   }, [account, status, error]);
   return <Context.Provider value={value}>{children}</Context.Provider>;
@@ -66,6 +90,6 @@ export function accountStatusText(status: AccountStatus | undefined, supported: 
     case 'signedOut': return status.reason ? {
       failed: '登录未完成，请重试。', expired: '登录已过期，请重新登录。',
       cancelled: '已取消登录。', sessionExpired: '登录已失效，请重新登录。',
-    }[status.reason] : '登录 Vonvon，使用社区中的配方。';
+    }[status.reason] : '使用 GitHub 等方式继续，首次使用会自动创建账号。';
   }
 }

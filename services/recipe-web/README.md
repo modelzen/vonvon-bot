@@ -10,9 +10,9 @@ npm run build
 npm start
 ```
 
-`npm run build` 生成 `dist/viewer.mjs`、`dist/viewer.css` 与 `dist/rich-detail.mjs`。详情页复用 App 的 `RecipeDetails`、`RichConfiguration`、`BackButton` 和 `GlowButton`。`npm start` 或 `node server.mjs` 直接运行这些产物，不在运行机器上构建或写入发布目录。开发时可用 `npm run dev` 先构建再启动。
+`npm run build` 生成 `dist/viewer.mjs`、`dist/viewer.css` 与 `dist/rich-detail.mjs`。网页与 App 读取同一个 Recipe API 的账号权益和固定版本数据。网页使用独立的社区首页、导航与详情布局，沿用官网的白底、墨黑字和橙色品牌点缀；详情为可通过目录链接定位的长页面，桌面右侧提供作者、版本及获取入口，窄屏将获取入口放在正文前。配置文字和 Markdown 复用内容渲染器，页面布局与操作控件由 Web 自己实现。`npm start` 或 `node server.mjs` 直接运行这些产物，不在运行机器上构建或写入发布目录。开发时可用 `npm run dev` 先构建再启动。
 
-部署包须保留 `server.mjs`、`auth.mjs`、`native-auth.mjs`、`public/`、上述三个 `dist/` 文件、服务的 package 文件，以及 API 的 `src/credential-shapes.mjs`。构建只在有共享 UI 源码和根目录开发依赖的源码树运行；构建完成后，运行机器只需 `npm ci --omit=dev` 安装网页 Markdown 依赖，无需 React、esbuild、TypeScript 或 UI 源码。
+部署包须保留 `server.mjs`、`auth.mjs`、`native-auth.mjs`、`release-code-oauth.mjs`、`release-code-store.mjs`、`public/`、上述三个 `dist/` 文件、服务的 package 文件，以及 API 的 `src/credential-shapes.mjs`。构建只在有共享 UI 源码和根目录开发依赖的源码树运行；构建完成后，运行机器只需 `npm ci --omit=dev` 安装网页及账号服务的运行依赖，无需 React、esbuild、TypeScript 或 UI 源码。
 
 开发入口为 `http://127.0.0.1:49151/`。服务监听本机端口。Web 到 API 的默认连接是 `http://127.0.0.1:4317`，到 broker 的默认连接是 `http://127.0.0.1:4318`。`RECIPE_API_ORIGIN` 和 `RECIPE_BROKER_ORIGIN` 只接受固定 loopback origin。若修改 `RECIPE_WEB_PORT`，相应设置 `RECIPE_WEB_ORIGIN`；从 Nginx 暴露时，后者必须等于浏览器实际打开的 HTTPS origin。
 

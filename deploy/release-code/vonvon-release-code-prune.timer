@@ -1,0 +1,10 @@
+[Unit]
+Description=Clean up drained VonVon release code generations
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=15min
+Unit=vonvon-release-code-prune.service
+
+[Install]
+WantedBy=timers.target

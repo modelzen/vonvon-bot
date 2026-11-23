@@ -148,7 +148,9 @@ export async function checkNativeInstall({ root, tmp, origin, author, accountId,
   const row = await getProjectByChatId(groupId, location.file);
   assert.equal(row.recipeInstall.versionId, version.versionId);
   assert.equal(row.supplement, '角色');
-  assert.equal(row.recipeInstall.setup.steps[0].instructions, '准备');
+  // A fresh role-v1 install applies the role without activating legacy setup steps.
+  assert.deepEqual(row.recipeInstall.base, {role: '角色'});
+  assert.equal(row.recipeInstall.setup, undefined);
   assert.equal((await controller.request({ type: 'finish', handle: pending.handle })).kind, 'closed');
   const place = { viewId: 'local', accountId, botId, groupId };
   const shown = await controller.source({ type: 'check', ...place });

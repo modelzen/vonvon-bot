@@ -11,6 +11,10 @@ const manifestId = id(5), partId = id(6), key = newAcquisitionKey();
 const check = () => {};
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 const detailPath = (v = target) => `/v2/recipes/${v.recipeId}/versions/${v.versionId}`;
+const browsePath = (v = target) => detailPath(v) + '/preview';
+const browse = <T extends {manifest?:unknown;release?:unknown;visibility?:unknown}>(detail:T) => {
+  const {manifest:_m,release:_r,visibility:_v,...preview}=detail;return preview;
+};
 const memberPath = (id: string) => `/v2/versions/${target.versionId}/objects/${id}`;
 function fixture() {
   const content = JSON.parse(readFileSync(new URL('../../protocol/test/fixtures/recipe-rich-v2.content.json', import.meta.url), 'utf8')) as RecipeRichContent;
@@ -26,6 +30,7 @@ function fixture() {
       authorId:id(100), access, logicalBytes:doc.logicalBytes},
     manifest: {objectId:manifestId, kind:'manifest', mediaType:'application/json', sha256:hash(doc.canonicalUTF8), bytes:doc.canonicalUTF8.length}};
   const dispatch = vi.fn(async (path: string, _init?: RequestInit): Promise<Response> => {
+    if (path === browsePath()) return Response.json(browse(detail));
     if (path === detailPath()) return Response.json(detail);
     if (path === memberPath(manifestId)) return new Response(doc.canonicalUTF8);
     if (path === memberPath(partId)) return new Response(body);
@@ -55,6 +60,21 @@ it('checks exact entitlement before object reads, including public direct and co
     await expect(f.reader.readExact(accountId, target, check)).rejects.toMatchObject({code:'not_acquired'});
     expect(f.dispatch.mock.calls.map(c => c[0])).toEqual([detailPath()]);
   }
+});
+
+it('handoff reads only compact exact entitlement and never downloads a manifest or member',async()=>{
+  const f=fixture();
+  expect(await f.reader.previewExact(accountId,target,check)).toMatchObject({...target,acquired:true});
+  expect(f.dispatch.mock.calls.map(([path])=>path)).toEqual([browsePath()]);
+  f.detail.acquired=false;
+  await expect(f.reader.previewExact(accountId,target,check)).rejects.toMatchObject({code:'not_acquired'});
+  expect(f.dispatch.mock.calls.map(([path])=>path)).toEqual([browsePath(),browsePath()]);
+});
+it('abandons the compact handoff response when the native account lease changes',async()=>{
+  const f=fixture(),original=f.dispatch.getMockImplementation()!;
+  f.dispatch.mockImplementation(async(path,init)=>{const response=await original(path,init);f.rotate();return response;});
+  await expect(f.reader.previewExact(accountId,target,check)).rejects.toMatchObject({code:'session_changed'});
+  expect(f.dispatch.mock.calls.map(([path])=>path)).toEqual([browsePath()]);
 });
 
 it.each(['acquired', 'owned'] as const)('delivers an exactly %s, withdrawn coded release with only three private GETs', async grant => {
@@ -120,9 +140,9 @@ it('never dispatches a cross-recipe claim or a coded claim without a code', asyn
   f.dispatch.mockImplementation(async () => Response.json({...f.detail, recipeId:id(999)}));
   expect(await f.reader.acquireExact(accountId, target, key, check)).toEqual({ok:false, error:{code:'unavailable'}});
   const {manifest: _m, release: _r, ...intro} = f.detail;
-  f.dispatch.mockImplementation(async () => Response.json({...intro, visibility:'intro', public:{...intro.public, access:'coded'}, acquired:false}));
+  f.dispatch.mockImplementation(async () => Response.json({...browse(intro), public:{...intro.public, access:'coded'}, acquired:false}));
   expect(await f.reader.acquireExact(accountId, target, key, check)).toEqual({ok:false, error:{code:'invalid_code'}});
-  expect(f.dispatch.mock.calls.map(c => c[0])).toEqual([detailPath(),detailPath()]);
+  expect(f.dispatch.mock.calls.map(c => c[0])).toEqual([browsePath(),browsePath()]);
 });
 it('replays exactly the same acquisition key after unknown post outcome; validates response identity and retryAfter', async () => {
   const f = fixture();
@@ -130,7 +150,7 @@ it('replays exactly the same acquisition key after unknown post outcome; validat
   const writes: string[] = [];
   const value = {...target, owned:false, acquired:true};
   f.dispatch.mockImplementation(async (path, init) => {
-    if (path === detailPath()) return Response.json(f.detail);
+    if (path === browsePath()) return Response.json(browse(f.detail));
     expect(path).toBe('/v2/versions/' + target.versionId + '/acquire');
     expect(init?.method).toBe('POST'); expect(init?.body).toBe('{}');
     writes.push(new Headers(init?.headers).get('Idempotency-Key')!);
@@ -165,7 +185,7 @@ it('checks the exact live connection after token refresh and before sending an a
   });
   await expect(f.reader.acquireExact(accountId, target, key, () => {if (!connected) throw new Error('connection changed');}))
     .rejects.toMatchObject({code:'session_changed'});
-  expect(f.dispatch.mock.calls.map(c => c[0])).toEqual([detailPath()]);
+  expect(f.dispatch.mock.calls.map(c => c[0])).toEqual([browsePath()]);
 });
 it('checks connection changes during the body stream and same-account lease replacement after a submitted claim', async () => {
   const f = fixture(), original = f.dispatch.getMockImplementation()!;

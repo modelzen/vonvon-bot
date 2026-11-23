@@ -7,6 +7,7 @@ import { CodexAppServerBackend } from '../../src/agent/codex-appserver/backend';
 import { shutdownResidentClients } from '../../src/agent/codex-appserver/client-pool';
 import { createAgentEntries, type AgentPlace, type TurnFacts } from '../../src/agent/entry/registry';
 import { feedbackTool } from '../../src/agent/entry/feedback-tool';
+import { releaseCodeTools } from '../../src/agent/entry/release-code-tools';
 import { createScheduleTools } from '../../src/agent/entry/schedule-tools';
 import { sessionInfoTool } from '../../src/agent/entry/tools';
 import type { SessionProfile } from '../../src/agent/session-profile';
@@ -52,13 +53,13 @@ function script(threadId, turnId, text, done) {
     }, 10);
   }
   let open = list.length;
-  const requests = list.map(c => {
+  const requests = list.map((c, index) => {
     const id = 'call-' + ++calls;
-    waiting.set(id, () => { if (--open === 0) finish(); });
+    waiting.set(id, () => { if (--open === 0) finish(); else if (instruction.sequential) send(requests[index + 1]); });
     return { id, method: 'item/tool/call', params: { threadId: c.threadId || threadId, turnId: c.turnId || turnId,
-      callId: 'c' + calls, namespace: 'vonvon_bot', tool: c.tool, arguments: c.args || {} } };
+      callId: 'c' + calls, namespace: c.namespace || 'vonvon_bot', tool: c.tool, arguments: c.args || {} } };
   });
-  return {early, send: () => requests.length ? requests.forEach(send) : finish()};
+  return {early, send: () => requests.length ? instruction.sequential ? send(requests[0]) : requests.forEach(send) : finish()};
 }
 require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
   const m = JSON.parse(line), p = m.params || {};
@@ -100,7 +101,7 @@ export const person = (openId: string, more: Partial<TurnFacts> = {}): TurnFacts
 });
 export const profile = (schedule: boolean): SessionProfile => ({ instructions: '', env: {}, nativeSettings: { automaticMemory: false },
   additionalRoots: [], capabilityPackages: [], mcpServers: [], tools: { schedule } });
-export type Call = { tool: string; args?: unknown; threadId?: string; turnId?: string };
+export type Call = { tool: string; namespace?: string; args?: unknown; threadId?: string; turnId?: string };
 
 const threads: (() => Promise<void>)[] = [];
 const dirs: string[] = [];
@@ -121,20 +122,20 @@ export async function closeCodexToolFixtures(): Promise<void> {
 }
 
 /** A real Codex backend and transport on the fake; the real registry with T3's schedule tools over a spied command core, and session_info, which Codex is not offered. */
-export function codexToolsFixture(feedbackEnabled?: (chatId: string) => boolean) {
+export function codexToolsFixture(feedbackEnabled?: (chatId: string) => boolean, codeEnabled?: (chatId: string) => boolean) {
   const dir = mkdtempSync(join(tmpdir(), 'codex-tools-'));
   dirs.push(dir);
   vi.stubEnv('CODEX_BIN', writeNodeExecutable(dir, 'codex', FAKE).bin);
   const execute = vi.fn<ScheduleCommands['execute']>(async () => ({ kind: 'tasks', tasks: [], now: 0, timeZone: 'Asia/Shanghai' }));
-  const entries = createAgentEntries({ appId: 'bot', isAdmin: id => id === OWNER, feedbackEnabled,
-    tools: [sessionInfoTool, ...(feedbackEnabled ? [feedbackTool] : []), ...createScheduleTools({ commands: { execute }, now: () => 0, hostTimeZone: () => 'Asia/Shanghai' })] });
+  const entries = createAgentEntries({ appId: 'bot', isAdmin: id => id === OWNER, feedbackEnabled, codeEnabled,
+    tools: [sessionInfoTool, ...(feedbackEnabled ? [feedbackTool] : []), ...(codeEnabled ? releaseCodeTools() : []), ...createScheduleTools({ commands: { execute }, now: () => 0, hostTimeZone: () => 'Asia/Shanghai' })] });
   const read = (file: string): Record<string, unknown>[] => {
     try { return readFileSync(join(dir, file), 'utf8').trim().split('\n').map(line => JSON.parse(line)); } catch { return []; }
   };
   async function drain(run: AgentRun) { for await (const _ of run.events) { /* the fake completes once its calls are answered */ } }
   async function open(how: 'start' | 'resume' = 'start', schedule = true, place: AgentPlace = { kind: 'group', chatId: 'oc_group' }) {
     const entry = entries.issue(place);
-    const backend = new CodexAppServerBackend(), opts = { cwd: dir, entry, profile: { ...profile(schedule), tools: { schedule, feedback: Boolean(feedbackEnabled) } } };
+    const backend = new CodexAppServerBackend(), opts = { cwd: dir, entry, profile: { ...profile(schedule), tools: { schedule, feedback: Boolean(feedbackEnabled), releaseCode: Boolean(place.chatId && codeEnabled?.(place.chatId)) } } };
     const thread = how === 'start' ? await backend.startThread(opts) : await backend.resumeThread({ ...opts, sessionId: 'th' });
     entry.attach(thread);
     threads.push(() => thread.close());
@@ -151,9 +152,12 @@ export function codexToolsFixture(feedbackEnabled?: (chatId: string) => boolean)
   }
   let scripts = 0;
   return {
-    scriptNext(calls: Call[], hold = false) {
+    seedTools(sessionId: string, names: string[]) {
+      writeFileSync(join(dir, 'tools-' + sessionId), JSON.stringify([{namespace: 'vonvon_bot', tools: names.map(name => ({name}))}]));
+    },
+    scriptNext(calls: Call[], hold = false, options?: {sequential?: boolean}) {
       const release = 'release-script-' + ++scripts;
-      writeFileSync(join(dir, 'next-turn'), JSON.stringify({calls, ...(hold ? {hold: release} : {})}));
+      writeFileSync(join(dir, 'next-turn'), JSON.stringify({calls, ...options, ...(hold ? {hold: release} : {})}));
       return () => writeFileSync(join(dir, release), '');
     },
     failNextStart: () => writeFileSync(join(dir, 'fail-start'), ''),

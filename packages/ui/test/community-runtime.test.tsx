@@ -2,7 +2,7 @@
 import {act} from 'react';
 import {createRoot, type Root} from 'react-dom/client';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
-import {communityRequestSchema, type AuthoringPublished, type AccountShell, type CommunityRequest, type RecipeDetail, type RecipeRoleDraft} from '@vonvon/protocol';
+import {communityRequestSchema, type AuthoringPublished, type AccountShell, type CommunityRequest, type RecipeBrowseDetail, type RecipeRoleDraft} from '@vonvon/protocol';
 import {createDesktopFacades} from '../../desktop/src/facade';
 import {desktopChannels} from '../../desktop/src/ipc-contract';
 import {DesktopRootView} from '../src/devices/DesktopRoot';
@@ -13,7 +13,7 @@ import {A, B, devicesState, fakeShell, newClient} from './devices-fixture';
 
 const accountId = '44444444-4444-4444-8444-444444444444';
 const draftId = '55555555-5555-4555-8555-555555555555';
-const recipe: RecipeDetail = {recipeId: A, versionId: B, revision: 1, public: {name: '真实配方', summary: '简介', overview: '# 正文', version: '1', access: 'direct'}, owned: false, acquired: false, config: {role: '角色'}};
+const recipe: RecipeBrowseDetail = {recipeId: A, versionId: B, revision: 1, format: 'rich-v2', state: 'listed', creator: {authorId: A, displayName: '作者'}, hasDisplayLogo: false, public: {name: '真实配方', summary: '简介', overview: '# 正文', version: '1', access: 'direct'}, owned: false, acquired: false, preview: {settings: [], skills: [], ruleCount: 0, taskCount: 0}};
 const summary = {recipeId: recipe.recipeId, versionId: recipe.versionId, revision: recipe.revision, public: recipe.public};
 let root: Root;
 let calls: CommunityRequest[];
@@ -51,7 +51,7 @@ beforeEach(() => {
   root = createRoot(document.getElementById('root')!); calls = [];
   handle = async request => {
     if (request.type === 'catalog') return {hero: summary, items: [], nextCursor: null};
-    if (request.type === 'detail') return recipe;
+    if (request.type === 'browse') return recipe;
     if (request.type === 'shareLink') return {url: 'https://community.example/recipes/' + A + '/versions/' + B};
     if (request.type === 'saveDraft') return {draftId, recipeId: null, revision: 1, public: request.public, config: request.config};
     if (request.type === 'publishDraft') return {...summary, firstCode: 'A'.repeat(32)};
@@ -70,9 +70,51 @@ it('opens an actual catalog card through the production facade and strict main r
   await draw();
   await act(async () => document.querySelector<HTMLButtonElement>('.community-card')!.click());
   expect(document.querySelector('.community-detail h1')?.textContent).toBe(recipe.public.name);
-  expect(calls.filter(request => request.type === 'detail' || request.type === 'shareLink')).toEqual([
-    {type: 'detail', accountId, recipeId: A, versionId: B}, {type: 'shareLink', recipeId: A, versionId: B},
+  expect(calls.filter(request => request.type === 'browse' || request.type === 'shareLink')).toEqual([
+    {type: 'browse', accountId, recipeId: A, versionId: B}, {type: 'shareLink', recipeId: A, versionId: B},
   ]);
+});
+it.each([false, true])('keeps catalog cards readable and usable while a public logo is pending or fails; failed=%s', async failed => {
+  let finish!: (value: unknown) => void;
+  let fail!: (error: Error) => void;
+  const pending = new Promise((resolve, reject) => {finish = resolve; fail = reject;});
+  const normal = handle;
+  handle = async request => {
+    if (request.type === 'catalog') return {hero: {...summary, hasDisplayLogo: true}, items: [], nextCursor: null};
+    if (request.type === 'displayLogo') return pending;
+    return normal(request);
+  };
+  await draw();
+  const card = document.querySelector<HTMLButtonElement>('.community-card')!;
+  expect(card.textContent).toContain(recipe.public.name);
+  expect(card.querySelector('img')).toBeNull();
+  expect(card.disabled).toBe(false);
+  expect(calls.filter(request => request.type === 'displayLogo')).toEqual([{type: 'displayLogo', versionId: B}]);
+  await act(async () => {
+    if (failed) fail(new Error('Logo unavailable'));
+    else finish({logo: 'data:image/webp;base64,AQID'});
+  });
+  expect(card.textContent).toContain(recipe.public.name);
+  expect(card.querySelector('img')?.getAttribute('src')).toBe(failed ? undefined : 'data:image/webp;base64,AQID');
+  await act(async () => {card.click();});
+  expect(document.querySelector('.community-detail h1')?.textContent).toBe(recipe.public.name);
+});
+it('opens a recipe before its catalog logo finishes and ignores the late image after navigation', async () => {
+  let finish!: (value: unknown) => void;
+  const pending = new Promise(resolve => {finish = resolve;});
+  const normal = handle;
+  handle = async request => {
+    if (request.type === 'catalog') return {hero: {...summary, hasDisplayLogo: true}, items: [], nextCursor: null};
+    if (request.type === 'displayLogo') return pending;
+    return normal(request);
+  };
+  await draw();
+  await act(async () => {document.querySelector<HTMLButtonElement>('.community-card')!.click();});
+  expect(document.querySelector('.community-detail h1')?.textContent).toBe(recipe.public.name);
+  await act(async () => {finish({logo: 'data:image/webp;base64,AQID'});});
+  expect(document.querySelector('.community-detail h1')?.textContent).toBe(recipe.public.name);
+  expect(document.querySelector('.community-card')).toBeNull();
+  expect(document.querySelector('.community-detail img')).toBeNull();
 });
 it('reads legacy notes without rewriting the original role draft', async () => {
   const legacySetup = {steps: [{kind: 'tool' as const, title: '旧说明', instructions: 'LEGACY_NOTES_KEEP', check: '核对已有工具', required: true}]};
@@ -87,7 +129,7 @@ it('reads legacy notes without rewriting the original role draft', async () => {
 it('opens both launch recipe links using the explicit App external-document bridge',async()=>{
   const {readFileSync}=await import('node:fs');const {resolve}=await import('node:path');
   const help=JSON.parse(readFileSync(resolve(process.cwd(),'../../content/recipes/vonvon-help/recipe.json'),'utf8'));
-  const normal=handle;handle=async request=>request.type==='detail'?{...recipe,public:help.public}:normal(request);
+  const normal=handle;handle=async request=>request.type==='browse'?{...recipe,public:help.public}:normal(request);
   shell={...shell,openExternal:vi.fn(async()=>{})};
   await draw();await click('打开已发布版本');
   for(const label of ['官方问题反馈表单','官方排错指南']) {
@@ -106,7 +148,7 @@ it('recovers a lost code-batch receipt using the same key while retaining only s
   const disabled = {codeId: B, status: 'disabled' as const};
   let attempts = 0; const normal = handle;
   handle = async request => {
-    if (request.type === 'detail') return {...recipe, owned: true, public: {...recipe.public, access: 'coded'}};
+    if (request.type === 'browse') return {...recipe, owned: true, public: {...recipe.public, access: 'coded'}};
     if (request.type === 'codes') return {items: [available, redeemed, disabled].map(item => ({codeId: item.codeId, status: item.status, suffix: 'AAAA', redeemedAt: null})), nextCursor: null};
     if (request.type === 'issueCodes') {if (++attempts === 1) throw new Error('receipt lost'); return {items: [available, redeemed, disabled]};}
     return normal(request);
@@ -131,7 +173,7 @@ it('keeps App author code listing, reveal, copying and confirmed disable availab
   let disabled = false;
   const normal = handle;
   handle = async request => {
-    if (request.type === 'detail') return {...recipe, owned: true, public: {...recipe.public, access: 'coded'}};
+    if (request.type === 'browse') return {...recipe, owned: true, public: {...recipe.public, access: 'coded'}};
     if (request.type === 'codes') return {items: [{codeId: draftId, status: disabled ? 'disabled' : 'available', suffix: 'BBBB', redeemedAt: null}, {codeId: A, status: 'redeemed', suffix: 'AAAA', redeemedAt: null}], nextCursor: null};
     if (request.type === 'revealCode') return {codeId: request.codeId, status: 'available', code: secret};
     if (request.type === 'disableCode') {disabled = true; return {codeId: request.codeId, status: 'disabled'};}
@@ -156,7 +198,7 @@ it.each(['operation_expired','request_upgrade_required'])('reconciles a native %
   const normal = handle;
   handle = async request => {
     if (request.type === 'acquire') throw {code: failure};
-    if (request.type === 'detail' && offline) throw new Error('offline');
+    if (request.type === 'browse' && offline) throw new Error('offline');
     return normal(request);
   };
   await draw(); await click('打开已发布版本');
@@ -176,7 +218,7 @@ it.each(['acquire_rate_limited','rate_limited'])('retains a native uncertain raw
   let failedRead = false;
   handle = async request => {
     if (request.type === 'acquire') throw {code: failure, retryAfter: 60};
-    if (request.type === 'detail') {if (failedRead) throw new Error('offline'); const {config: _config, ...publicRecipe} = recipe; return {...publicRecipe, public: {...recipe.public, access: 'coded'}};}
+    if (request.type === 'browse') {if (failedRead) throw new Error('offline'); const {preview: _preview, ...publicRecipe} = recipe; return {...publicRecipe, public: {...recipe.public, access: 'coded'}};}
     return normal(request);
   };
   await draw(); await click('打开已发布版本'); await fill('分享码', 'Ab-CD'); await click('获取配方');
@@ -214,10 +256,10 @@ it('ignores a native old-account receipt after another account opens the same ve
   await draw();await click('打开已发布版本');await click('获取配方');
   await act(async()=>{current={...status,accountId:draftId};listeners.forEach(listener=>listener(current));});
   await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());
-  const before=calls.filter(request=>request.type==='detail').length;
+  const before=calls.filter(request=>request.type==='browse').length;
   await act(async()=>{finish({recipeId:A,versionId:B,owned:false,acquired:true});});
   expect(document.body.textContent).not.toContain('已保存在「我的配方」');
-  expect(calls.filter(request=>request.type==='detail')).toHaveLength(before);
+  expect(calls.filter(request=>request.type==='browse')).toHaveLength(before);
   expect([...document.querySelectorAll('button')].find(button=>button.textContent==='获取配方')?.disabled).toBe(false);
 });
 
@@ -231,13 +273,13 @@ it('recovers a clock-rejected native attempt only after a checked explicit retry
       if(born>now+120000)throw {code:'operation_clock_skew'};
       acquired=true;return {recipeId:A,versionId:B,owned:false,acquired:true};
     }
-    if(request.type==='detail'){const {config:_config,...publicRecipe}=recipe;return {...publicRecipe,public:{...recipe.public,access:'coded'},acquired,...(acquired?{config:recipe.config}:{})};}
+    if(request.type==='browse'){const {preview:_preview,...publicRecipe}=recipe;return {...publicRecipe,public:{...recipe.public,access:'coded'},acquired,...(acquired?{preview:recipe.preview}:{})};}
     return normal(request);
   };
   try {
     await draw();await click('打开已发布版本');await fill('分享码','Ab-CD');await click('获取配方');
     expect(document.body.textContent).toContain('校准设备时间');expect(document.body.textContent).toContain('再次点击');
-    expect(calls.filter(request=>request.type==='detail')).toHaveLength(2);
+    expect(calls.filter(request=>request.type==='browse')).toHaveLength(2);
     expect(calls.filter(request=>request.type==='acquire')).toHaveLength(1);
     await click('重试读取');
     expect(document.querySelector<HTMLInputElement>('[aria-label="分享码"]')?.value).toBe('Ab-CD');
@@ -253,9 +295,9 @@ it('keeps a native clock-rejected raw/key until an online exact-version read con
   let offline=false,acquired=false;const normal=handle;
   handle=async request=>{
     if(request.type==='acquire')throw {code:'operation_clock_skew'};
-    if(request.type==='detail'){
+    if(request.type==='browse'){
       if(offline)throw new Error('offline');
-      const {config:_config,...publicRecipe}=recipe;return {...publicRecipe,public:{...recipe.public,access:'coded'},acquired,...(acquired?{config:recipe.config}:{})};
+      const {preview:_preview,...publicRecipe}=recipe;return {...publicRecipe,public:{...recipe.public,access:'coded'},acquired,...(acquired?{preview:recipe.preview}:{})};
     }
     return normal(request);
   };
@@ -270,7 +312,7 @@ it('keeps a clock-rejected native key when reconciliation returns another versio
   let mismatched=false;const normal=handle;
   handle=async request=>{
     if(request.type==='acquire')throw {code:'operation_clock_skew'};
-    if(request.type==='detail'&&mismatched)return {...recipe,versionId:draftId};
+    if(request.type==='browse'&&mismatched)return {...recipe,versionId:draftId};
     return normal(request);
   };
   await draw();await click('打开已发布版本');mismatched=true;await click('获取配方');await click('获取配方');
@@ -282,7 +324,7 @@ it('ignores a native clock reconciliation after route A-B-A and preserves the cu
   let finish!:(value:unknown)=>void,reads=0;const normal=handle;
   handle=async request=>{
     if(request.type==='acquire')throw {code:'operation_clock_skew'};
-    if(request.type==='detail'&&++reads===2)return new Promise(resolve=>{finish=resolve;});
+    if(request.type==='browse'&&++reads===2)return new Promise(resolve=>{finish=resolve;});
     return normal(request);
   };
   await draw();await click('打开已发布版本');await click('获取配方');expect(finish).toBeTypeOf('function');
@@ -298,9 +340,9 @@ it('ignores native clock reconciliation after an account change and preserves th
   let finish!:(value:unknown)=>void,reads=0;const normal=handle;
   handle=async request=>{
     if(request.type==='acquire')throw {code:'operation_clock_skew'};
-    if(request.type==='detail'){
+    if(request.type==='browse'){
       if(++reads===2)return new Promise(resolve=>{finish=resolve;});
-      const {config:_config,...publicRecipe}=recipe;return {...publicRecipe,public:{...recipe.public,access:'coded'}};
+      const {preview:_preview,...publicRecipe}=recipe;return {...publicRecipe,public:{...recipe.public,access:'coded'}};
     }
     return normal(request);
   };
@@ -317,9 +359,9 @@ it('retains edited text and reconciles an uncertain submission across a native d
   let offline=false;const normal=handle;
   handle=async request=>{
     if(request.type==='acquire')throw {code:'unavailable'};
-    if(request.type==='detail'){
+    if(request.type==='browse'){
       if(offline)throw new Error('offline');
-      return {recipeId:A,versionId:B,revision:1,owned:false,acquired:false,public:{...recipe.public,access:'coded'}};
+      const {preview: _preview, ...intro} = recipe; return {...intro, public:{...recipe.public,access:'coded'}};
     }
     return normal(request);
   };
@@ -335,45 +377,48 @@ it('retains edited text and reconciles an uncertain submission across a native d
   expect(attempts()[1]!.code).toBe('New-Code');
 });
 
-it('renders complete rich configuration through the strict facade and hides every private tab in coded introductions',async()=>{
-  const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
-  const {readFileSync}=await import('node:fs');const {resolve}=await import('node:path');
-  const content=JSON.parse(readFileSync(resolve(process.cwd(),'../protocol/test/fixtures/recipe-rich-v2.content.json'),'utf8'));
-  content.parts=[];content.memories=[];delete content.finalLogo;
-  const identity=(n:number)=>({itemId:`70000000-0000-4000-8000-${String(n).padStart(12,'0')}`,originId:`80000000-0000-4000-8000-${String(n).padStart(12,'0')}`});
-  const file={...identity(1),name:'SKILL.md',use:'skillDescription',text:{kind:'inline',value:'SETUP_SKILL_BODY'}};
-  content.files=[file];content.skills=[{...identity(2),name:'setup',entryFileId:file.itemId,fileIds:[file.itemId]}];
-  content.setup=[{...identity(3),kind:'tool',title:'旧说明',instructions:'OLD_SETUP_PRIVATE',check:'OLD_SETUP_CHECK',required:true,action:{kind:'manual'}}];
-  const doc=canonicalizeRichRecipeContent(content);
-  const normal=handle;let acquired=false;
-  handle=async request=>{
-    if(request.type==='detail')return {...summary,format:'rich-v2',public:{...recipe.public,access:'coded'},owned:false,acquired,...(acquired?{rich:{content:doc.content,texts:{},canonical:Buffer.from(doc.canonicalUTF8).toString('base64url')}}:{})};
-    if(request.type==='acquire'){acquired=true;return {recipeId:A,versionId:B,owned:false,acquired:true};}
+it('browses compact configuration and acquisition rights without fetching skill files or full recipe content', async () => {
+  const identity = {itemId: '70000000-0000-4000-8000-000000000001', originId: '80000000-0000-4000-8000-000000000001'};
+  const preview: NonNullable<RecipeBrowseDetail['preview']> = {
+    settings: [{...identity, field: 'presentation.voiceEnabled', value: true}],
+    skills: [{itemId: B, name: 'setup', description: '核对运行环境并准备项目。'}], ruleCount: 2, taskCount: 1,
+  };
+  const normal = handle;
+  let acquired = false;
+  handle = async request => {
+    if (request.type === 'browse') {
+      const {preview: _preview, ...intro} = recipe;
+      return {...intro, public: {...recipe.public, access: 'coded'}, acquired, ...(acquired ? {preview} : {})};
+    }
+    if (request.type === 'detail') throw new Error('Full recipe fetch is forbidden during browsing');
+    if (request.type === 'acquire') {acquired = true; return {recipeId: A, versionId: B, owned: false, acquired: true};}
     return normal(request);
   };
-  await draw();await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());
+  await draw();
+  await act(async () => {document.querySelector<HTMLButtonElement>('.community-card')!.click();});
   expect(document.querySelector('[aria-label="配方详细信息"]')?.textContent).toBe('概览');
-  expect(document.querySelector('.community-detail')?.textContent).not.toContain(content.role.text.value);
-  expect(document.querySelector('.community-detail')?.textContent).not.toContain('OLD_SETUP_PRIVATE');
-  expect(document.querySelector('.community-detail')?.textContent).not.toContain('SETUP_SKILL_BODY');
-  await fill('分享码','VALID');await click('获取配方');
-  expect([...document.querySelectorAll('[aria-label="配方详细信息"] button')].map(button=>button.textContent)).toEqual(['概览','模型与权限','能力','沟通方式','任务']);
-  expect(document.querySelector('.community-additional-notes')?.textContent).toContain('OLD_SETUP_PRIVATE');
-  expect(document.querySelector('.community-additional-notes')?.textContent).toContain('OLD_SETUP_CHECK');
-  for(const section of ['模型与权限','能力','沟通方式','任务']){
-    await click(section);expect(document.querySelector('.community-detail-content h2')?.textContent).toBe(section==='能力'?'角色':section);
-  }
-  expect(document.querySelector('[aria-label="配方详细信息"]')?.textContent).not.toContain('记忆');
-  await click('能力');expect(document.querySelector('.community-detail-content')?.textContent).toContain(content.role.text.value);
+  await fill('分享码', 'VALID'); await click('获取配方');
+  expect([...document.querySelectorAll('[aria-label="配方详细信息"] button')].map(button => button.textContent)).toEqual(['概览', '模型与权限', '能力', '沟通方式', '任务']);
+  await click('能力');
   expect(document.querySelector('.community-detail-content')?.textContent).toContain('setup');
-  expect(document.querySelector('.community-detail-content')?.textContent).toContain('SETUP_SKILL_BODY');
+  expect(document.querySelector('.community-detail-content')?.textContent).toContain('核对运行环境并准备项目。');
+  expect(document.querySelector('.community-detail-content')?.textContent).toContain('2 条规则');
+  expect(document.querySelector('.community-detail-content details')).toBeNull();
+  await click('沟通方式');
+  expect(document.querySelector('.community-detail-content')?.textContent).toContain('语音回复');
+  expect(document.querySelector('.community-detail-content')?.textContent).toContain('开启');
+  await click('任务');
+  expect(document.querySelector('.community-detail-content')?.textContent).toContain('1 项任务');
+  expect(calls.filter(request => request.type === 'detail')).toEqual([]);
+  expect(calls.filter(request => request.type === 'browse')).toHaveLength(2);
+  expect(document.querySelector('.community-additional-notes')).toBeNull();
 });
 
 it('opens coded acquisition in a focused dialog and keeps an uncertain retry bound to the same request', async () => {
   const normal = handle;
   let acquired = false, attempts = 0;
   handle = async request => {
-    if (request.type === 'detail') {const {config, ...intro} = recipe; return {...intro, public: {...recipe.public, access: 'coded'}, acquired, ...(acquired ? {config} : {})};}
+    if (request.type === 'browse') {const {preview, ...intro} = recipe; return {...intro, public: {...recipe.public, access: 'coded'}, acquired, ...(acquired ? {preview} : {})};}
     if (request.type === 'acquire') {
       if (++attempts === 1) throw new Error('receipt lost');
       acquired = true;
@@ -416,13 +461,13 @@ it('keeps rental content distinct and explicitly returns other routes to recipes
 
 it('opens the exact recovered published version when a cold draft read is retired', async () => {
   const normal = handle;
-  handle = async request => {if (request.type === 'draft') throw new Error('retired'); return request.type === 'detail' ? {...recipe, owned: true} : normal(request);};
+  handle = async request => {if (request.type === 'draft') throw new Error('retired'); return request.type === 'browse' ? {...recipe, owned: true} : normal(request);};
   const recover = vi.fn(async () => ({kind: 'publicationRecovery' as const, result: {kind: 'published' as const, publication: {accountId, draftId, recipeId: A, versionId: B, revision: 1}}}));
   shell = {...shell, recipeAuthoring: {request: recover}};
   await draw(); await click('打开旧私人草稿');
   expect(recover).toHaveBeenCalledExactlyOnceWith({type: 'recoverPublication', accountId, draftId});
   expect(document.querySelector('.community-detail h1')?.textContent).toBe(recipe.public.name);
-  expect(calls.filter(request => request.type === 'detail')).toEqual([{type: 'detail', accountId, recipeId: A, versionId: B}]);
+  expect(calls.filter(request => request.type === 'browse')).toEqual([{type: 'browse', accountId, recipeId: A, versionId: B}]);
 });
 
 it('ignores a late publication event for a draft the user has already left', async () => {
@@ -433,6 +478,31 @@ it('ignores a late publication event for a draft the user has already left', asy
   shell = {...shell, recipeAuthoring: {request: async () => ({kind: 'publicationRecovery', result: {kind: 'absent'}}), onPublished(listener) {event = listener; return () => {};}}};
   await draw(); await click('打开旧私人草稿'); await click('返回我的配方');
   await act(async () => event({accountId, draftId, recipeId: A, versionId: B, revision: 1}));
-  expect(calls.filter(request => request.type === 'detail')).toEqual([]);
+  expect(calls.filter(request => request.type === 'browse')).toEqual([]);
   expect(document.querySelector('.community-detail')).toBeNull();
+});
+
+it('opens public author publications from a separate card action, paginates and returns from detail', async () => {
+  const creator = {authorId: accountId, displayName: '公开作者'};
+  const authored = {...summary, creator};
+  const nextId = '66666666-6666-4666-8666-666666666666';
+  const normal = handle;
+  handle = async request => {
+    if (request.type === 'catalog') return {hero: null, items: [authored], nextCursor: null};
+    if (request.type === 'author') return {creator, items: request.cursor ? [{...authored,versionId:nextId}] : [authored], nextCursor: request.cursor ? null : nextId};
+    if (request.type === 'browse') return {...recipe, creator};
+    return normal(request);
+  };
+  await draw();
+  expect(document.querySelector('.community-card .community-author-link')).toBeNull();
+  await act(async () => document.querySelector<HTMLButtonElement>('.community-author-link')!.click());
+  expect(document.querySelector('.community-author-page h1')?.textContent).toBe('Fixture');
+  expect(document.querySelector('.community-author-page')?.textContent).toContain('公开发布的配方');
+  await click('加载更多');
+  expect(document.querySelectorAll('.community-author-page .community-card')).toHaveLength(2);
+  expect(calls.filter(request => request.type === 'author')).toEqual([{type:'author',authorId:accountId,accountId},{type:'author',authorId:accountId,accountId,cursor:nextId}]);
+  await act(async () => document.querySelector<HTMLButtonElement>('.community-author-page .community-card')!.click());
+  expect(document.querySelector('.community-detail h1')?.textContent).toBe(recipe.public.name);
+  await click('返回作者主页');
+  expect(document.querySelector('.community-author-page h1')?.textContent).toBe('Fixture');
 });

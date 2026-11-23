@@ -121,15 +121,29 @@ async function stageHoistedDependencies(from, destination, options) {
         edges.push({ owner, name, from: dependency });
         continue;
       }
+      // Keep a plugin adjacent to peer instances already available at its original
+      // caller. Hoisting the plugin past one of those instances can give it a
+      // different object (e.g. the daemon's zod 4 instead of the MCP SDK's zod 3).
+      const childMetadata = JSON.parse(await readFile(join(dependency, 'package.json'), 'utf8'));
+      const visiblePeers = [];
+      for (const peer of Object.keys(childMetadata.peerDependencies ?? {})) {
+        const visible = resolution(owner, peer);
+        if (!visible) continue;
+        const original = await packageRoot(peer, dependency).catch(error => {
+          if (!childMetadata.peerDependenciesMeta?.[peer]?.optional) throw error;
+        });
+        if (visible === original) visiblePeers.push({ name: peer, from: original });
+      }
       // A later sibling may need a different version. Do not hoist it into an
       // intermediate scope that would shadow a dependency already using root.
       const placement = placements.reverse().find(scope => {
         const target = join(scope.target, 'node_modules', name);
-        return edges.every(edge => edge.name !== name || resolution(edge.owner, name, target, dependency) === edge.from);
+        return visiblePeers.every(peer => resolution(scope, peer.name) === peer.from) &&
+          edges.every(edge => edge.name !== name || resolution(edge.owner, name, target, dependency) === edge.from);
       });
       if (!placement) throw new Error(`Conflicting staged dependency ${name} in ${owner.target}`);
       const target = join(placement.target, 'node_modules', name);
-      const node = { from: dependency, target, parent: placement };
+      const node = { from: dependency, target, parent: placement, metadata: childMetadata };
       slots.set(target, node);
       if (!instances.has(dependency)) instances.set(dependency, new Set());
       instances.get(dependency).add(target);
@@ -210,6 +224,8 @@ export async function stageDaemon(destination, metadata, options = {}) {
     plugins: [runtimePlugin(runtime, bundled)],
     define: {
       __VONVON_SUPERVISOR_SHA256__: supervisorHash ? JSON.stringify(supervisorHash) : 'undefined',
+      __VONVON_RELEASE_CODE_MCP_URL__: JSON.stringify(process.env.VONVON_RELEASE_CODE_MCP_URL) ?? 'undefined',
+      __VONVON_RELEASE_CODE_ISSUER__: JSON.stringify(process.env.VONVON_RELEASE_CODE_ISSUER) ?? 'undefined',
       __VONVON_ACCOUNT_API_ORIGIN__: JSON.stringify(process.env.VONVON_ACCOUNT_API_ORIGIN) ?? 'undefined',
     },
   });

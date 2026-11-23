@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { draftPreviewLocatorSchema, draftPreviewNavigationSchema } from '../src/recipe-preview.js';
+import { draftPreviewLocatorSchema, draftPreviewNavigationSchema, recipePreviewNavigationSchema } from '../src/recipe-preview.js';
 const draftId = '8d85af21-e80d-4665-a6b8-ccf162dc1923';
 describe('draft preview navigation contract', () => {
   it('contains only a draft locator, never publication authority', () => {
@@ -12,4 +12,11 @@ describe('draft preview navigation contract', () => {
     }
     expect(draftPreviewNavigationSchema.safeParse({draftId, revision: 1, navigationId: draftId}).success).toBe(true);
   });
+});
+
+it('accepts only a creation navigation identifier without source, account or publication authority', () => {
+  expect(recipePreviewNavigationSchema.parse({kind:'create',navigationId:draftId})).toEqual({kind:'create',navigationId:draftId});
+  for (const extra of [{accountId:draftId},{draftId},{source:'bot'},{publish:true},{token:'secret'}]) {
+    expect(recipePreviewNavigationSchema.safeParse({kind:'create',navigationId:draftId,...extra}).success).toBe(false);
+  }
 });

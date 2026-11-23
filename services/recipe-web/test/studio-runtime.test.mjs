@@ -26,7 +26,7 @@ async function runtime(t, {signedIn = false, route = '/studio', sessionFails = f
     if (path === '/api/v1/me/drafts' || path === '/api/v2/me/publications') return Response.json({items: []});
     throw Error('Unexpected studio request ' + path);
   };
-  const location = {pathname: window.location.pathname, search: window.location.search, href: window.location.href, reloads: 0, reload() {this.reloads++;}};
+  const location = {pathname: window.location.pathname, search: window.location.search, href: window.location.href, reloads: 0, reload() {this.reloads++;}, assign(path) {this.assigned = path;}};
   const run = new AsyncFunction('document', 'window', 'location', 'history', 'fetch', 'BroadcastChannel', source);
   await run(window.document, window, location, window.history, fetch, undefined);
   await settle();
@@ -44,7 +44,7 @@ function assertGuide(document) {
   assert.match(main.textContent, /已获取.*创作中.*已发布.*App/s);
   assert.doesNotMatch(main.textContent, /新建文字草稿|保存草稿|在私聊中查看完整预览|准备新版|生成分享码/);
   assert.equal(document.querySelector('a[href="/"]')?.textContent.includes('Vonvon Bot'), true);
-  assert.equal(document.querySelector('#library-link')?.getAttribute('href'), '/library');
+  assert.equal(document.querySelector('header nav a[href="/library"]'), null);
 }
 
 for (const route of ['/studio', '/studio?draftId=old-draft', '/studio.html', '/studio.html?draftId=old-draft', '/studio?login=1', '/studio.html?login=1', '/studio.html?login=1&next=studio']) {
@@ -80,12 +80,16 @@ for (const signedIn of [false, true]) {
     const h = await runtime(t, {signedIn});
     assertGuide(h.document);
     assert.deepEqual(h.calls.map(call => call.path), ['/auth/session']);
-    assert.equal(h.document.querySelector('#account').textContent, signedIn ? '账号' : '登录');
+    assert.equal(h.document.querySelector('#account').textContent, signedIn ? '账号' : '注册或登录');
     h.document.querySelector('#account').click();
     const form = h.document.querySelector('#modal form');
-    assert.equal(form.getAttribute('action'), signedIn ? '/auth/logout' : '/auth/start');
-    assert.equal(form.getAttribute('method'), 'post');
-    if (!signedIn) assert.equal(form.querySelector('[name="returnTo"]').value, '/studio');
+    if (signedIn) {
+      assert.equal(h.location.assigned, '/account'); assert.equal(form, null);
+    } else {
+      assert.equal(form.getAttribute('action'), '/auth/start');
+      assert.equal(form.getAttribute('method'), 'post');
+      assert.equal(form.querySelector('[name="returnTo"]').value, '/studio');
+    }
     assertGuide(h.document);
   });
 }
@@ -96,7 +100,7 @@ for (const route of ['/studio?draftId=11111111-1111-4111-8111-111111111111', '/s
     assertGuide(h.document);
     assert.deepEqual(h.calls.map(call => call.path), ['/auth/session']);
     h.document.querySelector('#account').click();
-    assert.equal(h.document.querySelector('#modal').open, true);
+    assert.equal(h.document.querySelector('#modal').open, !signedIn);
     h.state.signedIn = !signedIn; h.state.displaySession = signedIn ? null : 'new-author-session';
     h.window.dispatchEvent(new h.window.Event('focus'));
     await settle();

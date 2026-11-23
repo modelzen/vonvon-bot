@@ -57,13 +57,14 @@ class FixtureGateway implements FeedbackGateway {
   readonly authorized: FeedbackActor[] = [];
   readonly validated: FeedbackDestination[] = [];
   readonly submitted: FeedbackDraft[] = [];
+  layout?: 'detail-fields';
   lookupCount = 0;
   linkCount = 0;
   async user(actor: FeedbackActor): Promise<FeedbackUserIdentity> {
     this.authorized.push(actor);
     return {appId: actor.appId, openId: actor.openId, name: '飞书授权账号'};
   }
-  async validate(_actor: FeedbackActor, destination: FeedbackDestination): Promise<void> {this.validated.push(destination);}
+  async validate(_actor: FeedbackActor, destination: FeedbackDestination) {this.validated.push(destination); return this.layout;}
   async submit(draft: FeedbackDraft): Promise<void> {this.submitted.push(draft);}
   async lookup(draft: FeedbackDraft): Promise<FeedbackLookup> {
     this.lookupCount++;
@@ -177,6 +178,16 @@ describe('feedback chat review and trusted card callbacks', () => {
     expect(gateway.submitted).toEqual([]);
   });
 
+  it('can cancel a rich draft above the old ledger limit and reports the actionable card limit', async () => {
+    gateway.layout = 'detail-fields';
+    const detail = '现'.repeat(6000);
+    await expect(controller.prepare(message('整理反馈'), {...summary, description: '长'.repeat(30000), steps: '步'.repeat(12000),
+      checks: detail, sourceEvidence: detail, openQuestions: detail, useCase: detail, acceptanceCriteria: detail})).rejects.toThrow('保留版本、文件行号');
+    expect((await store.read(operationId)).state).toBe('cancelled');
+    expect(im.reviews).toEqual([]);
+    expect(gateway.submitted).toEqual([]);
+  });
+
   it('rejects another real SDK operator even if their display name is identical', async () => {
     await controller.prepare(message('整理并提交反馈'), summary);
     const persisted = await store.read(operationId);
@@ -185,7 +196,17 @@ describe('feedback chat review and trusted card callbacks', () => {
     expect((await store.read(operationId)).state).toBe('prepared');
     expect(im.replies[0]?.actor.openId).toBe('ou_someoneElse');
     expect(im.replies[0]?.text).toContain('尚未完成核验');
-    expect(im.replies[0]?.text).not.toContain(receiptUrl);
+    expect(im.replies[0]?.text).not.toContain('https://');
+  });
+
+  it('explains when the form loses the columns shown on a confirmation card', async () => {
+    gateway.layout = 'detail-fields';
+    await controller.prepare(message('整理并提交反馈'), {...summary, checks: '重新启动后复现'});
+    gateway.layout = undefined;
+    const operation = await store.read(operationId);
+    await controller.onAction(action(operationId, operation.draft.digest));
+    expect(im.replies.at(-1)?.text).toContain('请重新整理并核对新卡片');
+    expect(gateway.submitted).toEqual([]);
   });
 
   it('publishes once and returns the saved real receipt on a repeated card confirmation', async () => {
@@ -201,8 +222,13 @@ describe('feedback chat review and trusted card callbacks', () => {
     expect((await store.read(operationId)).state).toBe('submitted');
     expect(im.replies).toHaveLength(2);
     expect(im.replies[0]?.text).toBe(im.replies[1]?.text);
-    expect(im.replies[0]?.text).toContain(receiptUrl);
-    expect(im.replies[0]?.text).toContain('继续补充和评论');
+    expect(im.replies[0]?.text.split('\n')).toEqual([
+      '反馈已提交。跟进编号：' + persisted.draft.trackingCode,
+      '查看这条反馈：https://my.feishu.cn/base/baseToken?table=tblFeedback&record=recActual',
+      '打开记录后可评论。要查看其他反馈，请在侧栏切换到「全部反馈」或「处理进展」。',
+      '修改本人反馈：https://my.feishu.cn/share/base/shrFeedback',
+      '用提交时的飞书账号打开修改入口，点「查看提交记录」，按跟进编号找到这条反馈并编辑。',
+    ]);
   });
 
   it('routes cancellation to the original prepared draft and leaves unrelated callbacks untouched', async () => {

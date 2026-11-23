@@ -3,13 +3,13 @@ import {GlowButton} from '../GlowButton';
 import {Bookmark, ChevronRight, NotebookPen, Search} from 'lucide-react';
 import {useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {communityFailureMessages, newAcquisitionKey} from '@vonvon/protocol';
-import type {AuthoringPublished, CommunityResponses, CommunityShell, RecipeDetail, RecipeSummary, RecipeDraft} from '@vonvon/protocol';
+import type {AuthoringPublished, CommunityResponses, CommunityShell, RecipeDetail, RecipeBrowseDetail, RecipeSummary, RecipeDraft} from '@vonvon/protocol';
 import {Button, InlineNotice} from '../reference/components/ui';
 import {useShellCapabilities} from '../client-context';
 import {useAccount, accountStatusText} from '../account-context';
 import {useDraftGuard} from '../settings/DraftGuard';
 import {useCommunity, type CommunityRoute, type RecipeWorkspaceTab} from './community-context';
-import {CopyButton, RecipeCard, RecipeDetails, RecipeMark} from './RecipeContent';
+import {CopyButton, RecipeCard, RecipeDetails, RecipeMark, useCreatorName} from './RecipeContent';
 import {RecipeDraftPage} from './RecipeDraftPage';
 import {RecipeResourceDialog} from './RecipeResourceDialog';
 import {RecipeAuthoringPage} from './authoring/RecipeAuthoring';
@@ -43,7 +43,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   const {navigate} = useDraftGuard();
   const route = community.route;
   const authoring = useShellCapabilities()?.recipeAuthoring;
-  const [handoff, setHandoff] = useState<RecipeDetail>();
+  const [handoff, setHandoff] = useState<Pick<RecipeDetail, 'recipeId' | 'versionId' | 'public'>>();
   useEffect(() => setHandoff(undefined), [route]);
   const [preparation,setPreparation]=useState<{parent?:{recipeId:string;versionId:string};draft?:RecipeDraft}>();
   useEffect(()=>setPreparation(undefined),[route]);
@@ -56,6 +56,8 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   const searchInput = useRef<HTMLInputElement>(null);
   const setQuery = (query: string) => {setError(undefined); community.setCatalog(old => ({...old, query}));};
   const setCatalog = (result: CommunityResponses['catalog'] | ((old: CommunityResponses['catalog'] | undefined) => CommunityResponses['catalog'] | undefined)) => community.setCatalog(old => old.generation === catalogGeneration ? {...old, result: typeof result === 'function' ? result(old.result) : result} : old);
+  const [authorPage, setAuthorPage] = useState<CommunityResponses['author']>();
+  const authorName = useCreatorName(authorPage?.creator);
   const [library, setLibrary] = useState<CommunityResponses['library']>();
   const [drafts, setDrafts] = useState<CommunityResponses['drafts']['items']>();
   const [publications, setPublications] = useState<RecipeSummary[]>();
@@ -75,7 +77,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
     const main = document.getElementById('main-content');
     if (main) main.scrollTop = workspaceScroll.current.get(workspaceTab) ?? 0;
   }, [workspaceTab]);
-  const [detail, setDetail] = useState<RecipeDetail>();
+  const [detail, setDetail] = useState<RecipeBrowseDetail>();
   const [shareUrl, setShareUrl] = useState<string>();
   const uncertainWithdrawals = useRef(new Set<string>());
   const [withdrawal, setWithdrawal] = useState<'closed' | 'confirm' | 'uncertain'>('closed');
@@ -118,16 +120,20 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   useEffect(() => {
     let active = true;
     const current = ++generation.current;
-    setError(undefined); setDetail(undefined); setShareUrl(undefined);
+    setError(undefined); setDetail(undefined); setShareUrl(undefined); setAuthorPage(undefined);
     const request = async () => {
       if (route.kind === 'catalog') {
         if (catalog) {requestAnimationFrame(() => {const element = document.getElementById('main-content'); if (element) element.scrollTop = community.catalog.scrollTop;}); return;}
         setBusy(true);
         const result = await shell.request({type: 'catalog', ...(accountId ? {accountId} : {}), query: search});
         if (active && current === generation.current) setCatalog(result);
+      } else if (route.kind === 'author') {
+        setBusy(true);
+        const result = await shell.request({type: 'author', authorId: route.authorId, ...(accountId ? {accountId} : {})});
+        if (active && current === generation.current) setAuthorPage(result);
       } else if (route.kind === 'detail') {
         setBusy(true);
-        const result = await shell.request({type: 'detail', ...(accountId ? {accountId} : {}), recipeId: route.recipe.recipeId, versionId: route.recipe.versionId});
+        const result = await shell.request({type: 'browse', ...(accountId ? {accountId} : {}), recipeId: route.recipe.recipeId, versionId: route.recipe.versionId});
         if (!active || current !== generation.current) return;
         if (result.recipeId !== route.recipe.recipeId || result.versionId !== route.recipe.versionId) throw new Error('未能确认此配方版本，请重试读取。');
         setDetail(result);
@@ -184,7 +190,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
     const raw = selected.public.access === 'coded' ? code.trim() : '';
     let attempt = submitted.current.get(selected.versionId);
     const reconcile = async () => {
-      const next = await shell.request({type: 'detail', accountId, recipeId: selected.recipeId, versionId: selected.versionId});
+      const next = await shell.request({type: 'browse', accountId, recipeId: selected.recipeId, versionId: selected.versionId});
       if (!active()) return undefined;
       if (next.versionId !== selected.versionId || next.recipeId !== selected.recipeId) throw new Error('获取结果暂未确认，请重试同一操作。');
       setDetail(next);
@@ -232,7 +238,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
       finally {invalidateCatalog();}
       if (!active()) return;
     }
-    const next = await shell.request({type: 'detail', accountId, recipeId: selected.recipeId, versionId: selected.versionId});
+    const next = await shell.request({type: 'browse', accountId, recipeId: selected.recipeId, versionId: selected.versionId});
     if (!active()) return;
     if (next.recipeId !== selected.recipeId || next.versionId !== selected.versionId || !next.owned || !next.state) throw new Error('撤下结果尚未确认，请重新读取。');
     setDetail(next);
@@ -246,6 +252,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   }
   const login = <div className="community-empty"><h2>登录后继续</h2><p>{accountStatusText(account.status, account.supported)}</p><GlowButton variant="dark" disabled={!account.supported || account.status?.kind === 'signingIn'} onClick={() => void account.login()}>登录</GlowButton></div>;
   const privatePage = route.kind === 'workspace' || route.kind === 'draft' || route.kind === 'detail' && (route.privateView || route.from !== undefined);
+  if (route.kind === 'create') return <RecipeAuthoringPage key={route.navigationId} onBack={() => open({kind: 'catalog'})} onWorkspace={() => open({kind: 'workspace', tab: 'drafts'})}/>;
   const sourceDialog = preparation && <RecipeAuthoringPage {...preparation} onBack={() => setPreparation(undefined)} onWorkspace={() => {setPreparation(undefined); open({kind: 'workspace', tab: 'drafts'});}}/>;
   if (route.kind === 'draft' && accountId) return <><RecipeDraftPage key={route.navigationId ?? route.draftId} shell={shell} accountId={accountId} draftId={route.draftId} expectedRevision={route.expectedRevision} onContinueInChat={authoring ? draft => setPreparation({draft}) : undefined} onPublished={published} onDeleted={draftId => {
     invalidateWorkspace('drafts');
@@ -255,7 +262,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   return <div className="community-page">
     {route.kind === 'catalog' && <header className="community-heading community-page-heading"><h1>社区</h1><nav className="community-tabs" aria-label="社区类型"><button type="button" aria-current={tab === 'recipes' ? 'page' : undefined} onClick={() => {setTab('recipes'); if (route.kind !== 'catalog') open({kind: 'catalog'});}}>Bot 配方</button><button type="button" aria-current={tab === 'rental' ? 'page' : undefined} onClick={() => {setTab('rental'); if (route.kind !== 'catalog') open({kind: 'catalog'});}}>Bot 租赁 <span>敬请期待</span></button></nav></header>}
     {route.kind === 'catalog' && tab === 'recipes' && <div className="community-section-heading"><div><h2>{search ? '搜索结果' : catalog?.heroKind === 'featured' ? '场景精选' : '最新配方'}</h2>{!search && catalog?.heroKind === 'featured' && <p>Vonvon 编辑推荐</p>}</div><div className="community-actions"><Button variant="ghost" onClick={() => open({kind: 'workspace', tab: 'acquired'})}><Bookmark size={14}/>已获取<ChevronRight size={12}/></Button><Button variant="ghost" onClick={() => open({kind: 'workspace', tab: 'acquired'})}><NotebookPen size={14}/>我的配方<ChevronRight size={12}/></Button></div></div>}
-    {route.kind !== 'catalog' && <BackButton label={route.kind === 'detail' && route.from ? '返回我的配方' : '返回 Bot 配方'} onClick={() => {setTab('recipes'); open(route.kind === 'detail' && route.from ? {kind: 'workspace', tab: route.from} : {kind: 'catalog'});}}/>}
+    {route.kind !== 'catalog' && <BackButton label={route.kind === 'detail' && route.authorFrom ? '返回作者主页' : route.kind === 'detail' && route.from ? '返回我的配方' : '返回 Bot 配方'} onClick={() => {setTab('recipes'); open(route.kind === 'detail' && route.authorFrom ? {kind: 'author', authorId: route.authorFrom} : route.kind === 'detail' && route.from ? {kind: 'workspace', tab: route.from} : {kind: 'catalog'});}}/>}
     {error && <InlineNotice title="社区请求未完成" tone="warning" actions={<Button size="sm" onClick={() => {if (route.kind === 'catalog') community.setCatalog(old => ({...old, result: undefined})); if (workspaceTab) invalidateWorkspace(workspaceTab); else setRefresh(old => old + 1);}}>重试读取</Button>}>{error}</InlineNotice>}
     {notice && <InlineNotice title="操作完成" actions={detail?.acquired && !detail.owned ? <Button onClick={() => open({kind: 'workspace', tab: 'acquired'})}>查看已获取</Button> : undefined}>{notice}</InlineNotice>}
     {privatePage && !accountId ? login : <>
@@ -269,6 +276,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
           {catalog?.nextCursor && <div><Button disabled={busy} onClick={() => void run(async () => {const current = generation.current; const next = await shell.request({type: 'catalog', ...(accountId ? {accountId} : {}), query: search, cursor: catalog.nextCursor!}); if (live.current && current === generation.current) setCatalog(old => old ? {...old, items: uniqueRecipes(old.items, next.items), nextCursor: next.nextCursor} : next);})}>加载更多</Button></div>}
         </>}
       </>}
+      {route.kind === 'author' && authorPage && <section className="community-author-page"><header className="community-heading"><div><h1>{authorName}</h1><p>公开发布的配方</p></div></header>{authorPage.items.length === 0 && <p className="community-muted">这位作者还没有公开发布的配方。</p>}<div className="community-grid">{authorPage.items.map(recipe => <RecipeCard key={recipe.versionId} recipe={recipe} onOpen={() => open({kind: 'detail', recipe, authorFrom: route.authorId})}/>)}</div>{authorPage.nextCursor && <Button disabled={busy} onClick={() => void run(async () => {const current = generation.current; const next = await shell.request({type: 'author', authorId: route.authorId, cursor: authorPage.nextCursor!, ...(accountId ? {accountId} : {})}); if (live.current && current === generation.current) setAuthorPage(old => old ? {...old, items: uniqueRecipes(old.items, next.items), nextCursor: next.nextCursor} : next);})}>加载更多</Button>}</section>}
       {route.kind === 'workspace' && <>
         <div className="community-heading community-studio-heading"><div><h2>我的配方</h2><p>查看已获取的配方，继续创作，管理已发布版本与分享码。</p></div><div className="community-actions"><GlowButton variant="dark" onClick={() => setPreparation({})}>创作配方</GlowButton></div></div>
         <nav className="community-workspace-tabs" aria-label="我的配方内容">{([['acquired', '已获取'], ['drafts', '创作中'], ['published', '已发布']] as const).map(([value, label]) => <button key={value} type="button" aria-current={workspaceTab === value ? 'page' : undefined} onClick={() => open({kind: 'workspace', tab: value})}>{label}</button>)}</nav>

@@ -1,0 +1,52 @@
+limit_req_zone $binary_remote_addr zone=vv_code_login:1m rate=4r/s;
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name code.vonvon.cc;
+    access_log off;
+    error_log /dev/null;
+    location ^~ /.well-known/acme-challenge/ { root /var/www/vonvon-code-acme; }
+    location / { return 404; }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name code.vonvon.cc;
+    ssl_certificate /etc/letsencrypt/live/code.vonvon.cc/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/code.vonvon.cc/privkey.pem;
+
+    # Account/tool/hour totals are tracked by the service, never log tool payloads.
+    access_log off;
+    error_log /dev/null;
+    client_max_body_size 64k;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto https;
+    limit_req_status 429;
+    proxy_buffering off;
+    proxy_cache off;
+    add_header Cache-Control "private, no-store" always;
+
+    location = /feedback { return 302 "https://my.feishu.cn/base/ExampleReference1?table=tblExample3&view=vewExample5"; }
+    location = /feedback/ { return 302 "https://my.feishu.cn/base/ExampleReference1?table=tblExample3&view=vewExample5"; }
+    location = /mcp { proxy_pass http://127.0.0.1:8784; }
+    location = /.well-known/oauth-protected-resource/mcp { proxy_pass http://127.0.0.1:8784; }
+    location = /.well-known/oauth-protected-resource { proxy_pass http://127.0.0.1:8784; }
+    location = /.well-known/oauth-authorization-server/release-code/oauth { proxy_pass http://127.0.0.1:4346; }
+    location ^~ /release-code/oauth/ {
+        limit_req zone=vv_code_login burst=36 nodelay;
+        proxy_pass http://127.0.0.1:4346;
+    }
+    location ^~ /release-code/confirm/ {
+        limit_req zone=vv_code_login burst=16 nodelay;
+        proxy_pass http://127.0.0.1:4346;
+    }
+    location ~ ^/auth/(start|callback|session|logout)$ {
+        limit_req zone=vv_code_login burst=12 nodelay;
+        proxy_pass http://127.0.0.1:4346;
+    }
+    location / { return 404; }
+}

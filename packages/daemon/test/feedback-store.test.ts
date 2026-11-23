@@ -56,6 +56,19 @@ function attachmentPath(operationId: string, attachment: FeedbackAttachment): st
 }
 
 describe('FileFeedbackStore private attachment snapshots', () => {
+  it('refuses sensitive text attachments during staging and rechecks already staged legacy bytes before dispatch', async () => {
+    const operation = randomUUID();
+    const privateText = 'contact: user@example.com';
+    await expect(store.stage(operation, [await selectedFile('trace.txt', privateText)])).rejects.toThrow('附件内容');
+    await expect(lstat(store.directory(operation))).rejects.toMatchObject({code: 'ENOENT'});
+    const [file] = await store.stage(operation, [await selectedFile('trace.txt', '已脱敏')]);
+    if (!file) throw new Error('missing attachment');
+    const bytes = Buffer.from(privateText);
+    await writeFile(attachmentPath(operation, file), bytes);
+    const oldFile = {...file, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex')};
+    await expect(store.verify(draft(operation, [oldFile]))).rejects.toThrow('附件内容');
+  });
+
   it('copies only explicitly selected files, preserves readable names, and isolates equal names', async () => {
     const operationId = randomUUID();
     const chosen = await selectedFile('操作截图.png', 'screenshot');
@@ -243,7 +256,7 @@ describe('FileFeedbackStore persisted operations', () => {
     const path = join(store.directory(operationId), 'operation.json');
     await writeFile(path, JSON.stringify({state: 'submitted', draft: draft(operationId)}));
     await expect(store.read(operationId)).rejects.toThrow();
-    await writeFile(path, ' '.repeat(200001));
+    await writeFile(path, ' '.repeat(640 * 1024 + 1));
     await expect(store.read(operationId)).rejects.toThrow(/无效/);
   });
 

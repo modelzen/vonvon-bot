@@ -2,7 +2,7 @@
 import {act, useState} from 'react';
 import {createRoot, type Root} from 'react-dom/client';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
-import type {AccountStatus, DraftPreviewNavigation, RecipePreviewShell} from '@vonvon/protocol';
+import type {AccountStatus, DraftPreviewNavigation, RecipePreviewNavigationPayload, RecipePreviewShell} from '@vonvon/protocol';
 import {CommunityProvider, useCommunity} from '../src/community/community-context';
 import {DraftGuardProvider, useDraft} from '../src/settings/DraftGuard';
 
@@ -17,9 +17,9 @@ const draftId = '22222222-2222-4222-8222-222222222222';
 const navigation: DraftPreviewNavigation = {draftId, revision: 2, navigationId: '33333333-3333-4333-8333-333333333333'};
 let root: Root;
 let current: NonNullable<ReturnType<typeof useCommunity>>;
-let emit: (value: DraftPreviewNavigation) => void;
+let emit: (value: RecipePreviewNavigationPayload) => void;
 let acknowledge: ReturnType<typeof vi.fn>;
-let pending: () => Promise<DraftPreviewNavigation[]>;
+let pending: () => Promise<RecipePreviewNavigationPayload[]>;
 function Probe() {current = useCommunity()!; return <div>{JSON.stringify({open: current.isOpen, route: current.route})}</div>;}
 function DirtyProbe() {
   const [dirty, setDirty] = useState(false);
@@ -121,4 +121,36 @@ it('cancels an account-bound preview when the account changes before the edit gu
   await click('放弃并离开');
   expect(current.isOpen).toBe(false);expect(current.route).toEqual({kind:'catalog'});
   expect(acknowledge).not.toHaveBeenCalled();
+});
+
+it('keeps creation through login, acknowledges it and clears its account scope on switch', async () => {
+  const create = {kind:'create' as const,navigationId:navigation.navigationId};
+  pending = async () => [create];
+  await render();
+  expect(current.route).toEqual({kind:'create',navigationId:create.navigationId});
+  expect(current.isOpen).toBe(true);
+  expect(acknowledge).not.toHaveBeenCalled();
+  state.account={kind:'signedIn',accountId,displayName:'作者',provider:'github',persistence:'memory'};
+  await render();
+  expect(current.route).toEqual({kind:'create',navigationId:create.navigationId});
+  expect(acknowledge).toHaveBeenCalledWith(create.navigationId);
+  state.account={...state.account,accountId:draftId};
+  await render();
+  expect(current.route).toEqual({kind:'catalog'});
+});
+it('protects unsaved local edits before opening creation', async () => {
+  pending=async()=>[];
+  await act(async()=>root.render(<DraftGuardProvider><CommunityProvider><DirtyProbe/></CommunityProvider></DraftGuardProvider>));
+  const click=async(label:string)=>act(async()=>[...document.querySelectorAll('button')].find(button=>button.textContent===label)!.click());
+  await click('修改本地设置');
+  const create={kind:'create' as const,navigationId:navigation.navigationId};
+  await act(async()=>emit(create));
+  expect(current.isOpen).toBe(false);
+  expect(document.body.textContent).toContain('有未保存的修改');
+  await click('继续编辑');
+  expect(current.isOpen).toBe(false);
+  expect(acknowledge).toHaveBeenCalledWith(create.navigationId);
+  await act(async()=>emit({...create,navigationId:accountId}));
+  await click('放弃并离开');
+  expect(current.route).toEqual({kind:'create',navigationId:accountId});
 });

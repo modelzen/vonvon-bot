@@ -1,9 +1,10 @@
-import {richMetadataInputSchema,richMetadataCommitSchema,decodeRichRecipeContent,recipeRichPartDescriptorSchema,recipeRichInstallIntentSchema} from '../../../packages/protocol/dist/index.js';
+import {richMetadataInputSchema,richMetadataCommitSchema,decodeRichRecipeContent,recipeRichPartDescriptorSchema,recipeRichInstallIntentSchema,accountProfileAvatarChangeSchema,publicDisplayNameSchema} from '../../../packages/protocol/dist/index.js';
 import {authoringInput} from './authoring-input.mjs';
 import {ApiError,badInput} from './errors.mjs';
 import {bodyJson,expectedRevision,objectKeys,queryParams,requestKey,uuid} from './input.mjs';
 import {binary32} from './install-proof.mjs';
 import {operationId} from './operation-input.mjs';
+import {normalizeLogo} from './logo.mjs';
 import {richWireBytes,parseRichPayload} from './rich-document.mjs';
 
 const routes=[
@@ -16,8 +17,12 @@ const routes=[
  ['POST','authoring/:o/freeze','richFreeze'],['GET','authoring/:o','richGet'],['GET','authoring/:o/recovery','richRecover'],['POST','authoring/:o/cancel','richCancel'],
  ['PATCH','drafts/:d/metadata','richMetadata'],['GET','drafts/:d','richDraft'],['GET','me/drafts','richDraftList'],['DELETE','drafts/:d','richDelete'],['POST','drafts/:d/publish','richPublish'],
  ['GET','versions/:v/source-items','richSourceItems'],['GET','recipes/:r/versions/:v','richDetail',true],['GET','community/recipes','richCatalog',true],['POST','versions/:v/withdraw','richWithdraw'],
- ['GET','me/profile','richProfileRead'],['POST','me/profile','richProfile'],['POST','objects/:o/reserve','richReserve'],['POST','objects/:o/cancel','richCancelPackage'],['GET','me/object-capacity','richCapacity'],
-].map(([method,path,action,isPublic=false])=>({method,action,isPublic,regex:new RegExp('^(?:/api)?/v2/'+path.replace(/:[odrv]/g,'([^/]+)')+'$')}));
+ ['GET','recipes/:r/versions/:v/preview','richBrowsePreview',true],
+ ['GET','authors/:a/recipes','richAuthorRecipes',true],
+ ['GET','me/profile','richProfileRead'],['POST','me/profile','richProfile'],
+ ['GET','me/account-profile','richAccountProfileRead'],['POST','me/account-profile','richAccountProfile'],['POST','objects/:o/reserve','richReserve'],['POST','objects/:o/cancel','richCancelPackage'],['GET','me/object-capacity','richCapacity'],
+ ['POST','me/account-profile/initialize','richAccountProfileInitialize'],
+].map(([method,path,action,isPublic=false])=>({method,action,isPublic,regex:new RegExp('^(?:/api)?/v2/'+path.replace(/:[aodrv]/g,'([^/]+)')+'$')}));
 export function richRoute(method,path,admit) {
   const matches=routes.filter(r=>r.regex.test(path));
   if(!matches.length)throw new ApiError(404,'not_found');
@@ -33,6 +38,9 @@ export function readDocument(raw) {
   try{return decodeRichRecipeContent(wireBytes(raw));}catch{throw badInput();}
 }
 export async function richInput(req,url,{action,ids:[id,...other]}) {
+  if(action==='richAuthorRecipes'){
+    const {cursor}=queryParams(url,['cursor']);return [action,[id,cursor]];
+  }
   if(action==='richCatalog'){
     const copy=new URL(url);const cursors=copy.searchParams.getAll('cursor'),access=copy.searchParams.getAll('access');
     if(cursors.length>1||access.length>1||cursors.some(x=>x.length>1600)||access.some(x=>!['coded','direct'].includes(x)))throw badInput();
@@ -41,7 +49,7 @@ export async function richInput(req,url,{action,ids:[id,...other]}) {
   }
   queryParams(url,[]);
   if(req.method==='GET')return [action,id?[id,...other]:[]];
-  const b=await bodyJson(req,['richFreeze','richAccept','richPublish','richMetadata'].includes(action)?4*1048576:action==='richReserve'?262144:2048);
+  const b=await bodyJson(req,['richFreeze','richAccept','richPublish','richMetadata'].includes(action)?4*1048576:action==='richReserve'?262144:action==='richAccountProfile'?3*1048576:2048);
   if(action==='richUnredeemable'){objectKeys(b,['accountId']);return [action,[operationId(id),uuid(b.accountId)]];}
   if(action==='richInstallAuthorize'){const result=recipeRichInstallIntentSchema.safeParse(b);if(!result.success)throw badInput();return [action,[operationId(id),result.data]];}
   if(action==='richInstallRedeem'||action==='richInstallComplete'){
@@ -86,6 +94,26 @@ export async function richInput(req,url,{action,ids:[id,...other]}) {
     objectKeys(b,['draftId','cap']);if(!Number.isInteger(b.cap)||b.cap<1||b.cap>4194304)throw badInput();return [action,[operationId(id),uuid(b.draftId),b.cap]];
   }
   if(action==='richProfile'){objectKeys(b,['displayName']);if(typeof b.displayName!=='string')throw badInput();return [action,[b.displayName]];}
+  if(action==='richAccountProfileInitialize'){
+    objectKeys(b,['displayName']);
+    const name=publicDisplayNameSchema.safeParse(b.displayName);
+    if(!name.success)throw badInput();
+    return [action,[name.data]];
+  }
+  if(action==='richAccountProfile'){
+    objectKeys(b,['displayName'],['avatar','revision']);
+    const name=publicDisplayNameSchema.safeParse(b.displayName);
+    if(!name.success || (b.revision!==undefined && (!Number.isInteger(b.revision)||b.revision<0||b.revision>2147483647)))throw badInput();
+    const avatar=accountProfileAvatarChangeSchema.safeParse(b.avatar??{kind:'keep'});
+    if(!avatar.success)throw badInput();
+    let data=null;
+    if(avatar.data.kind==='replace'){
+      const bytes=Buffer.from(avatar.data.base64,'base64');
+      if(bytes.toString('base64')!==avatar.data.base64||bytes.length>2097152)throw badInput();
+      data='data:image/webp;base64,'+(await normalizeLogo(bytes)).toString('base64');
+    }
+    return ['richAccountProfile',[name.data,avatar.data.kind,data,b.revision??null]];
+  }
   objectKeys(b,[]);
   if(action==='richDelete')return [action,[id,expectedRevision(req),requestKey(req)]];
   return [action,[id]];

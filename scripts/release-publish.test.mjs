@@ -78,6 +78,7 @@ async function fixture(t, modern = false, server = false, version = server ? THR
   const assertServerEnv = env => { assert.equal(env.SRV_ID, 'private'); assert.equal(env.SRV_KEY, 'private'); for (const name of ['READ_ID', 'WRITE_KEY', 'WIN_ID', 'WIN_KEY']) assert.equal(env[name], undefined, name); };
   const dependencies = {
     env: { ...secrets }, log: () => {}, serverConfigPath: join(out, 'no-cos-server.json'),
+    releaseCodeConfigPath: join(out, 'release-code.json'),
     macDependencies: { env: { ...secrets } },
     planServer: async input => {
       assert.equal(input.dir, join(out, 'server')); assert.equal(input.version, version); assert.equal(input.sha, sha); assert.equal(input.config.secretIdEnv, 'SRV_ID');
@@ -515,4 +516,30 @@ test('failed re-verification invalidates a previous ready handoff and status als
   // A legacy/stale handoff must not contradict the current failed mirror receipt either.
   await save(handoffPath, { readyForWebsite: true });
   assert.equal((await publicationStatus(f.options)).website, 'not-ready');
+});
+
+test('optional release-code sync runs only after verified stable and can fail independently', async t => {
+  const f = await fixture(t);
+  await uploadPublication(f.options, f.dependencies);
+  await save(f.dependencies.releaseCodeConfigPath, { sshHost: 'fixture-configured-host' });
+  f.dependencies.env.VONVON_RELEASE_CODE_SSH = 'fixture-release-code';
+  const attemptedHosts = [];
+  f.dependencies.execute = async (command, args, { env }) => {
+    assert.equal(f.calls.at(-1), 'collect');
+    assert.equal(command, 'python3');
+    assert.match(args[0], /release-code\.py$/);
+    assert.deepEqual(args.slice(1, -1), ['send', '--out', f.out, '--host']);
+    attemptedHosts.push(args.at(-1));
+    assert.deepEqual(env, {});
+    if (attemptedHosts.length === 1) throw new Error('source host unavailable');
+  };
+  assert.deepEqual(await promotePublication(f.options, f.dependencies), { readyForWebsite: true, releaseCodeSync: 'pending' });
+  delete f.dependencies.env.VONVON_RELEASE_CODE_SSH;
+  assert.deepEqual(await promotePublication(f.options, f.dependencies), { readyForWebsite: true, releaseCodeSync: 'verified' });
+  f.dependencies.env.VONVON_RELEASE_CODE_SSH = '';
+  assert.deepEqual(await promotePublication(f.options, f.dependencies), { readyForWebsite: true });
+  delete f.dependencies.env.VONVON_RELEASE_CODE_SSH;
+  await save(f.dependencies.releaseCodeConfigPath, { sshHost: '--bad' });
+  assert.deepEqual(await promotePublication(f.options, f.dependencies), { readyForWebsite: true, releaseCodeSync: 'pending' });
+  assert.deepEqual(attemptedHosts, ['fixture-release-code', 'fixture-configured-host']);
 });

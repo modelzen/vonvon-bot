@@ -18,7 +18,7 @@ type Flow = {kind: 'choice'} | {kind: 'reconcile'} | {kind: 'delivery'; reply: D
 type Intent = {bot: DesktopSnapshot['agents'][number]; requestId: string; key: string; owner?: object; session?: Session};
 export type ResourceHandoffIntents = Map<string, Intent>;
 
-export function RecipeResourceDialog({recipe, intents, onClose}: {recipe: RecipeDetail; intents: ResourceHandoffIntents; onClose: () => void}) {
+export function RecipeResourceDialog({recipe, intents, onClose}: {recipe: Pick<RecipeDetail, 'recipeId' | 'versionId' | 'public'>; intents: ResourceHandoffIntents; onClose: () => void}) {
   const account = useAccount(), client = useClient(), device = useActiveDevice(), capabilities = useShellCapabilities();
   const shell = capabilities?.recipeAuthoring;
   const accountId = account.status?.kind === 'signedIn' ? account.status.accountId : undefined;
@@ -179,9 +179,9 @@ export function RecipeResourceDialog({recipe, intents, onClose}: {recipe: Recipe
   </>}><div className="recipe-source-dialog">
     {flow.kind !== 'choice' && intent.current && <p className="recipe-source-help">接收 Bot：{intent.current.bot.name}</p>}
     {changed ? <p role="status">账号或设备已切换，请关闭后重新选择。</p> : flow.kind === 'choice' ? <>
-      <p>让 Bot 参考这份配方，按你的要求调整配置。</p>
+      <p>和 Bot 讨论如何使用这份配方：新建群聊，或应用到已有群聊。</p>
       <label className="authoring-command">Bot<select aria-label="接收配方的 Bot" disabled={busy || Boolean(intent.current)} value={bot?.id ?? ''} onChange={event => setBotId(bots.find(row => row.id === event.target.value)?.id)}><option value="">选择 Bot</option>{bots.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}</select></label>
-      <p className="recipe-source-help">{!ready ? '正在等待当前设备连接…' : !bots.length ? '当前设备没有已连接的 Bot。' : 'Bot 会主动发一条私聊引导。之后告诉它你想修改哪个群、保留哪些设置。'}</p>
+      <p className="recipe-source-help">{!ready ? '正在等待当前设备连接…' : !bots.length ? '当前设备没有已连接的 Bot。' : 'Bot 会主动发一条私聊引导，先与你讨论群名、配置和冲突处理方案，等你确认后再创建或配置。'}</p>
     </> : flow.kind === 'link' ? <>
       <p>首次使用，需关联你与「{flow.session.target.botName}」的本人私聊。</p>
       {command && <><label className="authoring-command">向 Bot 私聊发送<input readOnly value={command} aria-label="私聊关联命令" onFocus={event => event.target.select()}/></label><CopyButton value={command} label="复制关联命令"/></>}

@@ -45,13 +45,17 @@ describe('dynamicTools on thread/start', () => {
   });
   it('offers feedback preparation before setup, then answers through only the current SDK turn', async () => {
     let enabled = false;
+    const details = {checks: '已复现', sourceEvidence: '0.10.1 packages/ui/src/app.ts:21 路由匹配', openQuestions: '待复测',
+      useCase: '每次手工查找', acceptanceCriteria: '可直接打开'};
+    const detailProperties = Object.fromEntries(Object.keys(details).map(name => [name, expect.objectContaining({type: 'string'})]));
     const f = codexToolsFixture(() => enabled);
     const session = await f.open();
     expect(f.starts()[0]?.dynamicTools).toEqual([expect.objectContaining({name: 'vonvon_bot', tools: expect.arrayContaining([
-      expect.objectContaining({type: 'function', name: 'feedback_prepare', inputSchema: expect.objectContaining({type: 'object'})}),
+      expect.objectContaining({type: 'function', name: 'feedback_prepare', inputSchema: expect.objectContaining({type: 'object',
+        properties: expect.objectContaining({summary: expect.objectContaining({properties: expect.objectContaining(detailProperties)})})})}),
     ])})]);
     expect(session.thread.startedWithFeedbackTool).toBe(true);
-    const calls = [{tool: 'feedback_prepare', args: {summary: {kind: 'bug', title: '标题', description: '说明'}}}];
+    const calls = [{tool: 'feedback_prepare', args: {summary: {kind: 'bug', title: '标题', description: '说明', ...details}}}];
     const user = 'ou_member';
     await session.turn(person(user), calls);
     expect(f.answers().at(-1)).toEqual({success: false, text: expect.stringContaining('/feedback setup')});
@@ -63,6 +67,7 @@ describe('dynamicTools on thread/start', () => {
     await session.turn(person(user, {feedback, triggerMessageId: 'old-message'}), calls);
     expect(f.answers().at(-1)?.success).toBe(false);
     expect(prepare).toHaveBeenCalledOnce();
+    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({summary: expect.objectContaining(details)}), expect.any(AbortSignal), expect.any(Function));
   });
   it.each([{kind: 'p2p', chatId: 'oc_private'}, {kind: 'doc', docId: 'doc'}] as const)('keeps preparation out of a $kind Codex session', async place => {
     const f = codexToolsFixture(() => true);
@@ -125,6 +130,29 @@ describe('connector tools that schedule on ChatGPT\'s side', () => {
 });
 
 describe('item/tool/call', () => {
+  it('routes release code calls only under the opted-in namespace and original member turn', async () => {
+    const namespace = 'vonvon-release-code';
+    const f = codexToolsFixture(undefined, chat => chat === 'oc_group');
+    const session = await f.open();
+    expect(f.starts()[0]?.dynamicTools).toEqual([
+      expect.objectContaining({name: 'vonvon_bot'}),
+      expect.objectContaining({name: namespace, tools: ['rg', 'read'].map(name => expect.objectContaining({name}))}),
+    ]);
+    const call = vi.fn(async () => 'current source');
+    const source = {chatId:'oc_group', openId:'ou_member', messageId:'om_ou_member', call};
+    const args = {argv:['--files']};
+    await session.turn(person(source.openId, {releaseCode:source}), [
+      {namespace, tool:'rg', args}, {namespace:'vonvon_bot', tool:'rg', args},
+    ]);
+    expect(f.answers()).toEqual([
+      {success:true, text:'current source'}, {success:false, text:'没有这个工具。'},
+    ]);
+    await session.turn(person('ou_other', {releaseCode:source}), [{namespace, tool:'rg',args}]);
+    expect(f.answers().at(-1)?.success).toBe(false);
+    expect(call).toHaveBeenCalledOnce();
+    await f.open('start', true, {kind:'group',chatId:'oc_other'});
+    expect(f.starts()[1]?.dynamicTools).toEqual([expect.objectContaining({name:'vonvon_bot'})]);
+  });
   it('answers through the entry as a tool result: a call, a tool it was not offered, bad arguments and another thread', async () => {
     const f = codexToolsFixture();
     const session = await f.open();

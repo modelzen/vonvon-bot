@@ -1,4 +1,4 @@
-import {beforeEach, expect, it, vi} from 'vitest';
+import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import type {AccountShell, AccountStatus} from '@vonvon/protocol';
 import {AccountProvider, type useAccount} from '../src/account-context';
 import {DesktopRootView} from '../src/devices/DesktopRoot';
@@ -38,6 +38,7 @@ function render(account?: AccountShell) {
 }
 const flush = async () => {await Promise.resolve(); await Promise.resolve();};
 beforeEach(() => {h.state = []; h.effects = []; h.pending = [];});
+afterEach(() => {for (const effect of h.effects) effect.cleanup?.(); vi.unstubAllGlobals();});
 
 it('keeps one native subscription and the signed-in identity across device switches', async () => {
   const {account, emit, off} = shell();
@@ -109,5 +110,39 @@ it('shows a failed native operation without exposing native exception details', 
   await render(fixture.account).login();
   expect(render(fixture.account).error).toBe('登录未完成，请重试。');
   fixture.emit({kind: 'signedOut'});
+  expect(render(fixture.account).error).toBeUndefined();
+});
+
+it('refreshes website edits on focus, deduplicates requests and ignores late failures after switching accounts', async () => {
+  const target = new EventTarget(); vi.stubGlobal('window', target);
+  const fixture = shell();
+  let rejectOld!: (reason: Error) => void;
+  const old = new Promise<AccountStatus>((_resolve, reject) => {rejectOld = reject;});
+  const next: AccountStatus = {...signedIn, accountId: '22222222-2222-4222-8222-222222222222', displayName: '新账号'};
+  const refresh = vi.fn().mockReturnValueOnce(old).mockResolvedValueOnce(next);
+  fixture.account.refresh = refresh;
+  render(fixture.account); await flush(); fixture.emit(signedIn);
+  target.dispatchEvent(new Event('focus')); target.dispatchEvent(new Event('focus'));
+  expect(refresh).toHaveBeenCalledOnce();
+  fixture.emit(next); target.dispatchEvent(new Event('focus')); await flush();
+  expect(refresh).toHaveBeenCalledTimes(2);
+  rejectOld(new Error('old account network error')); await flush();
+  expect(render(fixture.account).status).toEqual(next);
+  expect(render(fixture.account).error).toBeUndefined();
+  render(); target.dispatchEvent(new Event('focus'));
+  expect(refresh).toHaveBeenCalledTimes(2);
+});
+
+it('offers a sanitized retryable profile failure without changing the signed-in identity', async () => {
+  const target = new EventTarget(); vi.stubGlobal('window', target);
+  const fixture = shell();
+  fixture.account.refresh = vi.fn(async () => {throw new Error('private token details');});
+  fixture.account.manage = vi.fn(async () => {});
+  render(fixture.account); await flush(); fixture.emit(signedIn);
+  target.dispatchEvent(new Event('focus')); await flush();
+  expect(render(fixture.account).status).toEqual(signedIn);
+  expect(render(fixture.account).error).toBe('暂时无法更新账号资料，请重试。');
+  await render(fixture.account).manage?.();
+  expect(fixture.account.manage).toHaveBeenCalledOnce();
   expect(render(fixture.account).error).toBeUndefined();
 });

@@ -8,4 +8,5 @@ export function applyPreviewEnvironment(env: NodeJS.ProcessEnv, home: string, pl
     : join(home, '.vonvon-bot-preview');
   env.VONVON_DESKTOP_TEST_HOME = join(root, 'desktop');
   env.VONVON_HOME = join(root, 'data');
+  env.VONVON_APP_SCHEME = 'vonvon-preview';
 }

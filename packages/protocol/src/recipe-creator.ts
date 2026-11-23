@@ -1,4 +1,5 @@
 import {resourceReadTaskSchema,resourceAcquireTaskSchema,verifiedResourceSnapshotSchema,resourceLatestSchema,acquisitionOutcomeSchema,exactResourceVersionSchema} from './recipe-resource-context.js';
+import {recipeBrowseDetailSchema} from './recipe-browse.js';
 import {z} from 'zod';
 import {agentIdSchema, groupIdSchema} from './domain.js';
 import {recipePublicSchema} from './desktop-community.js';
@@ -72,7 +73,7 @@ export const creatorConfirmationSchema=z.discriminatedUnion('kind',[
   z.object({kind:z.literal('feishu-card')}).strict(),
   z.object({kind:z.literal('app'),confirmationId:uuid}).strict(),
 ]);
-export const RESOURCE_CONTEXT_CAPABILITY = 'recipe.resource-context.v1';
+export const RESOURCE_CONTEXT_CAPABILITY = 'recipe.resource-context.v2';
 export const resourceDeliverySchema=z.enum(['sent','pending','unknown','unavailable']);
 const task = z.discriminatedUnion('kind', [
   ...resourceReadTaskSchema.options, resourceAcquireTaskSchema,
@@ -84,6 +85,7 @@ const job = z.object({id:uuid,binding:uuid,scope:digest,task}).strict();
 export type CreatorJob = z.infer<typeof job>;
 const states = z.enum(['available','redeemed','disabled']);
 export const creatorAnswerSchema = z.discriminatedUnion('kind', [
+  z.object({kind:z.literal('resourcePreview'),preview:recipeBrowseDetailSchema}).strict(),
   z.object({kind:z.literal('resourceSnapshot'),snapshot:verifiedResourceSnapshotSchema}).strict(),
   z.object({kind:z.literal('resourceLatest'),latest:resourceLatestSchema}).strict(),
   z.object({kind:z.literal('resourceAcquired'),outcome:acquisitionOutcomeSchema}).strict(),

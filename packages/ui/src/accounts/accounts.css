@@ -31,3 +31,14 @@
 .account-public-profile > p { margin: 0; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
 .account-public-profile__edit { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .account-public-profile__edit input { flex: 1; min-width: 160px; }
+
+.account-public-profile form { gap: 20px; }
+.account-profile-avatar-edit { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.account-profile-avatar-edit input { min-width: 0; max-width: 100%; }
+.account-profile-feedback { margin: 0; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
+.account-identifier { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; max-width: 100%; }
+.account-identifier code { font-size: 11px; overflow-wrap: anywhere; user-select: text; }
+.account-identifier [role="status"] { flex-basis: 100%; color: var(--color-text-secondary); font-size: 12px; text-align: right; }
+.account-identifier-row { flex-wrap: wrap; gap: 8px 12px; }
+.account-identifier-row > .ss-row__copy { min-width: min(100%, 180px); }
+.account-identifier-row > .ss-row__trailing { min-width: 0; max-width: 100%; }

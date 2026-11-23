@@ -6,9 +6,13 @@ import {z} from 'zod';
 import {acquireMutex, closeMutex} from '../config/data-access.js';
 import {ensureDurableDirectory, syncDirectory} from '../config/bot-namespace.js';
 import {writeFileAtomic} from '../server/atomic-file.js';
-import {feedbackDraftSchema, feedbackOperationSchema, type FeedbackAttachment, type FeedbackDraft, type FeedbackOperation, type FeedbackStore} from './types.js';
+import {assertFeedbackAttachmentPrivacy} from './privacy.js';
+import {feedbackDraftSchema, feedbackOperationSchema, feedbackTooLongMessage, type FeedbackAttachment, type FeedbackDraft, type FeedbackOperation, type FeedbackStore} from './types.js';
 
 const uuid = z.string().uuid();
+// Up to 90,000 UTF-16 units of summary text can occupy six JSON bytes each.
+// Leave room for identifiers, filenames and the receipt while retaining a bounded read.
+const maxOperationBytes = 640 * 1024;
 const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 
 async function privateDirectory(path: string): Promise<void> {
@@ -71,6 +75,7 @@ export class FileFeedbackStore implements FeedbackStore {
           throw new Error('附件文件名不可用，请重命名后重试。');
         }
         const bytes = await boundedFile(path, 20 * 1024 * 1024);
+        assertFeedbackAttachmentPrivacy(filename, bytes);
         total += bytes.length;
         if (total > 40 * 1024 * 1024) throw new Error('一次反馈的附件总大小不能超过 40 MB。');
         const relativePath = `attachments/${randomUUID()}/${filename}`;
@@ -110,7 +115,7 @@ export class FileFeedbackStore implements FeedbackStore {
   async read(operationId: string): Promise<FeedbackOperation> {
     const path = join(this.directory(operationId), 'operation.json');
     const stat = await lstat(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 200000) throw new Error('本地反馈记录无效。');
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maxOperationBytes) throw new Error('本地反馈记录无效。');
     const value: unknown = JSON.parse(await readFile(path, 'utf8'));
     const operation = feedbackOperationSchema.parse(value);
     if (operation.draft.operationId !== operationId) throw new Error('本地反馈记录与操作不匹配。');
@@ -120,7 +125,9 @@ export class FileFeedbackStore implements FeedbackStore {
   async write(operation: FeedbackOperation): Promise<void> {
     const parsed = feedbackOperationSchema.parse(operation);
     await privateDirectory(this.directory(parsed.draft.operationId));
-    await writeFileAtomic(join(this.directory(parsed.draft.operationId), 'operation.json'), JSON.stringify(parsed), {durable: true});
+    const json = JSON.stringify(parsed);
+    if (Buffer.byteLength(json) > maxOperationBytes) throw new Error(feedbackTooLongMessage);
+    await writeFileAtomic(join(this.directory(parsed.draft.operationId), 'operation.json'), json, {durable: true});
     await syncDirectory(this.directory(parsed.draft.operationId));
   }
 
@@ -144,6 +151,7 @@ export class FileFeedbackStore implements FeedbackStore {
       }
       const bytes = await boundedFile(join(directory, ...parts), 20 * 1024 * 1024);
       if (bytes.length !== file.bytes || sha256(bytes) !== file.sha256) throw new Error('附件已发生变化，请重新核对后提交。');
+      assertFeedbackAttachmentPrivacy(file.filename, bytes);
     }
   }
 }

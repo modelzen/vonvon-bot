@@ -37,6 +37,7 @@
     "@vonvon/client": "0.1.0",
     "@vonvon/protocol": "0.1.0",
     "@larksuiteoapi/node-sdk": "1.71.1",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "commander": "^12.1.0",
     "cross-spawn": "^7.0.6",
     "ogg-opus-decoder": "^1.7.5",

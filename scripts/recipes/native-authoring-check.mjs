@@ -12,6 +12,7 @@ function imTransport() {
     replies = [];
   const updates = [];
   const faults = { update: false };
+  const findMessage = id => [...messages.values()].find(message => message.message_id === id);
   const channel = {
     send: async (chat, data) => {
       replies.push({ chat, data });
@@ -24,6 +25,10 @@ function imTransport() {
               const card_id = randomUUID();
               cards.set(card_id, JSON.parse(data.data));
               return { code: 0, data: { card_id } };
+            },
+            idConvert: async ({data}) => {
+              const message = findMessage(data.message_id);
+              return {code: 0, data: message ? {card_id: message.card} : {}};
             },
             update: async ({ path, data }) => {
               updates.push({cardId:path.card_id, ...data});
@@ -38,6 +43,10 @@ function imTransport() {
         v1: {
           chatMembers: { isInChat: async () => ({ code: 0, data: { is_in_chat: true } }) },
           message: {
+            get: async ({path}) => {
+              const message = findMessage(path.message_id);
+              return {code: 0, data: {items: message ? [{...message, msg_type: 'interactive'}] : []}};
+            },
             create: async ({ data }) => {
               const prior = messages.get(data.uuid);
               const message = prior ?? {
@@ -62,7 +71,7 @@ function imTransport() {
       const message = [...messages.values()].at(-1);
       const card = cards.get(message.card);
       const action = card.body.elements.flatMap((el) => el.behaviors ?? []).find((b) => b.value?.verb === verb);
-      assert.ok(action, 'the displayed private card has the requested button');
+      assert.ok(action, 'the displayed private card has a ' + verb + ' button');
       return {
         chatId,
         messageId: message.message_id,
@@ -542,7 +551,7 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
       const result = settled.operations.find(o=>o.operationId===operationId);
       assert.equal(result.state,'expired');
       assert.deepEqual(result.receipt,{operationId,status:'expired',outcome:'unknown'});
-      assert.match(result.syncMessage,/创作中心/);
+      assert.match(result.syncMessage,/我的配方/);
       await assert.rejects(act('resend',{operationId}));
     }
     assert.deepEqual(settled.operations.find(o=>o.operationId===accepted)?.receipt,acceptedReceipt);

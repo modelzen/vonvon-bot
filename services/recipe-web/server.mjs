@@ -2,8 +2,10 @@ import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { createLogin, detailPath, WebError } from './auth.mjs';
+import { createReleaseCodeAuth } from './release-code-oauth.mjs';
 import { createNativeLogin } from './native-auth.mjs';
-import { richDetail } from './dist/rich-detail.mjs';
+import { recipeCreationUrl } from './public/create.mjs';
+import { browseDetail, displayLogoLimit, verifiedDisplayLogo } from './dist/rich-detail.mjs';
 
 function origin(value, name, loopbackOnly = false) {
   const url = new URL(value);
@@ -16,6 +18,9 @@ function origin(value, name, loopbackOnly = false) {
 }
 
 const assets = new Map([
+  ['/account', ['account.html', 'text/html; charset=utf-8']],
+  ['/account.mjs', ['account.mjs', 'text/javascript; charset=utf-8']],
+  ['/account.css', ['account.css', 'text/css; charset=utf-8']],
   ['/auth/native', ['native.html', 'text/html; charset=utf-8']],
   ['/auth/native/complete', ['native.html', 'text/html; charset=utf-8']],
   ['/native.mjs', ['native.mjs', 'text/javascript; charset=utf-8']],
@@ -26,6 +31,7 @@ const assets = new Map([
   ['/studio.mjs', ['studio.mjs', 'text/javascript; charset=utf-8']],
   ['/setup.mjs', ['setup.mjs', 'text/javascript; charset=utf-8']],
   ['/app.mjs', ['app.mjs', 'text/javascript; charset=utf-8']],
+  ['/create.mjs', ['create.mjs', 'text/javascript; charset=utf-8']],
   ['/viewer.mjs', ['../dist/viewer.mjs', 'text/javascript; charset=utf-8']],
   ['/viewer.css', ['../dist/viewer.css', 'text/css; charset=utf-8']],
   ['/vendor/markdown-it.mjs', ['../node_modules/markdown-it/dist/browser/markdown-it.esm.min.mjs', 'text/javascript; charset=utf-8']],
@@ -35,7 +41,10 @@ const assets = new Map([
   ['/mark.png', ['mark.png', 'image/png']],
 ]);
 const idPattern = '[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}';
-const versionRead = new RegExp('^/v[12]/recipes/(' + idPattern + ')/versions/(' + idPattern + ')$', 'i');
+const displayLogoPath = new RegExp('^/media/versions/(' + idPattern + ')/logo[.]webp$', 'i');
+const versionRead = new RegExp('^/v[12]/recipes/(' + idPattern + ')/versions/(' + idPattern + ')(?:/preview)?$', 'i');
+const authorRead = new RegExp('^/v2/authors/' + idPattern + '/recipes$', 'i');
+const authorPage = new RegExp('^/authors/' + idPattern + '$', 'i');
 const claimPath = new RegExp('^/v[12]/versions/' + idPattern + '/(redeem|acquire)$', 'i');
 
 const draftPath = new RegExp('^/v1/drafts/' + idPattern + '$', 'i');
@@ -55,6 +64,15 @@ async function body(req, limit) {
   }
   return Buffer.concat(chunks).toString('utf8');
 }
+async function limitedMember(response, limit) {
+  const chunks = []; let size = 0;
+  for await (const chunk of response.body) {
+    size += chunk.length;
+    if (size > limit) throw new WebError(503, 'content_unavailable');
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
 
 export function createRecipeWeb(env = process.env) {
   const desktopChannel = env.RECIPE_DESKTOP_CHANNEL || 'preview';
@@ -67,6 +85,7 @@ export function createRecipeWeb(env = process.env) {
   const authConfig = { publicOrigin, supabaseOrigin, publishableKey: env.SUPABASE_PUBLISHABLE_KEY,
     providerNames: (env.RECIPE_WEB_PROVIDERS || 'github,google,apple').split(',').map(x => x.trim()) };
   const login = createLogin(authConfig), native = createNativeLogin(authConfig);
+  const releaseCode = createReleaseCodeAuth({ env, publicOrigin, apiOrigin, login });
 
   async function handle(req, res) {
     res.setHeader('Cache-Control', 'no-store');
@@ -87,7 +106,17 @@ export function createRecipeWeb(env = process.env) {
       res.end(url.pathname === '/open/draft' ? file.replace('__DESKTOP_CHANNEL__', desktopChannel) : file);
       return;
     }
+    if (releaseCode && await releaseCode.handle(req, res, url)) return;
     if (await native.handle(req, res, url)) return;
+    const logo = req.method === 'GET' && displayLogoPath.exec(url.pathname);
+    if (logo) {
+      const response = await fetch(brokerOrigin + '/v2/versions/' + logo[1].toLowerCase() + '/display-logo', {
+        redirect: 'error', signal: AbortSignal.timeout(12_000),
+      });
+      if (!response.ok) throw new WebError(response.status === 404 ? 404 : 503, 'content_unavailable');
+      const bytes = verifiedDisplayLogo(await limitedMember(response, displayLogoLimit));
+      res.writeHead(200, {'Content-Type': 'image/webp'}); res.end(bytes); return;
+    }
     if (['POST', 'PATCH', 'DELETE'].includes(req.method) && req.headers.origin !== publicOrigin) throw new WebError(403, 'invalid_origin');
     if (req.method === 'GET' && url.pathname === '/auth/session') return json(res, 200, login.status(req));
     if (req.method === 'POST' && url.pathname === '/auth/continuation') {
@@ -100,61 +129,64 @@ export function createRecipeWeb(env = process.env) {
       return login.start(req, res, new URLSearchParams(await body(req, 4096)));
     }
     if (req.method === 'GET' && url.pathname === '/auth/callback') return login.callback(req, res, url);
-    if (req.method === 'POST' && url.pathname === '/auth/logout') return login.logout(req, res);
+    if (req.method === 'POST' && url.pathname === '/auth/logout') {
+      const current = login.status(req).displaySession;
+      login.logout(req, res);
+      if (current && releaseCode) releaseCode.logout(current);
+      return;
+    }
     if (url.pathname.startsWith('/api/')) {
       const path = url.pathname.slice(4);
-      const read = req.method === 'GET' && (versionRead.test(path) || ['/v1/community/recipes', '/v1/me/recipes', '/v2/community/recipes', '/v2/me/recipes', '/v2/me/publications'].includes(path));
+      const accountProfile = path === '/v2/me/account-profile';
+      const profileInitialize = path === '/v2/me/account-profile/initialize';
+      if ((accountProfile || profileInitialize) && url.search) throw new WebError(400, 'invalid_path');
+      const profileRead = accountProfile && req.method === 'GET';
+      const profileWrite = (accountProfile || profileInitialize) && req.method === 'POST';
+      const read = req.method === 'GET' && (versionRead.test(path) || authorRead.test(path) || ['/v1/community/recipes', '/v1/me/recipes', '/v2/community/recipes', '/v2/me/recipes', '/v2/me/publications'].includes(path));
       const claim = req.method === 'POST' && claimPath.test(path);
       const creatorRead = req.method === 'GET' && (['/v1/me/drafts', '/v1/me/publications'].includes(path) || draftPath.test(path) || codesPath.test(path));
       const creatorWrite = (req.method === 'POST' && (path === '/v1/drafts' || publishPath.test(path) || codesPath.test(path) || disableCode.test(path))) || (['PATCH', 'DELETE'].includes(req.method) && draftPath.test(path));
-      if (!read && !claim && !creatorRead && !creatorWrite) throw new WebError(404, 'not_found');
-      const guardedRead = req.method === 'GET' && versionRead.test(path) && req.headers['x-vonvon-session'] !== undefined;
-      const guarded = claim || creatorWrite || guardedRead;
+      if (!read && !claim && !creatorRead && !creatorWrite && !profileRead && !profileWrite) throw new WebError(404, 'not_found');
+      const privateRead = req.method === 'GET' && /^\/v[12]\/me\//.test(path);
+      const guardedRead = req.method === 'GET' && (privateRead || (versionRead.test(path) && req.headers['x-vonvon-session'] !== undefined));
+      const guarded = claim || creatorWrite || guardedRead || profileRead || profileWrite;
       const access = await login.access(req, { write: guarded });
-      if (guardedRead && !access) throw new WebError(409, 'session_changed');
-      if ((claim || creatorRead || creatorWrite || /^\/v[12]\/me\//.test(path)) && !access) throw new WebError(401, 'login_required');
+      if (guardedRead && !access) throw new WebError(privateRead ? 401 : 409, privateRead ? 'login_required' : 'session_changed');
+      if ((claim || creatorRead || creatorWrite || profileRead || profileWrite || /^\/v[12]\/me\//.test(path)) && !access) throw new WebError(401, 'login_required');
       const headers = { Accept: 'application/json' };
       if (access) headers.Authorization = 'Bearer ' + access;
       let payload;
-      if (claim || creatorWrite) {
+      if (claim || creatorWrite || profileWrite) {
         if (req.method !== 'DELETE' && !req.headers['content-type']?.startsWith('application/json')) throw new WebError(415, 'invalid_body');
         headers['Content-Type'] = 'application/json';
         headers['Idempotency-Key'] = String(req.headers['idempotency-key'] || '');
         if (req.headers['if-match']) headers['If-Match'] = req.headers['if-match'];
-        payload = await body(req, creatorWrite ? 448 * 1024 : 4096);
+        payload = await body(req, profileWrite ? (profileInitialize ? 4096 : 3 * 1024 * 1024) : creatorWrite ? 448 * 1024 : 4096);
       }
       login.assertAccess(req, access, { write: guarded });
-      const response = await fetch(apiOrigin + path + url.search, {
+      const browseRead = req.method === 'GET' && path.startsWith('/v2/recipes/') && versionRead.test(path);
+      const upstreamPath = browseRead && !path.endsWith('/preview') ? path + '/preview' : path;
+      const response = await fetch(apiOrigin + upstreamPath + url.search, {
         method: req.method, headers, body: payload, redirect: 'error', signal: AbortSignal.timeout(12_000),
       });
       let data = await response.json();
       login.assertAccess(req, access, { write: guarded });
-      if (response.ok && path.startsWith('/v2/recipes/')) {
-        if (['withdrawn', 'blocked'].includes(data.state)) throw new WebError(404, 'not_found');
+      if (response.ok && browseRead) {
+        if (data.state === 'blocked' || data.state === 'withdrawn' && !data.recipeId) throw new WebError(404, 'not_found');
         const [, recipeId, versionId] = versionRead.exec(path.toLowerCase());
-        data = await richDetail(data, recipeId, versionId, async (memberPath, limit) => {
-          login.assertAccess(req, access, { write: guarded });
-          const member = await fetch(brokerOrigin + memberPath, {headers, redirect: 'error', signal: AbortSignal.timeout(12_000)});
-          if (!member.ok) throw new WebError(503, 'content_unavailable');
-          const chunks = []; let size = 0;
-          for await (const chunk of member.body) {
-            size += chunk.length;
-            if (size > limit) throw new WebError(503, 'content_unavailable');
-            chunks.push(chunk);
-          }
-          login.assertAccess(req, access, { write: guarded });
-          return Buffer.concat(chunks);
-        });
+        data = browseDetail(data, recipeId, versionId);
         login.assertAccess(req, access, { write: guarded });
       }
       if (response.headers.has('retry-after')) res.setHeader('Retry-After', response.headers.get('retry-after'));
       return json(res, response.status, data);
     }
     if (req.method === 'GET') {
-      const asset = assets.get(url.pathname) || ((['/', '/library'].includes(url.pathname) || detailPath.test(url.pathname)) && ['index.html', 'text/html; charset=utf-8']);
+      const asset = assets.get(url.pathname) || ((['/', '/library', '/publications'].includes(url.pathname) || authorPage.test(url.pathname) || detailPath.test(url.pathname)) && ['index.html', 'text/html; charset=utf-8']);
       if (asset) {
         const file = await readFile(new URL('public/' + asset[0], import.meta.url));
-        res.writeHead(200, { 'Content-Type': asset[1] }); res.end(file); return;
+        const content = asset[1].startsWith('text/html') ? file.toString('utf8')
+          .replaceAll('__DESKTOP_CHANNEL__', desktopChannel).replaceAll('__RECIPE_CREATE_URL__', recipeCreationUrl(desktopChannel)) : file;
+        res.writeHead(200, { 'Content-Type': asset[1] }); res.end(content); return;
       }
     }
     throw new WebError(404, 'not_found');
@@ -164,7 +196,7 @@ export function createRecipeWeb(env = process.env) {
       { error: { code: error instanceof WebError ? error.message : 'unavailable' } });
     else res.end();
   }));
-  server.on('close', () => { login.stop(); native.stop(); });
+  server.on('close', () => { login.stop(); native.stop(); void releaseCode?.close(); });
   return server;
 }
 

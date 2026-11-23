@@ -50,7 +50,8 @@ function fixture() {
   });
   const authorize = vi.fn(async (url: URL) => {
     expect(url.origin + url.pathname).toBe(issuer + '/auth/v1/authorize');
-    expect([...url.searchParams.keys()].sort()).toEqual(['code_challenge', 'code_challenge_method', 'provider', 'redirect_to']);
+    expect([...url.searchParams.keys()].sort()).toEqual(['code_challenge', 'code_challenge_method', 'prompt', 'provider', 'redirect_to']);
+    expect(url.searchParams.get('prompt')).toBe('select_account');
     expect(url.searchParams.get('provider')).toBe(provider);
     expect(url.searchParams.get('redirect_to')).toBe(web + '/auth/native/callback');
     expect(url.searchParams.get('code_challenge_method')).toBe('s256');
@@ -63,6 +64,8 @@ function fixture() {
   const ack = vi.fn(async () => Response.json({ status: 'completed' }));
   const cancel = vi.fn(async () => Response.json({ status: 'cancelled' }));
   const avatar = vi.fn(async () => new Response(null, { status: 404 }));
+  const logout = vi.fn(async () => new Response(null, { status: 204 }));
+  const profile = vi.fn(async () => new Response(null, {status: 404}));
   const transport = vi.fn<typeof fetch>(async (input, init = {}) => {
     const url = new URL(String(input));
     const headers = new Headers(init.headers);
@@ -87,6 +90,12 @@ function fixture() {
     }
     if (url.origin === issuer) {
       expect(headers.get('apikey')).toBe(issued.publishableKey);
+      if (url.pathname === '/auth/v1/logout') {
+        expect(init.method).toBe('POST');
+        expect(url.searchParams.get('scope')).toBe('local');
+        expect(headers.get('Authorization')).toBe('Bearer ' + access);
+        return logout();
+      }
       if (url.pathname === '/auth/v1/user') { expect(headers.get('Authorization')).toBe('Bearer ' + access); return verifyUser(); }
       if (url.searchParams.get('grant_type') === 'refresh_token') return rotate();
       if (url.searchParams.get('grant_type') === 'pkce') return exchange(body);
@@ -95,6 +104,7 @@ function fixture() {
       expect(headers.get('Authorization')).toBe('Bearer ' + access);
       return url.pathname === '/v1/me' ? me() : Response.json({ items: [] });
     }
+    if (url.origin === api && url.pathname === '/v2/me/account-profile') return profile();
     throw new Error('Unexpected fixture request');
   });
   const openBrowser = vi.fn(async (_url: string) => {});
@@ -104,7 +114,7 @@ function fixture() {
     sessions.add(session);
     return session;
   }
-  return { create, store, transport, issued, openBrowser, poll, ack, cancel, rotate, authorize, exchange, verifyUser, me, avatar };
+  return { create, store, transport, issued, openBrowser, poll, ack, cancel, rotate, authorize, exchange, verifyUser, me, avatar, logout, profile };
 }
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -114,6 +124,165 @@ function deferred<T>() {
 const waitFor = (assertion: () => void) => vi.waitFor(assertion, { interval: 5, timeout: 2500 });
 
 describe('native desktop account', () => {
+  it('allows anonymous public author pages and valid cursors without sending account credentials', async () => {
+    const f = fixture(), a = f.create(), authorId = randomUUID(), cursor = randomUUID();
+    f.transport.mockResolvedValue(Response.json({items: []}));
+    for (const path of [`/v2/authors/${authorId}/recipes`, `/v2/authors/${authorId}/recipes?cursor=${cursor}`]) {
+      await a.publicRequest!(path);
+      const [url, init] = f.transport.mock.calls.at(-1)!;
+      expect(String(url)).toBe(api + path);
+      expect(new Headers(init?.headers).has('Authorization')).toBe(false);
+      expect(init?.credentials).toBe('omit');
+    }
+    const sent = f.transport.mock.calls.length;
+    for (const path of [`/v2/authors/invalid/recipes`, `/v2/authors/${authorId}/recipes?cursor=invalid`,
+      `/v2/authors/${authorId}/recipes?cursor=${cursor}&cursor=${cursor}`, `/v2/authors/${authorId}/recipes?private=1`]) {
+      await expect(a.publicRequest!(path)).rejects.toThrow();
+    }
+    expect(f.transport).toHaveBeenCalledTimes(sent);
+  });
+
+  it('opens only the configured website account settings for the current account', async () => {
+    const f = fixture(), a = f.create();
+    await expect(a.manage!()).rejects.toThrow();
+    expect(f.openBrowser).not.toHaveBeenCalled();
+    await a.login(); await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
+    await a.manage!();
+    expect(f.openBrowser).toHaveBeenLastCalledWith(web + '/account#account=' + business);
+    await a.logout();
+    await expect(a.manage!()).rejects.toThrow();
+    expect(f.openBrowser).toHaveBeenCalledTimes(2);
+  });
+
+  it('deduplicates profile refreshes and updates website edits without another OAuth flow', async () => {
+    const f = fixture(), a = f.create(); await a.login();
+    await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
+    const held = deferred<Response>(); f.profile.mockReturnValueOnce(held.promise);
+    const first = a.refresh!(), second = a.refresh!();
+    expect(first).toBe(second);
+    held.resolve(Response.json({authorId: business, displayName: '网站修改的昵称', revision: 4, avatarDataUrl: 'data:image/png;base64,YQ=='}));
+    await Promise.all([first, second]);
+    expect(a.status()).toMatchObject({accountId: business, displayName: '网站修改的昵称', profileRevision: 4, avatarDataUrl: 'data:image/png;base64,YQ=='});
+    expect(f.openBrowser).toHaveBeenCalledOnce();
+    expect(f.rotate).not.toHaveBeenCalled();
+    expect(f.profile).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the signed-in account when refreshing website profile fails', async () => {
+    const f = fixture(), a = f.create(); await a.login();
+    await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
+    f.profile.mockRejectedValueOnce(new TypeError('offline'));
+    await expect(a.refresh!()).rejects.toThrow();
+    expect(a.status()).toMatchObject({kind: 'signedIn', accountId: business});
+    expect((await f.store.read())?.accountId).toBe(business);
+    f.profile.mockResolvedValueOnce(Response.json({authorId: business, displayName: '已恢复', revision: 5}));
+    await a.refresh!();
+    expect(a.status()).toMatchObject({displayName: '已恢复'});
+  });
+
+  it('discards a website profile refresh that completes after the account switches', async () => {
+    const f = fixture(), a = f.create(); await a.login();
+    await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
+    const held = deferred<Response>(); f.profile.mockReturnValueOnce(held.promise);
+    const pending = a.refresh!(); const rejected = expect(pending).rejects.toThrow();
+    await a.logout();
+    const nextAccount = randomUUID(); f.me.mockResolvedValueOnce(Response.json({accountId: nextAccount}));
+    await a.login(); await waitFor(() => expect(a.status()).toMatchObject({kind: 'signedIn', accountId: nextAccount}));
+    held.resolve(Response.json({authorId: business, displayName: '旧账号的网站昵称', revision: 20}));
+    await rejected;
+    expect(a.status()).toMatchObject({accountId: nextAccount, displayName: 'Example User'});
+  });
+
+  it('restores the saved nickname and custom avatar while keeping the same account ID', async () => {
+    const f = fixture(), avatarDataUrl = 'data:image/webp;base64,YQ==';
+    f.profile.mockResolvedValueOnce(Response.json({authorId: business, displayName: '自选昵称', avatarDataUrl, revision: 2}));
+    const a = f.create(); await a.login();
+    await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
+    expect(a.status()).toMatchObject({accountId: business, displayName: '自选昵称', avatarDataUrl, profileRevision: 2});
+    expect(f.avatar).not.toHaveBeenCalled();
+  });
+
+  it('applies profile saves immediately, ignores older revisions and restores the provider avatar on removal', async () => {
+    const f = fixture(), a = f.create(); await a.login();
+    await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
+    a.applyProfile!(business, {authorId: business, displayName: '新昵称', avatarDataUrl: 'data:image/png;base64,YQ==', revision: 2});
+    expect(a.status()).toMatchObject({accountId: business, displayName: '新昵称', profileRevision: 2, avatarDataUrl: 'data:image/png;base64,YQ=='});
+    a.applyProfile!(business, {authorId: business, displayName: '旧昵称', revision: 1});
+    expect(a.status()).toMatchObject({displayName: '新昵称', profileRevision: 2});
+    a.applyProfile!(business, {authorId: business, displayName: '新昵称', revision: 3});
+    expect(a.status()).not.toHaveProperty('avatarDataUrl');
+    expect(a.status()).toMatchObject({avatarUrl: user.user_metadata.avatar_url, profileRevision: 3});
+    await a.logout();
+    a.applyProfile!(business, {authorId: business, displayName: '迟到的资料', revision: 4});
+    expect(a.status()).toEqual({kind: 'signedOut'});
+  });
+
+  it('does not let an earlier token refresh overwrite a newer saved profile', async () => {
+    const f = fixture(), a = f.create(); await a.login();
+    await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
+    const held = deferred<Response>(); f.profile.mockReturnValueOnce(held.promise);
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 3_590_000);
+    const refreshing = a.request(business, '/v1/me/recipes');
+    await waitFor(() => expect(f.profile).toHaveBeenCalledTimes(2));
+    a.applyProfile!(business, {authorId: business, displayName: '更新的昵称', revision: 8});
+    held.resolve(Response.json({authorId: business, displayName: '刷新中的旧昵称', revision: 7}));
+    await refreshing;
+    expect(a.status()).toMatchObject({accountId: business, displayName: '更新的昵称', profileRevision: 8});
+  });
+
+  it('clears local credentials and revokes only the outgoing session without blocking the next login', async () => {
+    const f = fixture(), a = f.create();
+    await a.login();
+    await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
+    const held = deferred<Response>();
+    f.logout.mockReturnValueOnce(held.promise);
+    const loggingOut = a.logout();
+    expect(a.status()).toEqual({kind: 'signedOut'});
+    await waitFor(() => expect(f.store.clear).toHaveBeenCalledTimes(2));
+    await expect(a.request(business, '/v1/me/recipes')).rejects.toThrow();
+    const nextAccount = randomUUID();
+    f.me.mockResolvedValueOnce(Response.json({accountId: nextAccount}));
+    await a.login();
+    await waitFor(() => expect(a.status()).toMatchObject({kind: 'signedIn', accountId: nextAccount}));
+    held.resolve(new Response(null, {status: 204}));
+    await loggingOut;
+    expect(a.status()).toMatchObject({kind: 'signedIn', accountId: nextAccount});
+    expect((await f.store.read())?.accountId).toBe(nextAccount);
+    expect(f.logout).toHaveBeenCalledOnce();
+  });
+
+  it('still removes local credentials when remote logout is offline', async () => {
+    const f = fixture(), a = f.create();
+    await a.login();
+    await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
+    f.logout.mockRejectedValueOnce(new TypeError('offline'));
+    expect(await a.logout()).toEqual({kind: 'signedOut'});
+    expect(await f.store.read()).toBeUndefined();
+    expect(f.logout).toHaveBeenCalledOnce();
+  });
+
+  it('revokes an outgoing session after its access token expires during sleep', async () => {
+    const f = fixture(), a = f.create(); await a.login();
+    await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 3_610_000);
+    expect(await a.logout()).toEqual({kind: 'signedOut'});
+    expect(f.rotate).toHaveBeenCalledOnce();
+    expect(f.logout).toHaveBeenCalledOnce();
+    expect(await f.store.read()).toBeUndefined();
+    expect(f.store.save).toHaveBeenCalledOnce();
+  });
+
+  it('retries remote logout with only the outgoing refresh token when its JWT is rejected', async () => {
+    const f = fixture(), a = f.create(); await a.login();
+    await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
+    f.logout.mockResolvedValueOnce(Response.json({msg: 'JWT expired'}, {status: 401}));
+    expect(await a.logout()).toEqual({kind: 'signedOut'});
+    expect(f.rotate).toHaveBeenCalledOnce();
+    expect(f.logout).toHaveBeenCalledTimes(2);
+    expect(await f.store.read()).toBeUndefined();
+    expect(f.store.save).toHaveBeenCalledOnce();
+  });
+
   it('recovers a failed avatar in the background without waiting for token refresh', async () => {
     vi.useFakeTimers();
     const f = fixture();
@@ -589,7 +758,7 @@ it('checks the captured device again after a credential refresh and before sendi
   expect(f.transport.mock.calls.some(([url])=>String(url).endsWith(path))).toBe(false);
 });
 
-it('routes only canonical v1/v2 paths to the configured API and keeps public member reads anonymous', async()=>{
+it('routes canonical API paths, keeps public previews anonymous and rejects anonymous full objects', async()=>{
   const f=fixture(),a=f.create(),version=randomUUID(),object=randomUUID();
   await a.login();await waitFor(()=>expect(a.status().kind).toBe('signedIn'));
   f.transport.mockResolvedValue(Response.json({}));
@@ -598,7 +767,7 @@ it('routes only canonical v1/v2 paths to the configured API and keeps public mem
     await a.request(business,path);
     seen.push(new Headers(f.transport.mock.lastCall?.[1]?.headers).get('Authorization'));
   }
-  for(const path of ['/v2/community/recipes?q=%E7%BE%A4','/v2/recipes/'+object+'/versions/'+version,'/v2/versions/'+version+'/display-logo','/v2/versions/'+version+'/objects/'+object]){
+  for(const path of ['/v2/community/recipes?q=%E7%BE%A4','/v2/recipes/'+object+'/versions/'+version,'/v2/versions/'+version+'/display-logo','/v2/recipes/'+object+'/versions/'+version+'/preview']){
     await a.publicRequest!(path);
     seen.push(new Headers(f.transport.mock.lastCall?.[1]?.headers).get('Authorization'));
   }
@@ -607,7 +776,7 @@ it('routes only canonical v1/v2 paths to the configured API and keeps public mem
   for(const path of ['https://wrong.example/v2/me','//wrong.example/v2/me','/v3/me','/v2/a/../me','/v2/%2e%2e/v1/me','/v2/a%2fb','/v2/a%252fb','/v2/me#','/v2/me?x=1#x','/v2//me','/v2/\\me']){
     await expect(a.request(business,path)).rejects.toThrow();
   }
-  for(const path of ['/v2/me/drafts','/v2/drafts/'+version+'/objects/'+object,'/v2/versions/'+version+'/source-items','/v2/versions/'+version+'/display-logo?token=x'])
+  for(const path of ['/v2/me/drafts','/v2/drafts/'+version+'/objects/'+object,'/v2/versions/'+version+'/objects/'+object,'/v2/versions/'+version+'/source-items','/v2/versions/'+version+'/display-logo?token=x'])
     await expect(a.publicRequest!(path)).rejects.toThrow();
   expect(f.transport.mock.calls).toHaveLength(prior);
   await a.logout();

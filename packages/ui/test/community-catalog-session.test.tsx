@@ -9,9 +9,9 @@ import {CommunityPage} from '../src/community/CommunityPage';
 const state = vi.hoisted(() => ({owner: 'a', client: {}, device: {id: 'dev'}}));
 vi.mock('../src/account-context', () => ({useAccount: () => ({supported: true, status: {kind: 'signedIn', accountId: state.owner}}), accountStatusText: () => ''}));
 vi.mock('../src/client-context', () => ({useShellCapabilities: () => undefined, useClient: () => state.client, useActiveDevice: () => state.device}));
-vi.mock('../src/settings/DraftGuard', () => ({useDraft: () => {}, useDraftGuard: () => ({navigate: (action: () => void) => action()})}));
+vi.mock('../src/settings/DraftGuard', () => ({useDraft: () => {}, useOptionalDraftGuard: () => undefined, useDraftGuard: () => ({navigate: (action: () => void) => action()})}));
 vi.mock('../src/community/RecipeContent', () => ({
-  CopyButton: () => null, RecipeMark: () => null,
+  CopyButton: () => null, RecipeMark: () => null, useCreatorName: (creator: {displayName: string} | undefined) => creator?.displayName,
   RecipeCard: ({recipe}: {recipe: RecipeSummary}) => <span>{recipe.public.name}</span>,
   RecipeDetails: ({management}: {management?: ReactNode}) => <div>{management}</div>,
 }));
@@ -40,7 +40,7 @@ it.each([false, true])('refreshes the current account catalog after an unmounted
         if (late && input.accountId === 'b' && !committed) await new Promise<void>(resolve => pending.push(resolve));
         return result;
       }
-      case 'detail': return recipe;
+      case 'browse': return recipe;
       case 'shareLink': return {url: 'https://community.example/version'};
       case 'withdraw': await new Promise<void>(resolve => {finish = resolve;}); committed = true; return;
       default: return {items: []};
@@ -70,8 +70,8 @@ it.each([false, true])('refreshes the current account catalog after an unmounted
     expect(host.textContent).toContain('社区正在准备第一份配方');
     expect(host.textContent).not.toContain('原精选');
     expect(events.filter(event => event === 'withdraw:a')).toHaveLength(1);
-    expect(events.filter(event => event === 'detail:b')).toHaveLength(0);
-    expect(events.filter(event => event === 'detail:a')).toHaveLength(1);
+    expect(events.filter(event => event === 'browse:b')).toHaveLength(0);
+    expect(events.filter(event => event === 'browse:a')).toHaveLength(1);
   } finally {
     await act(async () => {root.unmount(); host.remove();});
   }

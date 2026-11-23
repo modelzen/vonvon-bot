@@ -6,6 +6,8 @@ import {
   RECIPE_RICH_LIMITS, recipeRichReleaseSchema, recipeRichTextSchema, type RecipeRichText,
 } from './recipe-rich.js';
 import {verifyRichRecipeRelease} from './recipe-rich-codec.js';
+import {recipeBrowseDetailSchema} from './recipe-browse.js';
+import {groupIdSchema} from './domain.js';
 
 const id = z.string().uuid();
 const revision = z.number().int().positive().max(2147483647);
@@ -14,7 +16,8 @@ export const exactResourceVersionSchema = z.object({recipeId: id, versionId: id}
 export type ExactResourceVersion = z.infer<typeof exactResourceVersionSchema>;
 const target = exactResourceVersionSchema;
 export const resourceReadTaskSchema = z.discriminatedUnion('kind', [
-  z.object({kind: z.literal('resourceRead'), target}).strict(),
+  z.object({kind: z.literal('resourcePreview'), target}).strict(),
+  z.object({kind: z.literal('resourceRead'), target, groupId: groupIdSchema, groupIdentity: digest}).strict(),
   z.object({kind: z.literal('resourceLatest'), target, revision}).strict(),
 ]);
 export type ResourceReadTask = z.infer<typeof resourceReadTaskSchema>;
@@ -122,6 +125,22 @@ function pages(scope: string, documents: Document[]): ResourceDocuments {
     return {kind: 'text', documentId: query.documentId, text: decoder.decode(bytes.subarray(from, end)),
       nextCursor: end < bytes.length ? query.documentId + '.' + end : null};
   }};
+}
+
+export async function openResourcePreview(input: unknown): Promise<ResourceDocuments> {
+  const preview = recipeBrowseDetailSchema.parse(input);
+  if (!preview.owned && !preview.acquired) throw new Error('请先获取这个版本。');
+  const scope = await sha256(utf8.encode(JSON.stringify(preview)));
+  const documents: Document[] = [
+    {kind: 'public', label: preview.public.name, body: JSON.stringify({...preview.public, format: preview.format,
+      fullContentRead: false,
+      ...(preview.preview ? {summaryCounts: {settings: preview.preview.settings.length, skills: preview.preview.skills.length,
+        rules: preview.preview.ruleCount, tasks: preview.preview.taskCount, omittedSettings: preview.preview.omittedSettingCount ?? 0}} : {}),
+      detail: '只含展示摘要。缺省字段表示未展示，不能据此判断完整配方没有角色、规则、文件、任务或 Setup。新群方案应包含按所选版本完整配方配置；本人确认后创建绑定，再为该群准备完整内容。'})},
+  ];
+  for (const setting of preview.preview?.settings ?? []) documents.push({kind: 'setting', label: setting.field, body: JSON.stringify(setting.value)});
+  for (const skill of preview.preview?.skills ?? []) documents.push({kind: 'skill', label: skill.name, body: skill.description || '未填写技能说明。'});
+  return pages(scope, documents);
 }
 
 export async function openResourceSnapshot(input: unknown): Promise<ResourceDocuments> {

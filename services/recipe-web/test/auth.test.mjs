@@ -5,6 +5,22 @@ import { createLogin, createLoginAdmission } from '../auth.mjs';
 const response = () => ({ writeHead(status, headers) { this.status = status; this.headers = headers; }, end() {} });
 const cookie = value => value.split(';', 1)[0];
 
+test('web OAuth selects accounts for GitHub and Google while preserving PKCE and exact callback', t => {
+  const login = createLogin({publicOrigin: 'https://community.example', supabaseOrigin: 'https://issuer.example',
+    publishableKey: 'synthetic', providerNames: ['github', 'google', 'apple']});
+  t.after(() => login.stop());
+  for (const provider of ['github', 'google', 'apple']) {
+    const res = response(); login.start({headers: {}}, res, new URLSearchParams({provider}));
+    const url = new URL(res.headers.Location);
+    assert.equal(url.origin + url.pathname, 'https://issuer.example/auth/v1/authorize');
+    assert.equal(url.searchParams.get('provider'), provider);
+    assert.equal(url.searchParams.get('prompt'), provider === 'apple' ? null : 'select_account');
+    assert.equal(url.searchParams.get('redirect_to'), 'https://community.example/auth/callback');
+    assert.equal(url.searchParams.get('code_challenge_method'), 's256');
+    assert.match(url.searchParams.get('code_challenge'), /^[A-Za-z0-9_-]{43}$/);
+  }
+});
+
 test('logout invalidates a write that is waiting for token refresh', async t => {
   const originalFetch = globalThis.fetch;
   let release;

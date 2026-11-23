@@ -18,7 +18,7 @@ async function runtime(t, route, returnedRecipe = recipe) {
     calls.push({url, options});
     if (url === '/auth/session') return Response.json({signedIn: true, displaySession: 'test-session', providers: []});
     if (url === '/api/v2/me/recipes') return Response.json({items: [returnedRecipe], nextCursor: null});
-    if (url === '/api/v1' + path) return Response.json(returnedRecipe);
+    if (url === '/api/v2' + path + '/preview') return Response.json(returnedRecipe);
     throw Error('Unexpected request ' + url);
   };
   const run = new AsyncFunction('document', 'window', 'location', 'history', 'navigator', 'crypto', 'fetch', 'BroadcastChannel', 'setTimeout', 'clearTimeout', source);
@@ -34,10 +34,19 @@ test('library cards describe an owned entry without asking for another code and 
   const card = h.document.querySelector('.card');
   assert.ok(card);
   assert.doesNotMatch(card.textContent, /需分享码/);
-  assert.equal(card.getAttribute('href'), path + '?from=library');
+  assert.equal(card.querySelector('.card-main').getAttribute('href'), path + '?from=library');
   const back = h.document.querySelector('a[aria-label="返回 Bot 配方"]');
   assert.equal(back.getAttribute('href'), '/');
   assert.ok(back.querySelector('svg[aria-hidden="true"]'));
+});
+
+test('catalog-shaped summaries load their public version logo and preserve a readable fallback', async t => {
+  const h = await runtime(t, '/library', {...recipe, hasDisplayLogo: true});
+  const mark = h.document.querySelector('.card img');
+  assert.equal(mark.getAttribute('src'), '/media/versions/' + recipe.versionId + '/logo.webp');
+  mark.dispatchEvent(new h.document.defaultView.Event('error'));
+  assert.equal(h.document.querySelector('.card .card-mark').textContent, '会');
+  assert.equal(h.document.querySelector('.card img'), null);
 });
 
 test('a library detail returns to that library while shared URLs remain the fixed version path', async t => {

@@ -44,6 +44,7 @@ export function cardDisplayPresentationDefaults(cfg:Partial<AppConfig>):ProjectP
 /** A project = a Feishu group bound to a fixed working directory. */
 export interface Project {
   feedback?: import('../feedback/config').GroupFeedbackConfig;
+  releaseCode?: {binding:string; registration:string; revision:string};
   bindingIncarnation?: string;
   projectSettingsRevision?: number;
   richRecipe?: import('../recipe/rich-state').RichRecipeState;

@@ -39,6 +39,7 @@ export * from './desktop-community.js';
 export * from './recipe-install.js';
 export * from './desktop-recipe-use.js';
 export * from './recipe-source.js';
+export * from './setup-skill.js';
 export * from './recipe-creator.js';
 export * from './recipe-authoring.js';
 export * from './desktop-recipe-authoring.js';
@@ -52,3 +53,6 @@ export * from './recipe-rich-authoring.js';
 
 export * from './recipe-preview.js';
 export * from './recipe-resource-context.js';
+export * from './recipe-browse.js';
+
+export * from './group-navigation.js';

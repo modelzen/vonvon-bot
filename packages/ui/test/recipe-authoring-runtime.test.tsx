@@ -5,7 +5,7 @@ import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import {
   accountStatusSchema, communityRequestSchema, desktopAuthoringReplySchema, desktopAuthoringRequestSchema,
   desktopSnapshotSchema, type AccountStatus, type CommunityRequest, type DesktopAuthoringOperation,
-  type DesktopAuthoringReply, type DesktopAuthoringRequest, type RecipeDraft,
+  type DesktopAuthoringReply, type DesktopAuthoringRequest, type RecipeBrowseDetail, type RecipeDraft,
 } from '@vonvon/protocol';
 import {createDesktopFacades} from '../../desktop/src/facade';
 import {desktopChannels} from '../../desktop/src/ipc-contract';
@@ -58,6 +58,11 @@ let facade: ReturnType<typeof createDesktopFacades>;
 const success = (value: unknown) => ({ok:true,value});
 const text = () => document.querySelector('main')?.textContent ?? '';
 const dialog = (title: string) => [...document.querySelectorAll('[role="dialog"]')].find(element=>element.querySelector('header h2')?.textContent===title);
+function browseFixture(recipeId: string, versionId: string, overrides: Partial<RecipeBrowseDetail> = {}): RecipeBrowseDetail {
+  return {recipeId, versionId, revision: 1, format: 'role-v1', public: draft.public,
+    creator: {authorId: accountB, displayName: '配方作者'}, owned: false, acquired: false,
+    state: 'listed', hasDisplayLogo: false, preview: {settings: [], skills: [], ruleCount: 0, taskCount: 0}, ...overrides};
+}
 async function click(label: string) {
   const button = [...document.querySelectorAll<HTMLButtonElement>('button')].find(button => (button.getAttribute('aria-label') ?? button.textContent?.trim()) === label);
   expect(button, label).toBeDefined(); expect(button!.disabled, label).toBe(false);
@@ -113,7 +118,7 @@ beforeEach(() => {
     if(request.type==='publications')return {items:[]};
     if(request.type==='draft')return draft;
     if(request.type==='recoverRichDraftMetadata'&&draft.format==='rich-v2')return {status:'current',draft};
-    if(request.type==='detail') return {recipeId:request.recipeId,versionId:request.versionId,revision:7,public:draft.public,config:{role:'已发布内容'},owned:true,acquired:false};
+    if(request.type==='browse') return browseFixture(request.recipeId,request.versionId,{revision:7,creator:{authorId:accountA,displayName:'作者'},owned:true});
     if(request.type==='shareLink') return {url:'https://community.example/recipe'};
     throw new Error('Unexpected cloud request '+request.type);
   };
@@ -144,7 +149,8 @@ async function draw(view=A) {
 async function openResource() {
   const normal = cloud;
   cloud = async request => request.type === 'library' ? {items: [{recipeId: accountB, versionId: draftId, revision: 1, public: draft.public}], nextCursor: null}
-    : request.type === 'latestVersion' ? {status: 'unknown'} : normal(request);
+    : request.type === 'latestVersion' ? {status: 'unknown'}
+      : request.type === 'browse' ? browseFixture(request.recipeId,request.versionId,{acquired:true}) : normal(request);
   await draw(); await click('社区'); await click('我的配方');
   await act(async () => document.querySelector<HTMLButtonElement>('.community-card')!.click());
   await click('交给 Bot');
@@ -160,7 +166,8 @@ it('hands an exact acquired resource to private chat without selecting or writin
     target: {recipeId: accountB, versionId: draftId}, requestId: expect.any(String)}]);
   expect(externalCalls).toHaveLength(1);
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain('私聊引导已发送');
-  expect(cloudCalls.some(request => ['saveDraft', 'publishDraft', 'acquire'].includes(request.type))).toBe(false);
+  expect(cloudCalls.filter(request => request.type === 'browse')).toEqual([{type:'browse',accountId:accountA,recipeId:accountB,versionId:draftId}]);
+  expect(cloudCalls.some(request => ['detail', 'richDetail', 'saveDraft', 'publishDraft', 'acquire'].includes(request.type))).toBe(false);
 });
 
 it('reconciles an uncertain resource delivery with the original identity and target', async () => {
@@ -253,13 +260,17 @@ it('offers a newer recipe from the account library without changing a group or c
   const normal = cloud;
   cloud = async request => request.type === 'library' ? {items: [{recipeId: accountB, versionId: draftId, revision: 1, public: draft.public}], nextCursor: null}
     : request.type === 'latestVersion' ? {status: 'newer', target: {recipeId: accountB, versionId: operationId}, revision: 2, version: '2.0', format: 'rich-v2', access: 'coded'}
+      : request.type === 'browse' ? browseFixture(request.recipeId,request.versionId,{revision:2,format:'rich-v2',public:{...draft.public,version:'2.0',access:'coded'},preview:undefined})
       : normal(request);
   await draw(); await click('社区'); await click('我的配方');
   expect(document.querySelector('.community-library-update')?.textContent).toContain('有新版本 · 2.0');
   expect(calls).toEqual([]);
   expect(cloudCalls.some(request => request.type === 'acquire')).toBe(false);
   await act(async () => document.querySelector<HTMLButtonElement>('.community-library-update')!.click());
-  expect(cloudCalls.filter(request => request.type === 'detail')).toEqual([{type: 'detail', accountId: accountA, recipeId: accountB, versionId: operationId}]);
+  expect(cloudCalls.filter(request => request.type === 'browse')).toEqual([{type: 'browse', accountId: accountA, recipeId: accountB, versionId: operationId}]);
+  expect(document.body.textContent).toContain('获取配方');
+  expect(document.body.textContent).not.toContain('交给 Bot');
+  expect(cloudCalls.some(request => ['detail','richDetail','acquire'].includes(request.type))).toBe(false);
   expect(calls).toEqual([]);
 });
 
@@ -268,13 +279,15 @@ it('shows one account resource with its newest acquired version', async () => {
   cloud = async request => request.type === 'library' ? {items: [
     {recipeId: accountB, versionId: draftId, revision: 1, public: draft.public},
     {recipeId: accountB, versionId: operationId, revision: 2, public: {...draft.public, version: '2.0'}},
-  ], nextCursor: null} : request.type === 'latestVersion' ? {status: 'unknown'} : normal(request);
+  ], nextCursor: null} : request.type === 'latestVersion' ? {status: 'unknown'}
+    : request.type === 'browse' ? browseFixture(request.recipeId,request.versionId,{revision:2,public:{...draft.public,version:'2.0'},acquired:true}) : normal(request);
   await draw(); await click('社区'); await click('我的配方');
   expect(document.querySelectorAll('.community-card')).toHaveLength(1);
   expect(document.querySelector('.community-card-footer')?.textContent).toContain('2.0');
   expect(cloudCalls.filter(request => request.type === 'latestVersion')).toMatchObject([{versionId: operationId, revision: 2}]);
   await act(async () => document.querySelector<HTMLButtonElement>('.community-card')!.click());
-  expect(cloudCalls.filter(request => request.type === 'detail')).toEqual([{type: 'detail', accountId: accountA, recipeId: accountB, versionId: operationId}]);
+  expect(cloudCalls.filter(request => request.type === 'browse')).toEqual([{type: 'browse', accountId: accountA, recipeId: accountB, versionId: operationId}]);
+  expect(document.body.textContent).toContain('交给 Bot');
 });
 
 
@@ -353,9 +366,9 @@ it('routes only the current account and draft publication to the exact owned imm
   const receipt = {accountId: accountA, draftId, recipeId: A, versionId: B, revision: 77};
   for (const value of [{...receipt, accountId: accountB}, {...receipt, draftId: A}]) await act(async () => emit({type: 'authoringPublished', value}));
   expect(document.querySelector('.recipe-draft-page')).not.toBeNull();
-  expect(cloudCalls.filter(request => request.type === 'detail')).toEqual([]);
+  expect(cloudCalls.filter(request => request.type === 'browse')).toEqual([]);
   await act(async () => emit({type: 'authoringPublished', value: receipt}));
-  expect(cloudCalls.filter(request => request.type === 'detail')).toEqual([{type: 'detail', accountId: accountA, recipeId: A, versionId: B}]);
+  expect(cloudCalls.filter(request => request.type === 'browse')).toEqual([{type: 'browse', accountId: accountA, recipeId: A, versionId: B}]);
   expect(document.querySelector('.recipe-draft-page')).toBeNull();
   expect(document.querySelector('h1')?.textContent).toBe(draft.public.name);
   await click('创作新版本');
@@ -790,4 +803,31 @@ it('keeps the original Bot on an explicit retry when another Bot becomes the onl
   const requests = calls.filter(request => request.type === 'resourceHandoff');
   expect(requests).toHaveLength(2); expect(requests[1]?.botId).toBe(botA);
   expect(externalCalls).toHaveLength(1);
+});
+
+it('opens the existing Bot and group chooser directly from a website creation navigation without sending anything', async () => {
+  linked = true;
+  await draw();
+  await act(async()=>emit({type:'recipePreview',value:{kind:'create',navigationId:draftId}}));
+  expect(dialog('创作配方')).toBeDefined();
+  expect(Array.from(document.querySelectorAll('select')).map(select=>select.selectedOptions[0]?.textContent)).toEqual(['Bot A','群聊 A']);
+  expect(calls).toEqual([]);
+  expect(externalCalls).toEqual([]);
+  expect(cloudCalls.some(request=>['publishDraft','saveDraft','acquire'].includes(request.type))).toBe(false);
+  await click('前往私聊创作');
+  expect(calls.find(request=>request.type==='creatorContinue')).toMatchObject({accountId:accountA,entry:{kind:'source',viewId:A,botId:botA,groupId:groupA}});
+});
+it('offers App login before revealing creation sources and retains the incoming creation after login', async () => {
+  status={kind:'signedOut'};
+  await draw();
+  await act(async()=>emit({type:'recipePreview',value:{kind:'create',navigationId:draftId}}));
+  expect(dialog('创作配方')?.textContent).toContain('登录后可以');
+  expect([...document.querySelectorAll('button')].some(button=>button.textContent==='登录'&&!button.disabled)).toBe(true);
+  expect(document.querySelector('[aria-label="配方来源 Bot"]')).toBeNull();
+  expect(calls).toEqual([]);
+  status=signedIn();
+  await act(async()=>emit({type:'account',value:status}));
+  expect(document.querySelector('[aria-label="配方来源 Bot"]')).not.toBeNull();
+  expect(document.querySelector('[aria-label="配方来源群聊"]')).not.toBeNull();
+  expect(calls).toEqual([]);
 });

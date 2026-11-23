@@ -12,8 +12,13 @@ export const draftPreviewNavigationSchema = draftPreviewLocatorSchema.extend({
   accountId: z.string().uuid().optional(),
 }).strict();
 export type DraftPreviewNavigation = z.infer<typeof draftPreviewNavigationSchema>;
+export const recipeCreateNavigationSchema = z.object({
+  kind: z.literal('create'), navigationId: draftPreviewNavigationIdSchema,
+}).strict();
+export const recipePreviewNavigationSchema = z.union([draftPreviewNavigationSchema, recipeCreateNavigationSchema]);
+export type RecipePreviewNavigationPayload = z.infer<typeof recipePreviewNavigationSchema>;
 export interface RecipePreviewShell {
-  pending(): Promise<DraftPreviewNavigation[]>;
-  onOpen(listener: (navigation: DraftPreviewNavigation) => void): () => void;
+  pending(): Promise<RecipePreviewNavigationPayload[]>;
+  onOpen(listener: (navigation: RecipePreviewNavigationPayload) => void): () => void;
   acknowledge(navigationId: string): Promise<void>;
 }

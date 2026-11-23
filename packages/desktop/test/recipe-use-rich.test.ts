@@ -24,7 +24,8 @@ function fixture(){
   const account={lease:()=>state.account?signal.signal:undefined,request:async(_id:string,path:string,init?:RequestInit)=>{
     steps.push('cloud:'+path.split('/').pop());
     if(path.endsWith('/install-preview')){if(state.changeDuringPreview)state.account=false;if(state.previewDenied)return Response.json({error:{code:'forbidden'}},{status:403});return Response.json({...preview,release:{...preview.release,access:state.coded?'coded':'direct'}});}
-    if(path.includes('/recipes/'))return Response.json({format:'rich-v2',recipeId,versionId,revision:1,public:{name:doc.content.public.name.value,summary:doc.content.public.summary.value,overview:doc.content.public.overview.value,version:doc.content.public.version.value,access:state.coded?'coded':'direct'},state:'listed',visibility:state.coded?'intro':'full',owned:false,acquired:false,creator:{authorId:accountId,displayName:'公开作者'},hasDisplayLogo:false,...(state.coded?{}:{release:preview.release,manifest:preview.manifest})});
+    if(path.endsWith('/preview'))return Response.json({format:'rich-v2',recipeId,versionId,revision:1,public:{name:doc.content.public.name.value,summary:doc.content.public.summary.value,overview:doc.content.public.overview.value,version:doc.content.public.version.value,access:state.coded?'coded':'direct'},state:'listed',owned:false,acquired:false,creator:{authorId:accountId,displayName:'公开作者'},hasDisplayLogo:false});
+    if(path.endsWith('/acquire')){expect(state.coded).toBe(false);state.previewDenied=false;return Response.json({recipeId,versionId,owned:false,acquired:true});}
     if(path.includes('/objects/'))return new Response(doc.canonicalUTF8);
     if(path.endsWith('/authorize')){if(state.denyAuthority)return Response.json({error:{code:'forbidden'}},{status:403});expect(state.issuer).toBe('issuing');expect(JSON.parse(String(init?.body))).toEqual(intent);if(state.lost){state.lost=false;throw new Error('lost authorization response');}return Response.json({...intent,accountId,operationId,deadline:Date.now()+300000,serverPublicKey:binary(3),ticket:binary(4),status:'authorized'});}
     throw new Error('unexpected cloud request');
@@ -84,8 +85,20 @@ it('checks the native installed source instead of presenting an old journal succ
 it.each([false,true])('uses exact-version authority after an account-bound entitled preview including coded=%s',async coded=>{
   const f=fixture();f.state.coded=coded;const review=await f.begin();expect(f.state.lastAuthority).toBe('exactVersion');if(review.kind!=='richReview')throw new Error();await f.run({type:'richResolve',handle:review.handle,reviewToken:review.reviewToken,choices:{}});expect((await f.run({type:'confirm',handle:review.handle})).kind).toBe('applied');
 });
-it('uses direct-update authority only after a verified public direct fallback and stops before commit when cloud denies both grants',async()=>{
-  const f=fixture();f.state.previewDenied=true;const review=await f.begin();expect(f.state.lastAuthority).toBe('directUpdate');if(review.kind!=='richReview')throw new Error();await f.run({type:'richResolve',handle:review.handle,reviewToken:review.reviewToken,choices:{}});f.state.denyAuthority=true;await expect(f.run({type:'confirm',handle:review.handle})).rejects.toThrow();expect(f.steps).not.toContain('native:richCommit');
+it('acquires a direct new version before fetching its contents and still rechecks installation authority',async()=>{
+  const f=fixture();f.state.previewDenied=true;const review=await f.begin();expect(f.state.lastAuthority).toBe('exactVersion');
+  expect(f.steps.filter(step=>step.startsWith('cloud:')).slice(0,4)).toEqual(['cloud:install-preview','cloud:preview','cloud:acquire','cloud:install-preview']);
+  if(review.kind!=='richReview')throw new Error();await f.run({type:'richResolve',handle:review.handle,reviewToken:review.reviewToken,choices:{}});f.state.denyAuthority=true;await expect(f.run({type:'confirm',handle:review.handle})).rejects.toThrow();expect(f.steps).not.toContain('native:richCommit');
+});
+it('does not fetch a manifest or member before a group is selected',async()=>{
+  const f=fixture();expect((await f.begin(true)).kind).toBe('choose');
+  expect(f.steps.filter(step=>step.startsWith('cloud:'))).toEqual([]);
+});
+it('never uses a public-content fallback for an unacquired coded version',async()=>{
+  const f=fixture();f.state.previewDenied=true;f.state.coded=true;
+  await expect(f.begin()).rejects.toThrow();
+  expect(f.steps.filter(step=>step.startsWith('cloud:'))).toEqual(['cloud:install-preview','cloud:preview']);
+  expect(f.steps).not.toContain('native:richPrepare');
 });
 it('invalidates the preview authority when the account generation changes before its response',async()=>{
   const f=fixture();f.state.changeDuringPreview=true;await expect(f.begin()).rejects.toThrow();expect(f.steps).not.toContain('native:richPrepare');

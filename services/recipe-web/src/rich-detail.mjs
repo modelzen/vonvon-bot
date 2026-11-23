@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import {z} from 'zod';
 import {
-  RECIPE_RICH_LIMITS, recipeDetailSchema, recipePublicSchema, recipeSummarySchema,
+  RECIPE_RICH_LIMITS, recipeDetailSchema, recipePublicSchema, recipeSummarySchema, recipeBrowseDetailSchema,
   recipeRichManifestObjectSchema, recipeRichReleaseSchema, recipeRichTextSchema, verifyRichRecipeRelease,
 } from '../../../packages/protocol/src/index.ts';
 import {staticLogoFormat} from '../../recipe-api/src/logo-format.mjs';
@@ -14,7 +14,14 @@ const detail = z.object({
   manifest: recipeRichManifestObjectSchema.optional(), release: recipeRichReleaseSchema.optional(),
 }).strict();
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+export const displayLogoLimit = RECIPE_RICH_LIMITS.logoBytes;
+export function verifiedDisplayLogo(bytes) {staticLogoFormat(bytes, true); return bytes;}
 const invalid = () => {throw new Error('Invalid rich recipe response');};
+export function browseDetail(raw, recipeId, versionId) {
+  const data = recipeBrowseDetailSchema.parse(raw);
+  if (data.recipeId !== recipeId || data.versionId !== versionId) invalid();
+  return data;
+}
 function match(bytes, descriptor) {
   if (bytes.length !== descriptor.bytes || sha(bytes) !== descriptor.sha256) invalid();
 }
@@ -46,7 +53,7 @@ export async function richDetail(raw, recipeId, versionId, read) {
   }
   if (data.hasDisplayLogo) {
     const bytes = await read(`/v2/versions/${versionId}/display-logo`, RECIPE_RICH_LIMITS.logoBytes);
-    staticLogoFormat(bytes, true);
+    verifiedDisplayLogo(bytes);
     if (view.rich?.content.finalLogo) {
       const descriptor = view.rich.content.parts.find(part => part.objectId === view.rich.content.finalLogo.objectId);
       if (!descriptor) invalid();
