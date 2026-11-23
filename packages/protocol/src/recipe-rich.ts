@@ -224,6 +224,7 @@ export const recipeRichDraftChangeSchema = z.union([
   z.object({op: z.literal('addSetup'), value: setup.omit({itemId: true, originId: true}), source: newSetupSource}).strict(),
   z.object({op: z.literal('setSetup'), itemId: uuid, value: setup.omit({itemId: true, originId: true})}).strict(),
   z.object({op: z.literal('removeItem'), kind: itemKind, itemId: uuid}).strict(),
+  z.object({op: z.literal('removeLegacyMemories')}).strict(),
   z.object({op: z.literal('copyItem'), source: copyReference}).strict(),
   z.object({op: z.literal('includeCandidate'), value: candidateInclusion}).strict(),
 ]);

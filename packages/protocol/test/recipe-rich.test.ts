@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {describe, expect, it} from 'vitest';
 import {
-  canonicalizeRichRecipeContent, decodeRichRecipeContent, digestRichRecipeContent, verifyRichRecipeRelease, validatePublishableRichRecipeContent,
+  canonicalizeRichRecipeContent, decodeRichRecipeContent, digestRichRecipeContent, verifyRichRecipeRelease, validatePublishableRichRecipeContent, validateWritableRichRecipeContent,
   recipeRichAuthoringPayloadSchema, recipeRichOriginRecordSchema, recipeRichReleaseSchema,
   recipeAuthorizationSchema, recipeManifestSchema, authoringChangeSchema,
   RECIPE_RICH_LIMITS, defaultCardDisplay,
@@ -36,6 +36,28 @@ const release = (sha256: string, logicalBytes: number) => ({format: 'rich-v2' as
   authorId: id(602), revision: 1, access: 'coded' as const, contentSha256: sha256, logicalBytes});
 
 describe('rich-v2 exact canonical content', () => {
+  it('admits memory-free writes without changing historical bytes or mutating the caller', () => {
+    const empty = content();
+    expect(validateWritableRichRecipeContent(empty)).toEqual(canonicalizeRichRecipeContent(empty));
+    const historical = structuredClone(fixture);
+    expect(() => validateWritableRichRecipeContent(historical)).toThrow('invalid_content: memories');
+    expect(historical).toEqual(fixture);
+    expect(canonicalizeRichRecipeContent(historical).canonical).toBe(golden.canonical);
+    expect(decodeRichRecipeContent(golden.canonical).content).toEqual(historical);
+    expect(validatePublishableRichRecipeContent(historical).canonical).toBe(golden.canonical);
+    const inlineMemory = content();
+    inlineMemory.memories = [{...identity(900), text: inline('private memory')}];
+    expect(() => validateWritableRichRecipeContent(inlineMemory)).toThrow('invalid_content: memories');
+    expect(inlineMemory.memories).toHaveLength(1);
+  });
+  it('fits whole-collection memory cleanup into the existing sixteen-change envelope', () => {
+    const payload = {format: 'rich-v2', purpose: 'editDraft', draftId: id(901), baseRevision: 1,
+      requestId: id(902), schemaVersion: 2, changes: [{op: 'removeLegacyMemories'}]};
+    expect(recipeRichAuthoringPayloadSchema.safeParse(payload).success).toBe(true);
+    expect(recipeRichAuthoringPayloadSchema.safeParse({...payload, changes: Array(16).fill({op: 'removeLegacyMemories'})}).success).toBe(true);
+    expect(recipeRichAuthoringPayloadSchema.safeParse({...payload, changes: Array(17).fill({op: 'removeLegacyMemories'})}).success).toBe(false);
+    expect(recipeRichAuthoringPayloadSchema.safeParse({...payload, changes: [{op: 'removeLegacyMemories', itemId: id(903)}]}).success).toBe(false);
+  });
   it('matches independently serialized UTF-8 bytes, digest and distinct referenced bytes', async () => {
     const encoded = canonicalizeRichRecipeContent(fixture);
     expect(encoded.canonical).toBe(golden.canonical);
