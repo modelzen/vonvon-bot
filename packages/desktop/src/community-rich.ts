@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import {z} from 'zod';
 import {decodeRichRecipeContent, verifyRichRecipeRelease, recipeRichManifestObjectSchema, recipeRichReleaseSchema,
-  publicDisplayNameSchema, recipePublicSchema, recipeRoleDraftSchema, recipeSummarySchema, type RecipeDetail, type RecipeDraft, type CommunityResponses} from '@vonvon/protocol';
+  publicDisplayNameSchema, recipePublicSchema, recipeRoleDraftSchema, recipeSummarySchema, recipeBrowseDetailSchema, type RecipeBrowseDetail, type RecipeDetail, type RecipeDraft, type CommunityResponses} from '@vonvon/protocol';
 import type {NativeAccount} from './account-session.js';
 
 const uuid = z.string().uuid();
@@ -40,7 +40,11 @@ export function richCommunity(account: NativeAccount, accountId: string | undefi
     const parsed = release ? await verifyRichRecipeRelease(release, canonical) : decodeRichRecipeContent(canonical);
     check();
     const members = new Map<string, Buffer>();
-    for (const part of parsed.content.parts) members.set(part.objectId, await object(path, part));
+    for (let offset = 0; offset < parsed.content.parts.length; offset += 8) {
+      const loaded = await Promise.all(parsed.content.parts.slice(offset, offset + 8).map(async part =>
+        ({objectId: part.objectId, bytes: await object(path, part)})));
+      for (const member of loaded) members.set(member.objectId, member.bytes);
+    }
     return {content: parsed.content, canonical, members};
   }
   function display(loaded: Awaited<ReturnType<typeof loadMembers>>) {
@@ -92,6 +96,27 @@ export function richCommunity(account: NativeAccount, accountId: string | undefi
   }
   return {
     metadata, publishedMembers,
+    async browse(recipeId: string, versionId: string): Promise<RecipeBrowseDetail> {
+      const path = `/v2/recipes/${uuid.parse(recipeId)}/versions/${uuid.parse(versionId)}/preview`;
+      const raw: unknown = JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(await read(path, 131072, true)));
+      const unavailable = z.object({state: z.enum(['withdrawn', 'blocked']), versionId: uuid}).strict().safeParse(raw);
+      if (unavailable.success) {
+        if (unavailable.data.versionId !== versionId) throw fail();
+        throw new RichCommunityUnavailable(unavailable.data.state);
+      }
+      const value = recipeBrowseDetailSchema.parse(raw);
+      if (value.recipeId !== recipeId || value.versionId !== versionId) throw fail();
+      return value;
+    },
+    async displayLogo(versionId: string): Promise<CommunityResponses['displayLogo']> {
+      const bytes = await read(`/v2/versions/${uuid.parse(versionId)}/display-logo`, 131072);
+      return {logo: 'data:image/webp;base64,' + bytes.toString('base64')};
+    },
+    async author(authorId: string, cursor?: string): Promise<CommunityResponses['author']> {
+      const page = z.object({creator, items: recipeSummarySchema.array().max(50), nextCursor: uuid.nullable()}).strict().parse(await json(`/v2/authors/${uuid.parse(authorId)}/recipes` + (cursor ? '?cursor=' + encodeURIComponent(uuid.parse(cursor)) : '')));
+      if (page.creator.authorId !== authorId || page.items.some(item => item.creator?.authorId !== authorId)) throw fail();
+      return page;
+    },
     async library(cursor?: string): Promise<CommunityResponses['library']> {
       const page=z.object({items: recipeSummarySchema.array().max(50), nextCursor: uuid.nullable()}).strict().parse(await json('/v2/me/recipes' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : '')));
       return {...page,items:await logos(page.items)};
@@ -109,7 +134,7 @@ export function richCommunity(account: NativeAccount, accountId: string | undefi
     async catalog(query?: string, cursor?: string): Promise<CommunityResponses['catalog']> {
       const params = new URLSearchParams(); if (query) params.set('q', query); if (cursor) params.set('cursor', cursor);
       const page = z.object({heroKind:z.enum(['featured','latest']).nullable(),hero: recipeSummarySchema.nullable(), items: recipeSummarySchema.array().max(8), nextCursor: z.string().max(1600).nullable()}).strict().parse(await json('/v2/community/recipes?' + params));
-      return {...page, hero: page.hero ? await logo(page.hero) : null, items: await Promise.all(page.items.map(logo))};
+      return page;
     },
     async detail(recipeId: string, versionId: string): Promise<RecipeDetail> {
       const value = await metadata(recipeId, versionId);

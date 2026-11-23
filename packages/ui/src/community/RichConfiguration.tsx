@@ -1,5 +1,7 @@
-import type {RecipeRichContent, RecipeRichSetting, RecipeRichText} from '@vonvon/protocol';
+import type {RecipeBrowseDetail, RecipeRichContent, RecipeRichSetting, RecipeRichText} from '@vonvon/protocol';
+import {recipeSkillDescription} from '@vonvon/protocol';
 import {RecipeMarkdown} from './RecipeContent';
+import {RecipeSkills} from './RecipeSkills';
 
 export type RichView = {content: RecipeRichContent; texts: Record<string,string>};
 export const recipeSettingNames: Record<RecipeRichSetting['field'], string> = {
@@ -30,6 +32,16 @@ export function SettingValue({value, literal = false}: {value: unknown; literal?
 export function RichSettings({items}: {items: RecipeRichSetting[]}) {
   return <dl className="community-rich-settings">{items.map(item => <div key={item.itemId}><dt>{recipeSettingNames[item.field]}</dt><dd><SettingValue value={item.value} literal={item.field === 'presentation.completionTemplate'}/></dd></div>)}</dl>;
 }
+export function RecipeBrowseConfiguration({preview, section}: {preview: NonNullable<RecipeBrowseDetail['preview']>; section: string}) {
+  if (section === '模型与权限') {
+    const settings = preview.settings.filter(item => /^(model|modelAccess|speed|judge|permission)[.]/.test(item.field));
+    return <section className="community-config"><h2>模型与权限</h2>{!settings.some(item => item.field === 'model.recommendation') && <p>推荐模型：未指定</p>}<RichSettings items={settings}/></section>;
+  }
+  if (section === '沟通方式') return <section className="community-config"><h2>沟通方式</h2><RichSettings items={preview.settings.filter(item => !/^(model|modelAccess|speed|judge|permission)[.]/.test(item.field))}/></section>;
+  if (section === '能力') return <section className="community-config"><h2>技能</h2><RecipeSkills skills={preview.skills}/><h2>规则</h2><p>{preview.ruleCount ? `包含 ${preview.ruleCount} 条规则，使用配方时应用。` : '没有规则'}</p></section>;
+  if (section === '任务') return <section className="community-config"><h2>任务</h2><p>{preview.taskCount ? `包含 ${preview.taskCount} 项任务，添加到群后可查看并单独启用。` : '没有任务'}</p></section>;
+  return null;
+}
 export function RichConfiguration({view, section}: {view: RichView; section: string}) {
   const {content} = view;
   if (section === '模型与权限') {
@@ -37,7 +49,13 @@ export function RichConfiguration({view, section}: {view: RichView; section: str
     return <section className="community-config"><h2>模型与权限</h2>{!settings.some(item => item.field === 'model.recommendation') && <p>推荐模型：未指定</p>}<RichSettings items={settings}/></section>;
   }
   if (section === '沟通方式') return <section className="community-config"><h2>沟通方式</h2><RichSettings items={content.settings.filter(item => !/^(model|modelAccess|speed|judge|permission)[.]/.test(item.field))}/></section>;
-  if (section === '能力') return <section className="community-config"><h2>角色</h2>{content.role ? <RecipeMarkdown text={richText(content.role.text, view)}/> : <p>未指定</p>}<h2>规则</h2>{content.rules.map(rule => <article key={rule.itemId}><h3>{{work:'工作规则',smartRespond:'智能回复规则',smartNewTopic:'智能新话题规则'}[rule.purpose]}</h3><RecipeMarkdown text={richText(rule.text,view)}/></article>)}<h2>技能</h2>{!content.skills.length && <p className="community-muted">未选择技能</p>}{content.skills.map(skill => <article key={skill.itemId}><h3>{skill.name}</h3>{skill.fileIds.map(id => content.files.find(file => file.itemId === id)).map(file => file && <details key={file.itemId} open={file.itemId === skill.entryFileId}><summary>{file.name} · {{skillDescription:'技能说明',reference:'参考资料',declaration:'能力声明'}[file.use]}</summary><RecipeMarkdown text={richText(file.text,view)}/></details>)}</article>)}</section>;
+  if (section === '能力') {
+    const skills = content.skills.map(skill => {
+      const entry = content.files.find(file => file.itemId === skill.entryFileId);
+      return {itemId: skill.itemId, name: skill.name, description: entry ? recipeSkillDescription(richText(entry.text, view)) : ''};
+    });
+    return <section className="community-config"><h2>角色</h2>{content.role ? <RecipeMarkdown text={richText(content.role.text, view)}/> : <p>未指定</p>}<h2>规则</h2>{content.rules.map(rule => <article key={rule.itemId}><h3>{{work:'工作规则',smartRespond:'智能回复规则',smartNewTopic:'智能新话题规则'}[rule.purpose]}</h3><RecipeMarkdown text={richText(rule.text,view)}/></article>)}<h2>技能</h2><RecipeSkills skills={skills}/></section>;
+  }
   if (section === '任务') return <section className="community-config"><h2>任务</h2>{!content.tasks.length && <p className="community-muted">没有任务</p>}{content.tasks.map(task => <article key={task.itemId}><h3>{task.name}</h3><p>{task.spec.kind === 'every' ? `每 ${task.spec.minutes} 分钟` : task.spec.kind === 'once' ? new Date(task.spec.at).toLocaleString() : task.spec.kind === 'cron' ? task.spec.expr : task.spec.kind === 'daily' ? `每天 ${task.spec.time}` : `每周 ${task.spec.days.map(day=>['日','一','二','三','四','五','六'][day]).join('、')} ${task.spec.time}`} · {task.timeZone.kind === 'recommended' ? task.timeZone.iana : '安装时选择时区'} · {task.placement === 'follow' ? '跟随当前会话' : '新话题'}</p><RecipeMarkdown text={richText(task.instruction,view)}/><p className="community-muted">安装后暂停，核对实际执行条件后单独启用。</p></article>)}</section>;
   return null;
 }

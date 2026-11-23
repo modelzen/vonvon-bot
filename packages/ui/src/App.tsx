@@ -1,3 +1,4 @@
+import {useGroupConfigurationNavigation} from './group-configuration-navigation';
 import {useActiveDevice, useClient, useDevicesState, useShellCapabilities} from './client-context';
 import {DevicesPanel} from './devices/DevicesPanel';
 import {DeviceSwitcher} from './devices/DeviceSwitcher';
@@ -516,6 +517,25 @@ function DesktopApp() {
       setNotice(target?.missing ? {message: target.missing, error: false} : undefined);
     });
   }
+  useGroupConfigurationNavigation({shell: shell?.groupNavigation, snapshot, open(destination) {
+    setJoinedTarget(undefined);
+    setModal(null);
+    setSearchOpen(false);
+    setSearchTarget(undefined);
+    setNewMemoryFocus(undefined);
+    setSettingsReturn(undefined);
+    setFeatureId(undefined);
+    setPage('collaboration');
+    if (destination.kind === 'available') {
+      const memberId = destination.route.id;
+      setGroupTabs(current => ({...current, [memberId]: 'model'}));
+      setRoute(destination.route);
+      setNotice(undefined);
+    } else {
+      setRoute({kind: 'list', view: 'agents'});
+      setNotice({message: destination.message, error: true});
+    }
+  }});
   useEffect(() => {
     const departure = community?.departure;
     if (!departure) return;

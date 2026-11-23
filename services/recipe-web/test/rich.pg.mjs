@@ -53,7 +53,7 @@ async function browser(t, fixture, path, identity = {}, options = {}) {
   }
   const app = await load(path === '/studio' ? '/studio.mjs' : '/app.mjs'); await app.evaluate(); await settle();
   const find = label => [...window.document.querySelectorAll('button')].find(button => button.textContent === label);
-  async function click(label) {const button = find(label); assert.ok(button, label); button.click(); await settle();}
+  async function click(label) {const button = find(label) ?? [...window.document.querySelectorAll('[aria-label="配方详细信息"] a')].find(a => a.textContent === label); assert.ok(button, label); button.click(); await settle();}
   async function submit(code) {
     const form = window.document.querySelector('dialog form'); assert.ok(form);
     const input = form.querySelector('input'); input.value = code; input.dispatchEvent(new window.Event('input', {bubbles: true}));
@@ -62,7 +62,7 @@ async function browser(t, fixture, path, identity = {}, options = {}) {
   return {window, calls, state, find, click, submit, text: () => window.document.querySelector('main').textContent};
 }
 
-test('real PostgreSQL API, member broker and shipped Web modules preserve rich sharing boundaries', async t => {
+test('real PostgreSQL API and shipped Web modules browse projections without downloading recipe members', async t => {
   const fixture = await richFixture(t);
   const direct = await fixture.publish('direct'), coded = await fixture.publish('coded');
   const directPath = detailPath(direct), codedPath = detailPath(coded);
@@ -70,30 +70,52 @@ test('real PostgreSQL API, member broker and shipped Web modules preserve rich s
   const old = await get('/api/v1' + codedPath);
   assert.equal(old.status, 409); assert.equal((await old.json()).error.code, 'request_upgrade_required');
   const before = fixture.brokerReads.length;
-  const introResponse = await get('/api/v2' + codedPath), intro = await introResponse.json();
+  const introResponse = await get('/api/v2' + codedPath + '/preview'), intro = await introResponse.json();
   assert.equal(introResponse.status, 200); assert.equal(intro.format, 'rich-v2');
   assert.equal(intro.creator.displayName, '合成作者');
   assert.equal(intro.rich, undefined); assert.equal(intro.config, undefined);
+  assert.equal(intro.preview, undefined);
   assert.equal(intro.manifest, undefined); assert.equal(intro.release, undefined);
   assert.doesNotMatch(JSON.stringify(intro), /objectId|manifest|release|access_token|refresh_token|StorageURL/);
-  assert.match(intro.logo, /^data:image\/webp;base64,/);
-  assert.deepEqual(fixture.brokerReads.slice(before), ['/v2/versions/' + coded.versionId + '/display-logo']);
+  assert.equal(intro.logo, undefined); assert.equal(intro.hasDisplayLogo, true);
+  assert.deepEqual(fixture.brokerReads.slice(before), []);
   assert.equal(introResponse.headers.get('cache-control'), 'no-store');
-  const directResponse = await get('/api/v2' + directPath), full = await directResponse.json();
-  assert.equal(directResponse.status, 200); assert.equal(full.rich.content.files.length, 1);
-  assert.match(Object.values(full.rich.texts)[0], /完整正文/);
-  assert.equal(full.manifest, undefined); assert.equal(full.release, undefined);
+  const directResponse = await get('/api/v2' + directPath + '/preview'), preview = await directResponse.json();
+  assert.equal(directResponse.status, 200);
+  assert.equal(preview.rich, undefined); assert.equal(preview.config, undefined);
+  assert.equal(preview.manifest, undefined); assert.equal(preview.release, undefined);
+  assert.equal(preview.preview.skills[0].name, '样例技能');
+  assert.equal(preview.preview.skills[0].description, '核对环境并整理所选内容。');
+  assert.equal(preview.preview.ruleCount, 1); assert.equal(preview.preview.taskCount, 1);
+  assert.ok(preview.preview.settings.some(setting => setting.field === 'presentation.voiceEnabled' && setting.value === true));
+  assert.doesNotMatch(JSON.stringify(preview), /objectId|canonical|ENTRY_PRIVATE_BODY_SENTINEL|完整正文|工作规则正文|任务执行说明|核对本地环境/);
+  assert.deepEqual(fixture.brokerReads.slice(before), []);
+  assert.deepEqual(await get('/api/v2' + directPath).then(response => response.json()), preview);
+  assert.deepEqual(fixture.brokerReads.slice(before), []);
+  const logoResponse = await get('/media/versions/' + direct.versionId + '/logo.webp');
+  assert.equal(logoResponse.status, 200);
+  assert.equal(logoResponse.headers.get('content-type'), 'image/webp');
+  assert.equal(logoResponse.headers.get('cache-control'), 'no-store');
+  const logoBytes = Buffer.from(await logoResponse.arrayBuffer());
+  assert.equal(logoBytes.subarray(0, 4).toString(), 'RIFF');
+  assert.equal(logoBytes.subarray(8, 12).toString(), 'WEBP');
+  assert.equal((await get('/media/versions/' + coded.versionId + '/logo.webp')).status, 200);
+  const memberReadsBeforeBrowse = fixture.brokerReads.length;
   const anonymous = await browser(t, fixture, directPath);
   assert.match(anonymous.text(), /合成作者/);
   assert.match(anonymous.text(), /1\.0/); assert.match(anonymous.text(), /直接获取/);
-  assert.equal(anonymous.window.document.querySelector('main h2').textContent, '配方介绍');
+  assert.equal(anonymous.window.document.querySelector('#overview h2').textContent, '概览');
   assert.equal(anonymous.window.document.querySelector('main strong').textContent, '公开说明');
-  assert.match(anonymous.window.document.querySelector('main img').src, /^data:image\/webp;base64,/);
-  assert.deepEqual([...anonymous.window.document.querySelectorAll('[aria-label="配方详细信息"] button')].map(button=>button.textContent), ['概览','模型与权限','能力','沟通方式','记忆','任务']);
+  assert.equal(anonymous.window.document.querySelector('main img').src, fixture.publicOrigin + '/media/versions/' + direct.versionId + '/logo.webp');
+  assert.deepEqual([...anonymous.window.document.querySelectorAll('[aria-label="配方详细信息"] a')].map(button=>button.textContent), ['概览','模型与权限','能力','沟通方式','任务']);
   assert.equal(anonymous.find('使用前准备'), undefined);
-  assert.match(anonymous.window.document.querySelector('.community-additional-notes').textContent, /核对本地环境/);
-  const expected = {'模型与权限': '推荐模型', '能力': '样例技能', '沟通方式': '智能会话', '记忆': '完整正文', '任务': '每日整理'};
+  assert.equal(anonymous.window.document.querySelector('.web-recipe-notes'), null);
+  const expected = {'模型与权限': '推荐模型', '能力': '样例技能', '沟通方式': '智能会话', '任务': '1 项任务'};
   for (const [tab, text] of Object.entries(expected)) {await anonymous.click(tab); assert.match(anonymous.text(), new RegExp(text));}
+  assert.match(anonymous.text(), /核对环境并整理所选内容/);
+  assert.doesNotMatch(anonymous.text(), /ENTRY_PRIVATE_BODY_SENTINEL|完整正文|角色说明|工作规则正文|任务执行说明|核对本地环境/);
+  assert.ok(anonymous.calls.filter(call => call.path.startsWith('/api/v2/recipes/')).every(call => call.path.endsWith('/preview')));
+  assert.equal(fixture.brokerReads.length, memberReadsBeforeBrowse);
   assert.equal(anonymous.window.document.querySelector('main script, main img[src="x"]'), null);
   assert.equal(anonymous.window.document.querySelector('main').innerHTML.includes('<script>alert(1)</script>'), false);
   assert.equal(anonymous.find('发布'), undefined); assert.equal(anonymous.find('管理分享码'), undefined);
@@ -101,7 +123,7 @@ test('real PostgreSQL API, member broker and shipped Web modules preserve rich s
   assert.equal(anonymous.window.document.querySelector('input[aria-label="手动复制"]').value, fixture.publicOrigin + directPath);
   const locked = await browser(t, fixture, codedPath);
   assert.equal(locked.find('能力'), undefined); assert.match(locked.text(), /获取此版本后/);
-  assert.equal(locked.window.document.querySelector('.community-additional-notes'), null);
+  assert.equal(locked.window.document.querySelector('.web-recipe-notes'), null);
   assert.doesNotMatch(locked.text(), /核对本地环境/);
   assert.equal(locked.calls.some(call => call.path.includes('/objects/')), false);
   await locked.click('获取配方'); assert.match(locked.window.document.querySelector('dialog').textContent, /GitHub/);
@@ -124,9 +146,12 @@ test('real PostgreSQL API, member broker and shipped Web modules preserve rich s
   assert.notEqual(posts[0].options.headers['Idempotency-Key'], posts[1].options.headers['Idempotency-Key']);
   assert.equal(posts[1].options.headers['Idempotency-Key'], posts[2].options.headers['Idempotency-Key']);
   assert.equal(posts.every(call => call.path === '/api/v2/versions/' + coded.versionId + '/redeem'), true);
-  await readerBrowser.click('记忆'); assert.match(readerBrowser.text(), /完整正文/);
+  await readerBrowser.click('能力'); assert.match(readerBrowser.text(), /核对环境并整理所选内容/);
+  assert.doesNotMatch(readerBrowser.text(), /ENTRY_PRIVATE_BODY_SENTINEL|完整正文|工作规则正文|任务执行说明/);
+  assert.ok(readerBrowser.calls.filter(call => call.path.startsWith('/api/v2/recipes/')).every(call => call.path.endsWith('/preview')));
+  assert.equal(fixture.brokerReads.length, memberReadsBeforeBrowse);
   const otherDetail = await get('/api/v2' + codedPath, other).then(response => response.json());
-  assert.equal(otherDetail.rich, undefined); assert.equal(otherDetail.acquired, false);
+  assert.equal(otherDetail.rich, undefined); assert.equal(otherDetail.preview, undefined); assert.equal(otherDetail.acquired, false);
   assert.equal((await get('/api/v2' + codedPath, {...other, 'X-Vonvon-Session': reader['X-Vonvon-Session']})).status, 409);
   const claimPath = '/api/v2/versions/' + direct.versionId + '/acquire';
   const postHeaders = {...other, origin: fixture.publicOrigin, 'content-type': 'application/json', 'idempotency-key': 'a2.' + direct.versionId};
@@ -136,7 +161,7 @@ test('real PostgreSQL API, member broker and shipped Web modules preserve rich s
   const publications = await get('/api/v2/me/publications', author).then(response => response.json());
   assert.ok(publications.items.some(item => item.versionId === coded.versionId));
   const studio = await browser(t, fixture, '/studio', author);
-  assert.equal(studio.window.document.querySelector('main h1').textContent, '在 Vonvon Bot 中创作');
+  assert.equal(studio.window.document.querySelector('main h1').textContent, '在 Bot 私聊中创作');
   assert.match(studio.text(), /已获取.*创作中.*已发布.*App/s);
   assert.equal(studio.window.document.querySelector('main form,main input,main textarea'), null);
   assert.deepEqual(studio.calls.map(call => call.path), ['/auth/session']);
@@ -149,13 +174,15 @@ test('real PostgreSQL API, member broker and shipped Web modules preserve rich s
   const legacyDraft = await fixture.request('/v1/drafts', {public: {name: '旧版配方', summary: '兼容', overview: '# 旧版', version: '1', access: 'direct'}, config: {role: '旧版角色'}}, {key: crypto.randomUUID()});
   const legacy = await fixture.request('/v1/drafts/' + legacyDraft.draftId + '/publish', {}, {key: crypto.randomUUID(), revision: 1});
   const legacyBrowser = await browser(t, fixture, detailPath(legacy));
-  await legacyBrowser.click('配置'); assert.match(legacyBrowser.text(), /旧版角色/);
-  assert.ok(!legacyBrowser.calls.some(call => call.path.startsWith('/api/v2/recipes/')));
+  assert.match(legacyBrowser.text(), /旧版配方/);
+  assert.doesNotMatch(legacyBrowser.text(), /旧版角色/);
+  assert.ok(legacyBrowser.calls.some(call => call.path === '/api/v2' + detailPath(legacy) + '/preview'));
+  assert.ok(!legacyBrowser.calls.some(call => call.path.startsWith('/api/v1/recipes/')));
   const packageRoot = await mkdtemp(join(tmpdir(), 'vv-web-package-'));
   t.after(() => rm(packageRoot, {recursive: true, force: true}));
   const packaged = join(packageRoot, 'services/recipe-web'), source = fileURLToPath(new URL('../', import.meta.url));
   await mkdir(packaged, {recursive: true});
-  for (const file of ['server.mjs', 'auth.mjs', 'native-auth.mjs', 'public', 'dist', 'node_modules']) await cp(join(source, file), join(packaged, file), {recursive: true});
+  for (const file of ['server.mjs', 'auth.mjs', 'native-auth.mjs', 'release-code-oauth.mjs', 'release-code-store.mjs', 'public', 'dist', 'node_modules']) await cp(join(source, file), join(packaged, file), {recursive: true});
   await mkdir(join(packageRoot, 'services/recipe-api/src'), {recursive: true});
   await cp(new URL('../../recipe-api/src/credential-shapes.mjs', import.meta.url), join(packageRoot, 'services/recipe-api/src/credential-shapes.mjs'));
   const {createRecipeWeb} = await import(pathToFileURL(join(packaged, 'server.mjs')));
@@ -165,7 +192,7 @@ test('real PostgreSQL API, member broker and shipped Web modules preserve rich s
   const packageHost = 'http://127.0.0.1:' + server.address().port;
   for (const asset of [directPath, '/viewer.mjs', '/viewer.css', '/app.mjs', '/vendor/markdown-it.mjs']) assert.equal((await fetch(packageHost + asset)).status, 200, asset);
   assert.equal((await fetch(packageHost + '/api/v2' + directPath)).status, 200);
-  console.log('PASS real HTTP: exact-version rich direct full tabs; coded intro only; normalized Logo; code retry and opaque-key recovery; cross-account/CSRF; XSS text; legacy detail.');
+  console.log('PASS real HTTP: compact direct and entitled browse projections; no member downloads during view/acquisition; coded intro only; independent normalized Logo; retry/session/CSRF; legacy browse.');
 });
 
 test('the App guide preserves a legacy PostgreSQL draft while owner Web BFF editing and publication remain compatible',async t=>{
@@ -175,7 +202,7 @@ test('the App guide preserves a legacy PostgreSQL draft while owner Web BFF edit
   const rejected=await fetch(fixture.apiHost+'/v1/drafts/'+draft.draftId+'/publish',{method:'POST',headers:{authorization:'Bearer '+fixture.tokens.author,'content-type':'application/json','idempotency-key':crypto.randomUUID(),'if-match':'"1"'},body:'{}'});
   assert.equal(rejected.ok,false);assert.equal((await rejected.json()).error.code,'incomplete_setup');
   const author=await fixture.login('author'),studio=await browser(t,fixture,'/studio',author);
-  assert.equal(studio.window.document.querySelector('main h1').textContent,'在 Vonvon Bot 中创作');
+  assert.equal(studio.window.document.querySelector('main h1').textContent,'在 Bot 私聊中创作');
   assert.equal(studio.window.document.querySelector('main form,main input,main textarea'),null);
   assert.deepEqual(studio.calls.map(call=>call.path),['/auth/session']);
   const before=await fixture.request('/v1/drafts/'+draft.draftId);

@@ -167,6 +167,7 @@ function harness() {
     status: () => ({ kind: 'signedOut' as const }), login: vi.fn(async () => ({ kind: 'signingIn' as const })),
     cancelLogin: vi.fn(async () => ({ kind: 'signedOut' as const })), logout: vi.fn(async () => ({ kind: 'signedOut' as const })),
     onStatus: vi.fn(() => () => {}), request: vi.fn(), dispose: vi.fn(),
+    manage: vi.fn(async () => {}), refresh: vi.fn(async () => ({kind: 'signedOut' as const})),
   };
   const recipePreview = new RecipePreviewNavigation('vonvon-preview');
   const bridge = installBridge(owner, window, paths, actions, devs.devices, account, undefined, undefined, recipePreview);
@@ -246,6 +247,12 @@ describe('desktop IPC boundary', () => {
     await h.devs.show(remoteView(REMOTE_A, remoteClient()));
     expect(await h.invoke(desktopChannels.accountLogin)).toEqual({ ok: true, value: { kind: 'signingIn' } });
     expect(await h.invoke(desktopChannels.accountLogin, 'https://untrusted.example')).toMatchObject({ ok: false });
+    expect(await h.invoke(desktopChannels.accountManage)).toEqual({ok: true, value: undefined});
+    expect(await h.invoke(desktopChannels.accountRefresh)).toEqual({ok: true, value: {kind: 'signedOut'}});
+    expect(await h.invoke(desktopChannels.accountManage, 'https://untrusted.example')).toMatchObject({ok: false});
+    expect(await h.invoke(desktopChannels.accountRefresh, REMOTE_A)).toMatchObject({ok: false});
+    expect(h.account.manage).toHaveBeenCalledOnce();
+    expect(h.account.refresh).toHaveBeenCalledOnce();
     h.frame.url = 'https://untrusted.example';
     expect(await h.invoke(desktopChannels.accountLogout)).toMatchObject({ ok: false });
     expect(h.account.login).toHaveBeenCalledTimes(1);

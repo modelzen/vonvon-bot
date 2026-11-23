@@ -28,8 +28,12 @@ export interface SessionRecord {
   titleJobKey?: string;
   /** The native Codex thread that accepted feedback_prepare on start. */
   feedbackToolSessionId?: string;
-  /** The native Codex thread that accepted both private-chat resource tools. */
+  /** Legacy v1 marker; it does not prove the current resource catalog was accepted. */
   resourceToolSessionId?: string;
+  /** The resource catalog accepted on thread/start, bound to that native thread. */
+  resourceToolCatalog?: {sessionId: string; version: number};
+  /** The group skill policy accepted by this native session, including managed recipe selection. */
+  skillProfile?: {sessionId: string; key: string};
   model?: string;
   effort?: ReasoningEffort;
   /** Session override; omitted inherits the project's current default. */
@@ -417,6 +421,8 @@ function put(store: StoreFile, rec: SessionRecord): void {
   const earlier = earlierAfter(held, rec.sessionId);
   if (held.feedbackToolSessionId === rec.sessionId) rec = {...rec, feedbackToolSessionId: rec.sessionId};
   if (held.resourceToolSessionId === rec.sessionId) rec = {...rec, resourceToolSessionId: rec.sessionId};
+  if (!rec.resourceToolCatalog && held.resourceToolCatalog?.sessionId === rec.sessionId) rec = {...rec, resourceToolCatalog: held.resourceToolCatalog};
+  if (!rec.skillProfile && held.skillProfile?.sessionId === rec.sessionId) rec = {...rec, skillProfile: held.skillProfile};
   store.sessions[idx] = earlier ? { ...rec, earlier } : rec;
 }
 

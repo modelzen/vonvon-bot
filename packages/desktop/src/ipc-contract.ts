@@ -1,4 +1,5 @@
-import type { DraftPreviewNavigation, RecipePreviewShell } from '@vonvon/protocol';
+import type {GroupConfigurationNavigation, GroupNavigationShell} from '@vonvon/protocol';
+import type { RecipePreviewNavigationPayload, RecipePreviewShell } from '@vonvon/protocol';
 import { z } from 'zod';
 import type { ServerInfo, VonvonClient } from '@vonvon/client/browser';
 import {
@@ -29,6 +30,8 @@ export const desktopChannels = {
   external: 'desktop:shell:external',
   community: 'desktop:community:request',
   recipeSource: 'desktop:recipe-source:request',
+  groupNavigationPending: 'desktop:group-navigation:pending',
+  groupNavigationAcknowledge: 'desktop:group-navigation:acknowledge',
   recipePreviewPending: 'desktop:recipe-preview:pending',
   recipePreviewAcknowledge: 'desktop:recipe-preview:acknowledge',
   recipeAuthoring: 'desktop:recipe-authoring:request',
@@ -37,6 +40,8 @@ export const desktopChannels = {
   accountLogin: 'desktop:account:login',
   accountCancel: 'desktop:account:cancel',
   accountLogout: 'desktop:account:logout',
+  accountManage: 'desktop:account:manage',
+  accountRefresh: 'desktop:account:refresh',
   chooseExecutablePath: 'desktop:shell:chooseExecutablePath',
   chooseDirectoryPaths: 'desktop:shell:chooseDirectoryPaths',
   startHost: 'desktop:shell:startHost',
@@ -104,7 +109,8 @@ export type DesktopEvent =
   /** This computer's own device events, whichever device the page shows (U3's "new device paired"). */
   | { type: 'localDevice'; value: DeviceEventPayload }
   | { type: 'account'; value: AccountStatus }
-  | { type: 'recipePreview'; value: DraftPreviewNavigation }
+  | { type: 'groupNavigation'; value: GroupConfigurationNavigation }
+  | { type: 'recipePreview'; value: RecipePreviewNavigationPayload }
   | { type: 'authoringSaved'; value: AuthoringSaved }
   | { type: 'authoringPublished'; value: AuthoringPublished }
   | { type: 'devices'; value: DevicesState }
@@ -118,7 +124,7 @@ export type DesktopEvent =
 
 export type DesktopShell = Required<Pick<ShellCapabilities,
   'openExternal' | 'chooseExecutablePath' | 'chooseDirectoryPaths' | 'checkDesktopUpdate' | 'retryDesktopUpdate' | 'installDesktopUpdate' | 'onDesktopUpdate' |
-  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli' | 'service' | 'setLoginItem' | 'devices' | 'onLocalDeviceEvent' | 'quitKeepsDaemon' | 'onRemoteUpdate'>> & { recipePreview: RecipePreviewShell; account: AccountShell; community: CommunityShell; recipeAuthoring: RecipeAuthoringShell; recipeUse: RecipeUseShell; recipeSource:RecipeSourceShell };
+  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli' | 'service' | 'setLoginItem' | 'devices' | 'onLocalDeviceEvent' | 'quitKeepsDaemon' | 'onRemoteUpdate'>> & { groupNavigation: GroupNavigationShell; recipePreview: RecipePreviewShell; account: AccountShell; community: CommunityShell; recipeAuthoring: RecipeAuthoringShell; recipeUse: RecipeUseShell; recipeSource:RecipeSourceShell };
 
 export interface DesktopResources {
   uiIndex: string;

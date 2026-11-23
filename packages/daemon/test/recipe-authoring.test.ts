@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { Client, DefaultCache, type LarkChannel, type NormalizedMessage } from '@larksuiteoapi/node-sdk';
-import { authoringAuthorizationSchema, agentIdSchema, groupIdSchema, recipeAuthoringRequestSchema, type AuthoringAuthorization, type AuthoringOperation, type RecipeAuthoringReply, type RecipeAuthoringRequest, type AuthoringSaved } from '@vonvon/protocol';
+import { authoringAuthorizationSchema, agentIdSchema, groupIdSchema, recipeAuthoringRequestSchema, type AuthoringAuthorization, type AuthoringOperation, type RecipeAuthoringReply, type RecipeAuthoringRequest, type AuthoringSaved, type RecipeBrowsePreview } from '@vonvon/protocol';
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type {RichModelInput} from '../src/recipe/authoring-rich-model';
 import type { DraftInstructionParser, ReadDraftField } from '../src/recipe/draft-instruction';
@@ -3885,15 +3885,247 @@ async function resourceTransport(){
     const target={recipeId,versionId:randomUUID()},requestId=randomUUID();
     const handoff=()=>ownerRpc('resourceHandoff',{target,requestId});
     expect(await handoff()).toMatchObject({delivery:'pending'});
-    const job=kind(await ownerRpc('creatorPoll'),'creatorJobs').jobs.find(j=>j.task.kind==='resourceRead'&&j.task.target.versionId===target.versionId)!;
+    const job=kind(await ownerRpc('creatorPoll'),'creatorJobs').jobs.find(j=>j.task.kind==='resourcePreview'&&j.task.target.versionId===target.versionId)!;
     const data={target,revision:1,public:{version:'1.0',access:'direct' as const,name:'资源',summary:'',overview:''},config:{role:'不得持久化的正文'+requestId}};
     const {roleResourceDigest}=await import('@vonvon/protocol');
     const snapshot={...data,format:'role-v1',contentSha256:await roleResourceDigest(data)};
-    const answer=()=>ownerRpc('creatorAnswer',{id:job.id,answer:{kind:'resourceSnapshot',snapshot}});
-    return {target,requestId,job,handoff,answer,snapshot};
+    const previewSkills:RecipeBrowsePreview['skills']=[];
+    const preview={...target,revision:1,public:data.public,format:'role-v1' as const,creator:{authorId:account,displayName:'作者'},owned:false,acquired:true,state:'listed' as const,hasDisplayLogo:false,
+      preview:{settings:[],skills:previewSkills,ruleCount:1,taskCount:0}};
+    const answer=()=>ownerRpc('creatorAnswer',{id:job.id,answer:{kind:'resourcePreview',preview}});
+    return {target,requestId,job,handoff,answer,snapshot,preview};
   };
   return {start,attach,ownerRpc};
 }
+
+it('RESOURCE TRANSPORT names the selected version and Setup before asking about a new or existing group',async()=>{
+  const f=await resourceTransport(),a=await f.start();
+  a.preview.public.name='周会助理';a.preview.public.version='2.4.1';
+  a.preview.preview.skills.push({itemId:randomUUID(),name:'Setup',description:'初始化团队资料'});
+  await a.answer();
+  const sent=[...messages.values()].find(value=>value.chat_id===chatId)!;
+  const body=cards.get(sent.card_id)!;
+  expect(body).toContain('周会助理');expect(body).toContain('2.4.1');
+  expect(body).toContain('新建一个群聊');expect(body).toContain('用到已有群聊');
+  expect(body).toContain('等你确认方案后再创建或配置');expect(body).toContain('Setup 初始化技能');
+  expect(kind(await f.ownerRpc('creatorPoll'),'creatorJobs').jobs).toEqual([]);
+});
+
+it('RESOURCE TRANSPORT hands off only preview data and fetches full material only for a human-selected bound group',async()=>{
+  const f=await resourceTransport(),a=await f.start();
+  expect(a.job.task.kind).toBe('resourcePreview');
+  await a.answer();
+  const natural=msg('把这份配方应用到已选择的群','om_prepare_resource');
+  expect(await service.onMessage(natural)).toBe(false);
+  const caller={sessionId:'ses_1234567812345678',openId:owner,chatId,messageId:natural.messageId};
+  expect(await service.resources.bind(caller)).toBe('selected');
+  const tool=(q:Parameters<typeof service.resources.tool>[1])=>service.resources.tool(()=>caller,q);
+  const preview=await tool({kind:'index'}) as {page:{entries:{kind:string}[]}};
+  expect(preview.page.entries.some(entry=>entry.kind==='role'||entry.kind==='file')).toBe(false);
+  expect(kind(await f.ownerRpc('creatorPoll'),'creatorJobs').jobs).toEqual([]);
+  await expect(tool({kind:'prepare',groupId:'oc_missing'})).rejects.toThrow();
+  expect(kind(await f.ownerRpc('creatorPoll'),'creatorJobs').jobs).toEqual([]);
+  expect(await tool({kind:'prepare',groupId})).toEqual({status:'pending'});
+  const [read]=kind(await f.ownerRpc('creatorPoll'),'creatorJobs').jobs;
+  expect(read?.task).toMatchObject({kind:'resourceRead',target:a.target,groupId});
+  await f.ownerRpc('creatorAnswer',{id:read!.id,answer:{kind:'resourceSnapshot',snapshot:a.snapshot}});
+  const full=await tool({kind:'index',groupId}) as {page:{entries:{kind:string;documentId:string}[]}};
+  expect(full).toMatchObject({links:{chat:'https://applink.feishu.cn/client/chat/open?openChatId='+groupId,
+    app:'vonvon://groups/'+appId+'/'+groupId}});
+  const role=full.page.entries.find(entry=>entry.kind==='role')!;
+  expect(await tool({kind:'text',documentId:role.documentId,groupId})).toMatchObject({page:{text:a.snapshot.config.role},groupId});
+  const summary=await tool({kind:'index'}) as {page:{entries:{kind:string}[]}};
+  expect(summary.page.entries.some(entry=>entry.kind==='role')).toBe(false);
+  await removeProject('PRIVATE-GROUP-SENTINEL');
+  await addProject({chatId:groupId,name:'PRIVATE-GROUP-SENTINEL',createdAt:clock,cwd:root,blank:false});
+  expect(await tool({kind:'index',groupId})).toEqual({status:'prepareRequired'});
+});
+it('RESOURCE TRANSPORT rejects an outstanding full read after the selected group is rebound',async()=>{
+  const f=await resourceTransport(),a=await f.start();await a.answer();
+  const natural=msg('把配方应用到目标群','om_group_changes');
+  expect(await service.onMessage(natural)).toBe(false);
+  const caller={sessionId:'ses_1234567812345678',openId:owner,chatId,messageId:natural.messageId};
+  expect(await service.resources.bind(caller)).toBe('selected');
+  expect(await service.resources.tool(()=>caller,{kind:'prepare',groupId})).toEqual({status:'pending'});
+  const [read]=kind(await f.ownerRpc('creatorPoll'),'creatorJobs').jobs;
+  await removeProject('PRIVATE-GROUP-SENTINEL');
+  await addProject({chatId:groupId,name:'PRIVATE-GROUP-SENTINEL',createdAt:clock,cwd:root,blank:false});
+  await expect(f.ownerRpc('creatorCheck',{id:read!.id})).rejects.toThrow();
+  await expect(f.ownerRpc('creatorAnswer',{id:read!.id,answer:{kind:'resourceSnapshot',snapshot:a.snapshot}})).rejects.toThrow();
+});
+
+async function waitingResourcePreparation(waitMs=5_000){
+  const f=await resourceTransport(),a=await f.start();await a.answer();
+  const natural=msg('把这份配方应用到选定群','om_waiting_resource');
+  expect(await service.onMessage(natural)).toBe(false);
+  let caller:import('../src/recipe/resource-context').ResourceCaller|undefined={sessionId:'ses_1234567812345678',openId:owner,chatId,messageId:natural.messageId};
+  expect(await service.resources.bind(caller)).toBe('selected');
+  const controller=new AbortController();
+  const outcome=service.resources.tool(()=>caller,{kind:'prepare',groupId,wait:{signal:controller.signal,notAfter:Date.now()+waitMs}})
+    .then(value=>({ok:true,value}),error=>({ok:false,error}));
+  let read:import('@vonvon/protocol').CreatorJob|undefined;
+  await vi.waitFor(async()=>{
+    read=kind(await f.ownerRpc('creatorPoll'),'creatorJobs').jobs.find(job=>job.task.kind==='resourceRead');
+    expect(read).toBeDefined();
+  },{interval:10});
+  const ledger=async()=>JSON.parse(await readFile(join(root,'recipe-authoring/journal.json'),'utf8'));
+  return {f,a,outcome,controller,read:read!,get:()=>caller,changeCaller:(next:typeof caller)=>{caller=next;},ledger};
+}
+
+it('RESOURCE PREPARE waits for the original App job without blocking its answer, then reads full content in the same frame',async()=>{
+  const f=await waitingResourcePreparation();
+  const before=await f.ledger(),job=before.resources[f.a.requestId].jobs[f.read.id];
+  expect(await service.resources.tool(f.get,{kind:'index',groupId})).toEqual({status:'pending',groupId});
+  expect(kind(await f.f.ownerRpc('creatorPoll'),'creatorJobs').jobs.filter(item=>item.task.kind==='resourceRead').map(item=>item.id)).toEqual([f.read.id]);
+  await f.f.ownerRpc('creatorAnswer',{id:f.read.id,answer:{kind:'resourceSnapshot',snapshot:f.a.snapshot}});
+  expect(await f.outcome).toMatchObject({ok:true,value:{status:'ready',target:f.a.target,groupId}});
+  const full=await service.resources.tool(f.get,{kind:'index',groupId}) as {page:{entries:{kind:string}[]}};
+  expect(full.page.entries.some(entry=>entry.kind==='role')).toBe(true);
+  expect(await service.resources.tool(f.get,{kind:'prepare',groupId})).toMatchObject({status:'ready'});
+  const after=await f.ledger(),jobs=Object.values(after.resources[f.a.requestId].jobs) as {id:string;expires:number;task:{kind:string}}[];
+  expect(jobs.filter(item=>item.task.kind==='resourceRead')).toHaveLength(1);
+  expect(after.resources[f.a.requestId].jobs[f.read.id].expires).toBe(job.expires);
+});
+
+it('RESOURCE PREPARE returns retryable pending at its deadline without asking for another acquisition or queuing another job',async()=>{
+  const f=await waitingResourcePreparation(50);
+  expect(await f.outcome).toMatchObject({ok:true,value:{status:'pending',groupId,retryable:true,message:expect.stringContaining('并非领取或授权失败')}});
+  const before=await f.ledger();
+  const retry=service.resources.tool(f.get,{kind:'prepare',groupId,wait:{signal:f.controller.signal,notAfter:Date.now()+5_000}});
+  await f.f.ownerRpc('creatorAnswer',{id:f.read.id,answer:{kind:'resourceSnapshot',snapshot:f.a.snapshot}});
+  expect(await retry).toMatchObject({status:'ready',target:f.a.target});
+  const after=await f.ledger();
+  expect(Object.keys(after.resources[f.a.requestId].jobs)).toEqual(Object.keys(before.resources[f.a.requestId].jobs));
+  expect(after.resources[f.a.requestId].jobs[f.read.id].expires).toBe(before.resources[f.a.requestId].jobs[f.read.id].expires);
+});
+
+it('RESOURCE PREPARE stops on a real rejection without retrying the full download',async()=>{
+  const f=await waitingResourcePreparation();
+  await f.f.ownerRpc('creatorAnswer',{id:f.read.id,answer:{kind:'rejected',reason:'forbidden'}});
+  expect(await f.outcome).toMatchObject({ok:true,value:{status:'unavailable'}});
+  expect(kind(await f.f.ownerRpc('creatorPoll'),'creatorJobs').jobs).toEqual([]);
+  expect(Object.keys((await f.ledger()).resources[f.a.requestId].jobs)).toHaveLength(2);
+});
+
+it('RESOURCE PREPARE observations do not renew the original App lease without heartbeats',async()=>{
+  const f=await waitingResourcePreparation();
+  let checks=0;
+  onMembership=async()=>{
+    checks++;
+    if(checks===1)clock+=30_000;
+    if(checks===2)clock+=15_001;
+  };
+  expect(await f.outcome).toMatchObject({ok:false});
+  expect(checks).toBe(2);
+  expect(Object.keys((await f.ledger()).resources[f.a.requestId].jobs)).toHaveLength(2);
+});
+
+it('RESOURCE PREPARE respects its deadline while a group identity read is still in flight',async()=>{
+  const f=await waitingResourcePreparation(700),before=await f.ledger();
+  let release!:()=>void;
+  const held=new Promise<void>(resolve=>{release=resolve;});
+  onMembership=async()=>{await held;};
+  try{
+    const outcome=await Promise.race([f.outcome,new Promise(resolve=>setTimeout(()=>resolve('late'),1_500))]);
+    expect(outcome).toMatchObject({ok:true,value:{status:'pending',retryable:true}});
+  }finally{release();}
+  await new Promise(resolve=>setTimeout(resolve,50));
+  expect((await f.ledger()).resources[f.a.requestId]).toEqual(before.resources[f.a.requestId]);
+});
+
+it('RESOURCE PREPARE respects its deadline while the journal lock is held and cannot observe later',async()=>{
+  const f=await waitingResourcePreparation(700),before=await f.ledger();
+  const {acquireMutex,closeMutex}=await import('../src/config/data-access');
+  const lock=await acquireMutex(join(root,'recipe-authoring'),'creation',10_000);
+  try{
+    const outcome=await Promise.race([f.outcome,new Promise(resolve=>setTimeout(()=>resolve('late'),1_500))]);
+    expect(outcome).toMatchObject({ok:true,value:{status:'pending',retryable:true}});
+  }finally{await closeMutex(lock);}
+  await new Promise(resolve=>setTimeout(resolve,150));
+  expect((await f.ledger()).resources[f.a.requestId]).toEqual(before.resources[f.a.requestId]);
+});
+
+it.each(['cancel','session','message','account','group','target','expired-job'] as const)('RESOURCE PREPARE cannot drift or requeue while waiting after %s changes',async change=>{
+  const f=await waitingResourcePreparation();
+  const before=await f.ledger();
+  if(change==='cancel')f.controller.abort();
+  if(change==='session')f.changeCaller({...f.get()!,sessionId:'ses_other'});
+  if(change==='message')f.changeCaller({...f.get()!,messageId:'om_other'});
+  if(change==='account')service.disconnect(peer.id);
+  if(change==='group'){
+    await removeProject('PRIVATE-GROUP-SENTINEL');
+    await addProject({chatId:groupId,name:'PRIVATE-GROUP-SENTINEL',createdAt:clock,cwd:root,blank:false});
+  }
+  if(change==='target')await f.f.start();
+  if(change==='expired-job'){
+    before.resources[f.a.requestId].jobs[f.read.id].expires=clock-1;
+    await writeFile(join(root,'recipe-authoring/journal.json'),JSON.stringify(before));
+  }
+  const result=await f.outcome;
+  expect(result).toMatchObject(change==='expired-job'?{ok:true,value:{status:'unavailable'}}:{ok:false});
+  const after=await f.ledger();
+  expect(Object.keys(after.resources[f.a.requestId].jobs)).toEqual(Object.keys(before.resources[f.a.requestId].jobs));
+  expect(after.resources[f.a.requestId].jobs[f.read.id].expires).toBe(before.resources[f.a.requestId].jobs[f.read.id].expires);
+});
+it.each([false,true])('RESOURCE TRANSPORT recovers a persisted v1 pending full-read on polling without replaying handoff or dropping durable writes; read expired=%s',async expired=>{
+  const f=await resourceTransport(),a=await f.start();
+  await f.ownerRpc('creatorContinue',{selection:{kind:'draft',work:{draftId:randomUUID(),source:null},name:'另一份创作草稿',version:'1'}});
+  const file=join(root,'recipe-authoring/journal.json');
+  const before=JSON.parse(await readFile(file,'utf8'));
+  const creatorIds=Object.values(before.links).flatMap((link:any)=>Object.keys(link.creator?.jobs??{}));
+  const creatorJobs=Object.fromEntries(Object.entries(before.links).map(([key,link]:[string,any])=>[key,link.creator?.jobs??{}]));
+  expect(creatorIds.length).toBeGreaterThan(0);
+  const row=before.resources[a.requestId],mutationId=randomUUID();
+  row.jobs[a.job.id].task={kind:'resourceRead',target:a.target};
+  if(expired)row.jobs[a.job.id].expires=clock-1;
+  const mutation={id:mutationId,task:{kind:'resourceAcquire',target:{...a.target,versionId:randomUUID()},requestId:randomUUID()},
+    session:row.jobs[a.job.id].session,expires:clock+600_000,unknown:true};
+  row.jobs[mutationId]=mutation;
+  row.cardId='card_legacy_pending';cards.set(row.cardId,'existing pending card');
+  const preserved={requestId:row.requestId,sendId:row.sendId,cardId:row.cardId,focus:row.focus,expires:row.expires};
+  await writeFile(file,JSON.stringify(before));
+  restart();
+  const otherPeer={...peer,id:randomUUID()},other=await f.attach(otherPeer),active=await f.attach();
+  expect(kind(await active('creatorPoll'),'creatorJobs').jobs.some(job=>job.task.kind==='resourcePreview')).toBe(false);
+  expect(kind(await other('creatorPoll'),'creatorJobs').jobs.some(job=>job.task.kind==='resourcePreview')).toBe(false);
+  expect(JSON.parse(await readFile(file,'utf8')).resources[a.requestId].initial).toBe(a.job.id);
+  service.disconnect(otherPeer.id);
+  const first=kind(await active('creatorPoll'),'creatorJobs').jobs;
+  expect(first.some(job=>job.task.kind==='resourceRead')).toBe(false);
+  const resumed=first.filter(job=>job.task.kind==='resourcePreview'&&job.task.target.versionId===a.target.versionId);
+  expect(resumed).toHaveLength(1);
+  await expect(active('creatorCheck',{id:a.job.id})).rejects.toThrow();
+  const recovery=JSON.parse(await readFile(file,'utf8')).resources[a.requestId];
+  expect(recovery).toMatchObject(preserved);
+  expect(recovery.jobs[resumed[0]!.id].expires).toBeGreaterThan(clock);
+  expect(recovery.jobs[mutationId]).toEqual(mutation);
+  const answer={kind:'resourcePreview',preview:a.preview};
+  await active('creatorAnswer',{id:resumed[0]!.id,answer});
+  await active('creatorAnswer',{id:resumed[0]!.id,answer});
+  expect(messages.size).toBe(1);
+  expect(messages.get(preserved.sendId)?.card_id).toBe(preserved.cardId);
+  expect(kind(await active('creatorPoll'),'creatorJobs').jobs.some(job=>job.task.kind==='resourcePreview'||job.task.kind==='resourceRead')).toBe(false);
+  const after=JSON.parse(await readFile(file,'utf8'));
+  expect(after.resources[a.requestId]).toMatchObject({...preserved,delivery:'sent'});
+  expect(after.resources[a.requestId].jobs[mutationId]).toEqual(mutation);
+  const retained=Object.values(after.links).flatMap((link:any)=>Object.keys(link.creator?.jobs??{}));
+  expect(retained).toEqual(expect.arrayContaining(creatorIds));
+  expect(Object.fromEntries(Object.entries(after.links).map(([key,link]:[string,any])=>[key,link.creator?.jobs??{}]))).toEqual(creatorJobs);
+});
+it.each(['groupId','groupIdentity'])('RESOURCE TRANSPORT does not normalize a partially group-bound v2 initial read containing %s',async field=>{
+  const f=await resourceTransport(),a=await f.start();
+  const file=join(root,'recipe-authoring/journal.json'),before=JSON.parse(await readFile(file,'utf8'));
+  const task={kind:'resourceRead',target:a.target,[field]:field==='groupId'?groupId:'a'.repeat(64)};
+  before.resources[a.requestId].jobs[a.job.id].task=task;
+  await writeFile(file,JSON.stringify(before));
+  restart();const active=await f.attach();
+  expect(kind(await active('creatorPoll'),'creatorJobs').jobs).toEqual([]);
+  await expect(active('creatorCheck',{id:a.job.id})).rejects.toThrow();
+  const after=JSON.parse(await readFile(file,'utf8')).resources[a.requestId];
+  expect(after.initial).toBe(a.job.id);
+  expect(after.jobs[a.job.id].task).toEqual(task);
+  expect(messages.size).toBe(0);
+});
 
 it('RESOURCE TRANSPORT binds each job to an eligible native peer and sender, retains unknown delivery, and recovers only the original card UUID',async()=>{
   const f=await resourceTransport(),a=await f.start();
@@ -3964,7 +4196,7 @@ it('RESOURCE TRANSPORT keeps a newer resource selected when an earlier creatorCo
   const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
   const ledger=new AuthoringJournal(root,()=>clock);
   expect(await ledger.run(db=>db.resources?.[requestId]?.focus)).toBe(true);
-  expect(kind(await f.ownerRpc('creatorPoll'),'creatorJobs').jobs.map(j=>j.task.kind)).toEqual(['resourceRead']);
+  expect(kind(await f.ownerRpc('creatorPoll'),'creatorJobs').jobs.map(j=>j.task.kind)).toEqual(['resourcePreview']);
   await f.ownerRpc('creatorContinue',{selection:older});
   expect(await ledger.run(db=>db.resources?.[requestId]?.focus)).toBe(false);
 });
@@ -3993,11 +4225,11 @@ it('RESOURCE TRANSPORT requests an exact entitlement read after an interrupted a
   expect(await tool({kind:'acquire',versionId:next.versionId})).toMatchObject({status:'pending'});
   const jobs=kind(await recovered('creatorPoll'),'creatorJobs').jobs;
   expect(jobs).toHaveLength(1);
-  expect(jobs[0]!.task).toEqual({kind:'resourceRead',target:next});
+  expect(jobs[0]!.task).toEqual({kind:'resourcePreview',target:next});
   const {roleResourceDigest}=await import('@vonvon/protocol');
   const {format,...prior}=a.snapshot;
   const data={target:next,revision:2,public:prior.public,config:{role:'NEW EXACT'}};
-  await recovered('creatorAnswer',{id:jobs[0]!.id,answer:{kind:'resourceSnapshot',snapshot:{...data,format,contentSha256:await roleResourceDigest(data)}}});
+  await recovered('creatorAnswer',{id:jobs[0]!.id,answer:{kind:'resourcePreview',preview:{...a.preview,...next,revision:2,public:data.public}}});
   expect(await tool({kind:'index'})).toMatchObject({status:'ready',target:next});
   expect(kind(await recovered('creatorPoll'),'creatorJobs').jobs).toHaveLength(0);
 });
@@ -4036,8 +4268,9 @@ it.each(['invalid_code','rate_limited'] as const)('RESOURCE TRANSPORT rechecks e
         acquired=true;return Response.json({...next,owned:false,acquired});
       }
       expect(path).toContain(next.versionId);
-      if(path.startsWith('/v2/recipes/'))return Response.json({error:{code:'not_found'}},{status:404});
-      return Response.json({...next,revision:2,public:{...a.snapshot.public,version:'2',access},owned:false,acquired,...((access==='direct'||acquired)&&{config:{role:'第二版'}})});
+      if(path.endsWith('/preview'))return Response.json({...a.preview,...next,revision:2,public:{...a.snapshot.public,version:'2',access},acquired,
+        preview:access==='direct'||acquired?a.preview.preview:undefined});
+      throw new Error('Full detail should not be requested while acquiring');
     }};
   const reader=recipeResourceReader(accountClient);
   const answer=await reader.acquireExact(account,next,claim.task.requestId,()=>{});
@@ -4049,8 +4282,8 @@ it.each(['invalid_code','rate_limited'] as const)('RESOURCE TRANSPORT rechecks e
   if(failure==='rate_limited')clock+=1001;
   const follow=failure==='rate_limited'?tool:await human();
   expect(await follow(query)).toEqual({status:'pending'});
-  const [negative]=await jobs();expect(negative?.task).toEqual({kind:'resourceRead',target:next});
-  await expect(reader.readExact(account,next,()=>{})).rejects.toMatchObject({code:'not_acquired'});
+  const [negative]=await jobs();expect(negative?.task).toEqual({kind:'resourcePreview',target:next});
+  await expect(reader.previewExact(account,next,()=>{})).rejects.toMatchObject({code:'not_acquired'});
   await native('creatorAnswer',{id:negative!.id,answer:{kind:'rejected',reason:'unavailable'}});
   expect(await follow(query)).toEqual({status:'unknown'});expect(await jobs()).toEqual([]);
 
@@ -4062,9 +4295,9 @@ it.each(['invalid_code','rate_limited'] as const)('RESOURCE TRANSPORT rechecks e
   if(failure==='rate_limited'){clock+=11*60_000;service.disconnect(peer.id);native=await f.attach({...peer,id:randomUUID()});}
   const retry=await human();
   expect(await retry(query)).toEqual({status:'pending'});
-  const queued=await jobs();expect(queued.map(j=>j.task)).toEqual([{kind:'resourceRead',target:next}]);
-  const snapshot=await reader.readExact(account,next,()=>{});
-  await native('creatorAnswer',{id:queued[0]!.id,answer:{kind:'resourceSnapshot',snapshot}});
+  const queued=await jobs();expect(queued.map(j=>j.task)).toEqual([{kind:'resourcePreview',target:next}]);
+  const preview=await reader.previewExact(account,next,()=>{});
+  await native('creatorAnswer',{id:queued[0]!.id,answer:{kind:'resourcePreview',preview}});
   expect(await retry(query)).toEqual({status:'acquired'});
   expect(await retry({kind:'index'})).toMatchObject({status:'ready',target:next});
   expect(await jobs()).toEqual([]);
@@ -4095,9 +4328,8 @@ it('RESOURCE TRANSPORT opens a real native link session, resumes the original re
     expect(id).toBe(account);const beforeCount=rpcs.filter(r=>r.type==='creatorCheck').length;await before?.();
     if(path==='/v1/me')return Response.json({accountId:account});
     getTrace.push(rpcs.filter(r=>r.type==='creatorCheck').length-beforeCount);
-    if(path.startsWith('/v2/recipes/'))return Response.json({error:{code:'not_found'}},{status:404});
-    expect(path).toBe('/v1/recipes/'+target.recipeId+'/versions/'+target.versionId);
-    return Response.json({...target,public:{version:'1',access:'direct',name:'资源',summary:'',overview:''},config:{role:'测试角色'},revision:1,acquired:true,owned:false});
+    expect(path).toBe('/v2/recipes/'+target.recipeId+'/versions/'+target.versionId+'/preview');
+    return Response.json({...target,public:{version:'1',access:'direct',name:'资源',summary:'',overview:''},format:'role-v1',creator:{authorId:account,displayName:'作者'},state:'listed',hasDisplayLogo:false,revision:1,acquired:true,owned:false});
   }};
   const source=(viewId:string)=>({viewId,pairedKey:deviceKey,client:client(viewId==='local'?peer:remotePeer),release(){},
     check:()=>connection.signal.throwIfAborted(),signal:connection.signal});
@@ -4126,7 +4358,7 @@ it('RESOURCE TRANSPORT opens a real native link session, resumes the original re
     await authoring.request({type:'confirmLink',handle,challengeId:challenge.challengeId,evidence:evidence.evidence});
     const original=await supervisor.resourceHandoff(input);expect(original).toMatchObject({kind:'resourceHandoff',requestId:input.requestId,tenant:'feishu',botName:'已核验 Bot',delivery:'pending'});
     await vi.waitFor(async()=>expect(await supervisor.resourceHandoff(input)).toMatchObject({delivery:'sent'}),{timeout:6000,interval:30});
-    expect(getTrace).toEqual([1,1]);expect(messages.size).toBe(1);
+    expect(getTrace).toEqual([1]);expect(messages.size).toBe(1);
     expect(rpcs.filter(r=>r.type==='resourceHandoff').every(r=>r.requestId===input.requestId)).toBe(true);
     expect(rpcs.some(r=>['prepare','richPrepare','creatorContinue','creatorAppConfirm'].includes(r.type))).toBe(false);
     expect(JSON.parse(await readFile(join(root,'recipe-authoring/journal.json'),'utf8')).operations).toEqual({});
@@ -4137,7 +4369,7 @@ it('RESOURCE TRANSPORT restores only a compact grant after restart; replaying a 
   const f=await resourceTransport(),a=await f.start();await a.answer();
   const guide=[...messages.values()].at(-1)!.message_id;
   restart();const active=await f.attach();
-  await active('creatorAnswer',{id:a.job.id,answer:{kind:'resourceSnapshot',snapshot:a.snapshot}});
+  await active('creatorAnswer',{id:a.job.id,answer:{kind:'resourcePreview',preview:a.preview}});
   const m=msg('再读一次','om_after_resource_restart');
   (m.raw as {message:{parent_id?:string}}).message.parent_id=guide;
   expect(await service.onMessage({...m,replyToMessageId:guide})).toBe(false);
@@ -4146,8 +4378,8 @@ it('RESOURCE TRANSPORT restores only a compact grant after restart; replaying a 
   const read=()=>service.resources.tool(()=>caller,{kind:'index'});
   expect(await read()).toMatchObject({status:'pending'});
   const [reload]=kind(await active('creatorPoll'),'creatorJobs').jobs;
-  expect(reload!.task).toEqual({kind:'resourceRead',target:a.target});expect(reload!.id).not.toBe(a.job.id);
-  await active('creatorAnswer',{id:reload!.id,answer:{kind:'resourceSnapshot',snapshot:a.snapshot}});
+  expect(reload!.task).toEqual({kind:'resourcePreview',target:a.target});expect(reload!.id).not.toBe(a.job.id);
+  await active('creatorAnswer',{id:reload!.id,answer:{kind:'resourcePreview',preview:a.preview}});
   expect(await read()).toMatchObject({status:'ready',target:a.target});
   expect(messages.size).toBe(1);expect(cards.size).toBe(1);
 });

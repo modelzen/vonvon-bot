@@ -151,3 +151,11 @@
 .community-studio-row strong { font-size:16px; font-weight:600; }
 
 .community-page .today-back { width:auto; margin:0; padding:0; }
+
+.community-card-entry { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.community-card-entry > .community-card { width: 100%; flex: 1; }
+.community-card-author { color: var(--color-text-secondary); font-size: 12px; padding-inline: 4px; }
+.community-author-link { border: 0; padding: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.community-author-link:hover { color: var(--color-text); }
+.community-author-link:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; border-radius: 2px; }
+.community-author-page { display: flex; flex-direction: column; gap: 24px; }

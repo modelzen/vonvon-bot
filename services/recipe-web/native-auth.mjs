@@ -132,8 +132,11 @@ export function createNativeLogin({ publicOrigin, supabaseOrigin, publishableKey
     let url;
     try { url = new URL(value); } catch { throw new WebError(400, 'invalid_authorize_url'); }
     const params = url.searchParams, expected = ['provider', 'redirect_to', 'code_challenge', 'code_challenge_method'];
+    const accountChoice = params.has('prompt');
+    if (accountChoice && (!['github', 'google'].includes(flow.provider) || params.getAll('prompt').length !== 1 ||
+        params.get('prompt') !== 'select_account')) throw new WebError(400, 'invalid_authorize_url');
     if (url.origin !== supabaseOrigin || url.pathname !== '/auth/v1/authorize' || url.username || url.password || url.hash ||
-        [...params].length !== 4 || expected.some(name => params.getAll(name).length !== 1) ||
+        [...params].length !== 4 + Number(accountChoice) || expected.some(name => params.getAll(name).length !== 1) ||
         params.get('provider') !== flow.provider || params.get('redirect_to') !== publicOrigin + '/auth/native/callback' ||
         !canonicalToken(params.get('code_challenge')) || !['s256', 'S256'].includes(params.get('code_challenge_method'))) {
       throw new WebError(400, 'invalid_authorize_url');

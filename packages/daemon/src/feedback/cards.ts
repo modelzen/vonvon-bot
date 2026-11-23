@@ -1,6 +1,6 @@
 import {button, card, type CardElement} from '../card/cards.js';
 import {FEEDBACK_ACTION} from './events.js';
-import type {FeedbackReview} from './types.js';
+import {feedbackDetails, type FeedbackReview} from './types.js';
 
 const plain = (content: string): CardElement => ({tag: 'div', text: {tag: 'plain_text', content}});
 const kinds = {bug: '问题反馈', feature: '功能建议', improvement: '体验优化'};
@@ -17,6 +17,7 @@ export function feedbackReviewCard(review: FeedbackReview) {
     ...(summary.steps ? [plain('如何重现\n' + summary.steps)] : []),
     ...(summary.expected ? [plain('期望效果\n' + summary.expected)] : []),
     ...(summary.environment ? [plain('使用环境\n' + summary.environment)] : []),
+    ...feedbackDetails(summary).map(({label, value}) => plain(label + '\n' + value)),
     plain('影响程度：' + (summary.impact ?? '未说明') + '\n涉及功能：' + (summary.areas.join('、') || '未说明')),
     plain('附件：' + (review.attachments.map(file => `${file.filename}（${file.bytes} 字节）`).join('\n') || '无')),
     plain('只会提交这里列出的摘要和附件。修改内容后需要重新核对；截图请先确认已隐藏私人信息。'),

@@ -170,8 +170,12 @@ describe('the config builtin skill', () => {
     expect(configSkill.body).toContain('要协作的工作尽量放在群里');
     expect(configSkill.body).toContain('这只是引导');
   });
-  it('holds no judgment or risk text', () => {
-    expect(configSkill.body).not.toMatch(/风险|可信|不是指令|别人说的|谨慎|小心|必须确认|先确认|要不要确认/);
+  it('keeps ordinary configuration autonomous and previews recipe applications for user approval', () => {
+    const ordinary = configSkill.body.replace(/## 把配方用到群里[\s\S]*?(?=## 配置消息卡)/u, '');
+    expect(ordinary).not.toMatch(/风险|可信|不是指令|别人说的|谨慎|小心|必须确认|先确认|要不要确认/);
+    for (const words of ['获取配方','交给 Bot','应用配方']) expect(configSkill.description).toContain(words);
+    for (const words of ['新建群','已有群','具体合并方案','等用户认可完整方案后再写入','不能只复制角色',
+      '重新说明变化后的合并方案','links.chat','links.app','Setup 已完成']) expect(configSkill.body).toContain(words);
   });
   it('contains no credentials, real chat identifiers or machine paths', () => {
     expect(JSON.stringify(configSkill)).not.toMatch(/(?:cli_|oc_|ou_)[a-zA-Z0-9]{8,}|sk-[a-zA-Z0-9]{12,}|-----BEGIN|\/(?:home|Users)\//);
@@ -179,13 +183,13 @@ describe('the config builtin skill', () => {
 });
 
 describe('the two sets', () => {
-  it('are the schedule and Feishu skills, and config in a private chat', () => {
+  it('adds configuration and recipe creation to the private chat skill set', () => {
     expect(builtinSkillsOfSet('group').map(skill => skill.name)).toEqual(['vonvon-schedule', 'vonvon-feishu']);
-    expect(builtinSkillsOfSet('dm').map(skill => skill.name)).toEqual(['vonvon-schedule', 'vonvon-feishu', 'vonvon-config']);
+    expect(builtinSkillsOfSet('dm').map(skill => skill.name)).toEqual(['vonvon-schedule', 'vonvon-feishu', 'vonvon-config', 'vonvon-recipe']);
   });
   it('whitelist each name once, and not the name the Feishu skill had', () => {
-    expect(builtinSkillNames()).toEqual(['vonvon-schedule', 'vonvon-feishu', 'vonvon-config']);
-    expect(BUILTIN_SKILL_NAMES).toEqual(['vonvon:vonvon-schedule', 'vonvon:vonvon-feishu', 'vonvon:vonvon-config']);
+    expect(builtinSkillNames()).toEqual(['vonvon-schedule', 'vonvon-feishu', 'vonvon-config', 'vonvon-recipe']);
+    expect(BUILTIN_SKILL_NAMES).toEqual(['vonvon:vonvon-schedule', 'vonvon:vonvon-feishu', 'vonvon:vonvon-config', 'vonvon:vonvon-recipe']);
   });
 });
 

@@ -1,15 +1,18 @@
 <!doctype html>
-<html lang="zh-CN"><head>
+<html lang="zh-CN" data-desktop-channel="__DESKTOP_CHANNEL__" data-recipe-create-url="__RECIPE_CREATE_URL__"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="referrer" content="same-origin"><meta name="color-scheme" content="light dark">
+<meta name="referrer" content="same-origin"><meta name="color-scheme" content="light">
 <title>社区 · Vonvon Bot</title><link rel="icon" href="/mark.png"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/viewer.css">
 <script type="module" src="/app.mjs"></script>
+<script type="module" src="/create.mjs"></script>
 </head><body>
+<a class="skip" href="#main">跳到主要内容</a>
 <header class="mast"><div class="bar shell">
 <a href="/" class="brand"><img src="/mark.png" width="28" height="28" alt="">Vonvon Bot</a>
-<nav class="actions" aria-label="社区导航"><a href="/library" id="library-link">已获取</a><a href="/studio">创作配方</a><button class="secondary" id="account" type="button" hidden>登录</button></nav>
+<nav class="actions" aria-label="社区导航"><a href="https://vonvon.cc/">官网</a><a href="/" data-community-link>社区</a><a href="https://vonvon.cc/docs/">文档</a><a href="https://vonvon.cc/get/">下载</a><button class="secondary" id="account" type="button" hidden>登录</button></nav>
 </div></header>
 <main class="shell" id="main"><p class="muted" role="status">正在加载…</p></main>
+<footer class="site-footer"><div class="shell"><p>Vonvon Bot · 把好用的配方带回自己的 Bot</p><nav aria-label="相关页面"><a href="https://vonvon.cc/">官网</a><a href="https://vonvon.cc/docs/">使用文档</a><a href="/">配方社区</a><a href="__RECIPE_CREATE_URL__" data-create-recipe>分享我的配方</a><a href="/studio">创作指引</a></nav></div></footer>
 <dialog id="modal"></dialog><div id="feedback" role="status" aria-live="polite"></div>
 <noscript>请开启 JavaScript 以查看配方。</noscript>
 </body></html>

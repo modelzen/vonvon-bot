@@ -103,6 +103,10 @@ jobs:
           npm test --prefix services/recipe-api
           npm test --prefix services/recipe-web
           node scripts/recipes/check.mjs
+          npm ci --prefix services/release-code-mcp
+          command -v rg || sudo apt-get install -y ripgrep
+          npm test --prefix services/release-code-mcp
+          node --experimental-transform-types --test scripts/recipes/release-code-check.mjs
 
   macos:
     name: macOS checks

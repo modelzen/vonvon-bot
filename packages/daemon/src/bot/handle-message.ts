@@ -1,4 +1,7 @@
+import type {CodeSource, ReleaseCodeHost} from '../release-code/host';
 import type { FeedbackSource } from '../agent/entry/feedback-tool';
+import { RESOURCE_TOOL_CATALOG_VERSION } from '../agent/entry/resource-tools';
+import { recipeResourceTurnGuidance } from '../recipe/application-guidance';
 import { FEEDBACK_ACTION } from '../feedback/events';
 import type { FeedbackHost } from '../feedback/host';
 import { NOT_DM_MESSAGE, type AgentEntries, type AgentPlace, type TurnMemory, type TurnScope } from '../agent/entry/registry';
@@ -17,6 +20,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { settleTurn, recordUsage, type TurnStores } from './turn-usage';
 import { assemble, judgeContext, loadContextSources, openingInstructions, planTurnUpdate, contextOf, newNonce, type ContextPlace } from './context-assembly';
 import { groupSkillProfile } from '../agent/group-skills';
+import {projectSkillKey, sessionSkillsChanged} from './skill-profile';
+import {isManagedRecipeSkillPath, managedGroupSkillProfile} from '../recipe/group-skills';
 import { completeBuiltinPackage, ensureBuiltinPackage } from '../agent/builtin-skills/package';
 import { builtinSkillsOfSet } from '../agent/builtin-skills/registry';
 import type { SessionProfile } from '../agent/session-profile';
@@ -545,6 +550,7 @@ export { BACKEND_PROBE_TIMEOUT_MS, probeBackends, validateBackendSwitch } from '
  * manual-reminder ownership and long-task timing never leak from turn one. */
 export interface QueuedTurn {
   feedback?: FeedbackSource;
+  releaseCode?: CodeSource;
   attentionAcceptance?: AttentionAcceptance;
   voice?: VoiceReply;
   input: AgentInput;
@@ -742,7 +748,7 @@ function runFailureMessage(err: unknown, dropped: number, sessionNotice?: string
 
 /** Why a location's stored session couldn't be continued (see resolveThread). */
 type ToolRefresh = 'feedback-tool' | 'resource-tools';
-export type RecreateReason = 'resume-failed' | 'cwd-changed' | 'provider-changed' | ToolRefresh;
+export type RecreateReason = 'resume-failed' | 'cwd-changed' | 'provider-changed' | 'skills-changed' | ToolRefresh;
 
 function requiredCodexTools(extra?: TurnExtra): ToolRefresh | undefined {
   if (extra?.resourceSelected) return 'resource-tools';
@@ -752,7 +758,7 @@ function requiredCodexTools(extra?: TurnExtra): ToolRefresh | undefined {
 function missingCodexTools(required: ToolRefresh | undefined, rec?: SessionRecord, live?: AgentThread): boolean {
   if (!required || rec?.backend !== 'codex-appserver') return false;
   return required === 'resource-tools'
-    ? !live?.startedWithResourceTools && rec.resourceToolSessionId !== rec.sessionId
+    ? rec.resourceToolCatalog?.sessionId !== rec.sessionId || rec.resourceToolCatalog.version !== RESOURCE_TOOL_CATALOG_VERSION
     : !live?.startedWithFeedbackTool && rec.feedbackToolSessionId !== rec.sessionId;
 }
 
@@ -762,6 +768,7 @@ interface ResolvedThread { thread: AgentThread | undefined; recreated: boolean; 
  * silently (product.md 3.5). A topic re-weaves its recent messages into the new
  * session; the main area has nothing to re-weave. */
 export function sessionChangeNotice(reason: RecreateReason, topic: boolean): string {
+  if (reason === 'skills-changed') return `本群技能已更新，已重新加载当前启用的技能。原会话保留在历史记录中${topic ? '，话题里最近的消息已重新带上' : ''}。`;
   if (reason === 'resource-tools') return '本轮已启用配方资料工具。原 Codex 会话保留在历史记录中。';
   if (reason === 'feedback-tool') return '本轮已启用群反馈工具。原 Codex 会话保留在历史记录中。';
   const why = reason === 'cwd-changed' ? '本群的工作目录改了' : reason === 'provider-changed' ? 'Provider 换了' : '原来的会话接不上了（恢复失败）';
@@ -884,6 +891,7 @@ interface TurnExtra {
   /** The ordinary DM router verified a delivered resource for this SDK message. */
   resourceSelected?: true;
   feedback?: FeedbackSource;
+  releaseCode?: CodeSource;
   /** A smart judgement's one-use acknowledgement of actual session intake. */
   attentionAcceptance?: AttentionAcceptance;
   /** Local image paths to send instead of downloading the message's own. */
@@ -1210,7 +1218,7 @@ export function createOrchestrator(
   /** `droppedFile`: where a shutdown keeps the queued messages it drops (s18c). No default: without it, nothing is
    * kept or answered (tests, and every caller but `daemon run`). */
   // Only daemon run supplies judgeUsageFile; tests that omit it do not persist usage.
-  options?: { feedback?: FeedbackHost; authoring?: Pick<import('../recipe/authoring-service').AuthoringService, 'onMessage' | 'onAction' | 'adminRemoved'> & Partial<Pick<import('../recipe/authoring-service').AuthoringService,'resources'>>; entries?: AgentEntries; memory?: MemoryWriter; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention;
+  options?: { releaseCode?: ReleaseCodeHost; feedback?: FeedbackHost; authoring?: Pick<import('../recipe/authoring-service').AuthoringService, 'onMessage' | 'onAction' | 'adminRemoved'> & Partial<Pick<import('../recipe/authoring-service').AuthoringService,'resources'>>; entries?: AgentEntries; memory?: MemoryWriter; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention;
     /** devices-4a 4.3: where each new session's token comes from (the host, over IPC). Without it a session gets none (tests). */
     host?: Pick<HostApi, 'issueSessionToken'>;
     /** The launcher this Bot wrote for its sessions (agent/session-cli.ts); without one a session's PATH stays as it was. */
@@ -1268,20 +1276,26 @@ export function createOrchestrator(
   const openings = new WeakMap<object, SessionContext>();
   /** What each live thread has been handed; a resumed thread reads its record on its first turn. */
   const contextDelivered = new WeakMap<AgentThread, SessionContext>();
-  const sessionFields = (thread: AgentThread): Pick<SessionRecord, 'context' | 'feedbackToolSessionId' | 'resourceToolSessionId'> => {
+  const profileSkillKeys = new WeakMap<SessionProfile, string>();
+  const threadSkillKeys = new WeakMap<AgentThread, string>();
+  const sessionFields = (thread: AgentThread): Pick<SessionRecord, 'context' | 'feedbackToolSessionId' | 'resourceToolCatalog' | 'skillProfile'> => {
     const context = contextDelivered.get(thread);
+    const skillKey = threadSkillKeys.get(thread);
     return {
       ...(context ? {context} : {}),
       ...(thread.startedWithFeedbackTool ? {feedbackToolSessionId: thread.sessionId} : {}),
-      ...(thread.startedWithResourceTools ? {resourceToolSessionId: thread.sessionId} : {}),
+      ...(thread.startedWithResourceTools ? {resourceToolCatalog: {sessionId: thread.sessionId, version: RESOURCE_TOOL_CATALOG_VERSION}} : {}),
+      ...(skillKey ? {skillProfile: {sessionId: thread.sessionId, key: skillKey}} : {}),
     };
   };
   async function profileOf(project: Project | undefined, cwd: string, backend: AgentBackend, permission?: PermissionMode, place?: 'comment', commentedFile?: string) {
+    const skillKey = projectSkillKey(project);
     const execution = execOf(project);
     const sources = project || place === 'comment' ? await contextSourcesFor(project) : undefined;
     const assembled = sources ? assemble(sources, project ? 'work' : 'comment') : undefined;
     const nonce = newNonce();
-    const skills = project ? await groupSkillProfile({ backend, cwd, directories: execution.workspaces.additional, disabledPaths: project.skills?.disabledPaths }) : undefined;
+    const skills = project ? await groupSkillProfile({ backend, cwd, directories: execution.workspaces.additional,
+      disabledPaths: project.skills?.disabledPaths.filter(path => !isManagedRecipeSkillPath(path)) }) : undefined;
     // A bound group's and a private chat's sessions get the schedule tools (3.13) and the Feishu read tools (dm-agent 7.2),
     // read-only tier too; a comment's never do.
     const schedule = Boolean(project) && place !== 'comment';
@@ -1291,13 +1305,19 @@ export function createOrchestrator(
     // The generic tool is a private chat's alone: a group cannot reach other groups or write to Feishu through it (7.6).
     const feishuApi = schedule && Boolean(project?.dm);
     // The task skill goes with the tools (T4b); a package that cannot be written leaves the last whole one, or none.
-    const capabilityPackages = schedule && backend.profileCapabilities?.capabilityPackages ? await builtinPackage(project?.chatId, project?.dm ? 'dm' : 'group') : [];
+    const managed = schedule && project && !project.dm && backend.profileCapabilities?.capabilityPackages
+      ? await managedGroupSkillProfile(project, botPaths(cfg.accounts.app.id).dir) : {packages: [], instructions: ''};
+    const capabilityPackages = schedule && backend.profileCapabilities?.capabilityPackages ? [
+      ...await builtinPackage(project?.chatId, project?.dm ? 'dm' : 'group'),
+      ...managed.packages,
+    ] : [];
     // What the Feishu tools download must be readable outside full access too.
     const downloads = schedule && project ? inboundChatDir(project.chatId) : undefined;
     if (downloads) await prepareInboundDir(downloads);
-    const profile = assembled || skills ? { instructions: assembled ? openingInstructions(assembled, nonce, { hiddenBlocks: Boolean(project) && hiddenBlocksFor(backend.id) }) : '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: downloads ? [{ path: downloads, access: 'read' as const }] : [], capabilityPackages, mcpServers: [],
-      tools: { schedule, ...(schedule && !project?.dm && options?.feedback ? {feedback: true} : {}), feishu: schedule || comment, ...(feishuEdit ? { feishuEdit } : {}), ...(feishuApi ? { feishuApi } : {}), ...(comment ? { documentsOnly: true } : {}), ...(project?.dm ? { acrossBots: true } : {}) }, ...(skills ? { skills } : {}) } : undefined;
+    const profile = assembled || skills || capabilityPackages.length ? { instructions: [assembled ? openingInstructions(assembled, nonce, { hiddenBlocks: Boolean(project) && hiddenBlocksFor(backend.id) }) : '', managed.instructions].filter(Boolean).join('\n\n'), env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: downloads ? [{ path: downloads, access: 'read' as const }] : [], capabilityPackages, mcpServers: [],
+      tools: { schedule, ...(schedule && project && options?.releaseCode?.enabled(project.chatId) ? {releaseCode: true} : {}), ...(schedule && !project?.dm && options?.feedback ? {feedback: true} : {}), feishu: schedule || comment, ...(feishuEdit ? { feishuEdit } : {}), ...(feishuApi ? { feishuApi } : {}), ...(comment ? { documentsOnly: true } : {}), ...(project?.dm ? { acrossBots: true } : {}) }, ...(skills ? { skills } : {}) } : undefined;
     const built = await executionSessionProfile({ execution: { ...execution, permission: permission ?? execution.permission }, cwd, backend: backend.id, scope: project ? 'group' : 'ungrouped', profile });
+    if (built) profileSkillKeys.set(built, skillKey);
     if (assembled && built) openings.set(built, contextOf(assembled, nonce));
     return built;
   }
@@ -1548,6 +1568,12 @@ export function createOrchestrator(
       throw new ThreadPermissionChanged('旧权限会话没能关闭，请稍后重试。', {cause: error});
     } finally { clearTimeout(timer); }
   }
+  async function assertCurrentSkills(thread: AgentThread, chatId: string): Promise<void> {
+    const accepted = threadSkillKeys.get(thread);
+    if (accepted === undefined || accepted === projectSkillKey(await getProjectByChatId(chatId))) return;
+    await closeForPermission(thread);
+    throw new ThreadPermissionChanged('本群技能在准备任务时已更新，本轮未执行。请重新发送，使用当前启用的技能继续。');
+  }
   /**
    * The token a new session's `vonvon` commands carry (devices 5.3), in place of the bare marker, and beside it the
    * `--scope` its command line copies: a group's reach is its group, a comment's the bot. A private chat has one reach
@@ -1568,7 +1594,7 @@ export function createOrchestrator(
   /** Who a private chat's task runs as (dm-agent 6.3): its creator, or when this Bot has no open_id for them (the desktop, another Bot's private chat) the chat's person. */
   const dmRunner = (task: Pick<StoredTask, 'createdBy'>, project: Project): string => task.createdBy.openId ?? dmPersonOf(project, project.chatId)?.openId ?? '';
   /** The profile a thread was actually started with: a permission save can swap in a rebuilt one (and its opening). */
-  const profileUsed = new WeakMap<AgentThread, object>();
+  const profileUsed = new WeakMap<AgentThread, SessionProfile>();
   /** A save can finish while a provider is starting, before eviction can see its thread. */
   async function createWithPermission<T extends StartThreadOptions>(be: AgentBackend, original: T, place: AgentPlace, create: (opts: T) => Promise<AgentThread>): Promise<AgentThread> {
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -1577,9 +1603,11 @@ export function createOrchestrator(
       if (project?.dm && !dmOpen(project)) throw new ThreadPermissionChanged(DM_CLOSED);
       if (project) {
         const perm = turnPerm(project);
-        if (permissionFingerprint(opts) !== permissionFingerprint(perm))
+        if (permissionFingerprint(opts) !== permissionFingerprint(perm)
+          || opts.profile && profileSkillKeys.has(opts.profile) && profileSkillKeys.get(opts.profile) !== projectSkillKey(project))
           opts = {...opts, ...perm, native: perm.native, readScope: perm.readScope, profile: await profileOf(project, opts.cwd, be, perm.mode)};
       }
+      const skillKey = opts.profile && profileSkillKeys.get(opts.profile) || projectSkillKey(project);
       const entry = entries?.issue(place);
       let thread: AgentThread;
       try {
@@ -1594,6 +1622,7 @@ export function createOrchestrator(
       if (opts.profile) profileUsed.set(thread, opts.profile);
       const fingerprint = permissionFingerprint(opts);
       threadPermissions.set(thread, fingerprint);
+      threadSkillKeys.set(thread, skillKey);
       let current: Project | undefined;
       try { current = place.kind !== 'doc' && place.chatId ? await getProjectByChatId(place.chatId) : undefined; }
       catch (error) { entry?.revoke('start-failed'); await closeForPermission(thread); throw error; }
@@ -1602,7 +1631,7 @@ export function createOrchestrator(
         await closeForPermission(thread);
         throw new ThreadPermissionChanged(DM_CLOSED);
       }
-      if (!current || permissionFingerprint(turnPerm(current)) === fingerprint) return thread;
+      if (!current || permissionFingerprint(turnPerm(current)) === fingerprint && projectSkillKey(current) === skillKey) return thread;
       entry?.revoke('closed');
       await closeForPermission(thread);
     }
@@ -2964,7 +2993,8 @@ export function createOrchestrator(
   }
   const resourceMessages = new WeakSet<NormalizedMessage>();
   const feedbackSources = new WeakMap<NormalizedMessage, FeedbackSource>();
-  const directFeedback = (msg: NormalizedMessage): Pick<TurnExtra, 'feedback'> => ({feedback: feedbackSources.get(msg)});
+  const codeSources = new WeakMap<NormalizedMessage, CodeSource>();
+  const directFeedback = (msg: NormalizedMessage): Pick<TurnExtra, 'feedback'|'releaseCode'> => ({feedback: feedbackSources.get(msg),releaseCode:codeSources.get(msg)});
   const handleMessage = async (msg: NormalizedMessage, intakeOwner?: IntakeStatus): Promise<void> => {
     // Feishu does not keep events in order: a recall can come before its message (s15).
     if (await intakeStoppedBeforeText(msg, intakeOwner)) return;
@@ -2985,6 +3015,7 @@ export function createOrchestrator(
       if (await syncCopy.skip(msg, true)) return;
       if (fromBot(msg)) return;
       // Whoever a group's agent asked may reply to their card; everything else stops here, before any transcription (dm-agent 3.5).
+      if (await options?.releaseCode?.onMessage(msg)) return;
       if (options?.feedback && /^\/feedback (?:authorize|authorized)$/.test(msg.content.trim()) && await options.feedback.onMessage(msg)) return;
       if (!isAdmin(cfg, msg.senderId)) {
         if (!askAnswered(msg)) await refuseDm(msg);
@@ -3035,10 +3066,13 @@ export function createOrchestrator(
       || (noMentionOf(project) && !msg.mentionAll && !msg.mentions.some(mention => !mention.isBot))));
     // Resolve audio copies before spending a transcription on the duplicate.
     if (await syncCopy.skip(msg, voiceCandidate || (smart ? msg.mentionedBot : maybe) || resumePublications.has(msg.chatId))) return;
-    if (options?.feedback && project && !bot && project.enabled !== false && !projectMutations.has(msg.chatId)
+    if ((options?.feedback || options?.releaseCode) && project && !bot && project.enabled !== false && !projectMutations.has(msg.chatId)
       && !resumePublications.has(msg.chatId) && isChatAllowed(cfg, msg.chatId) && isUserAllowedInProject(cfg, project, msg.senderId)) {
-      if (/^\/feedback(?:\s|$)/.test(msg.content.trim()) && await options.feedback.onMessage(msg)) return;
-      const source = options.feedback.bind(msg, project);
+      if (await options.releaseCode?.onMessage(msg)) return;
+      const code = options.releaseCode?.bind(msg,project);
+      if (code) codeSources.set(msg,code);
+      if (/^\/feedback(?:\s|$)/.test(msg.content.trim()) && await options.feedback?.onMessage(msg)) return;
+      const source = options.feedback?.bind(msg, project);
       if (source) feedbackSources.set(msg, source);
     }
     if (voiceCandidate && project && project.enabled !== false
@@ -4004,7 +4038,7 @@ export function createOrchestrator(
         origin,
         ...(extra?.initiative ? { initiative: true as const } : {}),
         wake: extra?.wake,
-        feedback: extra?.feedback,
+        feedback: extra?.feedback, releaseCode: extra?.releaseCode,
         ...memoryTriggerOf(msg, extra),
         ...(extra?.scheduled ? { scheduled: extra.scheduled } : {}),
       });
@@ -4361,7 +4395,7 @@ export function createOrchestrator(
           ...(recreateReason && !unused ? { sessionNotice: sessionChangeNotice(recreateReason, Boolean(topicId)) } : {}),
           ...(extra?.initiative ? { initiative: true as const } : {}),
           wake: extra?.wake,
-          feedback: extra?.feedback,
+          feedback: extra?.feedback, releaseCode: extra?.releaseCode,
           ...memoryTriggerOf(msg, extra),
           ...(extra?.scheduled ? { scheduled: extra.scheduled } : {}),
         };
@@ -4476,15 +4510,21 @@ export function createOrchestrator(
         project = await getProjectByChatId(chatId);
         if (project) perm = turnPerm(project);
         const permissionChanged = threadPermissions.get(live) !== permissionFingerprint(perm);
+        const skillsChanged = threadSkillKeys.get(live) !== projectSkillKey(project);
         // Evicted while it looked (a tier change, the reaper): resume below like any other.
         if (sessions.get(threadId) === live && live.isAlive()) {
-          if (!elsewhere && !permissionChanged && !missingCodexTools(required, prior, live)) {
+          if (!elsewhere && !permissionChanged && !skillsChanged && !missingCodexTools(required, prior, live)) {
             noteCompaction(threadId, chatId, live, prior);
             return { thread: live, recreated: false };
           }
           // Someone else wrote the session (a terminal turn or /compact, s15b): this
           // process never rereads it, so reconnect from the file below.
           sessions.delete(threadId);
+          if (skillsChanged) {
+            await closeForPermission(live);
+            lastUsage.delete(threadId);
+            return {thread: undefined, recreated: true, reason: 'skills-changed'};
+          }
           if (required && missingCodexTools(required, prior, live)) {
             await closeForPermission(live);
             lastUsage.delete(threadId);
@@ -4511,6 +4551,8 @@ export function createOrchestrator(
     // is still consulted for cwd / tier defaults on the recreate path below.
     project = await getProjectByChatId(chatId);
     if (project) perm = turnPerm(project);
+    const skillsChanged = sessionSkillsChanged(rec, project);
+    const previousSkillKey = rec.skillProfile?.sessionId === rec.sessionId ? rec.skillProfile.key : projectSkillKey();
     if (project && rec.cwd !== project.cwd) {
       lastUsage.delete(threadId); // a new session: the meter starts over
       return { thread: undefined, recreated: true, reason: 'cwd-changed' };
@@ -4530,13 +4572,21 @@ export function createOrchestrator(
         mode: perm.mode,
         network: perm.network, native: perm.native, readScope: perm.readScope,
       }, sessionPlace(project, chatId));
+      const refreshedSkills = skillsChanged || previousSkillKey !== threadSkillKeys.get(resumed);
       if (resumed.sessionId !== rec.sessionId) {
         const freshProfile=profileUsed.get(resumed);
         const opening=freshProfile && openings.get(freshProfile);
         if (opening) contextDelivered.set(resumed,opening);
         await patchSession(threadId,{sessionId:resumed.sessionId,context:opening,...sessionFields(resumed),usage:undefined});
         trackSession(threadId,resumed);lastUsage.delete(threadId);
-        return {thread:resumed,recreated:false};
+        if (refreshedSkills) return {thread: resumed, recreated: true, reason: 'skills-changed'};
+        return {thread: resumed, recreated: false};
+      }
+      if (refreshedSkills) {
+        // Resume without a turn first: an external writer can still refuse. Fresh roots must never inherit old skill context.
+        await closeForPermission(resumed);
+        lastUsage.delete(threadId);
+        return {thread: undefined, recreated: true, reason: 'skills-changed'};
       }
       if (required && missingCodexTools(required, rec)) {
         // Resume first so an active native writer can still refuse. A new thread gets recent Feishu history via the ordinary recreation path.
@@ -4617,7 +4667,7 @@ export function createOrchestrator(
    * Detached — onMessage must return fast (see {@link handleTurn}); a new
    * topic has a unique reply target so no same-topic reservation is needed.
    * `under`: the earlier line the smart mode opens it on instead (s25b). */
-  function startTopicDirectly(msg: NormalizedMessage, text: string, project?: Project, goal?: boolean, extra?: Pick<TurnExtra, 'initiative' | 'wake' | 'attentionAcceptance' | 'feedback'>, under?: RecentLine): void {
+  function startTopicDirectly(msg: NormalizedMessage, text: string, project?: Project, goal?: boolean, extra?: Pick<TurnExtra, 'initiative' | 'wake' | 'attentionAcceptance' | 'feedback' | 'releaseCode'>, under?: RecentLine): void {
     // When this start ends, the registry or Feishu knows the topic under that line, or it did not open (anchorLine put it in).
     const opened = (): void => { if (under) openingUnder.delete(under.id); };
     if (resumePublications.has(msg.chatId) || projectMutations.has(msg.chatId)) {
@@ -4750,7 +4800,7 @@ export function createOrchestrator(
           : { id: msg.messageId, from: senderOf(msg), at: msg.createTime || undefined, text: msg.content },
         ...(extra?.initiative ? { initiative: true as const } : {}),
         wake: extra?.wake,
-        feedback: extra?.feedback,
+        feedback: extra?.feedback, releaseCode: extra?.releaseCode,
         ...memoryTriggerOf(msg, extra),
         backendId: be.id,
         titleJobKey,
@@ -4977,10 +5027,15 @@ export function createOrchestrator(
     void trackTask(withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
       let thread: AgentThread | undefined;
       try {
-        ({ thread } = await resolveThread(sessionKey, msg.chatId, {
+        const resolved = await resolveThread(sessionKey, msg.chatId, {
           mode: perm.mode,
           network: perm.network, native: perm.native, readScope: perm.readScope,
-        }));
+        });
+        thread = resolved.thread;
+        if (resolved.reason === 'skills-changed') {
+          await reply('本群技能已更新，原会话保留在历史记录中，本次未压缩。请发送下一条任务，系统会按当前启用的技能继续。');
+          return;
+        }
         if (!thread) {
           await reply('这个会话还没开始，先发条消息聊两句再 `/compact`。');
           return;
@@ -7494,10 +7549,34 @@ export function createOrchestrator(
         return applied;
       }
       if (request.action === 'compact') replyTo = await desktopTopicReply(project.chatId, key);
-      const { thread } = await resolveThread(key, project.chatId, perm);
+      const resolved = await resolveThread(key, project.chatId, perm);
+      let thread = resolved.thread;
+      const skillNotice = resolved.reason === 'skills-changed' ? sessionChangeNotice('skills-changed', false) : undefined;
+      let skillTitleKey: string | undefined;
+      if (!thread && skillNotice) {
+        const current = await getProjectByChatId(project.chatId);
+        const fresh = await startWith(sessionBackend, {cwd: project.cwd, model: record.model, effort: record.effort, serviceTier: record.serviceTier,
+          mode: perm.mode, network: perm.network, native: perm.native, readScope: perm.readScope,
+          profile: await profileOf(current, project.cwd, sessionBackend, perm.mode)}, sessionPlace(current, project.chatId));
+        trackSession(key, fresh); lastUsage.delete(key); dropRetries(key);
+        thread = fresh;
+      }
       if (!thread) throw new AdminWriteError('会话尚未开始');
+      if (skillNotice) {
+        skillTitleKey = await registerSessionTitle(sessionBackend, thread.sessionId, project.cwd,
+          request.action === 'startGoal' ? {text: request.objective, rawContentType: 'text'} : undefined);
+        const held = await getSession(key) ?? record;
+        try {await upsertSession({...held, sessionId: thread.sessionId, ...sessionFields(thread), titleJobKey: skillTitleKey,
+          usage: undefined, lastSeenAt: held.from ?? 0, seen: [], streaming: [], recalls: []});}
+        catch (error) {await thread.close(); throw error;}
+      }
       if (request.action === 'compact') {
         compacted = thread;
+        if (skillNotice) {
+          applied = {ok: true, threadId: key, message: skillNotice};
+          if (!await desktopReceipt(project.chatId, key, skillNotice, replyTo)) applied.warning = DESKTOP_RECEIPT_WARNING;
+          return applied;
+        }
         const before = meterOf(key, record, thread)?.used;
         const result = await thread.compact();
         markTopicsDue(key, project.chatId, thread.sessionId);
@@ -7517,7 +7596,7 @@ export function createOrchestrator(
       }
       const root = await channel.send(project.chatId, { markdown: `桌面端启动目标：${request.objective}` }, replyTo ? { replyTo, replyInThread: true } : undefined);
       launched = true;
-      void trackRun(launchGoalRun({ chatId: project.chatId, replyTo: root.messageId, thread, firstText: request.objective, knownThreadId: key, cwd: project.cwd, mode: perm.mode, network: perm.network, native: perm.native, readScope: perm.readScope, model: record.model, effort: record.effort, serviceTier: record.serviceTier, flat: ruleKind(project) === 'single', backendId: sessionBackend.id, requesterOpenId: admin, requesterKind: 'user', titleSource: { text: request.objective, rawContentType: 'text' } })).catch(error => log.fail('desktop', error));
+      void trackRun(launchGoalRun({ chatId: project.chatId, replyTo: root.messageId, thread, firstText: request.objective, knownThreadId: key, cwd: project.cwd, mode: perm.mode, network: perm.network, native: perm.native, readScope: perm.readScope, model: record.model, effort: record.effort, serviceTier: record.serviceTier, flat: ruleKind(project) === 'single', backendId: sessionBackend.id, requesterOpenId: admin, requesterKind: 'user', titleSource: { text: request.objective, rawContentType: 'text' }, ...(skillNotice ? {sessionNotice: skillNotice, titleJobKey: skillTitleKey} : {}) })).catch(error => log.fail('desktop', error));
       return { ok: true, threadId: key };
     } finally {
       if (!launched && active.get(key) === reserved) active.delete(key);
@@ -7606,6 +7685,7 @@ export function createOrchestrator(
 
   interface LaunchOpts {
     feedback?: FeedbackSource;
+    releaseCode?: CodeSource;
     attentionAcceptance?: AttentionAcceptance;
     /** Only group-message launches have a sender to notify if preparation is cut short. */
     origin?: DroppedOrigin;
@@ -8061,7 +8141,7 @@ export function createOrchestrator(
         replayText: opts.replayText,
         seen: opts.seen,
         triggerMessageId: opts.triggerMessageId,
-        feedback: opts.feedback,
+        feedback: opts.feedback, releaseCode: opts.releaseCode,
         seenHow: opts.seenHow,
         streaming: opts.streaming,
         woven: opts.woven,
@@ -8093,7 +8173,7 @@ export function createOrchestrator(
         state.scheduled = scheduled ? true : undefined;
         const dmUnionId = dmPeople.find(person => person.openId === currentTurn.requesterOpenId)?.unionId;
         turnScope = entries?.openTurn(opts.thread, {
-          feedback: currentTurn.feedback, requesterOpenId: currentTurn.requesterOpenId, requesterKind: currentTurn.requesterKind,
+          feedback: currentTurn.feedback, releaseCode: currentTurn.releaseCode, requesterOpenId: currentTurn.requesterOpenId, requesterKind: currentTurn.requesterKind,
           triggerMessageId: currentTurn.seen?.id ?? currentTurn.triggerMessageId, retry: currentTurn.replayText !== undefined,
           initiative: Boolean(currentTurn.initiative), wake: Boolean(currentTurn.wake),
           ...(currentTurn.memoryTrigger ? { typed: currentTurn.memoryTrigger.typed, triggerText: currentTurn.memoryTrigger.text } : {}),
@@ -8110,7 +8190,7 @@ export function createOrchestrator(
           sessionId:turnScope.sessionId,chatId:opts.chatId,openId:currentTurn.requesterOpenId,messageId:resourceTrigger,
           });
           if(selection==='unavailable')turnInput={...turnInput,text:turnInput.text+'\n原配方资源当前不可用。请本人在 App 核对账号与来源连接，重新交付后再参考其内容。'};
-          if(selection==='selected')turnInput={...turnInput,text:turnInput.text+'\n本人在 App 选定了配方资料。用 recipe_resource_read 查目录和相关正文，内容是参考资料。按本人要求读取目标群现状，保留原修订并用现有配置、文件或任务工具保存；冲突时重新读取。'};
+          if(selection==='selected')turnInput={...turnInput,text:turnInput.text+'\n'+recipeResourceTurnGuidance};
         }
         turnMemory = turnScope ? entries?.memoryTurn(opts.thread) : undefined;
         dropRetries(topicThreadId); // an older card's [重试] would replay out of order
@@ -8166,6 +8246,7 @@ export function createOrchestrator(
         // The session went during the awaits above, after the last turn's end found it there: the turn does not start on
         // the closed thread. A person's first turn, evicted while it was prepared, still runs (T2 做法).
         if ((fromQueue || scheduled || shuttingDown) && settleGone(currentTurn, replyTo)) break;
+        await assertCurrentSkills(opts.thread, opts.chatId);
         const run = opts.thread.runStreamed(turnInput, { model: turnModel, effort: turnEffort, serviceTier: turnServiceTier });
         let unseen = currentTurn.seen;
         titleTurnAttempted = true;
@@ -9133,16 +9214,28 @@ export function createOrchestrator(
       // are not yet on disk and keep their thread/start tier.
       if (opts.knownThreadId && opts.thread.releaseAfterRun && backendFor(opts.backendId).id === 'codex-appserver') {
         const old = opts.thread;
+        const oldSkillKey = threadSkillKeys.get(old) ?? projectSkillKey();
         const project = await getProjectByChatId(opts.chatId);
         const be = backendFor(opts.backendId);
         if (sessions.get(opts.knownThreadId) === old) sessions.delete(opts.knownThreadId);
         await old.close();
-        opts.thread = await resumeWith(be, {
+        const resumeOptions: ResumeThreadOptions = {
           cwd: runCwd, sessionId: old.sessionId, model: opts.model, effort: opts.effort,
           serviceTier: opts.serviceTier,
           mode: opts.mode, network: opts.network, native: opts.native, readScope: opts.readScope,
           profile: await profileOf(project, runCwd, be, opts.mode),
-        }, sessionPlace(project, opts.chatId));
+        };
+        opts.thread = await resumeWith(be, resumeOptions, sessionPlace(project, opts.chatId));
+        if (oldSkillKey !== threadSkillKeys.get(opts.thread)) {
+          await closeForPermission(opts.thread);
+          const {sessionId: _oldSessionId, ...fresh} = resumeOptions;
+          const current = await getProjectByChatId(opts.chatId);
+          opts.thread = await startWith(be, {...fresh, profile: await profileOf(current, runCwd, be, opts.mode)}, sessionPlace(current, opts.chatId));
+          opts.sessionNotice = sessionChangeNotice('skills-changed', false);
+          opts.titleJobKey = await registerSessionTitle(be, opts.thread.sessionId, runCwd, opts.titleSource);
+          const held = await getSession(opts.knownThreadId);
+          if (held) await upsertSession({...held, sessionId: opts.thread.sessionId, ...sessionFields(opts.thread), titleJobKey: opts.titleJobKey, usage: undefined});
+        }
         state.thread = opts.thread;
         trackSession(opts.knownThreadId, opts.thread);
       }
@@ -9153,6 +9246,7 @@ export function createOrchestrator(
       const goalContext = await preparePersonality(opts.thread, opts.chatId, {}, opts.knownThreadId, opts.backendId);
       if (currentProject?.dm && !dmOpen(currentProject)) throw new ThreadPermissionChanged(DM_CLOSED);
       askPlacement.own = Boolean(currentProject?.dm);
+      await assertCurrentSkills(opts.thread, opts.chatId);
       const run = opts.thread.runGoal(goalContext.text ? `${goalContext.text}\n\n目标：${objective}` : objective,
         { serviceTier: goalServiceTier });
       state.run = run;

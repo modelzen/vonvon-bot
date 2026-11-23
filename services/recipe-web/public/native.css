@@ -2,4 +2,5 @@
 .native-shell .panel{padding:28px}.native-shell h1{font-size:1.8rem}.native-shell .notice{margin:18px 0}
 .provider-list{display:grid;gap:10px;margin:20px 0}.provider-list button{width:100%;min-height:44px}
 .native-shell .fine{margin-top:20px}.native-shell #cancel{margin-top:20px}
+.login-help{margin-top:16px;font-size:.85rem;color:var(--muted)}.login-help summary{cursor:pointer;min-height:32px;display:list-item;align-content:center}.login-help p{line-height:1.65;margin:8px 0}
 @media(max-width:400px){.native-shell .panel{padding:22px}}

@@ -36,12 +36,12 @@ beforeEach(() => {
   h.state = []; h.refs = []; h.effects = []; h.pending = []; h.accountId = '11111111-1111-4111-8111-111111111111';
   h.route = {kind: 'detail', recipe: {recipeId: recipe.recipeId, versionId: recipe.versionId}};
   h.catalog = {generation: 0, query: '', search: '', scrollTop: 0}; h.request.mockReset(); h.login.mockReset().mockResolvedValue(undefined);
-  h.request.mockImplementation(async request => request.type === 'detail' ? recipe : request.type === 'shareLink' ? {url: 'https://community.example/version'} : {});
+  h.request.mockImplementation(async request => request.type === 'browse' ? recipe : request.type === 'shareLink' ? {url: 'https://community.example/version'} : {});
 });
 it('retries an uncertain code acquisition with one request key and reports account acquisition separately from installation', async () => {
   let attempts = 0; let acquired = false;
   h.request.mockImplementation(async request => {
-    if (request.type === 'detail') return {...recipe, acquired, ...(acquired ? {config: {role: 'role'}} : {})};
+    if (request.type === 'browse') return {...recipe, acquired, ...(acquired ? {config: {role: 'role'}} : {})};
     if (request.type === 'shareLink') return {url: 'https://community.example/version'};
     if (request.type === 'acquire') {if (++attempts === 1) throw new Error('暂时离线'); acquired = true; return {ok: true, value: {recipeId: recipe.recipeId, versionId: recipe.versionId, owned: false, acquired: true}};}
     return {};
@@ -71,7 +71,7 @@ it('opens login without sending an acquisition while signed out and retains the 
 });
 it('does not use a late acquisition receipt to replace the page after navigating away', async () => {
   let finish!: (value: unknown) => void;
-  h.request.mockImplementation(async request => request.type === 'detail' ? recipe : request.type === 'shareLink' ? {url: 'https://community.example/version'} : request.type === 'acquire' ? new Promise(resolve => {finish = resolve;}) : {hero: null, items: [], nextCursor: null});
+  h.request.mockImplementation(async request => request.type === 'browse' ? recipe : request.type === 'shareLink' ? {url: 'https://community.example/version'} : request.type === 'acquire' ? new Promise(resolve => {finish = resolve;}) : {hero: null, items: [], nextCursor: null});
   render(); await flush(); let all = render();
   all.find(node => node.props['aria-label'] === '分享码')!.props.onChange({target: {value: 'CODE'}});
   all = render(); all.find(node => node.props.id === 'community-acquire-code')!.props.onSubmit({preventDefault() {}});
@@ -85,7 +85,7 @@ it('confirms author withdrawal, reads uncertain outcomes without resubmitting, a
   let withdrawn=false;
   h.route={...h.route,privateView:true};
   h.request.mockImplementation(async request=>{
-    if(request.type==='detail')return {...recipe,format:'rich-v2',owned:true,state:withdrawn?'withdrawn':'listed'};
+    if(request.type==='browse')return {...recipe,format:'rich-v2',owned:true,state:withdrawn?'withdrawn':'listed'};
     if(request.type==='shareLink')return {url:'https://community.example/version'};
     if(request.type==='withdraw'){withdrawn=true;throw new Error('暂时离线');}
     return {};
@@ -109,7 +109,7 @@ it('reloads the cached catalog after closing an uncertain author withdrawal', as
   h.catalog = {...h.catalog, result: {hero: recipe, items: [recipe]}, scrollTop: 400};
   h.route = {...h.route, privateView: true};
   h.request.mockImplementation(async request => {
-    if (request.type === 'detail') return {...recipe, format: 'rich-v2', owned: true, state: withdrawn ? 'withdrawn' : 'listed'};
+    if (request.type === 'browse') return {...recipe, format: 'rich-v2', owned: true, state: withdrawn ? 'withdrawn' : 'listed'};
     if (request.type === 'shareLink') return {url: 'https://community.example/version'};
     if (request.type === 'withdraw') {withdrawn = true; throw new Error('暂时离线');}
     return {hero: null, items: [], nextCursor: null};
@@ -132,7 +132,7 @@ it('invalidates a mounted catalog when a late withdrawal settles and discards it
   h.catalog = {...h.catalog, result: {hero: recipe, items: [recipe]}};
   h.route = {...h.route, privateView: true};
   h.request.mockImplementation(async request => {
-    if (request.type === 'detail') return {...recipe, format: 'rich-v2', owned: true, state: 'listed'};
+    if (request.type === 'browse') return {...recipe, format: 'rich-v2', owned: true, state: 'listed'};
     if (request.type === 'shareLink') return {url: 'https://community.example/version'};
     if (request.type === 'withdraw') return new Promise<void>(resolve => {finishWithdrawal = resolve;});
     if (request.type === 'catalog' && ++reads === 1) return new Promise(resolve => {finishCatalog = resolve;});
@@ -147,6 +147,6 @@ it('invalidates a mounted catalog when a late withdrawal settles and discards it
   finishCatalog({hero: recipe, items: [recipe]}); await flush(); const final = render();
   expect(h.catalog.result).toEqual({hero: null, items: [], nextCursor: null});
   expect(final.some(node => node.type === RecipeDetails)).toBe(false);
-  expect(h.request.mock.calls.filter(([request]) => request.type === 'detail')).toHaveLength(1);
+  expect(h.request.mock.calls.filter(([request]) => request.type === 'browse')).toHaveLength(1);
   expect(h.request.mock.calls.filter(([request]) => request.type === 'withdraw')).toHaveLength(1);
 });

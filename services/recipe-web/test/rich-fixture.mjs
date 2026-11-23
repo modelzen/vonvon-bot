@@ -114,11 +114,12 @@ export async function richFixture(t) {
     content.public.name.value = '完整配方 ' + access;
     content.public.overview.value = '# 配方介绍\n**公开说明** <script>alert(1)</script>';
     content.role.text.value = '角色说明 **回答问题**';
-    content.parts = [text, logo]; content.memories = [{...identity(), text: {kind: 'part', objectId: text.objectId}}];
+    content.parts = [text, logo]; content.memories = [];
     content.rules = [{...identity(), purpose: 'work', text: {kind: 'inline', value: '工作规则正文'}}];
-    content.settings = [{...identity(), field: 'sessionMode', value: 'smart'}, {...identity(), field: 'permission.requirement', value: {mode: 'qa'}}];
-    const file = {...identity(), name: 'SKILL.md', use: 'skillDescription', text: {kind: 'part', objectId: text.objectId}};
-    content.files = [file]; content.skills = [{...identity(), name: '样例技能', entryFileId: file.itemId, fileIds: [file.itemId]}];
+    content.settings = [{...identity(), field: 'sessionMode', value: 'smart'}, {...identity(), field: 'permission.requirement', value: {mode: 'qa'}}, {...identity(), field: 'presentation.voiceEnabled', value: true}];
+    const file = {...identity(), name: 'SKILL.md', use: 'skillDescription', text: {kind: 'inline', value: '---\nname: sample-skill\ndescription: 核对环境并整理所选内容。\n---\nENTRY_PRIVATE_BODY_SENTINEL'}};
+    const reference = {...identity(), name: 'reference.md', use: 'reference', text: {kind: 'part', objectId: text.objectId}};
+    content.files = [file, reference]; content.skills = [{...identity(), name: '样例技能', entryFileId: file.itemId, fileIds: [file.itemId, reference.itemId]}];
     content.tasks = [{...identity(), name: '每日整理', instruction: {kind: 'inline', value: '任务执行说明'}, spec: {kind: 'daily', time: '09:00'}, timeZone: {kind: 'recommended', iana: 'Asia/Shanghai'}, placement: 'follow'}];
     content.setup = [{...identity(), kind: 'config', title: '使用前检查', instructions: '核对本地环境', required: true, action: {kind: 'manual'}}];
     content.finalLogo = {...identity(), objectId: logo.objectId};

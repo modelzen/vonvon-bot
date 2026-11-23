@@ -4,6 +4,7 @@ import {decodeRichRecipeContent,type AuthoringHandoff,type RecipeRichContent,typ
 import type {Recipient} from './authoring-journal';
 import type {readRichSource} from './authoring-rich-flow';
 import type {HandoffAttestation} from '@vonvon/protocol';
+import {recipeSetupAuthoringHint} from './setup-authoring-guidance';
 
 type Edit = Extract<RecipeAuthoringRequest,{type:'beginDraftHandoff'}>;
 type SourceInventory = Awaited<ReturnType<typeof readRichSource>>;
@@ -169,6 +170,7 @@ export function handoffCard(h:PrivateHandoff){
   if(h.inherited)elements.push(plain('沿用本人已发布版本的名称、简介、概览、Logo 和获取方式；请为新版填写新的显示版本。群配置只包含本次勾选内容。'));
   if(h.phase.state==='selecting'||h.phase.state==='deliveryUnknown'){
     elements.push(plain(h.edit?'选择这次要修改的草稿内容，然后告诉我想怎么改。':'勾选你有权分享的内容。技能文件和任务由你单独选择。'));
+    if(!h.edit&&s.page==='skills')elements.push(plain(recipeSetupAuthoringHint));
     for(const [i,c] of s.choices.entries())add((c.action==='skill'?'› ':c.checked?'☑ ':'☐ ')+c.label.slice(0,100),'choice',i);
     if(!s.choices.length)elements.push(plain('这里暂时没有可选内容。'));
     if(s.offset>0)add('上一页','prev');

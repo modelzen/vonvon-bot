@@ -13,11 +13,11 @@ export class CommunityError extends Error {
 }
 const fallback = '社区请求未完成，请稍后重试同一操作。';
 
-function endpoint(r: Exclude<CommunityRequest, {type: 'shareLink'|'saveRichDraftMetadata'|'recoverRichDraftMetadata'|'latestVersion'}>): {path: string; method?: string; body?: unknown; revision?: number} {
+function endpoint(r: Exclude<CommunityRequest, {type: 'shareLink'|'saveRichDraftMetadata'|'recoverRichDraftMetadata'|'latestVersion'|'displayLogo'|'author'|'browse'}>): {path: string; method?: string; body?: unknown; revision?: number} {
   switch (r.type) {
     case 'withdraw': return {path: `/v2/versions/${r.versionId}/withdraw`, method: 'POST', body: {}};
-    case 'profile': return {path: '/v2/me/profile'};
-    case 'saveProfile': return {path: '/v2/me/profile', method: 'POST', body: {displayName: r.displayName}};
+    case 'profile': return {path: '/v2/me/account-profile'};
+    case 'saveProfile': return {path: '/v2/me/account-profile', method: 'POST', body: {displayName: r.displayName, ...(r.avatar && {avatar: r.avatar}), ...(r.revision !== undefined && {revision: r.revision})}};
     case 'catalog': {const query = new URLSearchParams(); if (r.query) query.set('q', r.query); if (r.cursor) query.set('cursor', r.cursor); return {path: '/v1/community/recipes' + (query.size ? '?' + query : '')};}
     case 'detail': return {path: `/v1/recipes/${r.recipeId}/versions/${r.versionId}`};
     case 'library': return {path: '/v1/me/recipes' + (r.cursor ? '?cursor=' + r.cursor : '')};
@@ -58,7 +58,10 @@ export async function communityRequest<T extends CommunityRequest['type']>(accou
     if (r.type === 'latestVersion') return await recipeResourceReader(account).latest(r.accountId,
       {recipeId: r.recipeId, versionId: r.versionId}, r.revision, check) as CommunityResponses[T];
     const rich = richCommunity(account, r.accountId, check);
+    if (r.type === 'author') return await rich.author(r.authorId, r.cursor) as CommunityResponses[T];
     if (r.type === 'catalog') return await rich.catalog(r.query, r.cursor) as CommunityResponses[T];
+    if (r.type === 'browse') return await rich.browse(r.recipeId, r.versionId) as CommunityResponses[T];
+    if (r.type === 'displayLogo') return await rich.displayLogo(r.versionId) as CommunityResponses[T];
     if (r.type === 'library') return await rich.library(r.cursor) as CommunityResponses[T];
     if (r.type === 'publications') return await rich.publications() as CommunityResponses[T];
     if (r.type === 'drafts') return await rich.drafts() as CommunityResponses[T];
@@ -98,6 +101,11 @@ export async function communityRequest<T extends CommunityRequest['type']>(accou
     }
     const parsed = communityResponseSchemas[r.type].safeParse(value);
     if (!parsed.success) throw new CommunityError(fallback);
+    if (r.type === 'profile' || r.type === 'saveProfile') {
+      const profile = communityResponseSchemas.profile.parse(parsed.data);
+      if (profile.authorId !== r.accountId) throw new CommunityError(fallback);
+      account.applyProfile?.(r.accountId, profile);
+    }
     return parsed.data as CommunityResponses[T];
   } catch(error) {if(error instanceof RichCommunityUnavailable)throw new CommunityError(error.message,error.state);if (error instanceof CommunityError) throw error; throw new CommunityError(fallback);}
   finally {unsubscribe();}

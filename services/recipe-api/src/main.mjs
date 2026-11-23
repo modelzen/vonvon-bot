@@ -2,13 +2,15 @@ import { pathToFileURL } from 'node:url';
 import { createVerifier } from './auth.mjs';
 import { openDatabase } from './database.mjs';
 import { createRecipeServer } from './http.mjs';
+import {createPublicationReader} from './publication-preview.mjs';
 
-export async function startRecipeService(env = process.env) {
+export async function startRecipeService(env = process.env, dependencies = {}) {
+  const publicationRead=dependencies.publicationRead??createPublicationReader(env.RECIPE_BROKER_ORIGIN);
   const verify = createVerifier(env.RECIPE_AUTH_ISSUER);
   const port = Number(env.PORT ?? 4317);
   if (!Number.isSafeInteger(port) || port < 0 || port > 65535) throw new Error('Invalid PORT');
   const db = await openDatabase(env.RECIPE_DATABASE_URL, env.RECIPE_CODE_KEY, env.RECIPE_AUTH_ISSUER);
-  const server = createRecipeServer({ verify, execute: db.execute, admitRich:env.RECIPE_RICH_WRITES==="1" });
+  const server = createRecipeServer({ verify, execute: db.execute, admitRich:env.RECIPE_RICH_WRITES==="1", publicationRead });
   try {
     await new Promise((resolve, reject) => {
       server.once('error', reject);

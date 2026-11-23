@@ -1,6 +1,7 @@
 import { columns, hr, imagePill, md, table, type CardElement, type TableColumn } from './cards';
 import { cleanSrc, extractCardFences, fileName, imgRe, linkRe, unresolvedRefLabel } from './md-scan';
 import { renderRichText } from './markdown-render';
+import { parseGroupConfigurationLink } from '@vonvon/protocol';
 
 /**
  * Report rendering: markdown → card elements for STRUCTURED answers (headings,
@@ -18,7 +19,7 @@ import { renderRichText } from './markdown-render';
  *     author's words and the picture reappears as a pill at the end of the reply.
  *
  * Link handling is deliberately conservative: a `[text](target)` whose target
- * isn't `http(s)` keeps its TEXT and loses the link. A workspace-relative path
+ * isn't `http(s)` or a validated Vonvon group-config route keeps its TEXT and loses the link. A workspace-relative path
  * renders as a dead link in the feishu client, and the bridge has no way to mint
  * an openable URL for a local file (an earlier `links` option was never wired
  * up by any caller — a resolver is what that feature needs, not a parameter).
@@ -123,7 +124,7 @@ function parseTable(lines: string[]): ParsedTable | null {
 }
 
 /**
- * Sanitize a body/heading line: an `http(s)` link and a bare `[text]` survive,
+ * Sanitize a body/heading line: `http(s)` and validated group-configuration links survive,
  * any other link target keeps its TEXT and loses the link — a workspace-relative
  * path renders as a dead link in the feishu client and the bridge has no openable
  * URL for a local file.
@@ -136,7 +137,7 @@ function parseTable(lines: string[]): ParsedTable | null {
 function sanitizeLinks(text: string): string {
   return text.replace(/(?<!!)\[([^\]]*)\]\(\s*(<[^>]+>|[^)\s]+)\s*\)/g, (full, label: string, raw: string) => {
     const target = cleanSrc(raw);
-    return /^https?:\/\//i.test(target) ? full : label || target;
+    return /^https?:\/\//i.test(target) || parseGroupConfigurationLink(target) ? full : label || target;
   });
 }
 

@@ -1,14 +1,15 @@
 import {createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type Dispatch, type SetStateAction} from 'react';
 import type {Destination} from '../search';
 import {useAccount} from '../account-context';
-import type {CommunityShell, RecipeDetail, CommunityResponses, DraftPreviewNavigation} from '@vonvon/protocol';
+import type {CommunityShell, RecipeDetail, CommunityResponses, RecipePreviewNavigationPayload} from '@vonvon/protocol';
 import {useActiveDevice, useClient, useShellCapabilities} from '../client-context';
 import type {RecipeGroupTarget} from '../recipes/recipe-use-context';
 import {useOptionalDraftGuard} from '../settings/DraftGuard';
 import type {ResourceHandoffIntents} from './RecipeResourceDialog';
+import {useAccountPage} from '../accounts/account-page';
 
 export type RecipeWorkspaceTab = 'acquired' | 'drafts' | 'published';
-export type CommunityRoute = {kind: 'catalog'} | {kind: 'workspace'; tab: RecipeWorkspaceTab} | {kind: 'detail'; recipe: {recipeId: string; versionId: string}; from?: RecipeWorkspaceTab; privateView?: boolean; useTarget?: RecipeGroupTarget} | {kind: 'draft'; draftId: string; expectedRevision?: number; navigationId?: string};
+export type CommunityRoute = {kind: 'create'; navigationId: string} | {kind: 'author'; authorId: string} | {kind: 'catalog'} | {kind: 'workspace'; tab: RecipeWorkspaceTab} | {kind: 'detail'; recipe: {recipeId: string; versionId: string}; from?: RecipeWorkspaceTab; authorFrom?: string; privateView?: boolean; useTarget?: RecipeGroupTarget} | {kind: 'draft'; draftId: string; expectedRevision?: number; navigationId?: string};
 export type CommunityDeparture = {deviceId: string; destination: Destination};
 type CommunityContextValue = {
   shell?: CommunityShell; isOpen: boolean; route: CommunityRoute;
@@ -26,6 +27,9 @@ export function CommunityProvider({shell, onUse, children}: {shell?: CommunitySh
   const [isOpen, setOpen] = useState(false);
   const [departure, setDeparture] = useState<CommunityDeparture>();
   const account = useAccount();
+  const accountPage = useAccountPage();
+  const currentAccountPage = useRef(accountPage);
+  currentAccountPage.current = accountPage;
   const accountId = account.status?.kind === 'signedIn' ? account.status.accountId : undefined;
   const resourceOwner = useRef<{accountId?: string; intents: ResourceHandoffIntents}>({accountId, intents: new Map()});
   if (resourceOwner.current.accountId !== accountId) resourceOwner.current = {accountId, intents: new Map()};
@@ -35,13 +39,13 @@ export function CommunityProvider({shell, onUse, children}: {shell?: CommunitySh
   const client = useClient();
   const device = useActiveDevice();
   const [stored, setRoute] = useState<{route: CommunityRoute; owner?: string; deviceId?: string; client?: typeof client}>({route: {kind: 'catalog'}});
-  const privateRoute = stored.route.kind === 'draft' || stored.route.kind === 'workspace' || stored.route.kind === 'detail' && (stored.route.privateView || stored.route.from !== undefined);
+  const privateRoute = stored.route.kind === 'create' || stored.route.kind === 'draft' || stored.route.kind === 'workspace' || stored.route.kind === 'detail' && (stored.route.privateView || stored.route.from !== undefined);
   const foreignRoute = privateRoute && stored.owner !== undefined && stored.owner !== accountId;
   const route = foreignRoute ? {kind: 'catalog'} as const : stored.route;
   useEffect(() => {if (foreignRoute) setRoute({route: {kind: 'catalog'}});}, [foreignRoute]);
   const currentAccount = useRef(accountId);
   currentAccount.current = accountId;
-  const pendingPreview = useRef<DraftPreviewNavigation | undefined>(undefined);
+  const pendingPreview = useRef<RecipePreviewNavigationPayload | undefined>(undefined);
   const resumeBoundPreview = useRef<(() => void) | undefined>(undefined);
   useEffect(() => {
     if (!preview) return;
@@ -60,12 +64,13 @@ export function CommunityProvider({shell, onUse, children}: {shell?: CommunitySh
       navigating = false;
       const navigation = pendingPreview.current;
       if (!active || !navigation) return;
-      if (navigation.accountId && navigation.accountId !== currentAccount.current) {
+      if ('accountId' in navigation && navigation.accountId && navigation.accountId !== currentAccount.current) {
         if (currentAccount.current) pendingPreview.current = undefined;
         return;
       }
+      currentAccountPage.current?.close();
       setDeparture(undefined);
-      setRoute({route: {kind: 'draft', draftId: navigation.draftId, expectedRevision: navigation.revision, navigationId: navigation.navigationId}, owner: currentAccount.current});
+      setRoute({route: 'kind' in navigation ? {kind: 'create', navigationId: navigation.navigationId} : {kind: 'draft', draftId: navigation.draftId, expectedRevision: navigation.revision, navigationId: navigation.navigationId}, owner: currentAccount.current});
       setOpen(true);
       if (currentAccount.current) {
         acknowledge(navigation.navigationId);
@@ -75,7 +80,7 @@ export function CommunityProvider({shell, onUse, children}: {shell?: CommunitySh
     const navigate = () => {
       const navigation = pendingPreview.current;
       if (!navigation) return;
-      if (navigation.accountId && navigation.accountId !== currentAccount.current) {
+      if ('accountId' in navigation && navigation.accountId && navigation.accountId !== currentAccount.current) {
         if (currentAccount.current) pendingPreview.current = undefined;
         return;
       }
@@ -85,8 +90,8 @@ export function CommunityProvider({shell, onUse, children}: {shell?: CommunitySh
         if (!guard.navigate(openPending, cancelPending)) cancelPending();
       }
     };
-    resumeBoundPreview.current = () => {if (pendingPreview.current?.accountId) navigate();};
-    const receive = (navigation: DraftPreviewNavigation) => {
+    resumeBoundPreview.current = () => {if (pendingPreview.current && 'accountId' in pendingPreview.current && pendingPreview.current.accountId) navigate();};
+    const receive = (navigation: RecipePreviewNavigationPayload) => {
       if (!active || seen.has(navigation.navigationId)) return;
       seen.add(navigation.navigationId);
       const previous = pendingPreview.current;
@@ -107,7 +112,7 @@ export function CommunityProvider({shell, onUse, children}: {shell?: CommunitySh
     if (!accountId || !privateRoute || stored.owner !== undefined) return;
     setRoute(current => ({...current, owner: accountId}));
     const navigation = pendingPreview.current;
-    if (navigation && stored.route.kind === 'draft' && stored.route.draftId === navigation.draftId) {
+    if (navigation && (stored.route.kind === 'create' && 'kind' in navigation && stored.route.navigationId === navigation.navigationId || stored.route.kind === 'draft' && !('kind' in navigation) && stored.route.draftId === navigation.draftId)) {
       pendingPreview.current = undefined;
       void preview?.acknowledge(navigation.navigationId).catch(() => {});
     }

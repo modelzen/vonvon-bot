@@ -218,7 +218,7 @@ it.each([
   const options=await fixture((socket,frame)=>{
     payloads.push(frame.payload);
     socket.send(JSON.stringify({type:'response',id:frame.id,method:'recipeAuthoring',payload:{kind:'creatorSession',session,binding,scope,leaseMs:45000}}));
-  },[...preview?['recipe.native-preview']:[],...resource?['recipe.resource-context.v1']:[]]);
+  },[...preview?['recipe.native-preview']:[],...resource?['recipe.resource-context.v2']:[]]);
   const {client}=await connectLocal(options);
   const {recipeAuthoringRequestSchema}=await import('@vonvon/protocol');
   await client.recipeAuthoring!(recipeAuthoringRequestSchema.parse({...input,nativePreview:true,resourceContext:true}));

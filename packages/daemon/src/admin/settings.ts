@@ -36,6 +36,7 @@ import { supplementOf, workRulesOf } from '../bot/context-assembly';
 import { botFiles, readRole, readSoulText, readText, roleDraft, roleProblem, updateRole, waitForBotFiles } from '../bot/role-files';
 import { loadBots } from '../config/bots';
 import { discoverGroupSkills, discoverLocalGroupSkills } from '../agent/group-skills';
+import {managedGroupSkills} from '../recipe/group-skills';
 import { snapshotDefaultJudge, snapshotProviderJudge, requireDecisionKey } from '../project/initial-settings';
 import { readJudgeModels } from '../judge/global-models';
 import { assertValidCardDisplay } from '../card/card-display-validation';
@@ -745,7 +746,13 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     const fullOnly = snapshot.environment(backendId).fullOnly;
     const discovered = await snapshot.skills(backendId, p.cwd, data.workspace.directories);
     const disabled = new Set(data.skills.disabledPaths);
-    const skillView = { ...discovered, ...(discovered.skills ? { skills: discovered.skills.map(skill => ({ ...skill, enabled: skill.enabled && !disabled.has(skill.path) })) } : {}) };
+    let managed: Awaited<ReturnType<typeof managedGroupSkills>> = [];
+    let managedError: string | undefined;
+    try {managed = await managedGroupSkills(p, botDir(botId));}
+    catch {managedError = '暂时无法核对已安装配方的技能，请检查配方文件或重新应用。';}
+    const combined = [...discovered.skills ?? [], ...managed];
+    const skillView = { ...discovered, ...(discovered.skills || managed.length ? { skills: combined.map(skill => ({ ...skill, enabled: skill.enabled && !disabled.has(skill.path) })) } : {}),
+      ...(managedError ? {skillsError: [discovered.skillsError, managedError].filter(Boolean).join('；')} : {}) };
     return {
       scope,
       sections,

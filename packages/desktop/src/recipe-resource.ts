@@ -2,7 +2,7 @@ import {z} from 'zod';
 import {
   acquisitionFailureSchema, exactResourceVersionSchema, openResourceSnapshot, recipeDetailSchema, recipeLatestSchema,
   resourceAcquireTaskSchema, resourceLatestSchema, resourceReadTaskSchema, roleResourceDigest,
-  type AcquisitionOutcome, type ExactResourceVersion, type ResourceLatest, type VerifiedResourceSnapshot,
+  type AcquisitionOutcome, type ExactResourceVersion, type ResourceLatest, type VerifiedResourceSnapshot, type RecipeBrowseDetail,
 } from '@vonvon/protocol';
 import type {NativeAccount} from './account-session.js';
 import {communityRequest, CommunityError} from './community-api.js';
@@ -55,6 +55,14 @@ function access(account: NativeAccount, accountId: string, checkScope: () => voi
 
 export function recipeResourceReader(account: NativeAccount) {
   return {
+    async previewExact(accountId: string, selected: ExactResourceVersion, check: () => void): Promise<RecipeBrowseDetail> {
+      const target = exactResourceVersionSchema.parse(selected);
+      const scope = access(account, accountId, check);
+      const preview = await scope.rich.browse(target.recipeId, target.versionId);
+      scope.check();
+      if (!preview.owned && !preview.acquired) throw new CommunityError('请先获取这个版本。', 'not_acquired');
+      return preview;
+    },
     async readExact(accountId: string, selected: ExactResourceVersion, check: () => void): Promise<VerifiedResourceSnapshot> {
       const target = exactResourceVersionSchema.parse(selected);
       const scope = access(account, accountId, check);
@@ -107,7 +115,7 @@ export function recipeResourceReader(account: NativeAccount) {
       const scope = access(account, accountId, check);
       try {
         // The cloud write takes a versionId only. Verify the version belongs to this resource before sending it.
-        const {detail} = await scope.metadata(target);
+        const detail = await scope.rich.browse(target.recipeId,target.versionId);
         scope.check();
         if (!detail.owned && !detail.acquired && detail.public.access === 'coded') return {ok: false, error: {code: 'invalid_code'}};
         const value = await communityRequest<'acquire'>(scope.guarded, {type: 'acquire', accountId, versionId: target.versionId, requestId});

@@ -19,6 +19,7 @@ async function request(path, data) {
 
 function finish(text) {
   active = false; status.textContent = text; choices.hidden = true; cancel.hidden = true;
+  document.querySelector('#login-help').hidden = true;
 }
 
 async function poll() {
@@ -42,10 +43,10 @@ function render(view) {
   }
   if (view.status === 'selected') { choices.hidden = true; status.textContent = '正在连接 App，请稍候…'; return; }
   if (view.status === 'choosing' && choices.childElementCount === 0) {
-    status.textContent = '选择登录方式，授权后回到 App。'; choices.hidden = false;
+    status.textContent = '选择一种方式继续，完成后回到 App。'; choices.hidden = false;
     for (const provider of view.providers) {
       const button = document.createElement('button');
-      button.type = 'button'; button.className = 'secondary'; button.textContent = '使用 ' + names[provider] + ' 登录';
+      button.type = 'button'; button.className = 'secondary'; button.textContent = '使用 ' + names[provider] + ' 继续';
       button.addEventListener('click', async () => {
         for (const item of choices.children) item.disabled = true;
         try { render(await request('select', { provider })); }

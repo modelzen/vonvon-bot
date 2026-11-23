@@ -6,7 +6,7 @@ import {canonicalizeRichRecipeContent} from '../src/recipe-rich-codec.js';
 import {RECIPE_RICH_LIMITS, type RecipeRichContent} from '../src/recipe-rich.js';
 import {
   RESOURCE_INDEX_PAGE_BYTES, RESOURCE_SNAPSHOT_WIRE_BYTES, RESOURCE_TEXT_PAGE_BYTES, openResourceSnapshot, readResourcePage,
-  roleResourceDigest, type ResourceDocuments, type ResourceIndexEntry,
+  roleResourceDigest, openResourcePreview, resourceReadTaskSchema, type ResourceDocuments, type ResourceIndexEntry,
 } from '../src/recipe-resource-context.js';
 import {createInitiator, createResponder, decodeFrame, encodeFrame, FRAME, generateStaticKey} from '../src/secure-channel.js';
 
@@ -15,6 +15,20 @@ const identity = (n: number) => ({itemId: id(n), originId: id(n)});
 const sha = (bytes: Buffer | Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 const target = {recipeId: id(1), versionId: id(2)};
 const publicInfo = {name: '配方', summary: '说明', overview: '正文', version: 'v1', access: 'coded' as const};
+it('keeps compact preview pages separate from full group-bound material',async()=>{
+  expect(resourceReadTaskSchema.safeParse({kind:'resourceRead',target}).success).toBe(false);
+  expect(resourceReadTaskSchema.safeParse({kind:'resourceRead',target,groupId:'oc_group',groupIdentity:'a'.repeat(64)}).success).toBe(true);
+  const preview={...target,revision:1,public:publicInfo,format:'rich-v2',creator:{authorId:id(3),displayName:'作者'},owned:false,acquired:true,state:'listed',hasDisplayLogo:false,
+    preview:{settings:[],skills:[{itemId:id(4),name:'技能',description:'简短说明'}],ruleCount:2,taskCount:1}};
+  const docs=await openResourcePreview(preview),entries=index(docs);
+  expect(entries.map(entry=>entry.kind)).toEqual(['public','skill']);
+  expect(JSON.parse(read(docs,entries[0]!))).toMatchObject({fullContentRead:false,
+    summaryCounts:{settings:0,skills:1,rules:2,tasks:1,omittedSettings:0},
+    detail:expect.stringContaining('缺省字段表示未展示')});
+  expect(read(docs,entries[1]!)).toBe('简短说明');
+  await expect(openResourcePreview({...preview,acquired:false})).rejects.toThrow();
+  await expect(openResourcePreview({...preview,canonical:'PRIVATE_FULL_BODY'})).rejects.toThrow();
+});
 function fresh(): RecipeRichContent {
   const content = JSON.parse(readFileSync(new URL('./fixtures/recipe-rich-v2.content.json', import.meta.url), 'utf8')) as RecipeRichContent;
   content.memories = []; content.parts = [];

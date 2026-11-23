@@ -90,7 +90,9 @@ try {
     const catalog = await request('/community/recipes');
     assert.equal(catalog.hero.versionId, version.versionId);
     assert.deepEqual(catalog.items, []);
-    assert.deepEqual((await request('/recipes/' + version.recipeId + '/versions/' + version.versionId)).config, helpRecipe.config);
+    const detail = '/recipes/' + version.recipeId + '/versions/' + version.versionId;
+    assert.equal((await request(detail)).config, undefined);
+    assert.deepEqual((await request(detail, {token: author})).config, helpRecipe.config);
 
     const { startReview } = await import('./web-review.mjs');
     const running = await startReview({apiOrigin: origin, issuer, jwt, accounts: [aid, rid, oid]});
@@ -186,11 +188,14 @@ try {
     const updated=await request('/drafts/'+d2.draftId,{method:'PATCH',token:author,revision:d2.revision,body:{public:v2pub,config:{role:'更新后的公开角色'}}});
     await request('/drafts/'+d2.draftId+'/publish',{method:'POST',token:author,body:{},revision:d2.revision,status:409});
     const v2=await request('/drafts/'+d2.draftId+'/publish',{method:'POST',token:author,body:{},revision:updated.revision});
-    assert.deepEqual((await request('/recipes/'+v2.recipeId+'/versions/'+v2.versionId)).config,{role:'更新后的公开角色'});
+    const v2detail = '/recipes/'+v2.recipeId+'/versions/'+v2.versionId;
+    assert.equal((await request(v2detail)).config, undefined);
+    assert.deepEqual((await request(v2detail,{token:author})).config,{role:'更新后的公开角色'});
     assert.deepEqual((await request(detail,{token:reader})).config,config);
     assert.ok(!('config' in await request(detail,{token:other})));
     await request('/drafts',{method:'POST',token:author,body:{public:{...pub,version:'3'},config,recipeId:v.recipeId,sourceVersionId:v.versionId},status:409});
     await request('/versions/'+v2.versionId+'/acquire',{method:'POST',token:other,body:{}});
+    assert.deepEqual((await request(v2detail,{token:other})).config,{role:'更新后的公开角色'});
     assert.equal((await request('/me/recipes',{token:other})).items[0].versionId,v2.versionId);
     const budgetReader=jwt(randomUUID());
     for(let n=0;n<260;n++) await request('/versions/'+v2.versionId+'/acquire',{

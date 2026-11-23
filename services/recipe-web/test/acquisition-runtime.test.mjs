@@ -22,7 +22,7 @@ async function runtime(t,respond,auth = {signedIn:true,displaySession:'session-a
     if(path==='/auth/continuation')return Response.json({consumed:true});
     return respond(path,options,calls);
   };
-  const run=new AsyncFunction('document','window','location','history','navigator','crypto','fetch','BroadcastChannel','setTimeout','clearTimeout','setup',source+'\nreturn {detail,claim,setSession:value=>{session=value;}};');
+  const run=new AsyncFunction('document','window','location','history','navigator','crypto','fetch','BroadcastChannel','setTimeout','clearTimeout','setup',source+'\nreturn {detail,claim,modal,closeButton,setSession:value=>{session=value;}};');
   const api=await run(window.document,window,window.location,window.history,window.navigator,webcrypto,fetch,undefined,
     (fn,ms)=>{const timer=setTimeout(fn,ms);timer.unref();return timer;},clearTimeout);
   t.after(()=>window.close());
@@ -52,7 +52,9 @@ test('actual Web runtime retains raw/key after committed response loss and confi
   assert.match(posts[0].options.headers['Idempotency-Key'],/^a2\./);
   assert.equal(posts[0].options.body,'{"code":"AB-CD"}');
   assert.equal(h.document.querySelector('dialog').open,false);
-  const reads=h.calls.filter(c=>c.path.startsWith('/api/v1/recipes/'));
+  const reads=h.calls.filter(c=>c.path.startsWith('/api/v2/recipes/'));
+  assert.ok(reads.length > 0);
+  assert.ok(reads.every(c => c.path.endsWith('/preview')));
   assert.ok(reads.every(c=>c.options.headers['X-Vonvon-Session']==='session-a'));
 });
 for(const failure of ['operation_expired','request_upgrade_required']) test(`actual Web runtime reconciles ${failure}, keeps offline input, and requires another explicit submit before changing keys`,async t=>{
@@ -80,7 +82,7 @@ test('actual Web runtime never maps clock/quota failures to code-invalid and doe
 });
 test('actual Web runtime ignores late route A-B-A results and leaves a newly opened dialog intact',async t=>{
   let finish;
-  const h=await runtime(t,async(_path,options)=>options.method==='POST'?new Promise(resolve=>{finish=resolve;}):Response.json({...recipe, versionId:_path.split('/').at(-1)}));
+  const h=await runtime(t,async(_path,options)=>options.method==='POST'?new Promise(resolve=>{finish=resolve;}):Response.json({...recipe, versionId:_path.split('/').at(-2)}));
   const form=await h.open();await h.submit(form);
   h.dom.reconfigure({url:'https://recipes.example'+route.replace(recipe.versionId,'33333333-3333-4333-8333-333333333333')});await h.api.detail();
   h.dom.reconfigure({url:'https://recipes.example'+route});await h.api.detail();
@@ -98,7 +100,7 @@ test('actual Web runtime ignores an old account response after a new account ope
   const newer=await h.open();newer.querySelector('input').value='ACCOUNT-B-CODE';
   finish(Response.json({}));await h.settle();
   assert.equal(h.document.querySelector('dialog').open,true);assert.equal(newer.querySelector('input').value,'ACCOUNT-B-CODE');
-  const lastRead=h.calls.filter(c=>c.path.startsWith('/api/v1/recipes/')).at(-1);
+  const lastRead=h.calls.filter(c=>c.path.startsWith('/api/v2/recipes/')).at(-1);
   assert.equal(lastRead.options.headers['X-Vonvon-Session'],'session-b');
 });
 
@@ -143,7 +145,7 @@ test('actual Web runtime recovers after correcting the clock with a checked expl
   });
   const form=await h.open();await h.submit(form,'Ab-CD');
   assert.match(form.textContent,/校准设备时间/);assert.match(form.textContent,/再次点击/);
-  assert.equal(h.calls.filter(c=>c.path.startsWith('/api/v1/recipes/')).length,2);
+  assert.equal(h.calls.filter(c=>c.path.startsWith('/api/v2/recipes/')).length,2);
   assert.equal(h.calls.filter(c=>c.options.method==='POST').length,1);
   form.querySelector('button.secondary').click();
   const reopened=await h.open();
@@ -173,7 +175,7 @@ for(const transition of ['route','account']) test(`actual Web runtime ignores a 
   let finish,reads=0;
   const h=await runtime(t,async(_path,options)=>{
     if(options.method==='POST')return Response.json({error:{code:'operation_clock_skew'}},{status:422});
-    if(++reads===2)return new Promise(resolve=>{finish=resolve;});const versionId=_path.split('/').at(-1);return Response.json({...recipe,versionId});
+    if(++reads===2)return new Promise(resolve=>{finish=resolve;});const versionId=_path.split('/').at(-2);return Response.json({...recipe,versionId});
   });
   const old=await h.open();await h.submit(old,'OLD-CODE');assert.equal(typeof finish,'function');
   if(transition==='account')h.api.setSession({signedIn:true,displaySession:'session-b',providers:[]});
@@ -242,20 +244,21 @@ test('editing an uncertain claim preserves the draft and reconciles the old subm
   assert.equal(posts()[1].options.body,'{"code":"New-Code"}');
 });
 
-test('a pending direct claim cannot strand its button or close an unrelated account dialog',async t=>{
+test('a pending direct claim cannot strand its button or close an unrelated dialog',async t=>{
   let attempts=0,finish;
   const h=await runtime(t,async(_path,options)=>{
     if(options.method==='POST'){attempts++;return new Promise(resolve=>{finish=resolve;});}
     return Response.json({...recipe,public:{...recipe.public,access:'direct'},acquired:attempts===2});
   });
   const trigger=h.document.querySelector('main .actions button:last-child');
-  const dialog=h.document.querySelector('dialog'),account=h.document.querySelector('#account');
-  trigger.click();await h.settle();account.click();
+  const dialog=h.document.querySelector('dialog');
+  const openOther=()=>h.api.modal('其他操作',h.api.closeButton());
+  trigger.click();await h.settle();openOther();
   finish(Response.json({error:{code:'rate_limited'}},{status:429}));await h.settle();
   assert.equal(dialog.open,true);assert.equal(trigger.disabled,false);
-  dialog.querySelector('button.secondary').click();trigger.click();await h.settle();account.click();
+  dialog.querySelector('button.secondary').click();trigger.click();await h.settle();openOther();
   finish(Response.json({}));await h.settle();
-  assert.equal(dialog.open,true);assert.equal(dialog.querySelector('h2').textContent,'账号');
+  assert.equal(dialog.open,true);assert.equal(dialog.querySelector('h2').textContent,'其他操作');
   assert.match(h.document.querySelector('main').textContent,/已获取/);
 });
 

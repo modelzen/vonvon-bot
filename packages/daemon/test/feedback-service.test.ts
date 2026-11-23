@@ -1,3 +1,4 @@
+import {createHash, randomUUID} from 'node:crypto';
 import {describe, expect, it, vi} from 'vitest';
 import {
   feedbackActorSchema, feedbackConfirmationSchema, feedbackSummarySchema, FeedbackNotDispatchedError,
@@ -56,6 +57,7 @@ class Gateway implements FeedbackGateway {
   submitCount = 0;
   lookupCount = 0;
   validateCount = 0;
+  layout?: 'detail-fields';
   recordLinkCount = 0;
   createOnSubmit = true;
   loseWriteResponse = false;
@@ -64,7 +66,7 @@ class Gateway implements FeedbackGateway {
   inspectSending?: (draft: FeedbackDraft) => Promise<void>;
 
   async user(_actor: FeedbackActor): Promise<FeedbackUserIdentity> { return this.identity; }
-  async validate(_actor: FeedbackActor, _destination: FeedbackDestination): Promise<void> { this.validateCount++; }
+  async validate(_actor: FeedbackActor, _destination: FeedbackDestination) { this.validateCount++; return this.layout; }
   async lookup(_draft: FeedbackDraft): Promise<FeedbackLookup> {
     this.lookupCount++;
     if (this.lookupUnavailable && this.submitCount > 0) throw new Error('Network unavailable');
@@ -96,6 +98,66 @@ function setup() {
 }
 
 describe('FeedbackSubmissionService', () => {
+  const details = {checks: '复现\n重启后仍出现', sourceEvidence: '0.10.1 packages/daemon/src/chat.ts:42 核对发送分支',
+    openQuestions: '另一系统仍需复验', useCase: '目前手工重发', acceptanceCriteria: '重试后完整收到'};
+
+  it('reviews and persists the exact legacy description; later form upgrades and repeated confirmations cannot reshape it', async () => {
+    const h = setup();
+    const review = await h.service.prepare({actor, destination, summary: {...summary, ...details}});
+    expect(review.summary.description).toBe([summary.description, '排查记录\n' + details.checks, '源码依据\n' + details.sourceEvidence,
+      '待验证问题\n' + details.openQuestions, '使用场景与现有做法\n' + details.useCase, '验收标准\n' + details.acceptanceCriteria].join('\n\n'));
+    expect(review.summary).not.toHaveProperty('sourceEvidence');
+    expect((await h.store.read(review.operationId)).draft.summary).toEqual(review.summary);
+    h.gateway.layout = 'detail-fields';
+    h.gateway.inspectSending = async draft => { expect(draft.summary).toEqual(review.summary); };
+    await expect(h.service.confirm(h.confirmation(review))).resolves.toMatchObject({state: 'submitted'});
+    await expect(h.service.confirm(h.confirmation(review))).resolves.toMatchObject({state: 'submitted'});
+    expect(h.gateway.submitCount).toBe(1);
+  });
+
+  it('binds dedicated fields into the digest and refuses to silently drop them if the destination changes after review', async () => {
+    const h = setup();
+    h.gateway.layout = 'detail-fields';
+    const review = await h.service.prepare({actor, destination, summary: {...summary, ...details}});
+    expect(review.summary).toEqual({...summary, ...details});
+    h.gateway.layout = undefined;
+    await expect(h.service.confirm(h.confirmation(review))).rejects.toThrow('排查字段已变化');
+    const old = await h.store.read(review.operationId);
+    expect(old.state).toBe('prepared');
+    old.draft.summary.checks = '已改动';
+    await h.store.write(old);
+    await expect(h.service.confirm(h.confirmation(review))).rejects.toThrow('内容已经改变');
+    expect(h.gateway.submitCount).toBe(0);
+  });
+
+  it.each([false, true])('reopens a pre-upgrade prepared draft with its original digest (sensitive: %s)', async sensitive => {
+    const h = setup();
+    const oldSummary = {kind: 'bug' as const, title: '历史反馈', description: sensitive ? 'user@example.com' : '以前保存的内容',
+      steps: '', expected: '', environment: '', impact: null, areas: []};
+    const content = {operationId: randomUUID(), trackingCode: 'VV-0123456789ABCDEF', createdAt: 1000, expiresAt: 86401000,
+      actor, accountName: 'Clay', destination, summary: oldSummary, attachments: []};
+    const draft = {...content, digest: createHash('sha256').update(JSON.stringify(content)).digest('hex')};
+    await h.store.create({state: 'prepared', draft});
+    const confirmation = {botId: actor.botId, appId: actor.appId, tenantKey: actor.tenantKey, openId: actor.openId,
+      chatId: actor.chatId, operationId: draft.operationId, digest: draft.digest};
+    if (sensitive) {
+      await expect(h.service.confirm(confirmation)).rejects.toThrow('详细说明');
+      expect(h.gateway.submitCount).toBe(0);
+      // A crash-recovered external record remains queryable even when the old draft needs redaction.
+      h.gateway.result = {state: 'found', recordId: 'recExisting', creatorOpenId: actor.openId};
+    }
+    await expect(h.service.confirm(confirmation)).resolves.toMatchObject({state: 'submitted'});
+    expect(h.gateway.submitCount).toBe(sensitive ? 0 : 1);
+  });
+
+  it('rejects an oversized combined description and names the original sensitive field before folding', async () => {
+    const h = setup();
+    await expect(h.service.prepare({actor, destination, summary: {...summary, description: 'A'.repeat(29998), checks: '观察'}}))
+      .rejects.toThrow('完整核对');
+    await expect(h.service.prepare({actor, destination, summary: {...summary, checks: '联系人 user@example.com'}})).rejects.toThrow('排查记录');
+    expect(h.gateway.submitCount).toBe(0);
+  });
+
   it('shows the authorized person and selected attachments, then returns a persisted native record link', async () => {
     const h = setup();
     h.store.staged = [{filename: '截图.png', relativePath: 'attachments/12345678-abcd-4abc-8abc-123456789abc/截图.png', bytes: 12, sha256: 'a'.repeat(64)}];

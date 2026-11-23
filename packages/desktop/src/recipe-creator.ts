@@ -82,6 +82,7 @@ export class RecipeCreatorExecutor {
       });
     }};
     const reader=recipeResourceReader(account), id=context.association.accountId;
+    if(task.kind==='resourcePreview')return {kind:'resourcePreview',preview:await reader.previewExact(id,task.target,context.check)};
     if(task.kind==='resourceRead')return {kind:'resourceSnapshot',snapshot:await reader.readExact(id,task.target,context.check)};
     if(task.kind==='resourceLatest')return {kind:'resourceLatest',latest:await reader.latest(id,task.target,task.revision,context.check)};
     if(task.kind==='resourceAcquire')return {kind:'resourceAcquired',outcome:await reader.acquireExact(id,task.target,task.requestId,context.check)};
@@ -464,7 +465,7 @@ export class RecipeCreatorExecutor {
   }
   async run(context:CreatorContext,job:CreatorJob){
     const checked=await this.checked(context,job);
-    if(job.task.kind==='resourceRead'||job.task.kind==='resourceLatest'||job.task.kind==='resourceAcquire'){
+    if(job.task.kind==='resourcePreview'||job.task.kind==='resourceRead'||job.task.kind==='resourceLatest'||job.task.kind==='resourceAcquire'){
       if(checked.mode!==(job.task.kind==='resourceAcquire'?'execute':'read'))throw invalid();
       let answer:CreatorAnswer;
       try{answer=await this.resourceAnswer(context,job);}

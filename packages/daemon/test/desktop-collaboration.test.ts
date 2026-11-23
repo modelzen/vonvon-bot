@@ -2,7 +2,7 @@ import { pendingGroupsFile, readPendingGroups } from '../src/project/pending-gro
 import { afterAll, beforeEach, expect, it, vi } from 'vitest';
 import { readFile, rm, mkdir, realpath, symlink, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import type { AccountUsageBundle } from '../src/agent/types';
+import type { AccountUsageBundle, AgentEvent } from '../src/agent/types';
 import type { AppConfig } from '../src/config/schema';
 import { paths } from '../src/config/paths';
 import { addProject, getProjectByName, mutateProject, removeProject, updateProject } from '../src/project/registry';
@@ -117,6 +117,58 @@ it('s27a0: the desktop objective goes out without a real <at> (main fails: chann
     await vi.waitFor(() => expect(fixture.send).toHaveBeenCalledWith('oc_demo', { markdown: '桌面端启动目标：让 @小审 看' }, undefined));
     expect(be.resumeThread).toHaveBeenCalled();
   } finally { await app.shutdown(); }
+});
+
+it.each(['startGoal', 'compact'] as const)('refreshes a stale skill session for desktop %s and preserves its history', async action => {
+  const be = backend();
+  const runGoal = vi.fn(() => ({events: (async function* (): AsyncGenerator<AgentEvent> {
+    yield {type: 'goal_update', status: 'complete', objective: 'Finish with enabled skills', tokensUsed: 0, timeUsedSeconds: 0, tokenBudget: null};
+  })()}));
+  Object.assign(be.thread, {runGoal, clearGoal: vi.fn(async () => {})});
+  const old = {...be.thread, sessionId: 'old', close: vi.fn(async () => {})};
+  be.resumeThread.mockResolvedValueOnce(old);
+  await updateProject('demo', {skills: {disabledPaths: ['/work/feedback/SKILL.md']}});
+  const app = orchestrator();
+  try {
+    const result = await app.collaboration(action === 'startGoal'
+      ? {action, ...target, threadId: 'oc_demo', objective: 'Finish with enabled skills'}
+      : {action, ...target, threadId: 'oc_demo'});
+    expect(result).toMatchObject({ok: true});
+    expect(old.close).toHaveBeenCalled(); expect(be.startThread).toHaveBeenCalledOnce();
+    expect(await getSession('oc_demo')).toMatchObject({sessionId: 'fresh', earlier: ['old'], skillProfile: {sessionId: 'fresh'}});
+    if (action === 'compact') {
+      expect(be.thread.compact).not.toHaveBeenCalled();
+      expect(result).toMatchObject({message: expect.stringContaining('本群技能已更新')});
+      expect(JSON.stringify(fixture.send.mock.calls)).not.toContain('上下文已压缩');
+    } else {
+      expect(fixture.send).toHaveBeenCalledWith('oc_demo', {markdown: '桌面端启动目标：Finish with enabled skills'}, undefined);
+      await vi.waitFor(() => expect(runGoal).toHaveBeenCalledOnce());
+    }
+  } finally {await app.shutdown();}
+});
+
+it('recreates native goal context when skills change while its tier reopen is awaiting the provider', async () => {
+  const be = backend();
+  const goalThread = (sessionId: string) => ({...be.thread, sessionId, releaseAfterRun: true,
+    close: vi.fn(async () => {}), clearGoal: vi.fn(async () => {}),
+    runGoal: vi.fn(() => ({events: (async function* (): AsyncGenerator<AgentEvent> {
+      yield {type: 'goal_update', status: 'complete', objective: 'Finish', tokensUsed: 0, timeUsedSeconds: 0, tokenBudget: null};
+    })()})),
+  });
+  const old = goalThread('old'), stale = goalThread('old'), reopened = goalThread('old'), fresh = goalThread('fresh');
+  be.resumeThread.mockResolvedValueOnce(old).mockImplementationOnce(async () => {
+    await updateProject('demo', {skills: {disabledPaths: ['/work/feedback/SKILL.md']}});
+    return stale;
+  }).mockResolvedValueOnce(reopened);
+  be.startThread.mockResolvedValueOnce(fresh);
+  const app = orchestrator();
+  try {
+    await app.collaboration({action: 'startGoal', ...target, threadId: 'oc_demo', objective: 'Finish'});
+    await vi.waitFor(() => expect(fresh.runGoal).toHaveBeenCalledOnce());
+    expect(old.runGoal).not.toHaveBeenCalled(); expect(stale.runGoal).not.toHaveBeenCalled(); expect(reopened.runGoal).not.toHaveBeenCalled();
+    expect(stale.close).toHaveBeenCalled(); expect(reopened.close).toHaveBeenCalled();
+    expect(await getSession('oc_demo')).toMatchObject({sessionId: 'fresh', earlier: ['old']});
+  } finally {await app.shutdown();}
 });
 
 it('generates a share card with only the requested sections', async () => {

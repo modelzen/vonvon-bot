@@ -1,11 +1,12 @@
-import type { AccountStatus } from '@vonvon/protocol';
+import {accountProfileSchema, type AccountProfile, type AccountStatus} from '@vonvon/protocol';
 import { accountAuth, AccountFault, accountOrigin, checkAuth, requestSignal, sessionTokens, verifyAccount,
-  type AccountCredential, type AccountDeployment } from './account-auth.js';
+  type AccountCredential, type AccountDeployment, checkResponse } from './account-auth.js';
+import {boundedJson} from './community-response.js';
 import { nativeLogin } from './account-login.js';
 import { fetchAccountAvatar } from './account-avatar.js';
 import type { AccountStore } from './account-store.js';
 
-type PublicIdentity = Awaited<ReturnType<typeof verifyAccount>>;
+type PublicIdentity = Pick<Extract<AccountStatus, {kind: 'signedIn'}>, 'accountId' | 'displayName' | 'avatarUrl' | 'avatarDataUrl' | 'profileRevision'>;
 type Access = { token: string; expiresAt: number };
 type Persistence = 'secure' | 'memory';
 type Avatar = {
@@ -16,8 +17,10 @@ const avatarRetryDelays = [5000, 30_000] as const;
 const avatarAttemptLimit = avatarRetryDelays.length + 1;
 
 const uuidSegment = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
-const publicDetail = new RegExp('^/v[12]/recipes/' + uuidSegment + '/versions/' + uuidSegment + '$');
-const publicVersionObject = new RegExp('^/v2/versions/' + uuidSegment + '/(?:display-logo|objects/' + uuidSegment + ')$');
+const publicDetail = new RegExp('^/v[12]/recipes/' + uuidSegment + '/versions/' + uuidSegment + '(?:/preview)?$');
+const publicVersionObject = new RegExp('^/v2/versions/' + uuidSegment + '/display-logo$');
+const publicAuthor = new RegExp('^/v2/authors/' + uuidSegment + '/recipes$', 'i');
+const authorCursor = new RegExp('^' + uuidSegment + '$', 'i');
 const privateObjectMember = new RegExp('^/v2/objects/' + uuidSegment + '/members/(?:[0-9]|[1-5][0-9]|6[0-5])$');
 function apiUrl(path: string, origin: string, publicRead = false) {
   const pathname = path.split('?', 1)[0]!;
@@ -25,7 +28,9 @@ function apiUrl(path: string, origin: string, publicRead = false) {
     throw new AccountFault('invalid');
   const url = new URL(path, origin);
   if (url.origin !== origin || url.pathname !== pathname || url.hash) throw new AccountFault('invalid');
-  if (publicRead && !(/^\/v[12]\/community\/recipes$/.test(pathname) || !path.includes('?') && (publicDetail.test(pathname) || publicVersionObject.test(pathname))))
+  const authorRead = publicAuthor.test(pathname) && [...url.searchParams.keys()].every(key => key === 'cursor') &&
+    url.searchParams.getAll('cursor').length <= 1 && (!url.searchParams.has('cursor') || authorCursor.test(url.searchParams.get('cursor')!));
+  if (publicRead && !(/^\/v[12]\/community\/recipes$/.test(pathname) || authorRead || !path.includes('?') && (publicDetail.test(pathname) || publicVersionObject.test(pathname))))
     throw new AccountFault('invalid');
   return url;
 }
@@ -37,6 +42,9 @@ export interface NativeAccount {
   login(): Promise<AccountStatus>;
   cancelLogin(): Promise<AccountStatus>;
   logout(): Promise<AccountStatus>;
+  manage?(): Promise<void>;
+  refresh?(): Promise<AccountStatus>;
+  applyProfile?(accountId: string, profile: AccountProfile): void;
   recipeLink?(recipeId: string, versionId: string): string;
   publicRequest?(path: string): Promise<Response>;
   request(accountId: string, path: string, init?: RequestInit, beforeSend?: () => void | Promise<void>): Promise<Response>;
@@ -62,6 +70,8 @@ export function createAccountSession(options: {
   let loginActive = false;
   let avatar: Avatar | undefined;
   let avatarTimer: ReturnType<typeof setTimeout> | undefined;
+  let profileIdentity: PublicIdentity | undefined;
+  let profileRefreshing: Promise<AccountStatus> | undefined;
 
   function publish(next: AccountStatus) {
     if (next.kind !== 'signedIn') clearAvatarTimer();
@@ -98,6 +108,8 @@ export function createAccountSession(options: {
     refreshing = undefined;
     loginActive = false;
     discardAvatar();
+    profileIdentity = undefined;
+    profileRefreshing = undefined;
     return owner.signal;
   }
   function schedule(signal: AbortSignal, ms: number) {
@@ -106,7 +118,7 @@ export function createAccountSession(options: {
     timer.unref();
   }
   function currentAvatar(current: Avatar, signal: AbortSignal) {
-    return !signal.aborted && avatar === current && credential?.accountId === current.accountId &&
+    return !signal.aborted && !profileIdentity?.avatarDataUrl && avatar === current && credential?.accountId === current.accountId &&
       view.kind === 'signedIn' && view.accountId === current.accountId;
   }
   function scheduleAvatar(current: Avatar, signal: AbortSignal, ms: number) {
@@ -140,13 +152,21 @@ export function createAccountSession(options: {
     });
   }
   function ready(record: AccountCredential, verified: PublicIdentity, token: Access, persistence: Persistence, signal: AbortSignal) {
+    const previous = profileIdentity;
+    if (previous?.accountId === verified.accountId && previous.profileRevision !== undefined &&
+        (verified.profileRevision === undefined || verified.profileRevision < previous.profileRevision)) {
+      const {avatarDataUrl: _staleAvatar, ...identity} = verified;
+      verified = {...identity, displayName: previous.displayName, profileRevision: previous.profileRevision,
+        ...(previous.avatarDataUrl && {avatarDataUrl: previous.avatarDataUrl})};
+    }
+    profileIdentity = verified;
     credential = record;
     access = token;
     schedule(signal, token.expiresAt - Date.now() - 60_000);
     if (avatar?.accountId !== verified.accountId || avatar?.url !== verified.avatarUrl) discardAvatar();
     publish({ kind: 'signedIn', ...verified, provider: record.provider, persistence,
-      ...(avatar?.dataUrl ? { avatarDataUrl: avatar.dataUrl } : {}) });
-    if (signal.aborted || !verified.avatarUrl) return;
+      ...(!verified.avatarDataUrl && avatar?.dataUrl ? { avatarDataUrl: avatar.dataUrl } : {}) });
+    if (signal.aborted || verified.avatarDataUrl || !verified.avatarUrl) return;
     const current = avatar ??= { accountId: verified.accountId, url: verified.avatarUrl,
       attempts: 0, loading: false, controller: new AbortController() };
     if (current.dataUrl || current.loading) return;
@@ -229,6 +249,44 @@ export function createAccountSession(options: {
     return view;
   }
 
+  function applyProfile(accountId: string, profile: AccountProfile) {
+    if (disposed || !credential || !access || !profileIdentity || view.kind !== 'signedIn' ||
+        view.accountId !== accountId || credential.accountId !== accountId || profile.authorId !== accountId) return;
+    if (profileIdentity.profileRevision !== undefined &&
+        (profile.revision === undefined || profile.revision < profileIdentity.profileRevision)) return;
+    const {avatarDataUrl: _previousAvatar, ...identity} = profileIdentity;
+    ready(credential, {...identity, displayName: profile.displayName, ...(profile.revision !== undefined && {profileRevision: profile.revision}),
+      ...(profile.avatarDataUrl && {avatarDataUrl: profile.avatarDataUrl})}, access, view.persistence, owner.signal);
+  }
+
+  function refreshProfile(): Promise<AccountStatus> {
+    if (disposed || !deployment || view.kind !== 'signedIn' || !credential) return Promise.resolve(view);
+    if (profileRefreshing) return profileRefreshing;
+    const signal = owner.signal, accountId = credential.accountId;
+    const run = (async () => {
+      if (!access || access.expiresAt - Date.now() <= 30_000) await refresh(signal);
+      signal.throwIfAborted();
+      if (!access || credential?.accountId !== accountId || view.kind !== 'signedIn' || view.accountId !== accountId)
+        throw new AccountFault('offline');
+      const response = await transport(deployment.apiOrigin + '/v2/me/account-profile', {
+        headers: {Authorization: 'Bearer ' + access.token}, credentials: 'omit', redirect: 'error', cache: 'no-store',
+        signal: requestSignal(signal),
+      });
+      signal.throwIfAborted();
+      if (response.status === 404 || response.status === 405) return view;
+      checkResponse(response);
+      const profile = accountProfileSchema.parse(await boundedJson(response, 400_000));
+      signal.throwIfAborted();
+      if (profile.authorId !== accountId) throw new AccountFault('invalid');
+      applyProfile(accountId, profile);
+      return view;
+    })();
+    profileRefreshing = run;
+    void run.then(() => {if (profileRefreshing === run) profileRefreshing = undefined;},
+      () => {if (profileRefreshing === run) profileRefreshing = undefined;});
+    return run;
+  }
+
   return {
     lease: accountId => !disposed && credential?.accountId === accountId && view.kind === 'signedIn' && view.accountId === accountId ? leaseOwner.signal : undefined,
     status: () => view,
@@ -274,7 +332,32 @@ export function createAccountSession(options: {
       return view;
     },
     async cancelLogin() { return view.kind === 'signingIn' && !disposed ? clearLocal('cancelled') : view; },
-    async logout() { return disposed ? view : clearLocal(); },
+    async logout() {
+      if (disposed) return view;
+      const saved = credential, token = access;
+      const cleared = clearLocal();
+      if (saved) {
+        const auth = accountAuth(saved, AbortSignal.timeout(3000), transport);
+        try {
+          const result = token && token.expiresAt > Date.now() ? await auth.admin.signOut(token.token, 'local') : undefined;
+          if (!result || result.error?.status === 401 || result.error?.status === 403) {
+            const refreshed = await auth.refreshSession({refresh_token: saved.refreshToken});
+            checkAuth(refreshed.error);
+            const outgoing = sessionTokens(refreshed.data.session);
+            if (outgoing.subject === saved.subject) await auth.admin.signOut(outgoing.access, 'local');
+          }
+        }
+        catch { /* Local logout completes even when the identity service is offline. */ }
+        finally { await auth.dispose(); }
+      }
+      return cleared;
+    },
+    async manage() {
+      if (!deployment || disposed || view.kind !== 'signedIn') throw new AccountFault('invalid');
+      await options.openBrowser(deployment.webOrigin + '/account#account=' + view.accountId);
+    },
+    refresh: refreshProfile,
+    applyProfile,
     recipeLink(recipeId, versionId) {
       if (!deployment || !/^[0-9a-f-]{36}$/.test(recipeId) || !/^[0-9a-f-]{36}$/.test(versionId)) throw new AccountFault('invalid');
       return `${deployment.webOrigin}/recipes/${recipeId}/versions/${versionId}`;

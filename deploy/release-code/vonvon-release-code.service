@@ -1,0 +1,23 @@
+[Unit]
+Description=VonVon release code MCP service
+After=network-online.target
+
+[Service]
+User=vonvon-release-code
+Group=vonvon-release-code
+WorkingDirectory=/opt/vonvon-release-code/service
+EnvironmentFile=/etc/vonvon-release-code/mcp.env
+ExecStart=/usr/bin/node src/main.mjs
+Restart=on-failure
+RestartSec=5
+StateDirectory=vonvon-release-code
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/srv/vonvon-release-code
+
+[Install]
+WantedBy=multi-user.target

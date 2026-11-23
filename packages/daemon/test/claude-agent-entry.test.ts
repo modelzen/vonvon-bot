@@ -6,6 +6,9 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { ClaudeAgentBackend, type ClaudeSdkFacade } from '../src/agent/claude-agent/backend';
 import { createAgentEntries } from '../src/agent/entry/registry';
+import { feedbackTool } from '../src/agent/entry/feedback-tool';
+import { releaseCodeTools } from '../src/agent/entry/release-code-tools';
+import type { CodeSource } from '../src/release-code/host';
 import { claudeAccess, decide } from '../src/agent/claude-agent/permission';
 import type { AgentEntry, AgentThread, AgentToolReply } from '../src/agent/types';
 const threads: AgentThread[] = [];
@@ -18,6 +21,8 @@ function entry() {
 function fixture(withSdk = true, stream?: AsyncIterable<SDKMessage>) {
   let options: Options | undefined;
   const registered: string[] = [];
+  const schemas = new Map<string, object>();
+  const handlers = new Map<string,(args: object, extra: unknown) => Promise<unknown>>();
   let end: (() => void) | undefined;
   let invoke: ((args: object, extra: unknown) => Promise<unknown>) | undefined;
   const query = vi.fn<ClaudeSdkFacade['query']>(params => {
@@ -27,14 +32,32 @@ function fixture(withSdk = true, stream?: AsyncIterable<SDKMessage>) {
   });
   const makeTool: typeof tool = (name, description, schema, handler, ...rest) => {
     registered.push(name);
+    schemas.set(name, schema);
     invoke = (args, extra) => handler(args as never, extra as never);
+    handlers.set(name, invoke);
     return tool(name, description, schema, handler, ...rest);
   };
   const sdk = { query, listSessions: vi.fn(), getSessionInfo: vi.fn(), getSessionMessages: vi.fn(), renameSession: vi.fn(),
     ...(withSdk ? { createSdkMcpServer, tool: makeTool } : {}) } satisfies ClaudeSdkFacade;
-  return { registered, backend: new ClaudeAgentBackend(async () => sdk, () => undefined), query,
+  return { registered, schemas, handlers, backend: new ClaudeAgentBackend(async () => sdk, () => undefined), query,
     options: () => options, invoke: (args: object, extra: unknown) => { if (!invoke) throw Error('missing handler'); return invoke(args, extra); } };
 }
+it('registers all optional diagnostic and suggestion fields with the actual Claude tool schema', async () => {
+  const f = fixture();
+  const grant = createAgentEntries({appId: 'fixture', isAdmin: () => false, feedbackEnabled: () => true,
+    tools: [feedbackTool]}).issue({kind: 'group', chatId: 'oc_help'});
+  const thread = await f.backend.startThread({cwd:'/fixture', entry:grant});
+  threads.push(thread);
+  const shape = f.schemas.get('feedback_prepare');
+  expect(shape).toBeDefined();
+  const parser = z.object(shape as z.ZodRawShape);
+  const base = {kind:'feature', title:'标题', description:'说明'};
+  const summary = {...base, checks:'检查过程', sourceEvidence:'0.10.1 packages/ui/src/app.ts:21 路由匹配', openQuestions:'待复核',
+    useCase:'当前手工处理', acceptanceCriteria:'只需一次操作'};
+  expect(parser.parse({summary})).toMatchObject({summary});
+  expect(parser.parse({summary:base})).toMatchObject({summary:base});
+});
+
 it.each([
   ['start', undefined], ['resume', undefined], ['start', { permissionMode: 'plan' }], ['resume', { permissionMode: 'plan' }],
 ] as const)('%s carries entry separately from the serializable profile with native %j', async (action, native) => {
@@ -57,6 +80,50 @@ it.each([
   await threads.at(-1)?.close();
   expect(e.revoke).toHaveBeenCalledWith('closed');
 });
+it('exposes the opted-in release-code MCP and resolves SDK tool_use to the actual member', async () => {
+  const registry = createAgentEntries({appId:'fixture', isAdmin:() => false,
+    codeEnabled:chat => chat === 'oc_help', tools:releaseCodeTools()});
+  let send!: () => void;
+  const pause = new Promise<void>(resolve => {send = resolve;});
+  const stream = (async function* (): AsyncGenerator<SDKMessage> {
+    await pause;
+    const block = {type:'tool_use',id:'code-read',name:'mcp__vonvon-release-code__read',input:{path:'README.md'}};
+    yield {type:'assistant',message:{content:[block]}} as SDKMessage;
+  })();
+  const chatId = 'oc_help', openId = 'ou_member', messageId = 'om_user';
+  const grant = registry.issue({kind:'group',chatId});
+  const f = fixture(true,stream);
+  const thread = await f.backend.startThread({cwd:'/fixture',entry:grant});
+  threads.push(thread); grant.attach(thread);
+  expect(f.options()?.mcpServers?.['vonvon-release-code']).toMatchObject({name:'vonvon-release-code'});
+  expect(f.options()?.allowedTools).toEqual(expect.arrayContaining(['mcp__vonvon-release-code__rg','mcp__vonvon-release-code__read']));
+  const call = vi.fn<CodeSource['call']>(async () => 'code reply');
+  registry.openTurn(thread,{requesterKind:'user',requesterOpenId:openId,triggerMessageId:messageId,
+    retry:false,initiative:false,wake:false,releaseCode:{chatId,openId,messageId,call}});
+  const noted=vi.spyOn(grant,'noteToolUse');
+  send();
+  await vi.waitFor(()=>expect(noted).toHaveBeenCalledWith('code-read'));
+  const invoke = () => f.handlers.get('read')!({path:'README.md'},{_meta:{'claudecode/toolUseId':'code-read'}});
+  await expect(invoke()).resolves.toEqual({content:[{type:'text',text:'code reply'}]});
+  let running: AbortSignal | undefined;
+  call.mockImplementationOnce(async (_name, _args, signal) => {
+    running = signal;
+    await new Promise<void>(done => signal.addEventListener('abort', () => done(), {once:true}));
+    signal.throwIfAborted();
+    return 'unreachable';
+  });
+  const pending = invoke();
+  await vi.waitFor(() => expect(running).toBeDefined());
+  registry.noteSteer(thread,{kind:'user',openId:'ou_another'});
+  await expect(pending).resolves.toMatchObject({isError:true});
+  expect(running?.aborted).toBe(true);
+  await expect(invoke()).resolves.toMatchObject({isError:true});
+  expect(call).toHaveBeenCalledTimes(2);
+  const other = fixture();
+  threads.push(await other.backend.startThread({cwd:'/fixture',entry:registry.issue({kind:'group',chatId:'oc_other'})}));
+  expect(other.options()?.mcpServers?.['vonvon-release-code']).toBeUndefined();
+});
+
 it.each([true, false])('keeps sessions usable without entry or without SDK MCP exports (%s)', async withSdk => {
   const f = fixture(withSdk);
   threads.push(await f.backend.startThread({ cwd: '/fixture', ...(withSdk ? {} : { entry: entry() }) }));

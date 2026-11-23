@@ -202,6 +202,26 @@ test('authorize accepts actual SDK output and rejects every changed trust bounda
     body: { url: f.authorizeUrl('google').replace('method=s256', 'method=S256') } })).status, 200);
 });
 
+test('account selection permits only the exact supported provider prompt and keeps legacy clients compatible', async t => {
+  const f = await fixture(t);
+  for (const provider of ['github', 'google', 'apple']) {
+    const flow = await f.launch(await f.create());
+    await f.browser('select', flow, {body: {provider}});
+    const put = url => f.native('/' + flow.flowId + '/authorize', {method: 'PUT', token: flow.pollToken, body: {url}});
+    for (const prompt of ['consent', 'none', '', 'select_account&redirect_uri=https://evil.example']) {
+      const url = new URL(f.authorizeUrl(provider)); url.searchParams.set('prompt', prompt);
+      assert.equal((await put(url.href)).status, 400);
+    }
+    const url = new URL(f.authorizeUrl(provider)); url.searchParams.set('prompt', 'select_account');
+    const duplicate = new URL(url); duplicate.searchParams.append('prompt', 'select_account');
+    assert.equal((await put(duplicate.href)).status, 400);
+    assert.equal((await put(url.href)).status, provider === 'apple' ? 400 : 200);
+    if (provider === 'apple') assert.equal((await put(f.authorizeUrl(provider))).status, 200);
+  }
+  const legacy = await f.launch(await f.create());
+  await f.authorize(legacy);
+});
+
 test('browser mutations require their cookie, tab binding, and same origin', async t => {
   const f = await fixture(t), a = await f.launch(await f.create()), b = await f.launch(await f.create());
   for (const headers of [{ Origin: 'https://evil.example' }, { Origin: 'null' }]) {

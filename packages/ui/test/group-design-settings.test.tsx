@@ -72,9 +72,28 @@ it('shows discovered skills and no fabricated tool authorization state', () => {
   const failed = fixture(); delete failed.skills; failed.skillsError = '启动 Bot 后可读取 Provider 的技能目录';
   expect(render('capabilities', failed)).toContain(failed.skillsError);
   expect(render('capabilities', failed)).not.toContain('尚未发现技能');
+  const partial = fixture(); partial.skillsError = '暂时无法核对已安装配方的技能';
+  expect(render('capabilities', partial)).toContain('实际技能');
+  expect(render('capabilities', partial)).toContain(partial.skillsError);
 });
-it('orders the group tabs with sharing, keeps compact model and permission settings together, and preserves legacy routes', () => {
-  expect(groupDesignTabs.map(([, label]) => label)).toEqual(['模型与权限', '能力', '沟通方式', '记忆', '任务', '分享']);
+it('puts project skills first and pins Setup within each source group with its purpose and controls', () => {
+  const view = fixture();
+  view.skills = [
+    {name: '普通工作区技能', path: 'workspace:normal', source: 'workspace', enabled: true},
+    {name: 'feedback-setup', path: 'workspace:setup', source: 'workspace', enabled: true},
+    {name: 'ProviderSETUP', path: 'provider:setup', source: 'provider', enabled: true},
+    {name: '用户技能', path: 'user:normal', source: 'user', enabled: true},
+  ];
+  const html = render('capabilities', view);
+  expect(html.indexOf('feedback-setup')).toBeLessThan(html.indexOf('普通工作区技能'));
+  expect(html.indexOf('普通工作区技能')).toBeLessThan(html.indexOf('用户技能'));
+  expect(html.indexOf('用户技能')).toBeLessThan(html.indexOf('ProviderSETUP'));
+  expect(html).toContain('Setup Skill');
+  expect(html).toContain('了解 ProviderSETUP 的 Setup 用途');
+  expect(html).toContain('aria-label="使用 ProviderSETUP"');
+});
+it('orders the group tabs without sharing, keeps compact model and permission settings together, and preserves legacy routes', () => {
+  expect(groupDesignTabs.map(([, label]) => label)).toEqual(['模型与权限', '能力', '沟通方式', '记忆', '任务']);
   for (const section of ['任务', '定时任务']) expect(groupTabForSection(section)).toBe('schedule');
   expect(groupDesignTabs.map(([value]) => value)).not.toContain('workspace');
   for (const section of ['权限', '执行模型', '执行权限', '能挡到什么', '高级设置', '工作目录权限']) expect(groupTabForSection(section)).toBe('model');

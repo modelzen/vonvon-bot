@@ -354,9 +354,6 @@ export class RecipeUseController {
           row.stage === 'joining' ? 'joining' : row.action === 'cancel' ? 'cancelling' : 'installing',
         );
       }
-      if(input.format==='rich-v2') h.richPreview=await this.richCloud(h).preview(input.recipeId,input.versionId);
-      else h.preview = await this.cloud(h).preview(input.recipeId, input.versionId);
-      this.check(h);
       const groupId = input.groupId ?? (row && 'groupId' in row ? row.groupId : undefined);
       if (groupId && !row) this.save(h, { ...this.base(h), stage: 'group', groupId });
       const reply = groupId ? await this.prepare(h, groupId) : { kind: 'choose' as const, handle: h.id };
@@ -439,7 +436,7 @@ export class RecipeUseController {
     return this.prepare(h, input.groupId);
   }
   private async join(h: Handle, input: Extract<RecipeUseRequest, { type: 'join' }>['input']): Promise<RecipeUseReply> {
-    if (h.row || h.input.groupId || input.agentId !== h.input.botId || (!h.preview&&!h.richPreview)) throw invalid();
+    if (h.row || h.input.groupId || input.agentId !== h.input.botId) throw invalid();
     await this.identity(h);
     this.check(h);
     const row = {

@@ -1,16 +1,19 @@
 <!doctype html>
-<html lang="zh-CN"><head>
+<html lang="zh-CN" data-desktop-channel="__DESKTOP_CHANNEL__" data-recipe-create-url="__RECIPE_CREATE_URL__"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="referrer" content="same-origin"><meta name="color-scheme" content="light dark">
+<meta name="referrer" content="same-origin"><meta name="color-scheme" content="light">
 <title>创作配方 · Vonvon Bot</title><link rel="icon" href="/mark.png"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/studio.css">
 <script type="module" src="/studio.mjs"></script>
+<script type="module" src="/create.mjs"></script>
 </head><body>
+<a class="skip" href="#main">跳到主要内容</a>
 <header class="mast"><div class="bar shell">
 <a href="/" class="brand"><img src="/mark.png" width="28" height="28" alt="">Vonvon Bot</a>
-<nav class="actions" aria-label="社区导航"><a href="/library" id="library-link">已获取</a><a href="/studio" aria-current="page">创作配方</a><button class="secondary" id="account" type="button" hidden>登录</button></nav>
+<nav class="actions" aria-label="社区导航"><a href="https://vonvon.cc/">官网</a><a href="/" data-community-link>社区</a><a href="https://vonvon.cc/docs/">文档</a><a href="https://vonvon.cc/get/">下载</a><button class="secondary" id="account" type="button" hidden>登录</button></nav>
 </div></header>
 <main class="shell studio" id="main" data-page="app-guide">
 <div class="page-top"><div class="intro"><p class="eyebrow">创作配方</p><h1>在 Bot 私聊中创作</h1><p class="muted">把本地 Bot 和群聊中已有的配置整理成配方，再分享给社区。</p></div></div>
+<div class="studio-create"><a class="button" href="__RECIPE_CREATE_URL__" data-create-recipe>打开 App，创作配方</a><p class="fine">选择已有 Bot 和群聊，把自己的好配置分享给社区。</p></div>
 <section aria-labelledby="prepare-title"><h2 id="prepare-title">从已有配置开始创作</h2>
 <ol class="setup-list">
 <li><strong>选择已有配置</strong><p>在 App 中进入「社区」→「我的配方」→「创作配方」，选择已有 Bot 和群聊，点击「前往私聊创作」。Bot 会主动发送引导卡并打开本人私聊；首次使用需完成一次本人验证。也可直接在已关联的 Bot 私聊中发送「创建配方」，按卡片选择已有群聊。</p></li>
@@ -22,5 +25,6 @@
 <p class="muted">还没有 App？<a href="https://vonvon.cc/get/">前往官网下载</a>。</p>
 <div class="actions"><a class="button" href="/">浏览社区</a><a class="secondary" href="/library">查看已获取</a></div>
 </main>
+<footer class="site-footer"><div class="shell"><p>Vonvon Bot · 把好用的配方带回自己的 Bot</p><nav aria-label="相关页面"><a href="https://vonvon.cc/">官网</a><a href="https://vonvon.cc/docs/">使用文档</a><a href="/">配方社区</a><a href="__RECIPE_CREATE_URL__" data-create-recipe>分享我的配方</a><a href="/studio">创作指引</a></nav></div></footer>
 <dialog id="modal"></dialog><div id="feedback" role="status" aria-live="polite"></div>
 </body></html>

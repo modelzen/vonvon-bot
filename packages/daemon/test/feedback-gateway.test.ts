@@ -127,6 +127,22 @@ describe('NativeFeedbackGateway user identity and form contract', () => {
     expect(cli.calls).toEqual([{actor, args: ['base', '+form-detail', '--share-token', 'shrFeedback', '--as', 'user'], cwd: undefined}, {actor, args: ['base', '+field-list', '--base-token', 'baseToken', '--table-id', 'tblFeedback', '--as', 'user'], cwd: undefined}]);
   });
 
+  it.each(['complete', 'partial-form', 'partial-table', 'wrong-id', 'filtered', 'ambiguous'] as const)(
+    'selects dedicated fields only for the complete writable form and table (%s)', async layout => {
+      const extras: FormQuestion[] = ['排查记录', '源码依据', '待验证问题', '使用场景与现有做法', '验收标准']
+        .map((title, index) => ({id: 'fldExtra' + index, title, type: 'text', required: false}));
+      const items = [...questions(), ...extras];
+      const fields = items.map(item => ({id: item.id, name: item.title, type: item.type}));
+      if (layout === 'partial-form') items.pop();
+      if (layout === 'partial-table') fields.pop();
+      if (layout === 'wrong-id') fields[fields.length - 1]!.id = 'fldOther';
+      if (layout === 'filtered') items[items.length - 1]!.filter = {};
+      if (layout === 'ambiguous') items.push({...extras[0]!, id: 'fldDuplicate'});
+      cli.form = api({base_token: 'baseToken', questions: items});
+      cli.fields = api({fields: [...fields, {id: 'fldCreatedBy', name: '创建人', type: 'created_by'}]});
+      expect(await gateway.validate(actor, submission.destination)).toBe(layout === 'complete' ? 'detail-fields' : undefined);
+    });
+
   it.each([
     {ok: false, identity: 'user', data: {base_token: 'baseToken', questions: questions()}},
     api({base_token: 'baseToken', questions: questions()}, 'bot'),
@@ -176,6 +192,16 @@ describe('NativeFeedbackGateway user identity and form contract', () => {
 });
 
 describe('NativeFeedbackGateway human form submission', () => {
+  it('writes the five reviewed multiline texts to their exact native field names', async () => {
+    submission.summary = {...submission.summary, checks: '实际步骤\n观察结果', sourceEvidence: '0.10.1 packages/daemon/src/cli.ts:18 支持此结论',
+      openQuestions: '尚未验证的条件', useCase: '现有做法', acceptanceCriteria: '可观察行为'};
+    await gateway.submit(submission);
+    const fields = JSON.parse(argument(cli.calls[0]!.args, '--json')).fields;
+    expect(fields).toMatchObject({'详细说明': submission.summary.description, '排查记录': submission.summary.checks,
+      '源码依据': submission.summary.sourceEvidence, '待验证问题': submission.summary.openQuestions,
+      '使用场景与现有做法': submission.summary.useCase, '验收标准': submission.summary.acceptanceCriteria});
+  });
+
   it('maps the reviewed fields and relative attachments without overriding creator or workflow status', async () => {
     await gateway.submit(submission);
     expect(cli.calls).toHaveLength(1);

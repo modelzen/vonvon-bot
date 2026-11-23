@@ -36,9 +36,10 @@ export const accountStatusSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("signedIn"),
     accountId: z.string().uuid(),
-    displayName: z.string().min(1).max(80),
+    displayName: z.string().min(1).max(160).refine(value => Array.from(value).length <= 80),
     avatarUrl: accountAvatarUrlSchema.optional(),
     avatarDataUrl: accountAvatarDataUrlSchema.optional(),
+    profileRevision: z.number().int().min(0).max(2147483647).optional(),
     provider: accountProviderSchema,
     persistence: z.enum(["secure", "memory"]),
   }).strict(),
@@ -55,5 +56,7 @@ export interface AccountShell {
   login(): Promise<AccountStatus>;
   cancelLogin(): Promise<AccountStatus>;
   logout(): Promise<AccountStatus>;
+  manage?(): Promise<void>;
+  refresh?(): Promise<AccountStatus>;
   onStatus(listener: (status: AccountStatus) => void): () => void;
 }

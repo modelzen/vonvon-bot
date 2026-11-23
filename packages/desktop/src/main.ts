@@ -1,3 +1,4 @@
+import {GroupNavigation, captureGroupLaunches} from './group-navigation.js';
 import { RecipePreviewNavigation, captureRecipePreviewLaunches } from './recipe-preview-navigation.js';
 import { mkdirSync, realpathSync } from 'node:fs';
 import { homedir, release } from 'node:os';
@@ -241,6 +242,13 @@ export async function startDesktop(): Promise<void> {
   const recipePreviewScheme = previewBuild ? 'vonvon-preview' : 'vonvon';
   const recipePreview = new RecipePreviewNavigation(recipePreviewScheme);
   recipePreview.onOpen(show);
+  const groupNavigation = new GroupNavigation(recipePreviewScheme);
+  captureGroupLaunches(groupNavigation, {
+    onOpenUrl: listener => {app.on('open-url', listener);},
+    onSecondInstance: listener => {app.on('second-instance', (_event, argv) => listener(argv));},
+    argv: process.argv,
+    reveal: show,
+  });
   captureRecipePreviewLaunches(recipePreview, {
     onOpenUrl: listener => { app.on('open-url', listener); },
     onSecondInstance: listener => { app.on('second-instance', (_event, argv) => listener(argv)); },
@@ -733,7 +741,7 @@ export async function startDesktop(): Promise<void> {
       },
       connectionLost: showConnectionLost,
     }, devices, account, join(app.getPath('userData'),'recipe-install-journal.json'),
-      join(app.getPath('userData'),'recipe-authoring-journal.json'), recipePreview);
+      join(app.getPath('userData'),'recipe-authoring-journal.json'), recipePreview, groupNavigation);
     tray = createDesktopTray(icon, show, requestQuit);
     // U4: the daemon this app carries asks it to update when another device says so. Windows' app is updated on that
     // computer for 0.9.0 (owner 2026-11-02): its shell does not declare it can, as its daemon does not offer it.

@@ -36,3 +36,10 @@ describe('desktop account avatars', () => {
     expect(accountAvatarDataUrlSchema.safeParse('data:image/webp;base64,' + Buffer.alloc(accountAvatarMaxBytes).toString('base64')).success).toBe(true);
   });
 });
+
+
+it('accepts all 60 Unicode nickname characters supported by account profiles', () => {
+  const status = {kind: 'signedIn', accountId: '11111111-1111-4111-8111-111111111111', displayName: '🦉'.repeat(60), provider: 'github', persistence: 'secure'};
+  expect(accountStatusSchema.safeParse(status).success).toBe(true);
+  expect(accountStatusSchema.safeParse({...status, displayName: '🦉'.repeat(81)}).success).toBe(false);
+});

@@ -57,6 +57,17 @@ describe('renderReport — 链接只保留能打开的', () => {
     expect((out[0] as any).content).toBe('见 [文档](https://example.com/x)');
   });
 
+  it.each(['vonvon', 'vonvon-preview'])('preserves a validated %s group configuration link in a structured reply', scheme => {
+    const url = `${scheme}://groups/cli_bot/oc_group`;
+    const out = els(['| 项目 | 方案 |', '|---|---|', '| 角色 | 确认后合并 |', '', `[查看群配置](${url})`].join('\n'));
+    expect(JSON.stringify(out)).toContain(`[查看群配置](${url})`);
+  });
+
+  it.each(['vonvon://run/cli_bot/oc_group', 'vonvon-preview://groups/cli_bot/oc_group?command=run',
+    'vonvon://groups/cli_bot/oc_group/extra', 'other://groups/cli_bot/oc_group', 'file:///tmp/group'])('does not turn unsupported application targets into links (%s)', target => {
+    expect(JSON.stringify(els(`[配置](${target})`))).not.toContain(`](${target})`);
+  });
+
   it('非 http(s) 目标 → 纯文字，绝不留下死链', () => {
     const out = els('见 [nope.jpg](nope.jpg)');
     expect((out[0] as any).content).toBe('见 nope.jpg');

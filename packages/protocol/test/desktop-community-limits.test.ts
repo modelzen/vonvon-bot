@@ -60,7 +60,7 @@ it('accepts current batch states without disclosing plaintext for redeemed or di
   expect(communityResponseSchemas.revealCode.parse(available)).toEqual(available);
 });
 
-it('keeps public names separate from login metadata and validates trimmed code points', () => {
+it('validates normalized account nicknames by Unicode code points', () => {
   expect(publicDisplayNameSchema.parse('  作者  ')).toBe('作者');
   expect(publicDisplayNameSchema.parse('🦉'.repeat(60))).toBe('🦉'.repeat(60));
   for (const displayName of ['', ' ', 'a@b', 'a\nb', 'a\u007fb', '\ud800', '🦉'.repeat(61)]) {
@@ -68,4 +68,11 @@ it('keeps public names separate from login metadata and validates trimmed code p
   }
   expect(communityRequestSchema.safeParse({type: 'profile'}).success).toBe(false);
   expect(communityRequestSchema.safeParse({type: 'saveProfile', accountId: recipeId, requestId: versionId, displayName: '作者', privateName: 'OAuth 姓名'}).success).toBe(false);
+});
+
+it('canonicalizes compatibility and whitespace forms while keeping Chinese and emoji nicknames', () => {
+  expect(publicDisplayNameSchema.parse('　Ｆｏｏ　　昵称  👩‍💻  ')).toBe('Foo 昵称 👩‍💻');
+  for (const name of ['a\u200bb','a\u202eb','a\ufeffb','a\u00adb','＠name','\u200d','\ufe0f','\u115f','\u1160','\u3164','\uffa0','a\u3164b','a\u{1bca0}b'])
+    expect(publicDisplayNameSchema.safeParse(name).success).toBe(false);
+  expect(publicDisplayNameSchema.parse('é')).toBe(publicDisplayNameSchema.parse('e\u0301'));
 });

@@ -8,6 +8,7 @@ import { bodyJson, checkDraft, expectedRevision, objectKeys, queryParams, reques
 import { codeAttempts } from './limiter.mjs';
 import { operationId, operationInput } from './operation-input.mjs';
 import { authoringInput, checkDraftPatch } from './authoring-input.mjs';
+import {publicationDescriptions} from './publication-preview.mjs';
 
 const endpoints = [
   ['GET', '/me', 'me'],
@@ -135,7 +136,7 @@ function discardBody(req) {
   });
 }
 
-export function createRecipeServer({ verify, execute, admitRich=false, attempts = codeAttempts() }) {
+export function createRecipeServer({ verify, execute, admitRich=false, attempts = codeAttempts(), publicationRead }) {
   const server = createServer({ maxHeaderSize: 16 * 1024, requestTimeout: 15_000, headersTimeout: 10_000 },
     async (req, res) => {
       res.setHeader('Cache-Control', 'private, no-store');
@@ -154,6 +155,12 @@ export function createRecipeServer({ verify, execute, admitRich=false, attempts 
         if (route.isPublic === 'possession' && req.headersDistinct.authorization) throw badInput();
         const identity = route.isPublic === 'possession' ? null : await identityFromRequest(req, route.isPublic, verify);
         const [operation, args] = await (receipt?receiptInput:creator?creatorInput:reader?readerInput:rich?v2.richInput:inputFor)(req, url, route);
+        if(operation==='richPublish'){
+          const descriptions=await publicationDescriptions(args,{authorization:req.headersDistinct.authorization[0],read:publicationRead,
+            committed:({draftId,revision,requestId,contentSha256})=>execute(identity,'publicationReceipt',['rich-v2',requestId,draftId,revision,contentSha256]),
+            currentDraft:draftId=>execute(identity,'richDraft',[draftId])});
+          if(descriptions)args.push(descriptions);
+        }
         if (['redeem','readerRedeem'].includes(route.action)) finishAttempt = attempts.begin(identity.issuer + '\0' + identity.subject);
         const result = await execute(identity, operation, args);
         const response = JSON.stringify(result);

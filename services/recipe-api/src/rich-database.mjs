@@ -9,11 +9,14 @@ import {richWireBytes,applyChanges,document,writableDocument,validateRichWritePa
 import {parseEditFreeze,readDocument} from './rich-http.mjs';
 const sha=b=>createHash('sha256').update(b).digest('hex');
 const calls={
+  richAccountProfileInitialize:'rich_account_profile_initialize($1)',
+  richBrowsePreview:'browse_preview($1,$2)',
+  richAuthorRecipes:'reader_author_recipes($1,$2)',
   richUnredeemable:'rich_install_unredeemable($1,$2)',
   richInstallPreview:'rich_install_preview($1)',richInstallRecover:"rich_install_control($1,'recover')",richInstallCancel:"rich_install_control($1,'cancel')",
   richInstallRedeem:'rich_possess_install($1,$2,$3,$4,$5)',richInstallComplete:'rich_possess_install($1,$2,$3,$4,$5)',
   richSourceItems:'rich_source_items($1)',richRegister:'rich_register($1,$2)',richDraft:'rich_draft($1)',richDraftList:'rich_draft_list()',richDelete:'rich_delete($1,$2,$3)',
-  richDetail:'rich_detail($1,$2)',richWithdraw:'rich_withdraw($1)',richProfileRead:'rich_profile_read()',richProfile:'rich_profile($1)',richCatalog:'reader_catalog_page($1,$2,$3)',
+  richDetail:'rich_detail($1,$2)',richWithdraw:'rich_withdraw($1)',richProfileRead:'rich_profile_read()',richAccountProfileRead:'rich_account_profile_read()',richProfile:'rich_profile($1)',richAccountProfile:'rich_account_profile($1,$2,$3,$4)',richCatalog:'reader_catalog_page($1,$2,$3)',
   richGet:"rich_op_context($1,'get',null)",richRecover:"rich_op_context($1,'recover',null)",richCancel:"rich_op_context($1,'cancel',null)",
   richDispatch:'rich_dispatch($1,$2,$3,$4)',richAccept:'rich_accept($1,$2,$3,$4,$5,$6,$7,$8)',
   richReserve:'reserve_object_package($1,$2,$3)',richCancelPackage:'cancel_object_package($1)',richCapacity:'object_capacity()',
@@ -60,7 +63,10 @@ export async function richExecute(client,op,args) {
     const context=await call("rich_op_context($1,'context',$2)",args),m=richMaterial(context);
     return call('rich_authorize($1,$2,$3,$4,$5,$6)',[...args,m.key,m.ticket,m.hash,context.deadline]);
   }
-  if(op==='richPublish'){document(JSON.parse(args[3].toString('utf8')),true);return call('rich_publish($1,$2,$3,$4)',args);}
+  if(op==='richPublish'){
+    document(JSON.parse(args[3].toString('utf8')),true);
+    return args.length===5?call('rich_publish($1,$2,$3,$4,$5::jsonb)',[...args.slice(0,4),JSON.stringify(args[4])]):call('rich_publish($1,$2,$3,$4)',args);
+  }
   if(op!=='richFreeze')throw badInput();
   const [id,b]=args;
   const ctx=await call('rich_plan_context($1)',[id]);

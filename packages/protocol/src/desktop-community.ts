@@ -1,5 +1,7 @@
 import {z} from 'zod';
 import {recipeRichContentSchema} from './recipe-rich.js';
+import {recipeBrowseDetailSchema} from './recipe-browse.js';
+import {accountAvatarDataUrlSchema} from './desktop-account.js';
 
 const id = z.string().uuid();
 export const acquisitionKeySchema = z.string().regex(/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|a2\.[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i);
@@ -30,8 +32,20 @@ export const recipeResourceLatestSchema = z.union([
     version: recipePublicSchema.shape.version, format: z.enum(['rich-v2', 'role-v1']), access: recipePublicSchema.shape.access}).strict(),
   z.object({status: z.literal('unknown')}).strict(),
 ]);
-export const publicDisplayNameSchema = z.string().refine(value => wellFormed(value) && !/[@\u0000-\u001f\u007f-\u009f]/.test(value)).transform(value => value.replace(/^ +| +$/g, '')).refine(value => Array.from(value).length >= 1 && Array.from(value).length <= 60);
+const nicknameIdentityText = (value: string) => value.replace(/[\u200d\ufe00-\ufe0f\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}]/gu, '');
+const invisibleNickname = /\p{Default_Ignorable_Code_Point}/u;
+export const publicDisplayNameSchema = z.string().refine(value => wellFormed(value) &&
+  !/[@\u0000-\u001f\u007f-\u009f]/.test(value) && !invisibleNickname.test(nicknameIdentityText(value)))
+  .transform(value => value.normalize('NFKC').replace(/\s+/gu, ' ').trim())
+  .refine(value => Array.from(value).length >= 1 && Array.from(value).length <= 60 &&
+    !value.includes('@') && nicknameIdentityText(value).trim().length > 0);
 const creator = z.object({authorId:id,displayName:publicDisplayNameSchema}).strict();
+export const accountProfileSchema = creator.extend({avatarDataUrl: accountAvatarDataUrlSchema.optional(), revision: z.number().int().min(0).max(2147483647).optional()}).strict();
+export type AccountProfile = z.infer<typeof accountProfileSchema>;
+export const accountProfileAvatarChangeSchema = z.discriminatedUnion('kind', [
+  z.object({kind: z.literal('keep')}).strict(), z.object({kind: z.literal('remove')}).strict(),
+  z.object({kind: z.literal('replace'), base64: z.string().min(4).max(2796204).regex(/^[A-Za-z0-9+/]+={0,2}$/)}).strict(),
+]);
 const richView = z.object({content: recipeRichContentSchema, texts: z.record(id, bytes(131072)), canonical: z.string().max(1401000)}).strict();
 const display = {format: z.enum(['role-v1','rich-v2']).optional(), creator: creator.optional(), hasDisplayLogo: z.boolean().optional(), logo: z.string().max(180000).regex(/^data:image\/webp;base64,[A-Za-z0-9+/=]+$/).optional()};
 const summary = z.object({recipeId: id, versionId: id, revision, public: recipePublicSchema.partial({summary: true, overview: true}), ...display}).strict();
@@ -73,11 +87,14 @@ export const communityRequestSchema = z.discriminatedUnion('type', [
   z.object({type: z.literal('latestVersion'), ...privateRequest, ...version, revision}).strict(),
   richMetadataRequestSchema,
   z.object({type: z.literal('profile'), ...privateRequest}).strict(),
-  z.object({type: z.literal('saveProfile'), ...privateRequest, ...request, displayName: publicDisplayNameSchema}).strict(),
+  z.object({type: z.literal('saveProfile'), ...privateRequest, ...request, displayName: publicDisplayNameSchema, avatar: accountProfileAvatarChangeSchema.optional(), revision: z.number().int().min(0).max(2147483647).optional()}).strict(),
   z.object({type:z.literal('recoverRichDraftMetadata'),...privateRequest,draftId:id}).strict(),
   z.object({type: z.literal('shareLink'), ...version}).strict(),
+  z.object({type: z.literal('author'), authorId: id, accountId: id.optional(), ...page}).strict(),
   z.object({type: z.literal('catalog'), accountId: id.optional(), query: text(120).optional(), ...catalogPage}).strict(),
+  z.object({type: z.literal('displayLogo'), accountId: id.optional(), versionId: id}).strict(),
   z.object({type: z.literal('detail'), accountId: id.optional(), ...version}).strict(),
+  z.object({type: z.literal('browse'), accountId: id.optional(), ...version}).strict(),
   z.object({type: z.literal('library'), ...privateRequest, ...page}).strict(),
   z.object({type: z.literal('drafts'), ...privateRequest}).strict(),
   z.object({type: z.literal('publications'), ...privateRequest}).strict(),
@@ -108,13 +125,16 @@ const richMetadataOutcomeSchema = z.discriminatedUnion('status',[
 export const communityResponseSchemas = {
   latestVersion: recipeResourceLatestSchema,
   withdraw: z.literal(''),
-  profile: creator,
-  saveProfile: creator,
+  profile: accountProfileSchema,
+  saveProfile: accountProfileSchema,
   saveRichDraftMetadata:richMetadataOutcomeSchema,
   recoverRichDraftMetadata:z.union([z.object({status:z.literal('current'),draft:recipeRichDraftSchema}).strict(),richMetadataOutcomeSchema]),
   shareLink: z.object({url: z.string().url().max(2048)}).strict(),
+  author: z.object({creator, items: z.array(summary).max(50), nextCursor}).strict(),
   catalog: z.object({heroKind:z.enum(['featured','latest']).nullable().optional(),hero: summary.nullable(), items: z.array(summary).max(8), nextCursor:catalogNextCursor}).strict(),
+  displayLogo: z.object({logo: display.logo.unwrap()}).strict(),
   detail: recipeDetailSchema,
+  browse: recipeBrowseDetailSchema,
   library: z.object({items: z.array(summary).max(50), nextCursor}).strict(),
   drafts: z.object({items: z.array(z.union([recipeDraftSchema,z.object({format:z.literal('rich-v2'),draftId:id,recipeId:id.nullable(),revision,public:recipePublicSchema}).strict()])).max(1000)}).strict(),
   publications: z.object({items: z.array(summary).max(1000)}).strict(),
@@ -143,6 +163,7 @@ export interface CommunityShell {
 }
 
 export const communityFailureMessages = {
+  nickname_taken: '这个昵称已被使用，请换一个昵称。',
   invalid_logo: '图片未通过校验，请选择其他图片。', source_unavailable: '这项内容的来源已不可用。', object_capacity: '临时上传空间已满，请稍后重试。',
   conflict: '内容已在其他地方变更。请重新读取后再确认，你的输入仍保留。',
   operation_expired: '本次领取操作已过期。请先确认获取结果，再重新提交。',

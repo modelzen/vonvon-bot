@@ -16,7 +16,7 @@ const shell = {request: async (request: {type: string; cursor?: string}) => {
   if (request.type === 'library') return {items: request.cursor ? [{...recipe, recipeId: '55555555-5555-4555-8555-555555555555', versionId: '33333333-3333-4333-8333-333333333333', public: {...recipe.public, name: '第二份配方'}}] : [recipe], nextCursor: h.paginated && !request.cursor ? 'next-page' : null};
   if (request.type === 'drafts' || request.type === 'publications') return {items: []};
   if (request.type === 'catalog') return {hero: recipe, items: [], nextCursor: null};
-  if (request.type === 'detail') return {...recipe, acquired: h.acquired};
+  if (request.type === 'browse') return {...recipe, acquired: h.acquired};
   if (request.type === 'shareLink') return {url: 'https://recipes.example/recipes/' + recipe.recipeId + '/versions/' + recipe.versionId};
   throw Error('Unexpected ' + request.type);
 }};

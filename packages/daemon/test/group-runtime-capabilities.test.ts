@@ -97,3 +97,22 @@ it('reads a stopped Bot local skill inventory without starting a provider or cha
       .toEqual([{ path: 'claude:reports:weekly', name: 'reports:weekly', description: 'Weekly report', source: 'workspace', enabled: false }]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+it('classifies Claude native project and user skills without adding files the provider did not load', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'vonvon-claude-skill-sources-'));
+  try {
+    const home = join(root, 'home'), cwd = join(root, 'project');
+    for (const [base, name] of [[join(home, '.claude'), 'global'], [join(cwd, '.claude'), 'project'], [join(cwd, '.claude'), 'unloaded']]) {
+      const dir = join(base!, 'skills', name!); await mkdir(dir, {recursive: true});
+      await writeFile(join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: actual ${name}\n---\n`);
+    }
+    const native: AgentBackend['listSkills'] = async () => ['global', 'project', 'plugin:one'].map(name => ({
+      name, path: `claude:${name}`, description: name, enabled: true, source: 'provider',
+    }));
+    const found = await discoverGroupSkills({backend: {...backend, listSkills: native}, cwd, home, env: {}});
+    expect(found.map(({name, source}) => ({name, source}))).toEqual([
+      {name: 'global', source: 'user'}, {name: 'project', source: 'workspace'}, {name: 'plugin:one', source: 'provider'},
+    ]);
+    expect(found.some(skill => skill.name === 'unloaded')).toBe(false);
+  } finally { await rm(root, {recursive: true, force: true}); }
+});

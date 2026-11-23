@@ -48,7 +48,7 @@ describe('synchronous desktop facade', () => {
   it('exposes only validated account status and replays it to a remounted shell listener', async () => {
     const h = harness();
     const { account } = createDesktopFacades(h.transport).shell;
-    expect(Object.keys(account).sort()).toEqual(['cancelLogin', 'login', 'logout', 'onStatus', 'status']);
+    expect(Object.keys(account).sort()).toEqual(['cancelLogin', 'login', 'logout', 'manage', 'onStatus', 'refresh', 'status']);
     const statuses: unknown[] = [];
     h.event({ type: 'account', value: { kind: 'signedOut' } });
     const stop = account.onStatus(status => statuses.push(status));
@@ -59,6 +59,10 @@ describe('synchronous desktop facade', () => {
     expect(statuses).toEqual([{ kind: 'signedOut' }, { kind: 'signingIn' }]);
     h.replies.set(desktopChannels.accountStatus, async () => ({ ok: true, value: { kind: 'signedOut', refresh_token: 'secret' } }));
     await expect(account.status()).rejects.toThrow();
+    h.replies.set(desktopChannels.accountRefresh, async () => ({ok: true, value: {kind: 'signedOut'}}));
+    await expect(account.refresh?.()).resolves.toEqual({kind: 'signedOut'});
+    await expect(account.manage?.()).resolves.toBeUndefined();
+    expect(h.calls).toContain(desktopChannels.accountManage);
   });
 
   it('forwards service and login actions through dedicated shell IPC', async () => {

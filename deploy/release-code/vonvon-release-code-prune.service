@@ -1,0 +1,13 @@
+[Unit]
+Description=Collect retired VonVon source snapshot generations
+
+[Service]
+Type=oneshot
+User=release-code-upload
+Group=vonvon-release-code
+ExecStart=/usr/bin/python3 /opt/vonvon-release-code/release-code.py prune --root /srv/vonvon-release-code
+ProtectSystem=strict
+ReadWritePaths=/srv/vonvon-release-code
+ProtectHome=true
+NoNewPrivileges=true
+UMask=0027

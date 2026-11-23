@@ -49,6 +49,7 @@ const calls = Object.freeze({
 });
 
 const businessErrors = new Map(Object.entries({
+  nickname_taken:409,
   source_unavailable:403, object_unavailable:409, object_capacity:429, object_stream_limit:429,
   auth_required: 401, account_disabled: 403, not_found: 404, forbidden: 403, invalid_input: 422, incomplete_setup: 422,
   conflict: 409, quota_exceeded: 422, rate_limited: 429, invalid_code: 422,

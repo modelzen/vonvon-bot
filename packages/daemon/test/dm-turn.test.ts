@@ -600,6 +600,63 @@ describe('an administrator taken off the list', () => {
   });
 });
 
+it.each([
+  {resourceToolSessionId: 'old-native'},
+  {resourceToolCatalog: {sessionId: 'old-native', version: 1}},
+  {resourceToolCatalog: {sessionId: 'different-native', version: 2}},
+])('upgrades an outdated recipe catalog before prepare and reuses the upgraded catalog after restart (%j)', async marker => {
+  const {AuthoringService} = await import('../src/recipe/authoring-service');
+  const service = new AuthoringService({bot, cfg, channel: channel as never, root: join(paths.appDir, 'resource-catalog'), origin: 'http://127.0.0.1:9', loopback: true, currentBot: async () => {}});
+  vi.spyOn(service, 'onMessage').mockResolvedValue(false);
+  vi.spyOn(service.resources, 'hasTrigger').mockReturnValue(true);
+  vi.spyOn(service.resources, 'bind').mockResolvedValue('selected');
+  const prepare = vi.spyOn(service.resources, 'tool').mockResolvedValue({status: 'ready'});
+  const wire = codexToolsFixture();
+  wire.seedTools('old-native', ['recipe_resource_read', 'recipe_resource_acquire']);
+  async function startProvider() {
+    vi.resetModules();
+    const {CodexAppServerBackend} = await import('../src/agent/codex-appserver/backend');
+    const {createOrchestrator} = await import('../src/bot/handle-message');
+    fake.backend = new CodexAppServerBackend();
+    vi.spyOn(fake.backend, 'listModels').mockResolvedValue([]);
+    return app('queue', undefined, service, createOrchestrator);
+  }
+  let {o} = await startProvider();
+  try {
+    await upsertSession({threadId: A, chatId: A, sessionId: 'old-native', ...marker, backend: BE,
+      cwd: (await dmProject())!.cwd, summary: 'old private chat', createdAt: 1, updatedAt: 1});
+    fake.history = [{messageId: 'om_historical_catalog', senderId: OWNER, senderName: 'Owner', from: 'user', text: '升级前的私聊记录', createTime: 5}];
+    wire.failNextStart();
+    await o.onMessage(message('把配方用到已有群', {messageId: 'om_catalog_refused'}));
+    await until(() => expect(said()).toContain('fixture refused thread/start'));
+    expect(await getSession(A)).toMatchObject({sessionId: 'old-native', ...marker});
+    const call = {tool: 'recipe_resource_prepare', args: {groupId: 'oc_existing'}};
+    wire.scriptNext([call]);
+    await o.onMessage(message('重试把配方用到已有群', {messageId: 'om_catalog_prepare'}));
+    await until(() => expect(wire.answers()).toHaveLength(1));
+    expect(wire.answers()[0]).toEqual({success: true, text: JSON.stringify({status: 'ready'})});
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(prepare.mock.calls[0]?.[1]).toMatchObject({kind: 'prepare', groupId: 'oc_existing',wait:{signal:expect.any(AbortSignal)}});
+    expect(wire.inputs().at(-1)?.text).toContain('升级前的私聊记录');
+    expect(await getSession(A)).toMatchObject({sessionId: 'th', resourceToolCatalog: {sessionId: 'th', version: 2}, earlier: ['old-native']});
+    expect(wire.starts()).toHaveLength(2);
+    await o.shutdown();
+    ({o} = await startProvider());
+    wire.scriptNext([call]);
+    await o.onMessage(message('继续应用到同一个群', {messageId: 'om_catalog_resumed'}));
+    await until(() => expect(wire.answers()).toHaveLength(2));
+    expect(wire.answers()[1]?.success).toBe(true);
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(wire.starts()).toHaveLength(2);
+    expect(wire.resumes().at(-1)?.threadId).toBe('th');
+    expect((await getSession(A))?.earlier).toEqual(['old-native']);
+  } finally {
+    await o.shutdown();
+    await closeCodexToolFixtures();
+    service.close();
+  }
+});
+
 it.each(['new session', 'old Codex rollout'] as const)('delivers an exact resource through the native reader to the real SDK private turn (%s)',async mode=>{
   const {randomUUID}=await import('node:crypto');
   const {receive,throughBridgeChannel}=await import('./helpers/lark-events');
@@ -616,7 +673,7 @@ it.each(['new session', 'old Codex rollout'] as const)('delivers an exact resour
   const guide=vi.fn(async()=>({code:0,data:{card_id:'card_resource'}}));
   const dispatch=vi.fn(async()=>({code:0,data:{message_id:'om_resource_guide',chat_id:A}}));
   const localChannel={...channel,rawClient:{...channel.rawClient,cardkit:{v1:{card:{create:guide}}},
-    im:{v1:{...channel.rawClient.im.v1,message:{...channel.rawClient.im.v1.message,create:dispatch}}}}};
+    im:{v1:{...channel.rawClient.im.v1,chatMembers:{isInChat:async()=>({code:0,data:{is_in_chat:true}})},message:{...channel.rawClient.im.v1.message,create:dispatch}}}}};
   const serviceRoot = join(paths.appDir, mode);
   const service=new AuthoringService({bot,cfg,channel:localChannel as never,root:serviceRoot,origin:'http://127.0.0.1:9',loopback:true,currentBot:async()=>{}});
   const run=thread(),be=backend(run);
@@ -638,6 +695,9 @@ it.each(['new session', 'old Codex rollout'] as const)('delivers an exact resour
   const rpc=(type:string,fields:object)=>service.request(peer,recipeAuthoringRequestSchema.parse({type,botId:APP,...fields}));
   const history=new AuthoringJournal();
   try{
+    const targetGroup='oc_resource_target';
+    const {addProject}=await import('../src/project/registry');
+    await addProject({chatId:targetGroup,name:'Resource target',createdAt:1,cwd:paths.appDir,blank:false});
     if (wire) {
       const cwd = (await dmProject())!.cwd;
       await upsertSession({threadId: A, chatId: A, sessionId: 'old-native', backend: BE, cwd, summary: 'old private chat', createdAt: 1, updatedAt: 1});
@@ -662,6 +722,12 @@ it.each(['new session', 'old Codex rollout'] as const)('delivers an exact resour
       request:async(id:string,path:string,init?:RequestInit,beforeSend?:()=>Promise<void>)=>{
         expect(id).toBe(accountId);expect(beforeSend).toBeTypeOf('function');await beforeSend!();calls.push(path);
         if(path.endsWith('/latest-install-version'))return Response.json({...later,revision:2,access:'direct',format:'role-v1',entitled:true,version:'2.0'});
+        if(path.startsWith('/v2/recipes/')&&path.endsWith('/preview')){
+          const second=path.includes(later.versionId);
+          return Response.json({...second?later:target,revision:second?2:1,format:'role-v1',public:{...info,version:second?'2.0':'1.0'},
+            creator:{authorId:recipeId,displayName:'配方作者'},state:'listed',owned:false,acquired:second?acquired:true,hasDisplayLogo:false,
+            preview:{settings:[],skills:[],ruleCount:1,taskCount:0}});
+        }
         if(path.startsWith('/v2/recipes/'))return Response.json({error:{code:'not_found'}},{status:404});
         if(path.endsWith('/acquire')){
           expect(init?.method).toBe('POST');postKeys.push(new Headers(init?.headers).get('idempotency-key')!);acquired=true;
@@ -713,10 +779,28 @@ it.each(['new session', 'old Codex rollout'] as const)('delivers an exact resour
       const firstCaller = observed.mock.calls.at(-1)?.[0];
       expect(firstCaller).toMatchObject({chatId: A, openId: OWNER, messageId: 'om_resource_read', sessionId: expect.any(String)});
       expect(callsFrom).toEqual([{query: 'index', caller: firstCaller}]);
-      expect(await getSession(A)).toMatchObject({sessionId: 'th', resourceToolSessionId: 'th', earlier: ['old-native']});
+      expect(await getSession(A)).toMatchObject({sessionId: 'th', resourceToolCatalog: {sessionId: 'th', version: 2}, earlier: ['old-native']});
       expect(wire.starts()).toHaveLength(2); // first failed, second accepted
       await o.shutdown();
       ({o} = await startProvider());
+      const preparedCount=wire.answers().length;
+      const finishPrepare=wire.scriptNext([
+        {tool:'recipe_resource_prepare',args:{groupId:targetGroup}},
+        {tool:'recipe_resource_read',args:{kind:'index',groupId:targetGroup}},
+      ],true,{sequential:true});
+      await throughBridgeChannel(await event('把已领取配方应用到所选群，准备后读取完整目录','om_prepare_full','om_resource_guide'),m=>o.onMessage(m));
+      await until(async()=>{
+        const jobs=await rpc('creatorPoll',{session});
+        expect(jobs.kind==='creatorJobs'&&jobs.jobs.some(job=>job.task.kind==='resourceRead'&&job.task.groupId===targetGroup)).toBe(true);
+      });
+      expect(wire.answers()).toHaveLength(preparedCount);
+      await pump();
+      await until(()=>expect(wire.answers()).toHaveLength(preparedCount+2));
+      expect(wire.answers()[preparedCount]).toMatchObject({success:true,text:expect.stringContaining('"status":"ready"')});
+      const full=JSON.parse(wire.answers()[preparedCount+1]!.text);
+      expect(full).toMatchObject({status:'ready',target,groupId:targetGroup});
+      expect(full.page.entries.some((entry:{kind:string})=>entry.kind==='role')).toBe(true);
+      finishPrepare();await settled();
       const endLatest = await run('查看新版', 'om_latest', [{tool: 'recipe_resource_read', args: {kind: 'latest'}}], true);
       await pump(); endLatest();
       const endAcquire = await run('本人要领取该新版', 'om_acquire', [
@@ -749,8 +833,10 @@ it.each(['new session', 'old Codex rollout'] as const)('delivers an exact resour
     };
     const count=calls.length;
     const list=await tool('recipe_resource_read',{kind:'index'});
-    const role=list.page.entries.find((e:{kind:string})=>e.kind==='role');
-    expect(await tool('recipe_resource_read',{kind:'text',documentId:role.documentId})).toMatchObject({page:{text:'ROLE-ONLY-FROM-VERIFIED-SNAPSHOT'}});
+    expect(list.page.entries.some((entry:{kind:string})=>entry.kind==='role')).toBe(false);
+    const overview=list.page.entries.find((entry:{kind:string})=>entry.kind==='public');
+    expect(await tool('recipe_resource_read',{kind:'text',documentId:overview.documentId})).toMatchObject({page:{text:expect.stringContaining(info.name)}});
+    expect(calls.every(path=>!path.endsWith('/'+target.versionId)&&!path.endsWith('/'+later.versionId))).toBe(true);
     expect(calls).toHaveLength(count);
     expect(await tool('recipe_resource_read',{kind:'latest'})).toMatchObject({status:'pending'});await pump();
     expect(await tool('recipe_resource_read',{kind:'latest'})).toMatchObject({status:'newer',target:later});

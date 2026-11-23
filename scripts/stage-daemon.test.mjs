@@ -246,17 +246,24 @@ test('stageDaemon ships a minified CLI with the workspace packages bundled from 
   const daemonRoot = fileURLToPath(new URL('../packages/daemon/', import.meta.url));
   const daemon = JSON.parse(await readFile(join(daemonRoot, 'package.json'), 'utf8'));
   const staged = join(root, 'daemon');
-  const previousOrigin = process.env.VONVON_ACCOUNT_API_ORIGIN;
-  process.env.VONVON_ACCOUNT_API_ORIGIN = 'https://recipes-staging.example';
+  const endpoints = {
+    VONVON_ACCOUNT_API_ORIGIN: 'https://recipes-staging.example',
+    VONVON_RELEASE_CODE_MCP_URL: 'https://code-staging.example/mcp',
+    VONVON_RELEASE_CODE_ISSUER: 'https://code-staging.example/release-code/oauth',
+  };
+  const previous = new Map(Object.keys(endpoints).map(key => [key, process.env[key]]));
+  Object.assign(process.env, endpoints);
   let result;
   try {
     result = await stageDaemon(staged, {name: daemon.name, version: daemon.version, type: 'module', bin: daemon.bin, dependencies: daemon.dependencies}, {hoist: true});
   } finally {
-    if (previousOrigin === undefined) delete process.env.VONVON_ACCOUNT_API_ORIGIN;
-    else process.env.VONVON_ACCOUNT_API_ORIGIN = previousOrigin;
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
   const cli = await readFile(join(staged, 'dist/cli.js'), 'utf8');
-  assert.ok(cli.includes('https://recipes-staging.example'), 'the packaged daemon retains its compiled account origin');
+  for (const [key, url] of Object.entries(endpoints)) assert.ok(cli.includes(url), 'the packaged daemon retains ' + key);
   assert.ok(cli.length / cli.split('\n').length > 400, 'dist/cli.js is minified');
   assert.doesNotMatch(cli, /sourceMappingURL|\bfrom\s*["']@vonvon\//);
   const metadata = JSON.parse(await readFile(join(staged, 'package.json'), 'utf8'));
@@ -270,6 +277,20 @@ test('stageDaemon ships a minified CLI with the workspace packages bundled from 
   const zodOf = from => realpath(dirname(createRequire(join(from, 'package.json')).resolve('zod/package.json')));
   const protocolRoot = fileURLToPath(new URL('../packages/protocol/', import.meta.url));
   assert.equal(result.bundled.includes('zod'), await zodOf(protocolRoot) !== await zodOf(daemonRoot));
+  await t.test('staged MCP client and transport load with the same zod peer as their schema converter', () => {
+    execFileSync(process.execPath, ['--input-type=module', '--eval', `
+      import assert from 'node:assert/strict';
+      import { createRequire } from 'node:module';
+      import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+      import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+      const daemon = createRequire(import.meta.url);
+      const sdk = createRequire(daemon.resolve('@modelcontextprotocol/sdk/client/index.js'));
+      const converter = createRequire(sdk.resolve('zod-to-json-schema'));
+      assert.equal(sdk.resolve('zod'), converter.resolve('zod'));
+      assert.equal(typeof new Client({ name: 'staged', version: '1' }).callTool, 'function');
+      assert.equal(typeof new StreamableHTTPClientTransport(new URL('https://example.invalid/mcp')).start, 'function');
+    `], { cwd: staged, stdio: 'pipe' });
+  });
   const shipped = [];
   async function walk(path) {
     for (const entry of await readdir(path, {withFileTypes: true})) {

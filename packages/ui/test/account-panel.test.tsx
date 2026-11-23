@@ -7,7 +7,7 @@ import {AccountAvatar} from '../src/accounts/AccountAvatar';
 import {SettingsHome} from '../src/TodayHome';
 import {Button} from '../src/reference/components/ui';
 
-const h = vi.hoisted(() => ({account: {supported: true, status: {kind: 'signedOut'} as AccountStatus | undefined, error: undefined as string | undefined, login: vi.fn(), cancelLogin: vi.fn(), logout: vi.fn()}}));
+const h = vi.hoisted(() => ({account: {supported: true, status: {kind: 'signedOut'} as AccountStatus | undefined, error: undefined as string | undefined, login: vi.fn(), cancelLogin: vi.fn(), logout: vi.fn(), manage: vi.fn(), refresh: vi.fn()}}));
 vi.mock('../src/account-context', async original => ({...await original<typeof import('../src/account-context')>(), useAccount: () => h.account}));
 vi.mock('../src/client-context', async original => {const actual = await original<typeof import('../src/client-context')>(); return {...actual, useActiveDevice: () => actual.LOCAL_ACTIVE_DEVICE};});
 type Element = ReactElement<Record<string, unknown>>;
@@ -21,13 +21,13 @@ function click(label: string) {
 beforeEach(() => {h.account.supported = true; h.account.status = {kind: 'signedOut'}; h.account.error = undefined; vi.clearAllMocks();});
 
 it('starts native login directly and offers cancellation while waiting', () => {
-  expect(html()).toContain('登录 Vonvon');
+  expect(html()).toContain('注册或登录');
   expect(html()).not.toContain('网页登录');
-  click('登录 Vonvon');
+  click('注册或登录');
   expect(h.account.login).toHaveBeenCalledOnce();
   h.account.status = {kind: 'signingIn'};
   expect(html()).toContain('等待登录完成');
-  expect(html()).not.toContain('登录 Vonvon</button>');
+  expect(html()).not.toContain('注册或登录</button>');
   click('取消登录');
   expect(h.account.cancelLogin).toHaveBeenCalledOnce();
 });
@@ -41,6 +41,11 @@ it('shows the signed-in profile and explains a session held only in memory', () 
   expect(markup).toContain('已配对设备、Bot 和群组设置会保留');
   expect(markup).not.toContain('创作中心');
   expect(markup).not.toContain('已获取');
+  expect(markup).not.toContain('<input');
+  expect(markup).toContain('在网页管理账号');
+  expect(markup).toContain('用户 ID');
+  click('在网页管理账号');
+  expect(h.account.manage).toHaveBeenCalledOnce();
   click('退出登录');
   expect(h.account.logout).toHaveBeenCalledOnce();
 });

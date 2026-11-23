@@ -1,6 +1,6 @@
 import {useCallback, useContext, useEffect, useRef, useState, type ReactNode} from 'react';
 import {DEFAULT_DM_SMART_RULES_TEXT, smartRulesText} from '@vonvon/protocol';
-import {Blocks, ChevronRight, Folder, GitBranch, Plus, RefreshCw, Search, X} from 'lucide-react';
+import {Blocks, ChevronRight, Folder, GitBranch, Plus, RefreshCw, X} from 'lucide-react';
 import {backendLabel, isKnownJudgeSelection, type Agent, type AgentId, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ProjectSettingsView, type SettingsReply, type ToolState} from '@vonvon/protocol';
 import {useActiveDevice, useClient} from '../client-context';
 import {settingAnchor} from '../search';
@@ -25,6 +25,7 @@ import {useDecisionCatalogs} from './useDecisionCatalogs';
 import './group-design-settings.css';
 import {BotAdministrators} from '../management/AdministratorsPanel';
 import {CardDisplayEntry} from './card-display/CardDisplayStudio';
+import {SkillsList} from './GroupSkills';
 
 /** 模型与权限 shares one settings view; permission remains a compatible internal section key. */
 export type GroupSettingsTab = 'capabilities' | 'role' | 'model' | 'response' | 'permission';
@@ -294,31 +295,5 @@ export function WorkspaceFields({value, onChange, disabled}: {value: Workspace; 
       {!value[field].length && <p className="gd-note">{field === 'directories' ? '尚未添加目录' : '尚未添加代码仓库'}</p>}
     </div>)}
     {error && <p className="gd-empty gd-warning" role="alert">{error}</p>}
-  </>;
-}
-
-function SkillsList({skills, disabledPaths, disabled, onToggle, refresh}: {
-  skills: NonNullable<ProjectSettingsView['skills']>; disabledPaths: string[]; disabled: boolean; onToggle: (path: string, enabled: boolean) => void; refresh: () => Promise<void>;
-}) {
-  const [selected, setSelected] = useState<(typeof skills)[number]>();
-  const [query, setQuery] = useState('');
-  const needle = query.trim().toLocaleLowerCase();
-  const visible = skills.filter(skill => `${skill.name} ${skill.description ?? ''}`.toLocaleLowerCase().includes(needle))
-    .sort((a,b) => ({workspace:0,user:1,provider:2}[a.source] - {workspace:0,user:1,provider:2}[b.source]));
-  const enabledCount = skills.filter(skill => skill.enabled && !disabledPaths.includes(skill.path)).length;
-  return <>
-    <div className="gd-section-heading gd-skill-heading">
-      <label className="gd-skill-search"><Search size={14} aria-hidden="true"/><input type="search" aria-label="搜索技能" placeholder="搜索技能" value={query} onChange={event => setQuery(event.target.value)}/></label>
-      <div className="gd-skill-actions"><span className="gd-skill-count">{needle ? `${visible.length} / ${skills.length} 项` : `${skills.length} 项 · ${enabledCount} 已启用`}</span><IconButton size="sm" variant="ghost" label="重新读取" title="重新读取技能" onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton></div>
-    </div>
-    <div className="gd-skill-list">
-    {visible.length ? visible.map(skill => <div className="gd-skill-row" key={skill.path}>
-      <button type="button" className="gd-skill-detail" onClick={() => setSelected(skill)}><span><strong>{skill.name}</strong>{skill.description && <small>{skill.description}</small>}{!skill.enabled && !disabledPaths.includes(skill.path) && <small>Provider 已停用</small>}</span><ChevronRight size={14}/></button>
-      <Toggle className="settings-row-switch" label={`使用 ${skill.name}`} aria-label={`使用 ${skill.name}`} checked={skill.enabled && !disabledPaths.includes(skill.path)} disabled={disabled || !skill.enabled && !disabledPaths.includes(skill.path)} onChange={event => onToggle(skill.path, event.target.checked)}/>
-    </div>) : <div className="gd-empty" role="status">{skills.length ? <>没有匹配的技能。<button type="button" className="gd-text-action" onClick={() => setQuery('')}>清除搜索</button></> : '工作区中尚未发现技能。'}</div>}
-    </div>
-    <Dialog open={Boolean(selected)} title={selected?.name ?? '技能'} onClose={() => setSelected(undefined)} footer={<Button onClick={() => setSelected(undefined)}>完成</Button>}>
-      {selected && <dl className="gd-skill-facts"><div><dt>说明</dt><dd>{selected.description || '未提供说明'}</dd></div><div><dt>来源</dt><dd>{{workspace: '本群工作区', user: '用户目录', provider: 'Provider'}[selected.source]}</dd></div><div><dt>位置</dt><dd>{selected.path}</dd></div></dl>}
-    </Dialog>
   </>;
 }

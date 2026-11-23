@@ -1,8 +1,10 @@
 import {createHash, randomBytes, randomUUID} from 'node:crypto';
+import {basename} from 'node:path';
 import {z} from 'zod';
+import {assertFeedbackTextPrivacy} from './privacy.js';
 import {
   feedbackActorSchema, feedbackConfirmationSchema, feedbackDestinationSchema,
-  feedbackDraftSchema, feedbackReceiptSchema, feedbackSummarySchema, sameFeedbackPerson, FeedbackNotDispatchedError,
+  feedbackDetailFields, feedbackDetails, feedbackFormChangedMessage, feedbackDraftSchema, feedbackReceiptSchema, feedbackSummarySchema, feedbackTooLongMessage, sameFeedbackPerson, FeedbackNotDispatchedError,
   type FeedbackActor, type FeedbackConfirmation, type FeedbackDraft, type FeedbackGateway,
   type FeedbackLookup, type FeedbackOperation, type FeedbackReceipt, type FeedbackReview,
   type FeedbackStore, type FeedbackSubmissionResult,
@@ -79,8 +81,18 @@ export class FeedbackSubmissionService {
     attachments?: readonly string[];
   }): Promise<FeedbackReview> {
     const request = prepareSchema.parse(input);
+    assertFeedbackTextPrivacy(request.summary, request.attachments.map(path => basename(path)));
     const accountName = await this.authorize(request.actor);
-    await this.options.gateway.validate(request.actor, request.destination);
+    const layout = await this.options.gateway.validate(request.actor, request.destination);
+    const summary = request.summary;
+    const details = feedbackDetails(summary);
+    if (details.length && layout !== 'detail-fields') {
+      // Freeze the exact fields displayed on the card; a later template upgrade cannot change a retry.
+      summary.description = [summary.description, ...details.map(({label, value}) => label + '\n' + value)].join('\n\n');
+      if (summary.description.length > 30000) throw new Error(feedbackTooLongMessage);
+      for (const [key] of feedbackDetailFields) delete summary[key];
+      assertFeedbackTextPrivacy(summary);
+    }
     const operationId = z.string().uuid().parse(this.operationId());
     const attachments = await this.options.store.stage(operationId, request.attachments);
     const createdAt = this.now();
@@ -92,7 +104,7 @@ export class FeedbackSubmissionService {
       actor: request.actor,
       accountName,
       destination: request.destination,
-      summary: request.summary,
+      summary,
       attachments,
     };
     const draft = feedbackDraftSchema.parse({...content, digest: contentDigest(content)});
@@ -128,9 +140,13 @@ export class FeedbackSubmissionService {
           if (this.now() >= draft.expiresAt || this.now() < draft.createdAt) {
             throw new Error('这份提交确认已过期，请重新核对摘要。');
           }
-          await this.options.store.verify(draft);
           const existing = await this.options.gateway.lookup(draft);
           if (existing.state !== 'missing') return this.finishExisting(draft, existing);
+          assertFeedbackTextPrivacy(draft.summary, draft.attachments.map(file => file.filename));
+          await this.options.store.verify(draft);
+          if (feedbackDetails(draft.summary).length && await this.options.gateway.validate(draft.actor, draft.destination) !== 'detail-fields') {
+            throw new Error(feedbackFormChangedMessage);
+          }
           await check?.();
           const sending = {state: 'sending', draft, sentAt: this.now()} satisfies FeedbackOperation;
           await this.options.store.write(sending);

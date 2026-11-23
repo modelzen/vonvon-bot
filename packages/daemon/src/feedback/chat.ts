@@ -1,4 +1,6 @@
 import type {CardActionEvent, NormalizedMessage} from '@larksuiteoapi/node-sdk';
+import {FeedbackPrivacyError} from './privacy.js';
+import {feedbackTooLongMessage, feedbackFormChangedMessage} from './types.js';
 import {feedbackReviewCard} from './cards.js';
 import {feedbackActionFromEvent, feedbackActorFromMessage} from './events.js';
 import type {FeedbackSubmissionService} from './service.js';
@@ -70,7 +72,7 @@ export class FeedbackChatController {
     const body = feedbackReviewCard(review);
     if (!body) {
       await this.options.service.cancel({actor, operationId: review.operationId});
-      throw new Error('内容过长，无法在卡片中完整核对。请先精简说明，再重新准备反馈。');
+      throw new Error(feedbackTooLongMessage);
     }
     try {
       await lifecycle?.beforeReview(review.operationId);
@@ -103,15 +105,24 @@ export class FeedbackChatController {
           : await this.options.service.reconcile({actor: recipient, operationId: action.confirmation.operationId});
         await this.showResult(recipient, result);
       }
-    } catch {
-      await this.options.im.reply(recipient, '本次操作尚未完成核验。请保留原摘要和跟进编号；如已点击提交，先查询本次回执，不要新建一条重复反馈。');
+    } catch (error) {
+      const known = error instanceof FeedbackPrivacyError || (error instanceof Error && error.message === feedbackFormChangedMessage);
+      await this.options.im.reply(recipient, known ? error.message :
+        '本次操作尚未完成核验。请保留原摘要和跟进编号；如已点击提交，先查询本次回执，不要新建一条重复反馈。');
     }
     return true;
   }
 
   private async showResult(actor: FeedbackActor, result: FeedbackSubmissionResult): Promise<void> {
     if (result.state === 'submitted') {
-      await this.options.im.reply(actor, `反馈已提交。跟进编号：${result.receipt.trackingCode}\n${result.receipt.url}\n可以在网页继续补充和评论，并查看后续进展。`);
+      const {baseToken, tableId, shareToken} = this.options.destination;
+      await this.options.im.reply(actor, [
+        '反馈已提交。跟进编号：' + result.receipt.trackingCode,
+        `查看这条反馈：https://my.feishu.cn/base/${baseToken}?table=${tableId}&record=${result.receipt.recordId}`,
+        '打开记录后可评论。要查看其他反馈，请在侧栏切换到「全部反馈」或「处理进展」。',
+        '修改本人反馈：https://my.feishu.cn/share/base/' + shareToken,
+        '用提交时的飞书账号打开修改入口，点「查看提交记录」，按跟进编号找到这条反馈并编辑。',
+      ].join('\n'));
     } else if (result.state === 'not-submitted') {
       await this.options.im.reply(actor, `反馈记录尚未发出。跟进编号：${result.trackingCode}\n本次提交已停止，可以重新整理反馈并核对新卡片。`);
     } else {

@@ -1,15 +1,16 @@
 import type { BuiltinSkill } from './package';
+import { recipeApplicationGuidance } from '../../recipe/application-guidance';
 
 /**
  * product.md 3.7, dm-agent 9: a private chat's `vonvon` command line, which is how an administrator's chat reads and
- * changes the settings of every Bot on this computer. It teaches what can be done and nothing of how to decide (owner
- * 2026-11-05): whether a post can be trusted or a change wants a confirmation is the Agent's own business. The commands
+ * changes the settings of every Bot on this computer. Ordinary configuration decisions belong to the Agent; recipe
+ * application follows the owner's explicit preview-and-confirm workflow. The commands
  * it names are checked against the CLI by test/builtin-skill-text.test.ts.
  */
 export const configSkill: BuiltinSkill = {
   name: 'vonvon-config',
   title: '配置',
-  description: "看和改这台电脑上的 Bot、群和它们的设置：消息卡展示、沟通方式、智能提示词、角色设定、权限、模型、Skill、MCP、记忆，建群绑群。用户说帮我调调、卡片怎么显示、老抢话、太吵、不回话、以后在某个群怎样说话、照这篇帖子配一下、建个群、这台电脑有哪些 Bot 和群时，先读本 skill。",
+  description: "看和改这台电脑上的 Bot、群和它们的设置：消息卡展示、沟通方式、智能提示词、角色设定、权限、模型、Skill、MCP、记忆，建群绑群。用户说获取配方、交给 Bot、应用配方、帮我调调、卡片怎么显示、老抢话、太吵、不回话、以后在某个群怎样说话、照这篇帖子配一下、建个群、这台电脑有哪些 Bot 和群时，先读本 skill。",
   body: `这是管理员的私聊。你能用 \`vonvon\` 命令行读和改这台电脑上所有 Bot 和它们的群的配置，用户不用知道有哪些设置。
 
 ## 私聊是什么
@@ -40,6 +41,8 @@ export const configSkill: BuiltinSkill = {
 ## 群角色与规则
 群的补充职责用 \`role.supplement\`。工作执行规则用 \`role.workRules\`，只在群工作中生效，不参与智能判断；判断是否回应、是否开新话题分别用 \`smartRules.respond\` 和 \`smartRules.newTopic\`。不要把工作规则合并进补充职责或智能判断规则。工作规则最多 16 KiB UTF-8 字节，空字符串表示清空。
 先读目标群的 \`vonvon settings get role --group X --json\`，基于当前值只合并用户指定部分；保存使用原来的 role revision：\`vonvon settings set --group X --revision <原版本> role.workRules='"工作规则"'\`。发生 conflict 后重新读并重做合并，保存后读回核对。配方仅供本轮参考，普通配置不绑定来源；同一版本可以参考到不同群，不执行配方安装或自动更新。
+
+${recipeApplicationGuidance}
 
 ## 配置消息卡
 消息卡按每个群聊、每个私聊独立保存，没有 Bot 级消息卡设置。先用 \`vonvon settings get presentation --group X --json\` 看群，或用 \`vonvon settings get presentation --dm --json\` 看这个 Bot 的私聊；跨 Bot 加 \`--bot B\`。\`stored.cardDisplay\` 是本会话保存的对象，\`effective.cardDisplay\` 是实际生效值。null 表示固定旧版默认展示，不继承 Bot。旧的 \`showToolCalls\` 和 \`showModel\` 只用于兼容已有值，不再用 Bot 的 \`cards.*\` 开关配置消息卡。

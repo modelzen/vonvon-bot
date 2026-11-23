@@ -1,6 +1,7 @@
 import { AuthClient, type AuthError, type Session } from '@supabase/auth-js';
-import { accountAvatarUrlSchema, accountProviderSchema, type AccountProvider } from '@vonvon/protocol';
+import { accountAvatarUrlSchema, accountProfileSchema, accountProviderSchema, publicDisplayNameSchema, type AccountProvider } from '@vonvon/protocol';
 import { z } from 'zod';
+import {boundedJson, ResponseBodyReadError} from './community-response.js';
 
 export interface AccountDeployment {
   webOrigin: string;
@@ -48,6 +49,11 @@ export function checkResponse(response: Response): void {
   throw new AccountFault('invalid');
 }
 
+async function accountJson(response: Response): Promise<unknown> {
+  try {return await boundedJson(response, 400_000);}
+  catch (error) {throw new AccountFault(error instanceof ResponseBodyReadError ? 'offline' : 'invalid');}
+}
+
 export function accountAuth(project: AccountProject, signal: AbortSignal, transport: typeof fetch) {
   return new AuthClient({
     url: project.supabaseUrl + '/auth/v1',
@@ -79,11 +85,11 @@ export async function verifyAccount(deployment: AccountDeployment, auth: ReturnT
     headers: { Authorization: 'Bearer ' + token }, signal: requestSignal(signal), redirect: 'error', credentials: 'omit', cache: 'no-store',
   }).catch(() => { throw new AccountFault('offline'); });
   checkResponse(proof);
-  const { accountId } = z.object({ accountId: z.string().uuid() }).parse(await proof.json());
+  const { accountId } = z.object({ accountId: z.string().uuid() }).parse(await accountJson(proof));
   const metadata = user.user_metadata ?? {};
   const displayName = [metadata.full_name, metadata.name, metadata.user_name]
     .filter((name): name is string => typeof name === 'string')
-    .map(name => name.replace(/[\p{Cc}\p{Cf}]/gu, '').trim().slice(0, 80))
+    .map(name => Array.from(name.replace(/[\p{Cc}\p{Cf}]/gu, '').trim()).slice(0, 80).join(''))
     .find(name => name && !name.includes('@')) || 'Vonvon 用户';
   const picture = metadata.avatar_url ?? metadata.picture;
   let avatarUrl: string | undefined;
@@ -91,7 +97,37 @@ export async function verifyAccount(deployment: AccountDeployment, auth: ReturnT
     const avatar = accountAvatarUrlSchema.safeParse(picture);
     if (avatar.success) avatarUrl = avatar.data;
   }
-  return { accountId, displayName, ...(avatarUrl ? { avatarUrl } : {}) };
+  const fallback = {accountId, displayName, ...(avatarUrl ? {avatarUrl} : {})};
+  async function requestProfile(body?: {displayName: string}) {
+    signal.throwIfAborted();
+    return transport(deployment.apiOrigin + '/v2/me/account-profile' + (body ? '/initialize' : ''), {
+      method: body ? 'POST' : 'GET',
+      headers: {Authorization: 'Bearer ' + token, ...(body && {'Content-Type': 'application/json'})},
+      ...(body && {body: JSON.stringify(body)}),
+      signal: requestSignal(signal), redirect: 'error', credentials: 'omit', cache: 'no-store',
+    }).catch(() => {throw new AccountFault('offline');});
+  }
+  async function readProfile(response: Response) {
+    checkResponse(response);
+    const parsed = accountProfileSchema.safeParse(await accountJson(response));
+    if (!parsed.success || parsed.data.authorId !== accountId) throw new AccountFault('invalid');
+    return parsed.data;
+  }
+  const unavailable = (response: Response) => response.status === 404 || response.status === 405;
+  const profileResponse = await requestProfile();
+  if (unavailable(profileResponse)) return fallback;
+  let profile = await readProfile(profileResponse);
+  if (profile.revision === 0) {
+    const name = publicDisplayNameSchema.safeParse(Array.from(displayName).slice(0, 60).join(''));
+    const initialized = await requestProfile({displayName: name.success ? name.data : 'Vonvon 用户'});
+    if (unavailable(initialized)) throw new AccountFault('offline');
+    profile = await readProfile(initialized);
+    if (profile.revision === 0) throw new AccountFault('offline');
+  }
+  signal.throwIfAborted();
+  return {accountId, displayName: profile.displayName, ...(avatarUrl ? {avatarUrl} : {}),
+    ...(profile.avatarDataUrl && {avatarDataUrl: profile.avatarDataUrl}),
+    ...(profile.revision !== undefined && {profileRevision: profile.revision})};
 }
 
 export function sessionTokens(session: Session | null) {

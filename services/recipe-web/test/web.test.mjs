@@ -4,6 +4,7 @@ import { createServer, request } from 'node:http';
 import { createHash } from 'node:crypto';
 import { createRecipeWeb } from '../server.mjs';
 import { returnPath } from '../auth.mjs';
+import {displayLogoLimit} from '../dist/rich-detail.mjs';
 
 async function listen(server, t) {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -15,6 +16,19 @@ const v = '76ba7564-7ad3-4b46-833b-be9bb4827b77';
 const detail = '/recipes/' + r + '/versions/' + v;
 const toJson = (res, data) => { res.writeHead(200, {'Content-Type':'application/json'}); res.end(JSON.stringify(data)); };
 const cookie = response => response.headers.getSetCookie().map(x => x.split(';', 1)[0]).join('; ');
+
+test('public version logo route bounds and validates broker bytes without forwarding browser credentials', async t => {
+  const seen = []; let payload = Buffer.from('<svg onload="alert(1)"></svg>');
+  const broker = await listen(createServer((req, res) => {seen.push({path: req.url, authorization: req.headers.authorization}); res.end(payload);}), t);
+  const host = await listen(createRecipeWeb({RECIPE_BROKER_ORIGIN: broker}), t);
+  const logo = host + '/media/versions/' + v + '/logo.webp';
+  assert.equal((await fetch(logo, {headers: {authorization: 'Bearer browser-supplied'}})).status, 503);
+  assert.deepEqual(seen, [{path: '/v2/versions/' + v + '/display-logo', authorization: undefined}]);
+  payload = Buffer.alloc(displayLogoLimit + 1);
+  assert.equal((await fetch(logo)).status, 503);
+  assert.equal((await fetch(host + '/media/versions/not-a-version/logo.webp')).status, 404);
+  assert.equal(seen.length, 2);
+});
 
 test('return destination is always a local page', () => {
   for (const input of ['https://wrong.example/', '//wrong.example/', '/studio?next=other', '/auth/callback', '/recipes']) assert.equal(returnPath(input), '/');
@@ -133,6 +147,12 @@ test('reconciliation detail binds the displayed session, blocks changed cookies 
     return {cookie:sessionCookie,'X-Vonvon-Session':view.displaySession};
   }
   const a=await login(),b=await login(), path=host+'/api/v1'+detail;
+  for (const privatePath of ['/api/v2/me/recipes', '/api/v2/me/publications']) {
+    assert.equal((await fetch(host + privatePath, {headers: {...b, 'X-Vonvon-Session': a['X-Vonvon-Session']}})).status, 409);
+    assert.equal((await fetch(host + privatePath, {headers: {cookie: b.cookie}})).status, 409);
+    assert.equal((await fetch(host + privatePath, {headers: a})).status, 200);
+  }
+
   assert.equal((await fetch(path,{headers:a})).status,200);
   const count=seen.length;
   for (const headers of [{'X-Vonvon-Session':a['X-Vonvon-Session']},{...b,'X-Vonvon-Session':a['X-Vonvon-Session']}]) {

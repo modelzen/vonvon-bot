@@ -1,3 +1,5 @@
+import {GroupNavigation} from './group-navigation.js';
+import {groupNavigationIdSchema} from '@vonvon/protocol';
 import { draftPreviewNavigationIdSchema } from '@vonvon/protocol';
 import { RecipePreviewNavigation } from './recipe-preview-navigation.js';
 import { realpathSync } from 'node:fs';
@@ -177,7 +179,7 @@ const remoteServiceToggle = (value: unknown): boolean => {
 };
 
 export function installBridge(
-  owner: AttachedDaemon, window: BrowserWindow, paths: DesktopResources, actions: ShellActions, devices: DeviceConnections, account: NativeAccount, recipeJournalPath?:string, authoringJournalPath?:string, recipePreview = new RecipePreviewNavigation('vonvon'),
+  owner: AttachedDaemon, window: BrowserWindow, paths: DesktopResources, actions: ShellActions, devices: DeviceConnections, account: NativeAccount, recipeJournalPath?:string, authoringJournalPath?:string, recipePreview = new RecipePreviewNavigation('vonvon'), groupNavigation = new GroupNavigation('vonvon'),
 ): DesktopBridge {
   const expectedUrl = pathToFileURL(realpathSync(paths.uiIndex)).href;
   let disposed = false;
@@ -613,6 +615,8 @@ export function installBridge(
       return reply;
     });
     register(desktopChannels.recipeUse,1,value=>recipeUseRequestSchema.parse(value),retiredRecipeInstallation);
+    register(desktopChannels.groupNavigationPending, 0, noArg, async () => groupNavigation.pending());
+    register(desktopChannels.groupNavigationAcknowledge, 1, value => groupNavigationIdSchema.parse(value), async value => {groupNavigation.acknowledge(value);});
     register(desktopChannels.recipePreviewPending, 0, noArg, async () => recipePreview.pending());
     register(desktopChannels.recipePreviewAcknowledge, 1, value => draftPreviewNavigationIdSchema.parse(value), async value => {
       const actor=account.status();recipePreview.acknowledge(value,actor.kind==='signedIn'?actor.accountId:undefined);
@@ -622,6 +626,8 @@ export function installBridge(
     register(desktopChannels.accountLogin, 0, noArg, async () => accountStatusSchema.parse(await account.login()));
     register(desktopChannels.accountCancel, 0, noArg, async () => accountStatusSchema.parse(await account.cancelLogin()));
     register(desktopChannels.accountLogout, 0, noArg, async () => accountStatusSchema.parse(await account.logout()));
+    register(desktopChannels.accountManage, 0, noArg, async () => {if (!account.manage) throw new Error('Account management unavailable'); await account.manage();});
+    register(desktopChannels.accountRefresh, 0, noArg, async () => accountStatusSchema.parse(account.refresh ? await account.refresh() : account.status()));
     register(desktopChannels.devicesState, 0, noArg, async () => devices.state());
     register(desktopChannels.devicesInspect, 1, value => {
       if (typeof value !== 'string' || value.length > 65_536) throw new Error('Invalid link');
@@ -649,6 +655,7 @@ export function installBridge(
       return { ok: true, value: undefined };
     });
     registeredChannels.push(desktopChannels.subscribe);
+    unsubscribers.push(groupNavigation.onOpen(value => send({type: 'groupNavigation', value})));
     unsubscribers.push(recipePreview.onOpen(value => {creator.invalidateReviews(); send({type: 'recipePreview', value});}));
     unsubscribers.push(account.onStatus(value => {
       recipePreview.retainAccount(value.kind==='signedIn'?value.accountId:undefined);
