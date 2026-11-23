@@ -12,10 +12,13 @@ export function validateDecoderRoot(root) {
     if (inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside)) throw new Error('Decoder dependency escapes artifact');
     const info = statSync(path);
     if (![0,process.getuid?.()].includes(info.uid) || info.mode & 0o022) throw new Error('Writable decoder artifact');
-    if (info.isDirectory() && !lstatSync(path).isSymbolicLink()) for (const name of readdirSync(path)) inspect(join(path,name));
+    if (info.isDirectory() && lstatSync(path).isSymbolicLink()) throw new Error('Invalid decoder directory symlink');
+    if (info.isDirectory()) for (const name of readdirSync(path)) inspect(join(path,name));
     else if (!info.isDirectory() && !info.isFile()) throw new Error('Invalid decoder artifact entry');
   };
-  if (statSync(root).mode & 0o022) throw new Error('Writable decoder artifact');
+  const rootInfo = lstatSync(root);
+  if (!rootInfo.isDirectory()) throw new Error('Invalid decoder artifact root');
+  if (![0,process.getuid?.()].includes(rootInfo.uid) || rootInfo.mode & 0o022) throw new Error('Writable decoder artifact');
   for (const file of files) {
     const path = join(root,file);
     if (!lstatSync(path).isFile()) throw new Error('Invalid decoder module');
@@ -32,9 +35,9 @@ export function linuxDecoderLaunch(mode, {root = process.env.LOGO_DECODER_ROOT, 
   const binary = realpathSync(bwrap);
   const info = statSync(binary);
   if (binary !== bwrap || info.uid !== 0 || info.mode & 0o022 || !info.isFile()) throw new Error('Untrusted bubblewrap');
-  const args = ['--unshare-all','--die-with-parent','--new-session','--cap-drop','ALL','--clearenv',
-    '--ro-bind','/usr','/usr','--dir','/decoder','--dir','/dev','--ro-bind','/dev/null','/dev/null',
-    '--dir','/tmp','--remount-ro','/tmp','--proc','/proc','--remount-ro','/proc'];
+  const args = ['--unshare-all','--unshare-user','--die-with-parent','--new-session','--cap-drop','ALL','--clearenv',
+    '--ro-bind','/usr','/usr','--dir','/decoder','--dir','/dev','--dev-bind','/dev/null','/dev/null',
+    '--dir','/tmp','--proc','/proc','--remount-ro','/proc'];
   for (const path of ['/lib','/lib64']) {
     try {
       const entry = lstatSync(path);

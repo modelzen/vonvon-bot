@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { cp, mkdtemp, writeFile, readFile, realpath } from 'node:fs/promises';
+import { cp, mkdtemp, writeFile, readFile, realpath, readlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
@@ -18,10 +18,12 @@ await writeFile(credential,sentinel);
 const server = createServer(socket => socket.end(sentinel));
 await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
 const port = server.address().port;
+const namespaces = Object.fromEntries(await Promise.all(['user','pid','net','ipc','uts','mnt'].map(async name => [name,await readlink(`/proc/self/ns/${name}`)])));
 const worker = `
-import {readFile,writeFile} from 'node:fs/promises';
+import {readFile,writeFile,readlink} from 'node:fs/promises';
 import {connect} from 'node:net';
 const result = {};
+for (const [name,parent] of Object.entries(${JSON.stringify(namespaces)})) result['namespace-'+name] = await readlink('/proc/self/ns/'+name) !== parent;
 const limits = await readFile('/proc/self/limits','utf8');
 result.cpuLimit = /Max cpu time\\s+4\\s+4/.test(limits);
 result.addressLimit = /Max address space\\s+1610612736\\s+1610612736/.test(limits);
@@ -65,7 +67,9 @@ try {
 
 await writeFile(join(root,'logo-child.mjs'),`
 import {spawn} from 'node:child_process';
-spawn('/node',['--jitless','-e','setInterval(() => {},1000)'],{stdio:'ignore'});
+const child = spawn('/node',['--jitless','-e','setInterval(() => {},1000)','logo-grandchild-probe'],{stdio:'inherit'});
+child.on('error',() => process.exit(2));
+child.on('spawn',() => process.stdout.write('grandchild-started'));
 setInterval(() => {},1000);
 `);
 process.env.LOGO_DECODER_ROOT = root;
@@ -83,7 +87,11 @@ const completion = Promise.all([first,second].map(promise => assert.rejects(prom
 await assert.rejects(normalizeLogo(Buffer.from('probe')),error => error.code === 'logo_decoder_busy');
 await new Promise(resolve => setTimeout(resolve,500));
 const running = await descendants(process.pid);
-assert.ok(running.length >= 4,'two decoder trees and their grandchildren must start');
+const grandchildren = [];
+for (const pid of running) {
+  try { if ((await readFile(`/proc/${pid}/cmdline`,'utf8')).split('\0').includes('logo-grandchild-probe')) grandchildren.push(pid); } catch {}
+}
+assert.equal(grandchildren.length,2,'each real grandchild must start with its unique command identity');
 await completion;
 assert.ok(Date.now() - started >= 4500,'wall timeout, rather than early launch failure, ends the workers');
 for (let retry = 0; retry < 20; retry++) {
@@ -94,10 +102,27 @@ for (let retry = 0; retry < 20; retry++) {
   if (retry === 19) assert.fail(`decoder process remains after timeout: ${alive.filter(Boolean).join(',')}`);
   await new Promise(resolve => setTimeout(resolve,50));
 }
+for (const [name,source,expected] of [
+  ['cpu','while (true) {}','SIGKILL'],
+  ['memory',`try { new ArrayBuffer(512 * 1024 * 1024); process.exit(2); } catch { process.exit(0); }`,null],
+]) {
+  await writeFile(join(root,'logo-child.mjs'),source);
+  const limitLaunch = linuxDecoderLaunch('normalize',{root});
+  const limited = spawn('/bin/sh',['-c','ulimit -v 1572864 && ulimit -d 393216 && ulimit -c 0 && ulimit -t 4 && exec "$@"','logo',limitLaunch.command,...limitLaunch.args],{env:decoderEnvironment,stdio:'ignore'});
+  const limitStarted = Date.now();
+  const watchdog = setTimeout(() => limited.kill('SIGTERM'),6500);
+  const result = await new Promise((resolve,reject) => {limited.on('error',reject);limited.on('close',(code,signal) => resolve({code,signal}));});
+  clearTimeout(watchdog);
+  if (name === 'cpu') {
+    assert.ok(result.signal === expected || result.code === 137,JSON.stringify(result));
+    assert.ok(Date.now() - limitStarted < 6000,'hard CPU limit must beat watchdog');
+  } else assert.equal(result.code,0,'data limit must reject the actual allocation');
+  console.log(JSON.stringify({resourceLimit:name,result,elapsedMs:Date.now()-limitStarted}));
+}
 await cp(join(original,'logo-child.mjs'),join(root,'logo-child.mjs'));
 const { createRequire } = await import('node:module');
 const sharp = createRequire(join(original,'logo-child.mjs'))('sharp');
 const input = await sharp({create:{width:16,height:16,channels:4,background:'red'}}).png().toBuffer();
 const normalized = await normalizeLogo(input);
 await verifyNormalizedLogo(normalized);
-console.log(JSON.stringify({timeoutReap:'PASS',concurrencyAndRecovery:'PASS',observedProcesses:running.length}));
+console.log(JSON.stringify({timeoutReap:'PASS',concurrencyAndRecovery:'PASS',observedProcesses:running.length,grandchildren}));
