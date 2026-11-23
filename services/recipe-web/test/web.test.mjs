@@ -1,0 +1,82 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
+import { createRecipeWeb } from '../server.mjs';
+import { returnPath } from '../auth.mjs';
+
+async function listen(server, t) {
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
+  return 'http://127.0.0.1:' + server.address().port;
+}
+const r = '80b2a4df-0e0c-4e18-a90a-fda1c1ea7faa';
+const v = '76ba7564-7ad3-4b46-833b-be9bb4827b77';
+const detail = '/recipes/' + r + '/versions/' + v;
+const toJson = (res, data) => { res.writeHead(200, {'Content-Type':'application/json'}); res.end(JSON.stringify(data)); };
+const cookie = response => response.headers.getSetCookie().map(x => x.split(';', 1)[0]).join('; ');
+
+test('return destination is always a local page', () => {
+  for (const input of ['https://wrong.example/', '//wrong.example/', '/studio?next=other', '/auth/callback', '/recipes']) assert.equal(returnPath(input), '/');
+  assert.equal(returnPath(detail), detail);
+  assert.equal(returnPath('/studio'), '/studio');
+});
+
+test('same-origin PKCE login and claim use opaque session cookies', async t => {
+  const apiCalls = [];
+  const api = await listen(createServer(async (req,res) => {
+    const chunks = []; for await (const c of req) chunks.push(c);
+    apiCalls.push([req.method, req.url, req.headers.authorization, Buffer.concat(chunks).toString(), req.headers['idempotency-key']]);
+    toJson(res, {ok:true});
+  }),t);
+  const exchanges = [];
+  const issuer = await listen(createServer(async (req,res) => {
+    const pieces=[]; for await (const c of req) pieces.push(c);
+    exchanges.push({path:req.url, body:JSON.parse(Buffer.concat(pieces).toString()), apiKey:req.headers.apikey});
+    toJson(res, {access_token:'synthetic-ac',refresh_token:'synthetic-rf',expires_in:3600});
+  }),t);
+  // The configured origin models the external HTTPS host when running behind Nginx.
+  const origin = 'https://recipes.example';
+  const host = await listen(createRecipeWeb({RECIPE_WEB_ORIGIN:origin, RECIPE_API_ORIGIN:api,
+    SUPABASE_URL:issuer,SUPABASE_PUBLISHABLE_KEY:'test-publishable',RECIPE_WEB_PROVIDERS:'github'}),t);
+  let response = await fetch(host+'/auth/session');
+  assert.deepEqual(await response.json(), {signedIn:false,providers:['github']});
+  response = await fetch(host+'/api/v1/community/recipes', {headers:{Authorization:'Bearer client-supplied'}});
+  assert.equal(response.status,200); assert.equal(apiCalls[0][2], undefined);
+  let start = await fetch(host+'/auth/start', {method:'POST', redirect:'manual', headers:{origin}, body:new URLSearchParams({provider:'github',returnTo:detail})});
+  assert.equal(start.status,303);
+  assert.match(start.headers.get('set-cookie'),/HttpOnly/);
+  assert.match(start.headers.get('set-cookie'),/; Secure/);
+  const authorize=new URL(start.headers.get('location'));
+  assert.equal(authorize.origin,issuer); assert.equal(authorize.searchParams.get('redirect_to'),origin+'/auth/callback');
+  // A callback without the browser that started this flow cannot make a session or exchange the code.
+  let finish=await fetch(host+'/auth/callback?code=hello',{redirect:'manual'});
+  assert.equal(finish.headers.get('location'),'/?auth=failed'); assert.equal(exchanges.length,0);
+  finish=await fetch(host+'/auth/callback?code=hello',{redirect:'manual',headers:{cookie:cookie(start)}});
+  assert.equal(finish.status,303); assert.equal(finish.headers.get('location'),detail);
+  assert.equal(start.headers.get('referrer-policy'), 'same-origin');
+  assert.equal(finish.headers.get('referrer-policy'), 'no-referrer');
+  const opaque=cookie(finish);
+  assert.ok(!opaque.includes('synthetic-ac')); assert.ok(!opaque.includes('synthetic-rf'));
+  assert.equal(exchanges.length,1); assert.equal(exchanges[0].path,'/auth/v1/token?grant_type=pkce');
+  assert.equal(exchanges[0].body.auth_code,'hello');
+  assert.equal(createHash('sha256').update(exchanges[0].body.code_verifier).digest('base64url'),authorize.searchParams.get('code_challenge'));
+  assert.equal(exchanges[0].apiKey,'test-publishable');
+  const replay=await fetch(host+'/auth/callback?code=hello',{redirect:'manual',headers:{cookie:cookie(start)}});
+  assert.equal(replay.headers.get('location'),'/?auth=failed');assert.equal(exchanges.length,1);
+  const path=host+'/api/v1/versions/'+v+'/redeem';
+  const view = await fetch(host + '/auth/session', {headers:{cookie:opaque}}).then(r=>r.json());
+  assert.equal(typeof view.displaySession, 'string'); assert.ok(!opaque.includes(view.displaySession));
+  const headers={origin,cookie:opaque,'X-Vonvon-Session':view.displaySession,'Content-Type':'application/json','Idempotency-Key':r};
+  response=await fetch(path,{method:'POST',headers:{...headers,origin:'https://wrong.example'},body:'{"code":"a"}'});
+  assert.equal(response.status,403); assert.equal(apiCalls.length,1);
+  response=await fetch(path,{method:'POST',headers:{...headers,'X-Vonvon-Session':'older-window'},body:'{"code":"a"}'});
+  assert.equal(response.status,409); assert.equal((await response.json()).error.code, 'session_changed');
+  assert.equal(apiCalls.length,1);
+  response=await fetch(path,{method:'POST',headers,body:'{"code":"a"}'});
+  assert.equal(response.status,200); assert.deepEqual(apiCalls.at(-1),['POST','/v1/versions/'+v+'/redeem','Bearer synthetic-ac','{"code":"a"}',r]);
+  assert.equal((await fetch(host+'/api/v1/unrelated',{headers})).status,404);
+  let logout=await fetch(host+'/auth/logout',{method:'POST',redirect:'manual',headers});
+  assert.equal(logout.status,303);
+  assert.equal((await fetch(path,{method:'POST',headers,body:'{"code":"a"}'})).status,401);
+});

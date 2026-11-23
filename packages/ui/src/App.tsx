@@ -92,6 +92,7 @@ import {AdministratorsPanel} from './management/AdministratorsPanel';
 import {appCardFor, coreUpdatable, UpdatePanel} from './management/UpdatePanel';
 import {DesktopUpdateProvider, useDesktopUpdate} from './desktop-update';
 import {DesktopUpdateButton} from './DesktopUpdateButton';
+import {AccountPanel} from './accounts/AccountPanel';
 
 type Modal =
   | RegisterModal
@@ -575,6 +576,7 @@ function DesktopApp() {
     secrets: "决策模型",
     diagnostics: "诊断",
     devices: "设备连接",
+    account: "账号",
   };
   const host = snapshot.host;
   const ready = host.kind === "connected";
@@ -651,7 +653,7 @@ function DesktopApp() {
         selectedFeature={featureId}
         onFeatureNavigate={id => navigate(() => {setJoinedTarget(undefined); setModal(current => current?.kind === 'join' && current.suspended ? null : current); setFeatureId(id);})}
         onSearch={() => setSearchOpen(true)}
-        deviceSwitcher={shell?.devices ? <DeviceSwitcher onManage={() => openPage('devices')}/> : undefined}
+        deviceSwitcher={shell?.devices ? <DeviceSwitcher onManage={() => openPage('devices')} onAccount={() => openPage('account')}/> : undefined}
         onOpenList={openList}
         backLabel={`返回 ${settingsReturn?.label ?? parentLabel}`}
         onBack={
@@ -980,6 +982,7 @@ function DesktopApp() {
           )}
           {/* 设备: the desktop's list, then 允许别的设备连接 of the device shown (the web page has only that) */}
           {page === "devices" && <DevicesPanel/>}
+          {page === "account" && <AccountPanel/>}
           {page === "secrets" && <SecretsPanel onOpenProviders={() => openPage("providers")} onOpenApplication={() => openPage("application")}
             onOpenLogs={() => { openPage("diagnostics"); setSearchTarget({page: "diagnostics", section: "daemon 日志"}); }}/>}
           {page === "diagnostics" && <DiagnosticsPanel snapshot={snapshot} ready={ready} busy={busy} run={run}
