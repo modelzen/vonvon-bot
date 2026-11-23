@@ -38,7 +38,7 @@ export interface ContextSources {
   soul: string;
   role: ParsedRole;
   supplement: string;
-  recipeContext?: string;
+  workRules?: string;
   /** The library project the group is bound to. */
   project?: { id: string; name: string };
   bot?: MemoryRead;
@@ -57,7 +57,7 @@ export interface ContextInput {
   botName?: string;
   bio?: string;
   place: ContextPlace;
-  row?: Pick<Project, 'projectId' | 'supplement' | 'migration' | 'profile' | 'richRecipe'>;
+  row?: Pick<Project, 'projectId' | 'supplement' | 'workRules' | 'migration' | 'profile' | 'richRecipe'>;
   nameOf?: ContextSources['nameOf'];
   /** Asked only when an entry came from another group. */
   chatNames?: () => Promise<ReadonlyMap<string, string>>;
@@ -78,6 +78,12 @@ export function supplementOf(row: Pick<Project, 'supplement' | 'migration' | 'pr
   return row.migration?.memory === undefined ? row.profile?.persona ?? '' : '';
 }
 
+export function workRulesOf(row: Pick<Project, 'workRules' | 'richRecipe'> | undefined): string {
+  if (row?.workRules !== undefined) return row.workRules;
+  return row?.richRecipe?.resolved.flatMap(item =>
+    item.kind === 'rules' && item.value.purpose === 'work' ? [String(item.value.text)] : []).join('\n\n') ?? '';
+}
+
 async function readMemory(store: MemoryStore, which: MemoryKind): Promise<MemoryRead | undefined> {
   try { return { storeId: store.location.storeId, view: await store.read(), store }; }
   catch (error) { log.fail('memory', error, { phase: 'context', which }); return undefined; }
@@ -90,8 +96,7 @@ export async function loadContextSources(input: ContextInput): Promise<ContextSo
   const failed: ContextSources['failed'] = {};
   const sources: ContextSources = {
     place: input.place, botName: input.botName ?? input.appId, ...(input.bio ? { bio: input.bio } : {}),
-    ...(input.place.kind === 'group' && input.row?.richRecipe ? {recipeContext: input.row.richRecipe.resolved.flatMap(item =>
-      item.kind === 'rules' && item.value.purpose === 'work' ? [String(item.value.text)] : []).join('\n\n')} : {}),
+    ...(input.place.kind === 'group' ? { workRules: workRulesOf(input.row) } : {}),
     soul, role, supplement: input.place.kind === 'group' ? supplementOf(input.row) : '', failed,
     ...(input.nameOf ? { nameOf: input.nameOf } : {}),
   };
@@ -300,9 +305,9 @@ export function assemble(src: ContextSources, mode: 'work' | 'comment' = 'work')
   const identity = identityLine(src);
   const role = roleBlock(src);
   const supplement = mode === 'work' ? supplementBlock(src) : { body: '', block: '' };
-  if (mode === 'work' && src.recipeContext) {
-    supplement.body += '\n' + src.recipeContext;
-    supplement.block += `\n[本群配方 · 工作规则]\n${quote(src.recipeContext)}\n[/本群配方]`;
+  if (mode === 'work' && src.place.kind === 'group' && src.workRules) {
+    supplement.body += '\n' + src.workRules;
+    supplement.block += `\n[本群工作规则]\n${quote(src.workRules)}\n[/本群工作规则]`;
   }
   const bot = currentOf(src.bot, 'bot', mode === 'comment' ? { onlyBranch: COMMENT_BRANCH } : {});
   const project = mode === 'work' ? currentOf(src.projectMemory, 'project') : undefined;

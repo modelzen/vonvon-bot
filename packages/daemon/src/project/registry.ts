@@ -135,6 +135,8 @@ export interface Project {
   /** 补充职责（原"本群个性"，记忆设计 2.2）：这个 bot 在这个项目里多做什么、少做什么。写入时 ≤ 5,000 字，读取不校验。
    * P4a 之前和 `profile.persona` 双写；读者切换后 `profile` 不再读。 */
   supplement?: string;
+  /** Group execution rules. Absence reads legacy rules; an empty string explicitly clears them. */
+  workRules?: string;
   /** 记忆设计 7.1 的分步标记，每步做完的时间（epoch ms）：`library` = 步骤 A，`memory` = 步骤 B。 */
   migration?: { library?: number; memory?: number };
   /** This row is the bot's private chat (dm-agent 4.1): one per bot, kept out of everything about groups by

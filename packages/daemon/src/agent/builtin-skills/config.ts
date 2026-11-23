@@ -37,6 +37,10 @@ export const configSkill: BuiltinSkill = {
 ## 写文字
 \`settings set\` 的值是 JSON 或普通文字。普通文字里的 \`\\n\` 不是换行，会原样存进去。要换行就写成带双引号的 JSON 字符串：\`vonvon settings set --group X smartRules.respond='"第一段\\n\\n第二段"'\`。
 
+## 群角色与规则
+群的补充职责用 \`role.supplement\`。工作执行规则用 \`role.workRules\`，只在群工作中生效，不参与智能判断；判断是否回应、是否开新话题分别用 \`smartRules.respond\` 和 \`smartRules.newTopic\`。不要把工作规则合并进补充职责或智能判断规则。工作规则最多 1 MiB UTF-8 字节，空字符串表示清空。
+先读目标群的 \`vonvon settings get role --group X --json\`，基于当前值只合并用户指定部分；保存使用原来的 role revision：\`vonvon settings set --group X --revision <原版本> role.workRules='"工作规则"'\`。发生 conflict 后重新读并重做合并，保存后读回核对。配方仅供本轮参考，普通配置不绑定来源；同一版本可以参考到不同群，不执行配方安装或自动更新。
+
 ## 配置消息卡
 消息卡按每个群聊、每个私聊独立保存，没有 Bot 级消息卡设置。先用 \`vonvon settings get presentation --group X --json\` 看群，或用 \`vonvon settings get presentation --dm --json\` 看这个 Bot 的私聊；跨 Bot 加 \`--bot B\`。\`stored.cardDisplay\` 是本会话保存的对象，\`effective.cardDisplay\` 是实际生效值。null 表示固定旧版默认展示，不继承 Bot。旧的 \`showToolCalls\` 和 \`showModel\` 只用于兼容已有值，不再用 Bot 的 \`cards.*\` 开关配置消息卡。
 读取时同时记录 \`view.sections.presentation.revision\` 和目标 Bot、群或私聊，后续保存必须使用同一目标和这个原版本。所有基于快照的修改保存都必须带 \`--revision <原版本>\`，不能在临保存时另读一个新版本替代它。

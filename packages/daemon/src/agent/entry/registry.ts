@@ -247,10 +247,13 @@ export function createAgentEntries(opts: {
   function authorizeFeedback(grant: Grant, auth: TurnAuth | undefined): Failure | undefined {
     const refusal = authorizeMemory(grant, auth);
     const source = auth?.facts.feedback;
-    if (refusal || !auth?.human || auth.feedbackSteer.signal.aborted || !source || grant.place.kind !== 'group'
-      || !opts.feedbackEnabled?.(source.chatId) || source.chatId !== grant.place.chatId || source.openId !== auth.facts.requesterOpenId || source.messageId !== auth.facts.triggerMessageId) {
-      return { ...(refusal ?? refused('not-human-turn')), message: '这次调用没有对应的本人群消息。请在原群重新发起反馈。' };
-    }
+    if (refusal) return refusal;
+    if (auth?.human && !auth.feedbackSteer.signal.aborted && grant.place.kind === 'group' && grant.place.chatId
+      && !opts.feedbackEnabled?.(grant.place.chatId))
+      return { ok: false, code: 'refused', message: '本群反馈尚不可用。请让 Bot 管理员检查工具并用 /feedback setup 配置接收目标。' };
+    if (!auth?.human || auth.feedbackSteer.signal.aborted || !source || grant.place.kind !== 'group'
+      || source.chatId !== grant.place.chatId || source.openId !== auth.facts.requesterOpenId || source.messageId !== auth.facts.triggerMessageId)
+      return { ...refused('not-human-turn'), message: '这次调用没有对应的本人群消息。请在原群重新发起反馈。' };
   }
   /**
    * schedule 类的授权（3.13 的表、总设计第 8 节"在场"）：这一层先查，拒绝不进命令核；命令核按 actor 再查一遍，
@@ -512,7 +515,7 @@ export function createAgentEntries(opts: {
         // 评论会话（doc）只给读类和文档这一列的工具；写记忆的和任务的在群和私聊里给；只为设置服务的读工具只在私聊里给
         return tools.filter(tool => {
           if (!placed(tool, grant.place)) return false;
-          if (tool.class === 'feedback') return !!grant.place.chatId && opts.feedbackEnabled?.(grant.place.chatId);
+          if (tool.class === 'feedback') return !!grant.place.chatId;
           return tool.class === 'read' || tool.class === 'document'
             || (tool.class === 'memory' || tool.class === 'schedule' ? grant.place.kind !== 'doc' : grant.place.kind === 'p2p');
         })

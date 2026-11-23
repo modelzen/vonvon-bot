@@ -20,7 +20,9 @@ function setup(overrides: Partial<TurnFacts> = {}, place: AgentPlace = {kind: 'g
 it('exposes preparation in a configured group and binds a non-admin to the original turn', async () => {
   const f = setup();
   expect(f.entry.tools().map(tool => tool.name)).toEqual(['feedback_prepare']);
-  expect(setup({}, undefined, false).entry.tools()).toEqual([]);
+  const unconfigured = setup({feedback: undefined}, undefined, false);
+  expect(unconfigured.entry.tools().map(tool => tool.name)).toEqual(['feedback_prepare']);
+  expect(await unconfigured.call()).toMatchObject({ok: false, message: expect.stringContaining('/feedback setup')});
   expect(await f.call()).toMatchObject({ok: true});
   expect(await f.entry.call('feedback_prepare', {...args, actor: {openId: 'ou_other'}}, {toolUseId: 'one'})).toMatchObject({ok: false, code: 'bad-args'});
   expect(await f.entry.call('feedback_prepare', args)).toMatchObject({ok: false});

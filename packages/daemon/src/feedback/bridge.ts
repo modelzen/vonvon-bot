@@ -5,7 +5,7 @@ import {assertBotIdentity, withRegisteredBot, type BotIdentity} from '../config/
 import {botPaths, paths} from '../config/paths';
 import {isAdmin, isChatAllowed, isUserAllowedInProject, type AppConfig} from '../config/schema';
 import {getProjectByChatIdSync, mutateProjectStore} from '../project/registry';
-import {configureFeedback, feedbackInstallation} from './config';
+import {configureFeedback} from './config';
 import {feedbackActorFromMessage} from './events';
 import {NativeFeedbackGateway} from './gateway';
 import {createFeedbackHost, type FeedbackHost} from './host';
@@ -51,7 +51,7 @@ export function bridgeFeedback(identity: BotIdentity, cfg: AppConfig, appSecret:
     root, registration, bot, authorization: cli, store, gateway: new NativeFeedbackGateway(cli, store), checkBot,
     project: chatId => getProjectByChatIdSync(chatId, projectsFile),
     allowed: (project, openId) => isChatAllowed(cfg, project.chatId) && (!openId || isUserAllowedInProject(cfg, project, openId)),
-    configure: async (actor, destination, installation) => {
+    configure: async (actor, destination, binding) => {
       const admin = () => {
         if (!isAdmin(cfg, actor.openId) || !isChatAllowed(cfg, actor.chatId)) throw new Error('只有群内的 Bot 管理员可以配置。');
       };
@@ -60,9 +60,9 @@ export function bridgeFeedback(identity: BotIdentity, cfg: AppConfig, appSecret:
         await mutateProjectStore({file: projectsFile, dataRoot: paths.appDir}, async (_, rows) => {
           admin();
           const project = rows.find(row => row.chatId === actor.chatId && !row.dm);
-          if (!project || feedbackInstallation(project) !== installation) throw new Error('本群配方已变化，请重新配置。');
+          if (!project) throw new Error('本群已解绑。');
           const prior = project.feedback;
-          configureFeedback(project, registration, destination);
+          configureFeedback(project, registration, destination, binding);
           return {changed: prior !== project.feedback, value: undefined};
         }, admin);
       }, identity);

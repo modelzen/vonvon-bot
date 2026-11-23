@@ -1,3 +1,4 @@
+import { legacyWorkRules } from './helpers/work-rules-fixture';
 import { buildAdminsCard, DM } from '../src/card/dm-cards';
 import * as appRoles from '../src/config/app-roles';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -903,5 +904,74 @@ describe('model catalog availability', () => {
     const { owner } = await fixture({ backendFor: () => ({ ...backend, doctor: async () => ({ ok: false, version: null }), listModels, peekModels: () => native }) });
     expect(await owner.models(query)).toMatchObject({ state: 'unavailable', models: [] });
     expect(listModels).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('ordinary work rules role settings', () => {
+  const roleOf = async (owner: Awaited<ReturnType<typeof fixture>>['owner']) => {
+    const view = await owner.read(project);
+    if (view.scope.kind !== 'project') throw new Error('project view missing');
+    const role = (view as ProjectSettingsView).sections.role;
+    if (!role) throw new Error('project role missing');
+    return role;
+  };
+
+  it('patches only the named field, preserves work rules for old callers, and clears explicitly', async () => {
+    await updateProject('demo', { supplement: '职责', workRules: '工作' });
+    const { owner } = await fixture();
+    let role = await roleOf(owner);
+    expect(role.stored).toEqual({ supplement: '职责', workRules: '工作' });
+    expect(await owner.save({ scope: project, section: 'role', revision: role.revision, patch: { supplement: '新职责' } })).toMatchObject({ kind: 'saved' });
+    expect(await getProjectByName('demo')).toMatchObject({ supplement: '新职责', workRules: '工作' });
+    expect(await owner.save({ scope: project, section: 'role', revision: role.revision, patch: { workRules: '过期' } })).toMatchObject({ kind: 'conflict' });
+    role = await roleOf(owner);
+    expect(await owner.save({ scope: project, section: 'role', revision: role.revision, patch: { workRules: '' } })).toMatchObject({ kind: 'saved' });
+    expect(await getProjectByName('demo')).toMatchObject({ supplement: '新职责', workRules: '' });
+  });
+
+  it('returns the complete legacy aggregate and rejects a stale fallback snapshot', async () => {
+    const richRecipe = legacyWorkRules('汉'.repeat(20000), '字'.repeat(20000));
+    await updateProject('demo', { richRecipe });
+    const { owner } = await fixture();
+    const role = await roleOf(owner);
+    expect(role.stored.workRules).toBe('汉'.repeat(20000) + '\n\n' + '字'.repeat(20000));
+    richRecipe.resolved[0]!.value.text = '变化';
+    await updateProject('demo', { richRecipe });
+    expect(await owner.save({ scope: project, section: 'role', revision: role.revision, patch: { workRules: '旧方案' } })).toMatchObject({ kind: 'conflict' });
+    const current = await roleOf(owner);
+    expect(await owner.save({ scope: project, section: 'role', revision: current.revision, patch: { workRules: '' } })).toMatchObject({ kind: 'saved' });
+    expect((await roleOf(owner)).stored.workRules).toBe('');
+    expect((await getProjectByName('demo'))?.richRecipe).toEqual(richRecipe);
+  });
+
+  it('does not freeze legacy supplement fallback when only work rules are patched', async () => {
+    await updateProject('demo', { profile: { persona: '旧职责', memory: '', inheritMemory: true, inheritPersona: true } });
+    const { owner } = await fixture();
+    const role = await roleOf(owner);
+    expect(await owner.save({ scope: project, section: 'role', revision: role.revision, patch: { workRules: '执行' } })).toMatchObject({ kind: 'saved' });
+    const row = await getProjectByName('demo');
+    expect(row?.supplement).toBeUndefined();
+    expect(row?.workRules).toBe('执行');
+    expect((await roleOf(owner)).stored.supplement).toBe('旧职责');
+  });
+
+  it('checks beforeCommit and rejects an oversized UTF-8 patch without changing either field', async () => {
+    await updateProject('demo', { supplement: '职责', workRules: '原规则' });
+    const { owner } = await fixture();
+    const role = await roleOf(owner);
+    const before = await readFile(paths.projectsFile, 'utf8');
+    let checked = false;
+    expect(await owner.save({ scope: project, section: 'role', revision: role.revision, patch: { workRules: '新规则' } }, {
+      beforeCommit: () => { checked = true; throw new Error('permission changed'); },
+    })).toMatchObject({ kind: 'rejected' });
+    expect(checked).toBe(true);
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(before);
+    await expect(owner.save({ scope: project, section: 'role', revision: role.revision, patch: { workRules: '汉'.repeat(349526) } })).rejects.toThrow('范围无效');
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(before);
+    const large = '汉'.repeat(349525) + 'a';
+    expect(Buffer.byteLength(large)).toBe(1048576);
+    expect(await owner.save({ scope: project, section: 'role', revision: role.revision, patch: { workRules: large } })).toMatchObject({ kind: 'saved' });
+    expect((await roleOf(owner)).stored.workRules).toBe(large);
   });
 });

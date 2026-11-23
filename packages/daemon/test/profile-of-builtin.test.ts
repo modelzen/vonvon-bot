@@ -45,6 +45,7 @@ vi.mock('../src/card/run-card-stream', () => ({
     stats() { return { pushCount: 0, cardPushes: 0, elPushes: 0, totalRttMs: 0, maxRttMs: 0 }; }
   },
 }));
+import { legacyWorkRules } from './helpers/work-rules-fixture';
 import { builtinSkillsOfSet } from '../src/agent/builtin-skills/registry';
 import { codexSessionParams } from '../src/agent/codex-appserver/backend';
 import { createAgentEntries } from '../src/agent/entry/registry';
@@ -106,6 +107,28 @@ const readOnlyDirectoriesBite = process.platform !== 'win32' && process.getuid?.
 it('hands a bound group\'s session the group package', async () => {
   expect((await groupProfile())?.capabilityPackages).toEqual([{ path: '/builtin/group', kind: 'builtin' }]);
   expect(fake.ensure).toHaveBeenCalledWith('app', 'group', builtinSkillsOfSet('group'));
+});
+
+it('opens an ordinary group session even when its experimental package no longer exists', async () => {
+  fake.project = { name: 'g', chatId: 'chat', cwd: join(root, 'work'), kind: 'multi', mode: 'qa', createdAt: 1, blank: false,
+    workRules: 'Ordinary rule', richRecipe: legacyWorkRules('Obsolete injected text') };
+  const {o, startThread} = orchestrator();
+  try {
+    await o.onMessage(message());
+    await vi.waitFor(() => expect(startThread).toHaveBeenCalled());
+    const profile = startThread.mock.calls[0]![0].profile;
+    expect(profile?.capabilityPackages).toEqual([{path: '/builtin/group', kind: 'builtin'}]);
+    expect(profile?.instructions).toContain('Ordinary rule');
+    expect(profile?.instructions).not.toContain('Obsolete injected text');
+  } finally { await o.shutdown(); }
+});
+
+it('starts a fresh provider thread for a persisted experimental session alias', async () => {
+  fake.record = {threadId: 'omt_old', chatId: 'chat', sessionId: 'recipe_session_00000000-0000-4000-8000-000000000000',
+    backend: 'codex-appserver', cwd: join(root, 'work'), summary: ''};
+  const opened = await groupSession(true, 'qa', 'omt_old');
+  expect(opened).not.toHaveProperty('sessionId');
+  expect(opened.profile?.capabilityPackages).toEqual([{path: '/builtin/group', kind: 'builtin'}]);
 });
 
 it('starts the session without the package when writing it fails, and records why', async () => {
