@@ -15,7 +15,7 @@ const labels:Record<string,string>={
   modelEfforts:'各模型思考程度',modelServiceTiers:'各模型服务速度',defaultModel:'默认模型',defaultEffort:'默认思考程度',
   tier:'速度',provider:'提供方',mode:'模式',sandbox:'沙盒',network:'网络',permissionMode:'权限模式',
   version:'配置版本',blocks:'显示项',reply:'回复显示',streamText:'流式文字',collapseAfterRun:'完成后折叠',
-  id:'显示项标识',name:'名称',slot:'位置',appearance:'样式',template:'显示文案',requestedTemplate:'请求文案',size:'字号',color:'颜色',
+  name:'名称',slot:'位置',appearance:'样式',template:'显示文案',requestedTemplate:'请求文案',size:'字号',color:'颜色',
   warning:'警告',warningAt:'警告阈值',contextRules:'上下文提示',yellowAt:'黄色阈值',orangeAt:'橙色阈值',redAt:'红色阈值',showFrom:'开始显示阈值',enabledColors:'启用颜色',
   title:'标题',instructions:'说明',required:'必须完成',action:'操作',entry:'设置入口',check:'核对说明',
 };
@@ -94,7 +94,7 @@ function settingFields(setting:RecipeRichSetting):Field[]{
   if(setting.field==='presentation.completionTemplate')return [field('设置项',name),
     field('通知文案模式',setting.value===null?'使用默认':'自定义文案'),...(setting.value===null?[]:[field('完成通知文案',setting.value)])];
   if(setting.field==='presentation.cardDisplay'&&setting.value){
-    const blocks=setting.value.blocks.map(({itemId:_id,originId:_origin,...block})=>block);
+    const blocks=setting.value.blocks.map(({itemId:_item,originId:_origin,id:_id,...block})=>block);
     return [field('设置项',name),...valueFields({...setting.value,blocks},name)];
   }
   return [field('设置项',name),...valueFields(setting.value,name,setting.field)];
@@ -114,22 +114,50 @@ function taskFields(task:RecipeRichContent['tasks'][number]):Field[]{
     ...(task.timeZone.kind==='recommended'?[field('建议时区',task.timeZone.iana)]:[]),
     field('发布位置',task.placement==='follow'?'当前话题':'新话题')];
 }
+function sourceFields(content:RecipeRichContent):Field[]{
+  const fields:Field[]=[];
+  if(content.role)fields.push(field('角色','已选本地角色 · '+Buffer.byteLength(text(content.role.text))+' 字节'));
+  if(content.settings.length)fields.push(field('设置来源清单',content.settings.map(setting=>{
+    const name=labels[setting.field]!;
+    if(setting.field!=='presentation.cardDisplay')return name+' → 已选本地配置';
+    if(!setting.value)return name+' → 使用默认';
+    const {blocks,reply}=setting.value;
+    return [name,'显示项数量 → '+blocks.length,...blocks.map((block,index)=>'显示项 '+(index+1)+' → '+JSON.stringify(block.name)),
+      '回复显示 → '+(reply?'已包含':'未包含'),...(reply?['流式文字 → '+values(reply.streamText),'完成后折叠 → '+values(reply.collapseAfterRun)]:[])].join('\n');
+  }).join('\n\n')));
+  if(content.rules.length)fields.push(field('规则来源清单',content.rules.map((rule,index)=>
+    '规则 '+(index+1)+' → '+purposes[rule.purpose]+' · '+Buffer.byteLength(text(rule.text))+' 字节').join('\n')));
+  if(content.skills.length)fields.push(field('技能来源清单',content.skills.map((skill,index)=>{
+    const {files,entry}=skillFiles(skill,content);
+    return ['技能 '+(index+1),'名称 → '+JSON.stringify(skill.name),'说明文件相对路径 → '+JSON.stringify(entry.name),'包含文件数量 → '+files.length,
+      ...files.map((file,index)=>'文件 '+(index+1)+' → '+JSON.stringify(file.name)+' · '+Buffer.byteLength(text(file.text))+' 字节')].join('\n');
+  }).join('\n\n')));
+  const unowned=content.files.filter(file=>!content.skills.some(skill=>skill.fileIds.includes(file.itemId)));
+  if(unowned.length)fields.push(field('独立文件来源清单',unowned.map(file=>
+    position(content.files,file.itemId)+' → '+JSON.stringify(file.name)+' · '+uses[file.use]+' · '+Buffer.byteLength(text(file.text))+' 字节').join('\n')));
+  if(content.tasks.length)fields.push(field('任务来源清单',content.tasks.map((task,index)=>
+    '任务 '+(index+1)+' → '+JSON.stringify(task.name)+' · '+Buffer.byteLength(text(task.instruction))+' 字节').join('\n')));
+  if(content.memories.length)fields.push(field('记忆来源清单',content.memories.map((memory,index)=>
+    '记忆 '+(index+1)+' → '+Buffer.byteLength(text(memory.text))+' 字节').join('\n')));
+  return fields;
+}
 function itemFields(content:RecipeRichContent,summary:boolean):Field[]{
   const fields:Field[]=[];
-  if(content.role)fields.push(field('角色',summary?'已选本地角色 · '+Buffer.byteLength(text(content.role.text))+' 字节':text(content.role.text)));
-  for(const setting of content.settings)fields.push(...(summary?[field(labels[setting.field]!,'已选本地配置')]:settingFields(setting)));
-  for(const rule of content.rules)fields.push(field('规则位置',position(content.rules,rule.itemId)),field('规则用途',purposes[rule.purpose]),
-    field('规则正文',summary?'已选 · '+Buffer.byteLength(text(rule.text))+' 字节':text(rule.text)));
-  for(const skill of content.skills){
-    const {files,entry}=skillFiles(skill,content);
-    fields.push(field('技能位置',position(content.skills,skill.itemId)),field('技能名称',skill.name),field('说明文件相对路径',entry.name),
-      ...files.flatMap(f=>[field('包含文件相对路径',f.name),...(summary?[field('文件字节数',String(Buffer.byteLength(text(f.text))))]:[])]));
+  if(summary)fields.push(...sourceFields(content));
+  else{
+    if(content.role)fields.push(field('角色',text(content.role.text)));
+    for(const setting of content.settings)fields.push(...settingFields(setting));
+    for(const rule of content.rules)fields.push(field('规则位置',position(content.rules,rule.itemId)),field('规则用途',purposes[rule.purpose]),
+      field('规则正文',text(rule.text)));
+    for(const skill of content.skills){
+      const {files,entry}=skillFiles(skill,content);
+      fields.push(field('技能位置',position(content.skills,skill.itemId)),field('技能名称',skill.name),field('说明文件相对路径',entry.name),
+        ...files.map(f=>field('包含文件相对路径',f.name)));
+    }
+    for(const file of content.files)fields.push(...fileIdentity(file,content),field('文件用途',uses[file.use]),field('完整内容',text(file.text)));
+    for(const task of content.tasks)fields.push(field('任务位置',position(content.tasks,task.itemId)),...taskFields(task));
+    for(const memory of content.memories)fields.push(field('记忆',text(memory.text)));
   }
-  for(const file of content.files)if(!summary||!content.skills.some(s=>s.fileIds.includes(file.itemId)))
-    fields.push(...fileIdentity(file,content),field('文件用途',uses[file.use]),field(summary?'文件字节数':'完整内容',summary?String(Buffer.byteLength(text(file.text))):text(file.text)));
-  for(const task of content.tasks)fields.push(field('任务位置',position(content.tasks,task.itemId)),...(summary?
-    [field('任务名称',task.name),field('任务说明','已选 · '+Buffer.byteLength(text(task.instruction))+' 字节')]:taskFields(task)));
-  for(const memory of content.memories)fields.push(field('记忆',summary?'已选 · '+Buffer.byteLength(text(memory.text))+' 字节':text(memory.text)));
   for(const step of content.setup){
     const {itemId:_id,originId:_origin,...value}=step;
     fields.push({...field('旧补充说明',values(value)),valueJson:JSON.stringify(value)});
@@ -174,7 +202,8 @@ function selectedItemReview(content:RecipeRichContent,itemId:string,kind:ItemKin
     case 'cardBlock':{
       for(const setting of content.settings)if(setting.field==='presentation.cardDisplay'&&setting.value){
         const block=setting.value.blocks.find(i=>i.itemId===itemId);
-        if(block){const {itemId:_id,originId:_origin,...value}=block;return valueFields(value,'消息显示项');}
+        if(block){const {itemId:_item,originId:_origin,id:_id,...value}=block;
+          return [field('显示项位置',position(setting.value.blocks,itemId,positions)),...valueFields(value,'消息显示项')];}
       }
       break;
     }

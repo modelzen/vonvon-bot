@@ -18,6 +18,11 @@ const copy: Record<CardMode, string> = {
 const plain = (content: string) => ({tag:'div', text:{tag:'plain_text',content}});
 const action = (ref: string, verb: string, label: string, primary = false) => button(label, {a: AUTHORING_ACTION, ref, verb}, primary ? 'primary' : 'default');
 const authoringBody = (elements: CardElement[]) => card(elements, {header:{title:'配方草稿'},forward:false});
+function elementCount(value:unknown):number {
+  if(!value||typeof value!=='object')return 0;
+  if(Array.isArray(value))return value.reduce((count,item)=>count+elementCount(item),0);
+  return ('tag'in value&&typeof value.tag==='string'?1:0)+Object.values(value).reduce<number>((count,item)=>count+elementCount(item),0);
+}
 export function candidateConfirmation(ref: string, details?: CandidateCardDetails) {
   if (!details) return;
   const readable=(text:string)=>text.replace(/[⟦⟧\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu,
@@ -35,6 +40,7 @@ export function candidateConfirmation(ref: string, details?: CandidateCardDetail
     plain(details.sourceCapture?'本次保存你刚选中的本地内容快照。':'第 '+details.revision+' 次修订。请核对以下完整新值。'),
     ...fields, action(ref,'confirm','保存到草稿',true), action(ref,'cancel','取消')];
   const body = authoringBody(elements), data = JSON.stringify(body);
+  if(elementCount(body)>200)return;
   // CardKit recommends 30 KB. Budget both serialized request envelopes, including JSON escapes.
   const create = {type:'card_json',data};
   const update = {sequence:Number.MAX_SAFE_INTEGER,uuid:'a_'+Number.MAX_SAFE_INTEGER+'_'+ref,card:create};

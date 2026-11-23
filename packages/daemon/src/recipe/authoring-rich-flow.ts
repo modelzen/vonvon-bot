@@ -253,11 +253,12 @@ export function richCardReview(op:{rich?:RichLocalDraft;view:Pick<LocalOperation
         if(!donor)throw new Error('缺少恢复来源');
         return {content:decodeRichRecipeContent(Buffer.from(donor.canonical,'base64url')).content,itemId:ref.candidateId};
       };
-      const steps=request.payload.changes.map((change,index)=>({change,
-        after:applyChanges(base,request.payload.changes.slice(0,index+1),resolve,Buffer.alloc(32),request.newParts).doc.content}));
-      const positions=reviewPositions([base,...steps.map(step=>step.after)]);
+      const states:RecipeRichContent[]=[];
+      applyChanges(base,request.payload.changes,resolve,Buffer.alloc(32),request.newParts,after=>states.push(after));
+      const positions=reviewPositions([base,...states]);
       let current=base;
-      return steps.flatMap(({change,after},index)=>{
+      return request.payload.changes.flatMap((change,index)=>{
+        const after=states[index]!;
         const fields=changeReviewFields(change,current,after,positions);
         current=after;
         const step='第 '+(index+1)+' 项改动';
