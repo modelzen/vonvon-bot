@@ -13,10 +13,10 @@ test('creation links use only the server-selected exact desktop channel',()=>{
  for(const channel of ['','evil','preview?next=other',null,undefined])assert.equal(recipeCreationUrl(channel),undefined);
 });
 
-test('community, creation guide and account share the same navigation and trusted App link',async t=>{
+test('community and creation guide share navigation and the trusted App link',async t=>{
  for(const channel of ['preview','stable']){
   const host=await listen(t,channel);let common;
-  for(const path of ['/?channel=evil','/studio','/account']){
+  for(const path of ['/?channel=evil','/studio']){
    const response=await fetch(host+path);assert.equal(response.status,200);const html=await response.text();
    assert.ok(!html.includes('__DESKTOP_CHANNEL__'));assert.ok(!html.includes('__RECIPE_CREATE_URL__'));
    const dom=new JSDOM(html);t.after(()=>dom.window.close());const {document}=dom.window;
@@ -34,6 +34,16 @@ test('community, creation guide and account share the same navigation and truste
   }
   assert.equal((await fetch(host+'/create.mjs')).status,200);
  }
+});
+
+test('account settings provide a link back to the community and omit recipe creator controls',async t=>{
+ const host=await listen(t,'preview');
+ const response=await fetch(host+'/account');
+ assert.equal(response.status,200);
+ const dom=new JSDOM(await response.text());t.after(()=>dom.window.close());
+ const {document}=dom.window;
+ assert.equal(document.querySelector('.account-mast .brand').getAttribute('href'),'/');
+ assert.equal(document.querySelector('[data-create-site]'),null);
 });
 
 test('opening creation is user-driven and offers a download fallback without website authoring or writes',t=>{

@@ -17,27 +17,37 @@ function origin(value, name, loopbackOnly = false) {
   return url.origin;
 }
 
-const assets = new Map([
+const accountPages = new Map([
   ['/login', ['login.html', 'text/html; charset=utf-8']],
+  ['/account', ['account.html', 'text/html; charset=utf-8']],
+  ['/auth/native', ['login.html', 'text/html; charset=utf-8']],
+  ['/auth/native/complete', ['login.html', 'text/html; charset=utf-8']],
+]);
+const accountAssets = new Map([
+  ...accountPages,
   ['/login.mjs', ['login.mjs', 'text/javascript; charset=utf-8']],
   ['/login-promo.mjs', ['login-promo.mjs', 'text/javascript; charset=utf-8']],
   ['/login-join.webp', ['login-join.webp', 'image/webp']],
   ['/login-provider.webp', ['login-provider.webp', 'image/webp']],
+  ['/login-product.webp', ['login-product.webp', 'image/webp']],
   ['/login.css', ['login.css', 'text/css; charset=utf-8']],
-  ['/account', ['account.html', 'text/html; charset=utf-8']],
   ['/account.mjs', ['account.mjs', 'text/javascript; charset=utf-8']],
   ['/account.css', ['account.css', 'text/css; charset=utf-8']],
-  ['/auth/native', ['login.html', 'text/html; charset=utf-8']],
-  ['/auth/native/complete', ['login.html', 'text/html; charset=utf-8']],
   ['/native.mjs', ['native.mjs', 'text/javascript; charset=utf-8']],
   ['/native.css', ['native.css', 'text/css; charset=utf-8']],
+  ['/avatar-format.mjs', ['../../recipe-api/src/logo-format.mjs', 'text/javascript; charset=utf-8']],
+  ['/styles.css', ['styles.css', 'text/css; charset=utf-8']],
+  ['/mark.png', ['mark.png', 'image/png']],
+  ['/community-logo.webp', ['community-logo.webp', 'image/webp']],
+]);
+const assets = new Map([
+  ...accountAssets,
   ['/studio', ['studio.html', 'text/html; charset=utf-8']],
   ['/studio.html', ['studio.html', 'text/html; charset=utf-8']],
   ['/studio.css', ['studio.css', 'text/css; charset=utf-8']],
   ['/studio.mjs', ['studio.mjs', 'text/javascript; charset=utf-8']],
   ['/setup.mjs', ['setup.mjs', 'text/javascript; charset=utf-8']],
   ['/app.mjs', ['app.mjs', 'text/javascript; charset=utf-8']],
-  ['/avatar-format.mjs', ['../../recipe-api/src/logo-format.mjs', 'text/javascript; charset=utf-8']],
   ['/header.mjs', ['header.mjs', 'text/javascript; charset=utf-8']],
   ['/create.mjs', ['create.mjs', 'text/javascript; charset=utf-8']],
   ['/app-links.mjs', ['app-links.mjs', 'text/javascript; charset=utf-8']],
@@ -46,11 +56,43 @@ const assets = new Map([
   ['/vendor/markdown-it.mjs', ['../node_modules/markdown-it/dist/browser/markdown-it.esm.min.mjs', 'text/javascript; charset=utf-8']],
   ['/credential-shapes.mjs', ['../../recipe-api/src/credential-shapes.mjs', 'text/javascript; charset=utf-8']],
   ['/markdown.mjs', ['markdown.mjs', 'text/javascript; charset=utf-8']],
-  ['/styles.css', ['styles.css', 'text/css; charset=utf-8']],
-  ['/mark.png', ['mark.png', 'image/png']],
-  ['/community-logo.webp', ['community-logo.webp', 'image/webp']],
-  ['/login-product.webp', ['login-product.webp', 'image/webp']],
 ]);
+const accountRequests = new Map([
+  ['GET /auth/session', []],
+  ['POST /auth/start', ['content-type']],
+  ['POST /auth/logout', ['x-vonvon-session']],
+  ['POST /auth/account-link/consume', ['content-type']],
+  ['GET /api/v2/me/account-profile', ['x-vonvon-session']],
+  ['POST /api/v2/me/account-profile', ['content-type', 'idempotency-key', 'if-match', 'x-vonvon-session']],
+  ['POST /api/v2/me/account-profile/initialize', ['content-type', 'idempotency-key', 'x-vonvon-session']],
+  ['GET /auth/native/browser', ['content-type', 'x-vonvon-native-tab']],
+  ...['launch', 'select', 'complete', 'confirm', 'switch', 'cancel'].map(path =>
+    ['POST /auth/native/' + path, ['content-type', 'x-vonvon-native-tab']]),
+]);
+
+function allowAccountRequest(req, res, path, accountOrigin) {
+  if (!accountOrigin) return false;
+  const preflight = req.method === 'OPTIONS';
+  const method = preflight ? req.headers['access-control-request-method'] : req.method;
+  const allowedHeaders = accountRequests.get(method + ' ' + path);
+  if (allowedHeaders) res.setHeader('Vary', preflight ? 'Origin, Access-Control-Request-Method, Access-Control-Request-Headers' : 'Origin');
+  if (req.headers.origin !== accountOrigin) return false;
+  if (!allowedHeaders) {
+    if (preflight) throw new WebError(403, 'invalid_origin');
+    return false;
+  }
+  if (preflight) {
+    const requestedHeaders = req.headers['access-control-request-headers'];
+    if (requestedHeaders && requestedHeaders.toLowerCase().split(',').some(header => !allowedHeaders.includes(header.trim()))) {
+      throw new WebError(403, 'invalid_origin');
+    }
+    res.setHeader('Access-Control-Allow-Methods', method);
+    if (allowedHeaders.length) res.setHeader('Access-Control-Allow-Headers', allowedHeaders.join(', '));
+  }
+  res.setHeader('Access-Control-Allow-Origin', accountOrigin);
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  return true;
+}
 const idPattern = '[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}';
 const displayLogoPath = new RegExp('^/media/versions/(' + idPattern + ')/logo[.]webp$', 'i');
 const versionRead = new RegExp('^/v[12]/recipes/(' + idPattern + ')/versions/(' + idPattern + ')(?:/preview)?$', 'i');
@@ -90,15 +132,18 @@ export function createRecipeWeb(env = process.env) {
   const communityUrl = env.RECIPE_COMMUNITY_ORIGIN ? origin(env.RECIPE_COMMUNITY_ORIGIN, 'RECIPE_COMMUNITY_ORIGIN') + '/' : '/';
   const creatorsUrl = env.RECIPE_CREATORS_ORIGIN ? origin(env.RECIPE_CREATORS_ORIGIN, 'RECIPE_CREATORS_ORIGIN') + '/' : '/creators';
   const libraryUrl = communityUrl === '/' ? '/library' : new URL('library',communityUrl).href;
-  const accountUrl = env.RECIPE_ACCOUNT_ORIGIN ? origin(env.RECIPE_ACCOUNT_ORIGIN, 'RECIPE_ACCOUNT_ORIGIN') + '/account' : '/account';
+  const configuredAccountOrigin = env.RECIPE_ACCOUNT_ORIGIN ? origin(env.RECIPE_ACCOUNT_ORIGIN, 'RECIPE_ACCOUNT_ORIGIN') : '';
+  const accountUrl = configuredAccountOrigin ? configuredAccountOrigin + '/account' : '/account';
   const desktopChannel = env.RECIPE_DESKTOP_CHANNEL || 'preview';
   if (!['preview', 'stable'].includes(desktopChannel)) throw new Error('Invalid RECIPE_DESKTOP_CHANNEL');
   const port = Number(env.RECIPE_WEB_PORT || 49151);
   const publicOrigin = origin(env.RECIPE_WEB_ORIGIN || 'http://127.0.0.1:' + port, 'RECIPE_WEB_ORIGIN');
+  const accountOrigin = configuredAccountOrigin !== publicOrigin ? configuredAccountOrigin : '';
+  const accountHost = accountOrigin ? new URL(accountOrigin).host : '';
   const apiOrigin = origin(env.RECIPE_API_ORIGIN || 'http://127.0.0.1:4317', 'RECIPE_API_ORIGIN', true);
   const brokerOrigin = origin(env.RECIPE_BROKER_ORIGIN || 'http://127.0.0.1:4318', 'RECIPE_BROKER_ORIGIN', true);
   const supabaseOrigin = env.SUPABASE_URL ? origin(env.SUPABASE_URL, 'SUPABASE_URL') : null;
-  const authConfig = { publicOrigin, supabaseOrigin, publishableKey: env.SUPABASE_PUBLISHABLE_KEY,
+  const authConfig = { publicOrigin, accountOrigin, supabaseOrigin, publishableKey: env.SUPABASE_PUBLISHABLE_KEY,
     providerNames: (env.RECIPE_WEB_PROVIDERS || 'github,google').split(',').map(x => x.trim()) };
   async function verifyIdentity(accessToken, signal = AbortSignal.timeout(9000)) {
     const response = await fetch(apiOrigin + '/v2/me/account-profile', {headers: {Authorization: 'Bearer ' + accessToken},
@@ -116,11 +161,23 @@ export function createRecipeWeb(env = process.env) {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Referrer-Policy', /^\/auth\/(?:callback|native)/.test(req.url || '') ? 'no-referrer' : 'same-origin');
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
-    const url = new URL(req.url, publicOrigin);
-    if (url.origin !== publicOrigin) throw new WebError(400, 'invalid_path');
+    const accountSite = Boolean(accountHost && req.headers.host?.toLowerCase() === accountHost);
+    const siteOrigin = accountSite ? accountOrigin : publicOrigin;
+    const connectSource = accountSite ? "'self' " + publicOrigin : "'self'";
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src " + connectSource + "; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
+    const url = new URL(req.url, siteOrigin);
+    if (url.origin !== siteOrigin) throw new WebError(400, 'invalid_path');
     const appLogin = ['/auth/native','/auth/native/complete'].includes(url.pathname) || url.pathname === '/login' && url.searchParams.get('mode') === 'app';
-    if (appLogin) res.setHeader('Referrer-Policy','no-referrer');
+    const loginReferrer = appLogin ? 'no-referrer' : accountSite ? 'strict-origin-when-cross-origin' : 'same-origin';
+    if (appLogin || accountSite && url.pathname === '/login') res.setHeader('Referrer-Policy', loginReferrer);
+    if (!accountSite && accountOrigin && req.method === 'GET' && accountPages.has(url.pathname)) {
+      res.writeHead(303, { Location: accountOrigin + url.pathname + url.search }); res.end(); return;
+    }
+    if (accountSite && (req.method !== 'GET' || (url.pathname !== '/' && !accountAssets.has(url.pathname)))) {
+      throw new WebError(404, 'not_found');
+    }
+    const fromAccount = !accountSite && allowAccountRequest(req, res, url.pathname, accountOrigin);
+    if (fromAccount && req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
     if (['/open/draft', '/open-draft.mjs', '/open-draft.css'].includes(url.pathname)) {
       res.setHeader('Referrer-Policy', 'no-referrer');
       res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
@@ -134,7 +191,7 @@ export function createRecipeWeb(env = process.env) {
       return;
     }
     if (releaseCode && await releaseCode.handle(req, res, url)) return;
-    if (await native.handle(req, res, url)) return;
+    if (!accountSite && await native.handle(req, res, url, fromAccount)) return;
     const logo = req.method === 'GET' && displayLogoPath.exec(url.pathname);
     if (logo) {
       const response = await fetch(brokerOrigin + '/v2/versions/' + logo[1].toLowerCase() + '/display-logo', {
@@ -152,7 +209,7 @@ export function createRecipeWeb(env = process.env) {
       const identity = await verifyIdentity(token);
       return json(res, 201, login.accountLink(token, identity));
     }
-    if (['POST', 'PATCH', 'DELETE'].includes(req.method) && req.headers.origin !== publicOrigin) throw new WebError(403, 'invalid_origin');
+    if (['POST', 'PATCH', 'DELETE'].includes(req.method) && req.headers.origin !== publicOrigin && !fromAccount) throw new WebError(403, 'invalid_origin');
     if (req.method === 'POST' && url.pathname === '/auth/account-link/consume') {
       if (!req.headers['content-type']?.startsWith('application/json')) throw new WebError(415, 'invalid_body');
       const data = JSON.parse(await body(req, 2048));
@@ -171,7 +228,7 @@ export function createRecipeWeb(env = process.env) {
     if (req.method === 'GET' && url.pathname === '/auth/callback') return login.callback(req, res, url);
     if (req.method === 'POST' && url.pathname === '/auth/logout') {
       const current = login.status(req).displaySession;
-      login.logout(req, res);
+      login.logout(req, res, fromAccount);
       if (current && releaseCode) releaseCode.logout(current);
       return;
     }
@@ -229,14 +286,16 @@ export function createRecipeWeb(env = process.env) {
       res.end(); return;
     }
     if (req.method === 'GET') {
-      const asset = url.pathname === '/create' ? ['studio.html', 'text/html; charset=utf-8'] : url.pathname === '/' && siteKind === 'account' ? ['account.html', 'text/html; charset=utf-8']
+      const asset = url.pathname === '/create' ? ['studio.html', 'text/html; charset=utf-8'] : url.pathname === '/' && (accountSite || siteKind === 'account') ? accountPages.get('/account')
         : assets.get(url.pathname) || ((['/', '/library', '/publications'].includes(url.pathname) || authorPage.test(url.pathname) || detailPath.test(url.pathname)) && ['index.html', 'text/html; charset=utf-8']);
       if (asset) {
         const file = await readFile(new URL('public/' + asset[0], import.meta.url));
         const content = asset[1].startsWith('text/html') ? file.toString('utf8')
           .replaceAll('__DESKTOP_CHANNEL__', desktopChannel).replaceAll('__RECIPE_CREATE_URL__', recipeCreationUrl(desktopChannel))
           .replaceAll('__RECIPE_DRAFTS_URL__', recipeDraftsUrl(desktopChannel))
-          .replaceAll('__COMMUNITY_URL__', communityUrl).replaceAll('__CREATORS_URL__', creatorsUrl).replaceAll('__LIBRARY_URL__', libraryUrl).replaceAll('__ACCOUNT_URL__', accountUrl)
+          .replaceAll('__COMMUNITY_URL__', accountSite && communityUrl === '/' ? publicOrigin + '/' : communityUrl)
+          .replaceAll('__CREATORS_URL__', creatorsUrl).replaceAll('__LIBRARY_URL__', accountSite && libraryUrl === '/library' ? publicOrigin + '/library' : libraryUrl)
+          .replaceAll('__ACCOUNT_URL__', accountUrl).replaceAll('__AUTH_ORIGIN__', accountSite ? publicOrigin : '')
           .replaceAll('__CREATE_READY__', String(url.pathname === '/create'))
           .replaceAll('__GUARDED_CREATE_URL__','/create?from=' + encodeURIComponent(returnPath(url.pathname + url.search)))
           .replaceAll('__STUDIO_CREATE_URL__',url.pathname === '/create' ? recipeCreationUrl(desktopChannel) : '/create?from=%2Fstudio')
@@ -245,7 +304,7 @@ export function createRecipeWeb(env = process.env) {
           .replaceAll('__LOGIN_BACK_TO__', encodeURIComponent(returnPath(url.searchParams.get('backTo') ?? url.searchParams.get('returnTo'))))
           .replaceAll('__LOGIN_RETURN_TO__', encodeURIComponent(returnPath(url.searchParams.get('returnTo'))))
           .replaceAll('__LOGIN_ERROR__', ['failed','cancelled'].includes(url.searchParams.get('auth')) ? url.searchParams.get('auth') : 'false')
-          .replaceAll('__LOGIN_MODE__', appLogin ? 'app' : 'web').replaceAll('__LOGIN_REFERRER__', appLogin ? 'no-referrer' : 'same-origin') : file;
+          .replaceAll('__LOGIN_MODE__', appLogin ? 'app' : 'web').replaceAll('__LOGIN_REFERRER__', loginReferrer) : file;
         res.writeHead(200, { 'Content-Type': asset[1] }); res.end(content); return;
       }
     }

@@ -14,7 +14,7 @@ const cookie=response=>response.headers.getSetCookie().map(value=>value.split(';
 const id='11111111-1111-4111-8111-111111111111';
 
 test('login and account surfaces link the unified personal library with safe configured destinations',async t=>{
-  const host=await listen(t,createRecipeWeb({RECIPE_COMMUNITY_ORIGIN:'https://community.example',RECIPE_CREATORS_ORIGIN:'https://creators.example',RECIPE_ACCOUNT_ORIGIN:'https://accounts.example'}));
+  const host=await listen(t,createRecipeWeb({RECIPE_COMMUNITY_ORIGIN:'https://community.example',RECIPE_CREATORS_ORIGIN:'https://creators.example'}));
   for(const route of ['/login?returnTo='+encodeURIComponent('/?q=作者')+'&auth=failed','/library','/auth/native']) {
     const response=await fetch(host+route);assert.equal(response.status,200);
     const html=await response.text();assert.doesNotMatch(html,/__[A-Z_]+__/);
@@ -68,7 +68,7 @@ test('website keeps draft transport local and binds library reads to the display
     json(res,{items:['role-v1','rich-v2'].map(format=>({draftId:id,recipeId:null,revision:2,format,
       public:{name:format,summary:'简介',version:'1',access:'direct',overview:'PRIVATE OVERVIEW'},config:{role:'PRIVATE ROLE'},canonical:'PRIVATE PACKAGE',manifest:{secret:'PRIVATE MANIFEST'}}))});
   }));
-  const issuer=await listen(t,createServer((req,res)=>json(res,{access_token:'synthetic-access',refresh_token:'synthetic-refresh',expires_in:3600})));
+  const issuer=await listen(t,createServer((req,res)=>json(res,{access_token:'synthetic-access',refresh_token:'synthetic-refresh',expires_in:3600, user: {id: id}})));
   const origin='https://community.example';
   const host=await listen(t,createRecipeWeb({RECIPE_WEB_ORIGIN:origin,RECIPE_API_ORIGIN:api,SUPABASE_URL:issuer,SUPABASE_PUBLISHABLE_KEY:'synthetic',RECIPE_WEB_PROVIDERS:'github'}));
   assert.equal((await fetch(host+'/api/v2/me/drafts')).status,404);

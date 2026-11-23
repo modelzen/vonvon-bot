@@ -2,6 +2,10 @@ if (document.documentElement.dataset.loginMode !== 'app') {
 const $ = id => document.getElementById(id);
 const providers = $('login-providers'), current = $('login-current'), actions = $('login-session-actions');
 const status = $('login-status'), retry = $('login-retry'), firstUse = $('login-first-use'), switchHint = $('login-switch-hint');
+const configuredOrigin = document.documentElement.dataset.authOrigin;
+const authOrigin = configuredOrigin && !configuredOrigin.startsWith('__') ? configuredOrigin : '';
+const siteDestination = path => path === '/account' ? path : authOrigin + path;
+const credentials = authOrigin ? 'include' : 'same-origin';
 const providerNames = {github:'GitHub', google:'Google'};
 const uuid = '[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}';
 const detail = new RegExp('^/recipes/' + uuid + '/versions/' + uuid + '$', 'i');
@@ -28,28 +32,27 @@ function destination(encoded = document.documentElement.dataset.loginReturnTo) {
   } catch {return '/';}
 }
 const returnTo = destination(), storageKey = 'vv-recipe-login-continuation';
+if (authOrigin && window.location.hash) {
+  const fragment = new URLSearchParams(window.location.hash.slice(1));
+  const nonce = fragment.size === 1 ? fragment.get('acquire') : '';
+  const continuationNonce = detail.test(returnTo.split('?')[0]) && /^[a-f0-9]{64}$/.test(nonce || '') ? nonce : undefined;
+  window.history.replaceState({...window.history.state, continuationNonce}, '', window.location.pathname + window.location.search);
+}
 function continuation() {
+  if (authOrigin) {
+    const nonce = window.history.state?.continuationNonce;
+    if (detail.test(returnTo.split('?')[0]) && /^[a-f0-9]{64}$/.test(nonce || '')) return {nonce};
+    return;
+  }
   try {
     const value = JSON.parse(sessionStorage.getItem(storageKey) || 'null');
     const path = new URL(returnTo, location.origin).pathname;
     if (detail.test(path) && value?.path === path && /^[a-f0-9]{64}$/.test(value.nonce || '')) return value;
   } catch {}
 }
-function cancelContinuation() {
-  const pending = continuation();
-  if (pending) {try {sessionStorage.removeItem(storageKey);} catch {}}
-}
 const from = document.documentElement.dataset.loginBackTo;
 const originPath = from && !from.startsWith('__') ? destination(from) : returnTo;
-const backTo = originPath.startsWith('/release-code/confirm/') || originPath === '/create' ? '/' : originPath;
-$('login-cancel').href = backTo; $('login-continue').href = returnTo;
-$('login-cancel').addEventListener('click', event => {
-  cancelContinuation();
-  if (event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
-    event.preventDefault();
-    window.location.replace(backTo);
-  }
-});
+$('login-continue').href = siteDestination(returnTo);
 const loginError = document.documentElement.dataset.loginError;
 $('login-error').hidden = !['true','failed','cancelled'].includes(loginError);
 $('login-error').textContent = loginError === 'cancelled' ? '你已取消登录，可以重新选择登录方式。' : '这次登录没有完成，请重新选择登录方式。';
@@ -62,7 +65,7 @@ function clear() {
   firstUse.hidden = true; switchHint.hidden = true; retry.hidden = true;
 }
 async function request(path, signal, displaySession) {
-  const response = await fetch(path, {credentials:'same-origin',cache:'no-store',signal,...(displaySession && {headers:{'X-Vonvon-Session':displaySession}})});
+  const response = await fetch(authOrigin + path, {credentials,cache:'no-store',signal,...(displaySession && {headers:{'X-Vonvon-Session':displaySession}})});
   const data = await response.json();
   if (!response.ok) throw Object.assign(new Error(data?.error?.code || 'unavailable'), {status:response.status});
   return data;
@@ -79,7 +82,7 @@ function showProviders(switching = false) {
       const row = document.createElement('div'); row.className = 'auth-provider-unavailable'; row.append(button); providers.append(row);
       continue;
     }
-    const form = document.createElement('form'); form.method = 'post'; form.action = '/auth/start';
+    const form = document.createElement('form'); form.method = 'post'; form.action = authOrigin + '/auth/start';
     const fields = {provider,returnTo,...(from && !from.startsWith('__') && originPath !== returnTo && {backTo:originPath}),...(pending && {continuation:'acquire',continuationNonce:pending.nonce})};
     for (const [name,value] of Object.entries(fields)) {const input = document.createElement('input'); input.type = 'hidden'; input.name = name; input.value = value; form.append(input);}
     button.type = 'submit'; button.textContent = '使用 ' + providerNames[provider] + ' 登录';
@@ -124,7 +127,7 @@ $('login-continue').addEventListener('click', async event => {
     const profile = await request('/api/v2/me/account-profile', signal, shown.displaySession);
     if (shownAccount !== shown || generation !== shown.generation) return;
     if (typeof profile.authorId !== 'string' || profile.authorId.toLowerCase() !== shown.authorId) {void refresh(); return;}
-    location.assign(returnTo);
+    location.assign(siteDestination(returnTo));
   } catch {if (shownAccount === shown) void refresh();}
 });
 $('login-switch').addEventListener('click', () => {actions.hidden = true; showProviders(true);});

@@ -1,9 +1,14 @@
 const $ = id => document.getElementById(id);
+const configuredOrigin = document.documentElement.dataset.authOrigin;
+const authOrigin = configuredOrigin && !configuredOrigin.startsWith('__') ? configuredOrigin : '';
+const credentials = authOrigin ? 'include' : 'same-origin';
 const status = $('account-status'), loginPanel = $('account-login'), mismatch = $('account-mismatch');
 const form = $('account-profile'), name = $('account-name'), avatar = $('account-avatar');
-const image = $('avatar-image'), initials = $('avatar-initials'), remove = $('avatar-remove');
+const image = $('avatar-image'), initials = $('avatar-initials'), pickAvatar = $('avatar-pick'), remove = $('avatar-remove');
 const save = $('account-save'), feedback = $('account-feedback'), recover = $('account-recover');
 const sessionActions = $('account-session-actions'), logout = $('account-logout'), retry = $('account-retry');
+const identity = $('account-identity'), accountIdInput = $('account-id'), copyFeedback = $('account-id-feedback');
+const providerNames = new Map([['github', 'GitHub'], ['google', 'Google'], ['apple', 'Apple']]);
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const expectedStorage = 'vv-account-login-expected';
 let expectedAccount, invalidExpected = false;
@@ -48,7 +53,7 @@ class AccountError extends Error {
   constructor(code, status) {super(code); this.code = code; this.status = status;}
 }
 async function request(path, options = {}) {
-  const response = await fetch(path, {credentials: 'same-origin', cache: 'no-store', ...options,
+  const response = await fetch(authOrigin + path, {credentials, cache: 'no-store', ...options,
     signal: AbortSignal.any([owner.signal, AbortSignal.timeout(12_000)])});
   const data = await response.json();
   if (!response.ok) throw new AccountError(data?.error?.code || 'unavailable', response.status);
@@ -56,7 +61,8 @@ async function request(path, options = {}) {
 }
 function profileHeaders() {return {'X-Vonvon-Session': session.displaySession};}
 const after = document.documentElement.dataset.after;
-const nextPage = after && !after.startsWith('__') ? decodeURIComponent(after) : undefined;
+const nextPath = after && !after.startsWith('__') ? decodeURIComponent(after) : undefined;
+const nextPage = nextPath && (nextPath === '/account' ? nextPath : authOrigin + nextPath);
 function parseProfile(value) {
   if (!value || !uuid.test(value.authorId || '') || typeof value.displayName !== 'string' ||
       !Number.isInteger(value.revision) || value.revision < 0 || value.revision > 2147483647 ||
@@ -83,7 +89,7 @@ function update() {
   resume.hidden = !nextPage || !profile || busy;
   if (nextPage) resume.href = nextPage;
   save.disabled = busy || !profile || !valid || unchanged && recover.hidden;
-  for (const control of [name, avatar, remove, recover]) control.disabled = busy;
+  for (const control of [name, avatar, pickAvatar, remove, recover]) control.disabled = busy;
   initials.textContent = Array.from(name.value.trim()).slice(0, 2).join('').toLocaleUpperCase();
 }
 function preview(value) {
@@ -92,13 +98,14 @@ function preview(value) {
   remove.hidden = !profile?.avatarDataUrl && avatarChange.kind !== 'replace';
 }
 function applyProfile(value) {
-  profile = value; name.value = value.displayName; $('account-id').value = value.authorId;
+  profile = value; name.value = value.displayName; accountIdInput.value = value.authorId;
   avatarChange = {kind: 'keep'}; avatarPreview = value.avatarDataUrl; preview(avatarPreview);
   recover.hidden = true; update();
 }
 function clearProfile() {
   if (cropDialog.open) cropDialog.close('cancel');
-  profile = undefined; form.hidden = true; name.value = ''; $('account-id').value = '';
+  profile = undefined; form.hidden = identity.hidden = true; name.value = ''; accountIdInput.value = '';
+  copyFeedback.textContent = '账号的固定标识。';
   avatarError(); avatar.value = ''; avatarChange = {kind: 'keep'}; avatarPreview = undefined; preview();
   feedback.textContent = ''; $('name-error').textContent = ''; recover.hidden = true;
 }
@@ -123,7 +130,9 @@ async function load() {
     const next = await request('/auth/session');
     if (current !== generation) return;
     session = next;
-    if (!session.signedIn) {showLogin(); status.textContent = '登录后管理你的 Vonvon 账号。'; return;}
+    if (!session.signedIn) {showLogin(); status.textContent = ''; return;}
+    const provider = providerNames.get(session.provider);
+    $('account-session-method').textContent = provider ? `使用 ${provider} 登录` : '当前浏览器已登录';
     sessionActions.hidden = false;
     let value = parseProfile(await request('/api/v2/me/account-profile', {headers: profileHeaders()}));
     if (current !== generation) return;
@@ -133,11 +142,11 @@ async function load() {
       if (current !== generation) return;
       if (value.authorId !== accountId || value.revision === 0) throw new AccountError('invalid_profile');
     }
-    applyProfile(value); form.hidden = false; status.textContent = '';
+    applyProfile(value); form.hidden = identity.hidden = false; status.textContent = '';
   } catch (error) {
     if (current !== generation) return;
     if (error.code === 'account_mismatch') return showMismatch();
-    if (['login_required', 'auth_required'].includes(error.code)) {session = undefined; status.textContent = '网站登录已失效，请重新登录。'; retry.hidden = false; return;}
+    if (['login_required', 'auth_required'].includes(error.code)) {session = undefined; sessionActions.hidden = true; status.textContent = '网站登录已失效，请重新登录。'; retry.hidden = false; return;}
     status.textContent = '暂时无法读取账号，请稍后重试。'; retry.hidden = false;
   }
 }
@@ -156,6 +165,7 @@ let crop, pointer;
 function avatarError(message = '') {
   $('avatar-error').textContent = message;
   avatar.setAttribute('aria-invalid', String(Boolean(message)));
+  pickAvatar.setAttribute('aria-invalid', String(Boolean(message)));
 }
 function paintCrop() {
   if (!crop) return;
@@ -194,11 +204,16 @@ cropDialog.addEventListener('close', () => {
   try {
     if (crop.generation === generation && cropDialog.returnValue === 'confirm') {
       const data = canvas.toDataURL('image/webp', 0.9);
-      avatarChange = {kind: 'replace', base64: data.slice(data.indexOf(',') + 1)};
+      const output = /^data:image\/(?:webp|png);base64,([A-Za-z0-9+/]+={0,2})$/.exec(data);
+      if (!output) throw new Error('invalid_avatar_output');
+      avatarChange = {kind: 'replace', base64: output[1]};
       avatarPreview = data; preview(data); feedback.textContent = '头像已裁切，保存资料后生效。';
     }
+  } catch {
+    avatarError('浏览器无法生成裁切后的头像。请更换浏览器后重试。');
   } finally {crop.bitmap.close(); crop = undefined; pointer = undefined; update();}
 });
+pickAvatar.addEventListener('click', () => avatar.click());
 avatar.addEventListener('change', async () => {
   const file = avatar.files?.[0]; avatar.value = '';
   if (!file || busy || !profile) return;
@@ -210,11 +225,15 @@ avatar.addEventListener('change', async () => {
   let problem = '未能读取图片，请重新选择文件。';
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const {staticLogoFormat} = await import('/avatar-format.mjs');
-    problem = '请选择 PNG、JPEG 或 WebP 格式的静态图片。';
-    const format = staticLogoFormat(bytes);
+    // Decode the primary JPEG image with its original metadata so EXIF orientation is preserved.
+    let format = 'jpeg';
+    if (bytes[0] !== 0xff || bytes[1] !== 0xd8) {
+      const {staticLogoFormat} = await import('/avatar-format.mjs');
+      problem = '请选择 PNG、JPEG 或 WebP 格式的静态图片。';
+      format = staticLogoFormat(bytes);
+    }
     problem = '浏览器无法解码这张图片。请重新导出为 PNG 或 JPEG 后再试。';
-    const bitmap = await createImageBitmap(new Blob([bytes], {type:'image/' + format}));
+    const bitmap = await createImageBitmap(new Blob([bytes], {type:'image/' + format}), {imageOrientation: 'from-image'});
     if (current !== generation) {bitmap.close(); return;}
     crop = {bitmap, generation: current, x: 0, y: 0}; zoom.value = '1'; cropDialog.returnValue = '';
     problem = '未能打开裁切预览。请刷新页面后重新选择图片。';
@@ -257,16 +276,17 @@ recover.addEventListener('click', async () => {
   finally {if (current === generation) {busy = false; update();}}
 });
 $('account-copy').addEventListener('click', async () => {
+  if (!profile) return;
   const current = generation;
-  try {await navigator.clipboard.writeText(profile.authorId); if (current === generation) feedback.textContent = '用户 ID 已复制。';}
-  catch {if (current === generation) {feedback.textContent = '请选中用户 ID 手动复制。'; $('account-id').select();}}
+  try {await navigator.clipboard.writeText(profile.authorId); if (current === generation) copyFeedback.textContent = '用户 ID 已复制。';}
+  catch {if (current === generation) {copyFeedback.textContent = '请选中用户 ID 手动复制。'; accountIdInput.select();}}
 });
 logout.addEventListener('click', async () => {
   if (logout.disabled || !session?.signedIn) return;
   const displaySession = session.displaySession;
   ++generation; owner.abort(); owner = new AbortController(); clearProfile(); logout.disabled = true;
   try {
-    const response = await fetch('/auth/logout', {method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: {'X-Vonvon-Session': displaySession}, signal: AbortSignal.timeout(12_000)});
+    const response = await fetch(authOrigin + '/auth/logout', {method: 'POST', credentials, cache: 'no-store', headers: {'X-Vonvon-Session': displaySession}, signal: AbortSignal.timeout(12_000)});
     void response.body?.cancel().catch(() => {});
     if (!response.ok) throw new AccountError('logout_failed');
     events?.postMessage('check'); await load();

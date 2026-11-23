@@ -1,21 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { createLogin, createLoginAdmission, returnPath } from '../auth.mjs';
 
 const response = () => ({ writeHead(status, headers) { this.status = status; this.headers = headers; }, end() {} });
 const cookie = value => value.split(';', 1)[0];
+const user = {id: '11111111-1111-4111-8111-111111111111'};
 
 test('personal library return state is an explicit four-value allowlist', () => {
   for (const state of ['all','acquired','drafts','published']) assert.equal(returnPath('/library?state=' + state),'/library?state=' + state);
   for (const value of ['/library?state=other','/library?state=published&state=drafts','/library?state=published&next=https://evil.example','/library?from=creator','/library?state=//evil.example']) assert.equal(returnPath(value),'/');
 });
 
-test('web OAuth selects accounts for GitHub and Google while preserving PKCE and exact callback', t => {
+test('web OAuth selects accounts for GitHub and Google while preserving PKCE and exact callback', async t => {
   const login = createLogin({publicOrigin: 'https://community.example', supabaseOrigin: 'https://issuer.example',
     publishableKey: 'synthetic', providerNames: ['github', 'google', 'apple']});
   t.after(() => login.stop());
   for (const provider of ['github', 'google', 'apple']) {
-    const res = response(); login.start({headers: {}}, res, new URLSearchParams({provider}));
+    const res = response(); await login.start({headers: {}}, res, new URLSearchParams({provider}));
     const url = new URL(res.headers.Location);
     assert.equal(url.origin + url.pathname, 'https://issuer.example/auth/v1/authorize');
     assert.equal(url.searchParams.get('provider'), provider);
@@ -28,41 +30,44 @@ test('web OAuth selects accounts for GitHub and Google while preserving PKCE and
 
 test('logout invalidates a write that is waiting for token refresh', async t => {
   const originalFetch = globalThis.fetch;
-  let release;
+  const refreshStarted = Promise.withResolvers();
+  const refreshResponse = Promise.withResolvers();
   globalThis.fetch = async url => {
     if (url.includes('grant_type=refresh_token')) {
-      await new Promise(resolve => { release = resolve; });
-      return Response.json({ access_token: 'late-access', refresh_token: 'late-refresh', expires_in: 3600 });
+      refreshStarted.resolve();
+      await refreshResponse.promise;
+      return Response.json({ access_token: 'late-access', refresh_token: 'late-refresh', expires_in: 3600, user });
     }
-    return Response.json({ access_token: 'expired-access', refresh_token: 'refresh', expires_in: 1 });
+    return Response.json({ access_token: 'expired-access', refresh_token: 'refresh', expires_in: 1, user });
   };
   t.after(() => { globalThis.fetch = originalFetch; });
   const login = createLogin({ publicOrigin: 'http://localhost:1234', supabaseOrigin: 'http://localhost:1235',
     publishableKey: 'test', providerNames: ['github'] });
   t.after(() => login.stop());
   const start = response();
-  login.start({ headers: {} }, start, new URLSearchParams({ provider: 'github' }));
+  await login.start({ headers: {} }, start, new URLSearchParams({ provider: 'github' }));
   const finish = response();
   await login.callback({ headers: { cookie: cookie(start.headers['Set-Cookie']) } }, finish,
     new URL('http://localhost:1234/auth/callback?code=synthetic'));
   const req = { headers: { cookie: cookie(finish.headers['Set-Cookie'][1]) } };
   req.headers['x-vonvon-session'] = login.status(req).displaySession;
   const pending = login.access(req, { write: true });
+  await refreshStarted.promise;
   login.logout(req, response());
-  release();
+  refreshResponse.resolve();
   await assert.rejects(pending, { status: 409, message: 'session_changed' });
   assert.equal(login.status(req).signedIn, false);
 });
 
 test('a token obtained before logout cannot be forwarded after an await boundary', async t => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => Response.json({ access_token: 'valid-access', refresh_token: 'refresh', expires_in: 3600 });
+  globalThis.fetch = async () => Response.json({ access_token: 'valid-access', refresh_token: 'refresh', expires_in: 3600, user });
   t.after(() => { globalThis.fetch = originalFetch; });
   const login = createLogin({ publicOrigin: 'http://localhost:1234', supabaseOrigin: 'http://localhost:1235',
     publishableKey: 'test', providerNames: ['github'] });
   t.after(() => login.stop());
   const start = response();
-  login.start({ headers: {} }, start, new URLSearchParams({ provider: 'github' }));
+  await login.start({ headers: {} }, start, new URLSearchParams({ provider: 'github' }));
   const finish = response();
   await login.callback({ headers: { cookie: cookie(start.headers['Set-Cookie']) } }, finish,
     new URL('http://localhost:1234/auth/callback?code=synthetic'));
@@ -77,23 +82,29 @@ test('a token obtained before logout cannot be forwarded after an await boundary
 for (const action of ['logout', 'start']) {
   test(action + ' invalidates a callback waiting for its PKCE exchange', async t => {
     const originalFetch = globalThis.fetch;
-    let release, exchanges = 0;
+    const exchangeStarted = Promise.withResolvers();
+    const exchangeResponse = Promise.withResolvers();
+    let exchanges = 0;
     globalThis.fetch = async () => {
-      if (++exchanges === 1) await new Promise(resolve => { release = resolve; });
-      return Response.json({ access_token: 'synthetic-access', refresh_token: 'synthetic-refresh', expires_in: 3600 });
+      if (++exchanges === 1) {
+        exchangeStarted.resolve();
+        await exchangeResponse.promise;
+      }
+      return Response.json({ access_token: 'synthetic-access', refresh_token: 'synthetic-refresh', expires_in: 3600, user });
     };
     t.after(() => { globalThis.fetch = originalFetch; });
     const login = createLogin({ publicOrigin: 'http://localhost:1234', supabaseOrigin: 'http://localhost:1235',
       publishableKey: 'test', providerNames: ['github'] });
     t.after(() => login.stop());
     const start = response();
-    login.start({ headers: {} }, start, new URLSearchParams({ provider: 'github' }));
+    await login.start({ headers: {} }, start, new URLSearchParams({ provider: 'github' }));
     const req = { headers: { cookie: cookie(start.headers['Set-Cookie']) } }, finish = response();
     const pending = login.callback(req, finish, new URL('http://localhost:1234/auth/callback?code=synthetic'));
+    await exchangeStarted.promise;
     const next = response();
     if (action === 'logout') login.logout(req, next);
-    else login.start(req, next, new URLSearchParams({ provider: 'github' }));
-    release(); await pending;
+    else await login.start(req, next, new URLSearchParams({ provider: 'github' }));
+    exchangeResponse.resolve(); await pending;
     assert.equal(finish.headers.Location, '/login?returnTo=%2F&auth=failed#');
     assert.equal(finish.headers['Set-Cookie'], undefined);
     if (action === 'start') {
@@ -109,24 +120,55 @@ for (const action of ['logout', 'start']) {
 
 test('a duplicate callback cannot exchange the same flow concurrently', async t => {
   const originalFetch = globalThis.fetch;
-  let release, exchanges = 0;
+  const exchangeStarted = Promise.withResolvers();
+  const exchangeResponse = Promise.withResolvers();
+  let exchanges = 0;
   globalThis.fetch = async () => {
-    exchanges++; await new Promise(resolve => { release = resolve; });
-    return Response.json({ access_token: 'synthetic-access', refresh_token: 'synthetic-refresh', expires_in: 3600 });
+    exchanges++;
+    exchangeStarted.resolve();
+    await exchangeResponse.promise;
+    return Response.json({ access_token: 'synthetic-access', refresh_token: 'synthetic-refresh', expires_in: 3600, user });
   };
   t.after(() => { globalThis.fetch = originalFetch; });
   const login = createLogin({ publicOrigin: 'http://localhost:1234', supabaseOrigin: 'http://localhost:1235',
     publishableKey: 'test', providerNames: ['github'] });
   t.after(() => login.stop());
   const start = response();
-  login.start({ headers: {} }, start, new URLSearchParams({ provider: 'github' }));
+  await login.start({ headers: {} }, start, new URLSearchParams({ provider: 'github' }));
   const req = { headers: { cookie: cookie(start.headers['Set-Cookie']) } }, finish = response();
   const url = new URL('http://localhost:1234/auth/callback?code=synthetic');
   const pending = login.callback(req, finish, url), duplicate = response();
+  await exchangeStarted.promise;
   await login.callback(req, duplicate, url);
   assert.equal(duplicate.headers['Set-Cookie'], undefined); assert.equal(exchanges, 1);
-  release(); await pending;
+  exchangeResponse.resolve(); await pending;
   assert.equal(finish.headers.Location, '/#');
+});
+
+test('concurrent browser login flows exchange only their own PKCE verifier', async t => {
+  const originalFetch = globalThis.fetch;
+  const verifiers = new Map();
+  globalThis.fetch = async (url, options) => {
+    assert.equal(new URL(url).searchParams.get('grant_type'), 'pkce');
+    const {auth_code, code_verifier} = JSON.parse(options.body);
+    verifiers.set(auth_code, code_verifier);
+    return Response.json({access_token: 'session-' + auth_code, refresh_token: 'refresh-' + auth_code, expires_in: 3600, user});
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const login = createLogin({publicOrigin: 'https://community.example', supabaseOrigin: 'https://issuer.example', publishableKey: 'test', providerNames: ['github', 'google']});
+  t.after(() => login.stop());
+  const github = response(), google = response();
+  await Promise.all([
+    login.start({headers: {}}, github, new URLSearchParams({provider: 'github'})),
+    login.start({headers: {}}, google, new URLSearchParams({provider: 'google'})),
+  ]);
+  for (const [provider, start] of [['google', google], ['github', github]]) {
+    const finish = response();
+    await login.callback({headers: {cookie: cookie(start.headers['Set-Cookie'])}}, finish, new URL('https://community.example/auth/callback?code=' + provider));
+    assert.equal(login.status({headers: {cookie: cookie(finish.headers['Set-Cookie'][1])}}).provider, provider);
+    assert.equal(createHash('sha256').update(verifiers.get(provider)).digest('base64url'), new URL(start.headers.Location).searchParams.get('code_challenge'));
+  }
+  assert.notEqual(verifiers.get('github'), verifiers.get('google'));
 });
 
 test('anonymous login admission has a bounded burst and recovers over time', () => {
@@ -142,28 +184,28 @@ test('anonymous login admission has a bounded burst and recovers over time', () 
   assert.throws(admit, { status: 429 });
 });
 
-test('forged browser origins cannot bypass the login admission budget', () => {
+test('forged browser origins cannot bypass the login admission budget', async () => {
   const login = createLogin({ publicOrigin: 'https://community.example', supabaseOrigin: 'https://issuer.example',
     publishableKey: 'test', providerNames: ['github'] });
   try {
     for (let i = 0; i < 32; i++) {
-      login.start({ headers: { origin: 'https://' + i + '.example' } }, response(), new URLSearchParams({ provider: 'github' }));
+      await login.start({ headers: { origin: 'https://' + i + '.example' } }, response(), new URLSearchParams({ provider: 'github' }));
     }
-    assert.throws(() => login.start({ headers: {} }, response(), new URLSearchParams({ provider: 'github' })),
+    await assert.rejects(login.start({ headers: {} }, response(), new URLSearchParams({ provider: 'github' })),
       { status: 429, message: 'busy' });
   } finally { login.stop(); }
 });
 
 test('only allowlisted acquisition flows return a one-use exact-version continuation', async t => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => Response.json({access_token:'access',refresh_token:'refresh',expires_in:3600});
+  globalThis.fetch = async () => Response.json({access_token:'access',refresh_token:'refresh',expires_in:3600, user});
   t.after(() => {globalThis.fetch = originalFetch;});
   const login = createLogin({publicOrigin:'http://localhost:1234',supabaseOrigin:'http://localhost:1235',publishableKey:'test',providerNames:['github']});
   t.after(() => login.stop());
   const path = '/recipes/11111111-1111-4111-8111-111111111111/versions/22222222-2222-4222-8222-222222222222';
   for (const [returnTo, continuation, expected] of [[path,'acquire',path],[path,'',undefined],['https://evil.example','acquire',undefined],['/library','acquire',undefined],[path,'redeem',undefined]]) {
     const start = response();
-    login.start({headers:{}}, start, new URLSearchParams({provider:'github',returnTo,continuation,continuationNonce:'a'.repeat(64)}));
+    await login.start({headers:{}}, start, new URLSearchParams({provider:'github',returnTo,continuation,continuationNonce:'a'.repeat(64)}));
     const finish = response();
     await login.callback({headers:{cookie:cookie(start.headers['Set-Cookie'])}},finish,new URL('http://localhost:1234/auth/callback?code=ok'));
     assert.equal(finish.headers.Location, (returnTo.startsWith('https:') ? '/' : returnTo) + '#');
@@ -182,7 +224,7 @@ test('only allowlisted acquisition flows return a one-use exact-version continua
     assert.equal(login.status(req).continuation, undefined);
   }
   const start = response();
-  login.start({headers:{}},start,new URLSearchParams({provider:'github',returnTo:path,continuation:'acquire'}));
+  await login.start({headers:{}},start,new URLSearchParams({provider:'github',returnTo:path,continuation:'acquire'}));
   const failed = response();
   await login.callback({headers:{cookie:cookie(start.headers['Set-Cookie'])}},failed,new URL('http://localhost:1234/auth/callback?error=access_denied'));
   assert.equal(failed.headers.Location,'/login?'+new URLSearchParams({returnTo:path,auth:'cancelled'})+'#');
@@ -207,12 +249,12 @@ test('return paths preserve only bounded search and recipe provenance with canon
 for (const provider of ['github', 'google', 'apple']) test(provider + ' denial preserves the exact return context and permits a fresh login', async t => {
   const previous = globalThis.fetch;
   let exchanges = 0;
-  globalThis.fetch = async () => {exchanges++; return Response.json({access_token: 'synthetic-access', refresh_token: 'synthetic-refresh', expires_in: 3600});};
+  globalThis.fetch = async () => {exchanges++; return Response.json({access_token: 'synthetic-access', refresh_token: 'synthetic-refresh', expires_in: 3600, user});};
   t.after(() => {globalThis.fetch = previous;});
   const login = createLogin({publicOrigin: 'https://community.example', supabaseOrigin: 'https://issuer.example', publishableKey: 'synthetic', providerNames: [provider]});
   t.after(() => login.stop());
   const returnTo = '/recipes/11111111-1111-4111-8111-111111111111/versions/22222222-2222-4222-8222-222222222222?from=library-all';
-  const start = response(); login.start({headers: {}}, start, new URLSearchParams({provider, returnTo}));
+  const start = response(); await login.start({headers: {}}, start, new URLSearchParams({provider, returnTo}));
   const denied = response();
   await login.callback({headers: {cookie: cookie(start.headers['Set-Cookie'])}}, denied,
     new URL('https://community.example/auth/callback?error=access_denied&error_description=private-upstream-detail'));
@@ -220,7 +262,7 @@ for (const provider of ['github', 'google', 'apple']) test(provider + ' denial p
   assert.equal(denied.headers.Location.includes('private-upstream-detail'), false);
   assert.equal(exchanges, 0);
   assert.equal(login.status({headers: {}}).signedIn, false);
-  const retry = response(); login.start({headers: {}}, retry, new URLSearchParams({provider, returnTo}));
+  const retry = response(); await login.start({headers: {}}, retry, new URLSearchParams({provider, returnTo}));
   const completed = response();
   await login.callback({headers: {cookie: cookie(retry.headers['Set-Cookie'])}}, completed, new URL('https://community.example/auth/callback?code=fresh'));
   assert.equal(completed.headers.Location, returnTo + '#');
@@ -230,17 +272,17 @@ for (const provider of ['github', 'google', 'apple']) test(provider + ' denial p
 test('ambiguous web callbacks never exchange tokens or replace an existing session', async t => {
   const previous = globalThis.fetch;
   let exchanges = 0;
-  globalThis.fetch = async () => {exchanges++; return Response.json({access_token: 'synthetic-access', refresh_token: 'synthetic-refresh', expires_in: 3600});};
+  globalThis.fetch = async () => {exchanges++; return Response.json({access_token: 'synthetic-access', refresh_token: 'synthetic-refresh', expires_in: 3600, user});};
   t.after(() => {globalThis.fetch = previous;});
   const login = createLogin({publicOrigin: 'https://community.example', supabaseOrigin: 'https://issuer.example', publishableKey: 'synthetic', providerNames: ['github', 'google', 'apple']});
   t.after(() => login.stop());
-  const start = response(); login.start({headers: {}}, start, new URLSearchParams({provider: 'github'}));
+  const start = response(); await login.start({headers: {}}, start, new URLSearchParams({provider: 'github'}));
   const current = response();
   await login.callback({headers: {cookie: cookie(start.headers['Set-Cookie'])}}, current, new URL('https://community.example/auth/callback?code=valid'));
   const sessionCookie = cookie(current.headers['Set-Cookie'][1]);
   const identity = login.status({headers: {cookie: sessionCookie}});
   for (const query of ['?code=one&code=two', '?code=one&error=access_denied', '?code=one&returnTo=//evil.example']) {
-    const next = response(); login.start({headers: {cookie: sessionCookie}}, next, new URLSearchParams({provider: 'apple', returnTo: '/library?state=acquired'}));
+    const next = response(); await login.start({headers: {cookie: sessionCookie}}, next, new URLSearchParams({provider: 'apple', returnTo: '/library?state=acquired'}));
     const rejected = response();
     await login.callback({headers: {cookie: sessionCookie + '; ' + cookie(next.headers['Set-Cookie'])}}, rejected, new URL('https://community.example/auth/callback' + query));
     assert.equal(rejected.headers.Location, '/login?' + new URLSearchParams({returnTo: '/library?state=acquired', auth: 'failed'}) + '#');
@@ -251,20 +293,20 @@ test('ambiguous web callbacks never exchange tokens or replace an existing sessi
 
 test('OAuth returns original sanitized search/detail queries and retries failures on the login page', async t => {
   const originalFetch=globalThis.fetch;
-  globalThis.fetch=async()=>Response.json({access_token:'access',refresh_token:'refresh',expires_in:3600});
+  globalThis.fetch=async()=>Response.json({access_token:'access',refresh_token:'refresh',expires_in:3600, user});
   t.after(()=>{globalThis.fetch=originalFetch;});
   const login=createLogin({publicOrigin:'http://localhost:1234',supabaseOrigin:'http://localhost:1235',publishableKey:'test',providerNames:['google']});
   t.after(()=>login.stop());
   assert.equal(login.status({headers:{}}).provider,undefined);
   const path='/recipes/11111111-1111-4111-8111-111111111111/versions/22222222-2222-4222-8222-222222222222';
   for(const returnTo of ['/?q=Alice%20%26%20Bob',path+'?from=library',path+'?from=author&author=33333333-3333-4333-8333-333333333333']){
-    const start=response();login.start({headers:{}},start,new URLSearchParams({provider:'google',returnTo,continuation:'acquire',continuationNonce:'a'.repeat(64)}));
+    const start=response();await login.start({headers:{}},start,new URLSearchParams({provider:'google',returnTo,continuation:'acquire',continuationNonce:'a'.repeat(64)}));
     const finish=response();await login.callback({headers:{cookie:cookie(start.headers['Set-Cookie'])}},finish,new URL('http://localhost:1234/auth/callback?code=ok'));
     assert.equal(finish.headers.Location,returnPath(returnTo)+'#');
     const req={headers:{cookie:cookie(finish.headers['Set-Cookie'][1])}};
     assert.equal(login.status(req).provider,'google');
     assert.equal(login.status(req).continuation,returnTo.startsWith('/recipes/')?path:undefined);
-    const retry=response();login.start(req,retry,new URLSearchParams({provider:'google',returnTo}));
+    const retry=response();await login.start(req,retry,new URLSearchParams({provider:'google',returnTo}));
     const failed=response();await login.callback({headers:{cookie:cookie(retry.headers['Set-Cookie'])}},failed,new URL('http://localhost:1234/auth/callback?error=denied'));
     const url=new URL(failed.headers.Location,'http://localhost:1234');
     assert.equal(url.pathname,'/login');assert.equal(url.searchParams.get('returnTo'),returnPath(returnTo));assert.equal(url.searchParams.get('auth'),'failed');
