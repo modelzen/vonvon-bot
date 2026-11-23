@@ -13,6 +13,8 @@ import {desktopChannels} from '../../desktop/src/ipc-contract';
 import {DesktopRootView} from '../src/devices/DesktopRoot';
 import {useCommunity} from '../src/community/community-context';
 import {RecipeSourcePanel} from '../src/recipes/RecipeSourcePanel';
+import {RecipeUseDialog} from '../src/recipes/RecipeUseDialog';
+import {SettingValue} from '../src/community/RichConfiguration';
 import {useRecipeUse} from '../src/recipes/recipe-use-context';
 import {DraftGuardProvider} from '../src/settings/DraftGuard';
 import {A, B, devicesState, fakeShell, newClient} from './devices-fixture';
@@ -432,4 +434,78 @@ it('discards private version content arriving after an account switch', async ()
   expect(document.body.textContent).not.toContain('旧账号私有内容');
   expect(button('确认应用到这个群')).toBeUndefined();
   expect(requests.some(request => request.type === 'confirm')).toBe(false);
+});
+
+
+it('renders real conflict values without internal relationships or translating free text', async () => {
+  const parent = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const block = JSON.stringify({parentItemId: parent, id: 'context', kind: 'context', name: 'constructor', template: 'default', mystery: parent});
+  const setting = JSON.stringify({field: 'presentation.cardDisplay', value: {version: 1, blocks: [parent], reply: {streamText: true}}});
+  useReply = () => ({kind: 'richReview', handle, groupId, reviewToken: token, conflicts: [
+    {itemId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', kind: 'cardBlock', base: null, local: block, incoming: null},
+    {itemId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', kind: 'role', base: null, local: JSON.stringify({text: 'default'}), incoming: JSON.stringify({text: 'prototype'})},
+    {itemId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', kind: 'settings', base: null, local: setting, incoming: setting},
+  ]});
+  await draw(); await click('预览已知群');
+  const fields = [...document.querySelectorAll('fieldset')].map(element => element.textContent);
+  expect(fields[0]).toContain('constructor');
+  expect(fields[0]).toContain('default');
+  expect(fields[0]).toContain('移除此项');
+  expect(fields[1]).toContain('default');
+  expect(fields[1]).toContain('prototype');
+  expect(document.body.textContent).not.toContain(parent);
+  expect(document.body.textContent).not.toContain('parentItemId');
+  expect(document.body.textContent).not.toContain('mystery');
+});
+
+it('reuses successful fixed-version details when group-name verification temporarily becomes busy', async () => {
+  let notify: ((value: typeof snapshot) => void) | undefined;
+  client.watchSnapshots = listener => {notify = listener; listener(snapshot); return () => {};};
+  useReply = () => ({kind: 'richPrepared', handle, groupId, reviewToken: token});
+  await draw(); await click('预览已知群');
+  expect(button('确认应用到这个群').disabled).toBe(false);
+  detailRead = async () => {throw new Error('offline');};
+  await act(async () => notify!({...snapshot, agents: snapshot.agents.map(agent => ({...agent, running: false}))}));
+  expect(communityRequests.filter(request => request.type === 'detail')).toHaveLength(1);
+  expect(button('确认应用到这个群').disabled).toBe(false);
+  expect(document.body.textContent).toContain('以下是配方原文。本次冲突中选择保留的内容列在下方；未变更的项目可能沿用本群现有设置。');
+  expect(requests.some(request => request.type === 'confirm')).toBe(false);
+});
+
+it('keeps generic enum display compatible without reading inherited dictionary properties', async () => {
+  await act(async () => root.render(<><SettingValue value="default"/><SettingValue value="constructor"/><SettingValue value="prototype"/><SettingValue value={{constructor: 'prototype', text: 'default'}}/></>));
+  expect(document.body.textContent).toContain('默认');
+  expect(document.body.textContent).toContain('constructor');
+  expect(document.body.textContent).toContain('prototype');
+  expect(document.body.textContent).toContain('default');
+});
+
+it.each(['account', 'recipe', 'version', 'handle', 'token'] as const)('does not reuse content after the %s scope changes', async change => {
+  const session = {id: 1, recipe: {recipeId, versionId, name: '配方', version: '1'}, accountId, device: {id: A, name: '设备', isRemote: true, mode: 'full' as const, capabilities: []}, client, botId};
+  const reply = {kind: 'richPrepared' as const, handle, groupId, reviewToken: token};
+  async function render() {
+    await act(async () => root.render(<DesktopRootView state={devicesState({id: A, phase: 'ready'})} fallback={client} shell={shell} renderApp={() => <RecipeUseDialog session={session} visible reply={reply} busy={false} paused={false} accountChanged={false} unavailable={false} needsRecovery={false} groupId={groupId} groupName="群聊" community={shell.community} onRefreshGroupName={() => {}} onSelectBot={() => {}} onSelectGroup={() => {}} onClose={() => {}} onRecover={() => {}} onRequest={async () => {}}/>}/>));
+  }
+  await render();
+  expect(button('确认应用到这个群').disabled).toBe(false);
+  detailRead = async () => {throw new Error('offline');};
+  if (change === 'account') session.accountId = otherAccount;
+  if (change === 'recipe') session.recipe.recipeId = nextVersion;
+  if (change === 'version') session.recipe.versionId = nextVersion;
+  if (change === 'handle') reply.handle = nextVersion;
+  if (change === 'token') reply.reviewToken = newToken;
+  await render();
+  expect(button('确认应用到这个群').disabled).toBe(true);
+  expect(document.body.textContent).toContain('暂时无法读取配方内容');
+  expect(communityRequests.filter(request => request.type === 'detail')).toHaveLength(2);
+});
+
+it.each(['rules', 'files', 'tasks', 'memories', 'setup'])('keeps %s prose and names verbatim', async kind => {
+  const itemId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const content = JSON.stringify({name: 'constructor', title: 'constructor', text: 'default', instruction: 'default', instructions: 'default'});
+  useReply = () => ({kind: 'richReview', handle, groupId, reviewToken: token, conflicts: [{itemId, kind, base: null, local: content, incoming: null}]});
+  await draw(); await click('预览已知群');
+  expect(document.querySelector('fieldset')!.textContent).toContain('default');
+  expect(document.querySelector('fieldset')!.textContent).not.toContain('默认');
+  if (['files', 'tasks', 'setup'].includes(kind)) expect(document.querySelector('fieldset')!.textContent).toContain('constructor');
 });

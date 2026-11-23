@@ -7,7 +7,7 @@ import {Dialog} from '../reference/components/ui/Dialog';
 import {usePendingGroups} from '../pending-groups';
 import {OPEN_SETTING_EVENT} from '../search';
 import {RecipeDetails} from '../community/RecipeContent';
-import {SettingValue} from '../community/RichConfiguration';
+import {SettingValue, recipeSettingNames} from '../community/RichConfiguration';
 import type {CommunityShell, RecipeDetail} from '@vonvon/protocol';
 import type {RecipeUseSession} from './recipe-use-context';
 
@@ -74,7 +74,7 @@ export function RecipeUseDialog(props: Props) {
           acceptedResolution={props.acceptedResolution}
           onResolve={resolution => onRequest({type: 'resolve', handle: reply.handle, reviewToken: reply.review.reviewToken, resolution})}
           onConfirm={() => onRequest({type: 'confirm', handle: reply.handle})}/>}
-        {(reply?.kind === 'richReview' || reply?.kind === 'richPrepared') && <RichInstallReview key={`${reply.handle}:${reply.reviewToken}`} session={session} community={props.community} reply={reply} busy={!canAct || !groupName || !visible} retainedSettings={props.retainedSettings} onRequest={onRequest}/>}
+        {(reply?.kind === 'richReview' || reply?.kind === 'richPrepared') && <RichInstallReview key={JSON.stringify([session.accountId, session.device.id, session.recipe.recipeId, session.recipe.versionId, reply.handle, reply.reviewToken])} session={session} community={props.community} reply={reply} busy={!canAct || !groupName || !visible} retainedSettings={props.retainedSettings} onRequest={onRequest}/>}
         {reply?.kind === 'pending' && <InlineNotice title="正在核对结果" tone="warning">{pendingDetail(reply.phase)}关闭窗口后仍可从该配方恢复。</InlineNotice>}
         {recovery && reply?.kind === 'pending' && <InlineNotice title={recovery.state === 'createdUnsaved' ? '群已创建，连接尚未保存' : '群聊创建结果尚未确认'} tone="warning"
           actions={canAct && agent ? bound ? <Button onClick={() => void onRequest({type: 'repairJoin', handle: reply.handle, input: {type: 'existingBinding', agentId: agent.id, groupId: bound.groupId}})}>继续使用已连接的群</Button>
@@ -149,7 +149,7 @@ function RichInstallReview({session, community, reply, busy, retainedSettings, o
     void onRequest({type: 'richResolve', handle: reply.handle, reviewToken: reply.reviewToken, choices: {}});
   }, [reply, busy, onRequest]);
   useEffect(() => {
-    if (reply.kind !== 'richPrepared' || busy) return;
+    if (reply.kind !== 'richPrepared' || busy || detail) return;
     let current = true;
     setReadError(false);
     void community?.request({type: 'detail', accountId: session.accountId, recipeId: session.recipe.recipeId, versionId: session.recipe.versionId}).then(result => {
@@ -159,11 +159,11 @@ function RichInstallReview({session, community, reply, busy, retainedSettings, o
     }, () => {if (current) setReadError(true);});
     if (!community) setReadError(true);
     return () => {current = false;};
-  }, [reply.kind, session.accountId, session.recipe.recipeId, session.recipe.versionId, community, attempt, busy]);
+  }, [reply.kind, session.accountId, session.recipe.recipeId, session.recipe.versionId, community, attempt, busy, detail]);
   if (reply.kind === 'richPrepared') return <section className="recipe-use-preview">
-    <div><h3>配方内容</h3><p className="recipe-use-note">将此版本应用到上方群聊。以下展示配方内容，保留的本群设置单独列在下方。其他群聊与 Bot 不受影响。</p></div>
+    <div><h3>配方内容</h3><p className="recipe-use-note">以下是配方原文。本次冲突中选择保留的内容列在下方；未变更的项目可能沿用本群现有设置。</p></div>
     {detail ? <RecipeDetails recipe={detail} heading={<></>}/> : readError ? <InlineNotice title="暂时无法读取配方内容" tone="warning">读取后再确认应用。<Button disabled={busy} onClick={() => setAttempt(value => value + 1)}>重新读取配方</Button></InlineNotice> : <p role="status">正在读取配方内容…</p>}
-    {retainedSettings?.length ? <section className="recipe-use-retained"><h3>保留本群设置</h3>{retainedSettings.map((item, index) => <ConflictValue key={index} title={conflictLabel(item.kind)} text={item.local}/>)}</section> : retainedSettings === undefined ? <p className="recipe-use-note">恢复原操作，沿用先前确认的冲突选择。</p> : null}
+    {retainedSettings?.length ? <section className="recipe-use-retained"><h3>保留本群设置</h3>{retainedSettings.map((item, index) => <ConflictValue key={index} title={conflictLabel(item.kind)} kind={item.kind} text={item.local}/>)}</section> : retainedSettings === undefined ? <p className="recipe-use-note">恢复原操作，沿用先前确认的冲突选择。</p> : null}
     <div className="recipe-use-review__action"><Button className="recipe-use-confirm" variant="primary" disabled={busy || !detail} onClick={() => void onRequest({type: 'confirm', handle: reply.handle})}>确认应用到这个群</Button></div>
   </section>;
   if (!reply.conflicts.length) return <p role="status">正在准备配方预览…</p>;
@@ -171,7 +171,7 @@ function RichInstallReview({session, community, reply, busy, retainedSettings, o
     <div><h3>选择要使用的设置</h3><p className="recipe-use-note">这些内容与本群不同。选择后查看配方内容，再确认应用。</p></div>
     {reply.conflicts.map(item => <fieldset className="recipe-use-conflict" key={item.itemId}>
       <legend>{conflictLabel(item.kind)}</legend>
-      <div className="recipe-use-comparison"><ConflictValue title="当前本群" text={item.local}/><ConflictValue title="本次配方" text={item.incoming}/></div>
+      <div className="recipe-use-comparison"><ConflictValue title="当前本群" kind={item.kind} text={item.local}/><ConflictValue title="本次配方" kind={item.kind} text={item.incoming} removal/></div>
       <div className="recipe-use-choices">
         <label><input type="radio" disabled={busy} name={item.itemId} checked={choices[item.itemId] === 'local'} onChange={() => setChoices(old => ({...old, [item.itemId]: 'local'}))}/>保留本群</label>
         <label><input type="radio" disabled={busy} name={item.itemId} checked={choices[item.itemId] === 'incoming'} onChange={() => setChoices(old => ({...old, [item.itemId]: 'incoming'}))}/>使用配方</label>
@@ -183,9 +183,38 @@ function RichInstallReview({session, community, reply, busy, retainedSettings, o
 }
 
 const conflictNames: Record<string, string> = {role: '角色', settings: '群聊设置', rules: '规则', skills: '技能', files: '文档', tasks: '任务', memories: '记忆', setup: '补充说明', cardBlock: '消息卡片'};
-function conflictLabel(kind: string) {return conflictNames[kind] ?? kind;}
-function ConflictValue({title, text}: {title: string; text: string | null}) {
+function conflictLabel(kind: string) {return Object.hasOwn(conflictNames, kind) ? conflictNames[kind] ?? '配置项目' : '配置项目';}
+const conflictFields = new Map<string, string[]>([
+  ['role', ['text']], ['rules', ['purpose', 'text']], ['files', ['name', 'use', 'text']],
+  ['skills', ['name']], ['tasks', ['name', 'instruction', 'spec', 'timeZone', 'placement']],
+  ['memories', ['text']], ['setup', ['kind', 'title', 'instructions', 'check', 'required', 'action']],
+  ['cardBlock', ['kind', 'name', 'slot', 'mode', 'appearance', 'template', 'requestedTemplate', 'size', 'color', 'warning', 'warningAt', 'contextRules']],
+  ['settings', ['field', 'value']],
+]);
+const nestedFields = new Map<string, string[]>([
+  ['spec', ['kind', 'at', 'minutes', 'time', 'days', 'expr']], ['timeZone', ['kind', 'iana']],
+  ['action', ['kind', 'entry']], ['contextRules', ['yellowAt', 'orangeAt', 'redAt', 'showFrom', 'enabledColors']],
+  ['value', ['version', 'reply', 'backend', 'selection', 'models', 'efforts', 'modelEfforts', 'modelServiceTiers', 'defaultModel', 'defaultEffort', 'tier', 'provider', 'mode', 'sandbox', 'network', 'permissionMode']],
+  ['reply', ['streamText', 'collapseAfterRun']], ['selection', ['kind', 'model', 'effort', 'custom', 'backend', 'provider']],
+]);
+function readableFields(value: unknown, fields: string[]): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  return Object.fromEntries(fields.filter(key => Object.hasOwn(value, key)).map(key => {
+    const item: unknown = Reflect.get(value, key);
+    const nested = nestedFields.get(key);
+    return [key, nested ? readableFields(item, nested) : item];
+  }));
+}
+function ConflictValue({title, kind, text, removal = false}: {title: string; kind: string; text: string | null; removal?: boolean}) {
   let value: unknown = text;
   if (text) {try {value = JSON.parse(text);} catch {value = text;}}
-  return <div className="recipe-use-compare"><h4>{title}</h4><SettingValue value={value}/></div>;
+  const fields = conflictFields.get(kind) ?? [];
+  const readable = readableFields(value, fields);
+  const settingField = kind === 'settings' && value !== null && typeof value === 'object' && 'field' in value && typeof value.field === 'string' ? value.field : undefined;
+  const knownSetting = settingField && Object.hasOwn(recipeSettingNames, settingField) ? Object.entries(recipeSettingNames).find(([field]) => field === settingField)?.[1] : undefined;
+  const cardSetting = kind === 'settings' && value !== null && typeof value === 'object' && 'field' in value && value.field === 'presentation.cardDisplay';
+  return <div className="recipe-use-compare"><h4>{title}</h4>{text === null ? <p>{removal ? '移除此项' : '本群没有此项'}</p> : <>
+    {kind === 'settings' ? knownSetting ? <><p>{knownSetting}</p><SettingValue value={readable !== null && typeof readable === 'object' && 'value' in readable ? readable.value : null} literal={settingField === 'presentation.completionTemplate'}/></> : <p>此设置暂不支持预览。</p> : <SettingValue value={readable} literal={typeof readable === 'string'}/>}
+    {cardSetting && <p>卡片块的内容与顺序按本次逐项选择处理。</p>}
+  </>}</div>;
 }

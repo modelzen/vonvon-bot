@@ -222,7 +222,7 @@ it('does not enable confirmation until the exact platform identity is read, and 
   expect(button('确认应用到这个群')!.disabled).toBe(true);
   expect(document.body.textContent).toContain('输入已保留');
   readIdentity = request => ({kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: '已核对的目标群'});
-  await click('刷新群名');
+  await click('重新读取群名');
   expect(button('确认应用到这个群')!.disabled).toBe(false);
   expect(document.querySelector('[role="dialog"]')!.textContent).toContain('已核对的目标群');
 });
@@ -235,7 +235,7 @@ it('requires platform group identity instead of another bot local binding alias'
   readIdentity = () => {throw new Error('unavailable');};
   await draw(); await inGroup(groupId, '检查新版'); await inGroup(groupId, '预览更新');
   const dialog = document.querySelector('[role="dialog"]')!;
-  expect(dialog.textContent).not.toContain('群聊：另一 Bot 的本地绑定乙');
+  expect(dialog.textContent).not.toContain('另一 Bot 的本地绑定乙');
   expect(dialog.textContent).toContain('本地名称：本地绑定甲');
   expect(button('确认应用到这个群')!.disabled).toBe(true);
 });
@@ -265,14 +265,16 @@ it('uses the chosen Bot and physical group through the strict facade despite col
   readSnapshot = async () => projectedSnapshot();
   readIdentity = request => ({kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: '飞书物理群名'});
   await draw(); await inGroup(groupId, '检查新版'); await inGroup(groupId, '预览更新');
-  expect(document.querySelector('[role="dialog"]')!.textContent).toContain(`群聊：飞书物理群名（${groupId}）`);
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain('飞书物理群名');
   expect(document.querySelector('[role="dialog"]')!.textContent).toContain('本地名称：本地绑定甲');
   expect(identityRequests).toEqual([{type: 'readGroupIdentity', agentId: botId, groupId}]);
   readIdentity = request => ({kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: '飞书改名后'});
-  await click('刷新群名'); await click('确认应用到这个群');
+  await act(async () => dispatch({type: 'snapshot', view: A, value: {...projectedSnapshot(), revision: 2, agents: projectedSnapshot().agents.map(agent => ({...agent, running: false}))}}));
+  expect(button('确认应用到这个群')!.disabled).toBe(false);
+  await click('确认应用到这个群');
   expect(requests.at(-1)).toEqual({type: 'confirm', handle});
   expect(identityRequests.at(-1)).toEqual({type: 'readGroupIdentity', agentId: botId, groupId});
-  expect(document.querySelector('[role="dialog"]')!.textContent).toContain(`群聊：飞书改名后（${groupId}）`);
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain('飞书改名后');
 });
 
 it.each(['wrongBot', 'wrongGroup', 'empty'] as const)('refuses %s identity evidence instead of enabling confirmation', async kind => {
@@ -313,12 +315,13 @@ it('retains the custom role and same review while group-name refresh fails and r
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, '保留的手动合并🦉');
     input.dispatchEvent(new Event('input', {bubbles: true}));
   });
-  readIdentity = () => {throw new Error('offline');}; await click('刷新群名');
+  readIdentity = () => {throw new Error('offline');};
+  await act(async () => dispatch({type: 'snapshot', view: A, value: {...snapshot, revision: 2, agents: snapshot.agents.map(agent => ({...agent, running: false}))}}));
   expect(document.body.textContent).toContain('输入已保留');
   expect(input.value).toBe('保留的手动合并🦉');
   expect(button('预览所选内容')!.disabled).toBe(true);
   readIdentity = request => ({kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: '恢复后的群名'});
-  await click('刷新群名');
+  await click('重新读取群名');
   expect(document.querySelector('[aria-label="合并后的本群角色"]')).toBe(input);
   expect(input.value).toBe('保留的手动合并🦉'); expect(button('预览所选内容')!.disabled).toBe(false);
   expect(requests.map(request => request.type)).toEqual(['begin']);
@@ -343,8 +346,8 @@ it('does not let another account late closure dismiss the active account operati
   const dialog = document.querySelector('[role="dialog"]');
   await act(async () => done({kind: 'closed'}));
   expect(document.querySelector('[role="dialog"]')).toBe(dialog);
-  expect(dialog!.textContent).toContain(`（${groupTwo}）`);
-  expect(dialog!.textContent).not.toContain(`（${groupId}）`);
+  expect(dialog!.querySelector('.recipe-use-target strong')!.textContent).toBe('乙组');
+  expect(dialog!.querySelector('.recipe-use-target strong')!.textContent).not.toBe('甲组');
   expect(button('开始当前目标')).toBeUndefined();
 });
 
@@ -359,10 +362,10 @@ it('hides cached and delayed chooser group names when the real remote connection
     readIdentity = request => request.groupId === groupTwo ? new Promise(resolve => done = resolve)
       : {kind: 'groupIdentity', agentId: botId, groupId, name: '已核对的旧目标'};
     await inGroup(groupTwo, '检查新版'); await inGroup(groupTwo, '预览更新');
-    expect(document.querySelector('[role="dialog"]')!.textContent).toContain('群聊：已核对的旧目标');
+    expect(document.querySelector('[role="dialog"]')!.textContent).toContain('已核对的旧目标');
     await act(async () => link.end('client_revoked'));
     expect(connection.devices.state().active.phase).toBe('failed');
-    expect.soft(document.querySelector('[role="dialog"]')!.textContent).not.toContain('群聊：已核对的旧目标');
+    expect.soft(document.querySelector('[role="dialog"]')!.textContent).not.toContain('已核对的旧目标');
     await act(async () => done({kind: 'groupIdentity', agentId: botId, groupId: groupTwo, name: '断线后迟到的群名'}));
     expect(document.querySelector('[role="dialog"]')!.textContent).not.toContain('断线后迟到的群名');
     expect(requests.map(request => request.type)).toEqual(['begin']);
@@ -387,9 +390,9 @@ it.each(['connecting', 'offline'] as const)('pauses a prepared local operation a
       dispatch({type: 'snapshot', view: 'local', value: snapshot});
     });
     expect.soft(button('确认应用到这个群')?.disabled ?? true).toBe(true);
-    expect(document.querySelector('[role="dialog"]')!.textContent).not.toContain('群聊：甲组');
+    expect(document.querySelector('[role="dialog"]')!.textContent).not.toContain('甲组');
     await click('恢复原操作');
-    expect(document.querySelector('[role="dialog"]')!.textContent).toContain('群聊：重连后重新读取');
+    expect(document.querySelector('[role="dialog"]')!.textContent).toContain('重连后重新读取');
     expect(identityRequests).toHaveLength(2);
     expect(requests.map(request => request.type)).toEqual(['begin', 'begin']);
     await click('确认应用到这个群');
@@ -427,7 +430,7 @@ it.each(['account', 'same account', 'device', 'local reconnect'] as const)('reje
     expect(facade.shell.devices.clientFor(view)).toBe(originalClient);
     expect(button('确认应用到这个群')).toBeUndefined();
     await click('恢复原操作');
-    expect(document.querySelector('[role="dialog"]')!.textContent).toContain('群聊：新连接已核对');
+    expect(document.querySelector('[role="dialog"]')!.textContent).toContain('新连接已核对');
     await act(async () => oldDone({kind: 'groupIdentity', agentId: botId, groupId, name: '过期连接迟到的群名'}));
     expect(document.querySelector('[role="dialog"]')!.textContent).not.toContain('过期连接迟到的群名');
     await act(async () => {
@@ -455,7 +458,7 @@ it('requires a new identity and review when the same facade client receives reat
     });
     expect(button('确认应用到这个群')).toBeUndefined();
     await click('恢复原操作');
-    expect(document.querySelector('[role="dialog"]')!.textContent).toContain('群聊：重附加后核对');
+    expect(document.querySelector('[role="dialog"]')!.textContent).toContain('重附加后核对');
     expect(identityRequests).toHaveLength(2);
     expect(requests.map(request => request.type)).toEqual(['begin', 'begin']);
   } finally {stop(); await connection.devices.dispose();}
@@ -475,7 +478,7 @@ it('clears chooser evidence during a real remote disconnect and rereads on recov
     expect(connection.devices.state().active.phase).toBe('reconnecting');
     expect(button('继续旧目标')!.disabled).toBe(true);
     expect(button('开始当前目标')!.disabled).toBe(true);
-    expect(document.querySelector('[role="dialog"]')!.textContent).not.toContain('群聊：甲组');
+    expect(document.querySelector('[role="dialog"]')!.textContent).not.toContain('甲组');
     await act(async () => {
       for (const resolve of pending) resolve({kind: 'groupIdentity', agentId: botId, groupId: groupTwo, name: '连接断开后迟到'});
     });
@@ -483,8 +486,8 @@ it('clears chooser evidence during a real remote disconnect and rereads on recov
     readIdentity = request => ({kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: '恢复核对-' + request.groupId});
     await act(async () => {await connection.devices.switchTo('local'); await connection.ready(A);});
     expect(button('开始当前目标')!.disabled).toBe(false);
-    expect(document.querySelector('[role="dialog"]')!.textContent).toContain('群聊：恢复核对-' + groupId);
-    expect(document.querySelector('[role="dialog"]')!.textContent).toContain('群聊：恢复核对-' + groupTwo);
+    expect(document.querySelector('[role="dialog"]')!.textContent).toContain('恢复核对-' + groupId);
+    expect(document.querySelector('[role="dialog"]')!.textContent).toContain('恢复核对-' + groupTwo);
     const reads = identityRequests.length;
     await act(async () => dispatch({type: 'snapshot', view: A, value: {...snapshot, revision: 2}}));
     expect(identityRequests).toHaveLength(reads);
@@ -514,9 +517,9 @@ it('requires fresh evidence after a controlled restart whose first revision is h
     expect(devices.state().devices[0]!.status).toBe('online');
     expect(facade.shell.devices.clientFor('local')).toBe(original);
     expect(button('确认应用到这个群')).toBeUndefined();
-    expect(document.body.textContent).not.toContain('群聊：重启前群名');
+    expect(document.body.textContent).not.toContain('重启前群名');
     await click('恢复原操作');
-    expect(document.body.textContent).toContain('群聊：重启后群名');
+    expect(document.body.textContent).toContain('重启后群名');
     await act(async () => {for (const revision of [3,4,5]) h.push({...snapshot,revision});});
     expect(identityRequests).toHaveLength(2);
     expect(requests.map(r => r.type)).toEqual(['begin','begin']);
