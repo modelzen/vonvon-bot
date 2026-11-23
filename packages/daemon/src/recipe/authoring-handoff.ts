@@ -5,7 +5,7 @@ import {AuthoringJournal,sameRecipient,type AuthoringLedger,type Link,type Recip
 import {AuthoringIm,candidateConfirmation} from './authoring-im';
 import {groupSourceIdentity} from './authoring-source';
 import {preparedRich,readRichSource,richSkillOptions,typedRichEdit,richCardReview,type RichNativeOptions,type RichLocalDraft} from './authoring-rich-flow';
-import {candidateChanges,contentItems,emptySelection,handoffCard,selectedSource,setChoices,toggleChoice,viewHandoff,type PrivateHandoff,type handoffClick} from './authoring-handoff-menu';
+import {candidateChanges,contentItems,emptySelection,handoffCard,hasLegacyMemoryChoices,selectedSource,setChoices,toggleChoice,viewHandoff,type PrivateHandoff,type handoffClick} from './authoring-handoff-menu';
 import {wireDigest} from './authoring-rich-snapshot';
 
 type Begin=Extract<RecipeAuthoringRequest,{type:'beginHandoff'|'beginDraftHandoff'}>;
@@ -158,6 +158,13 @@ export class PrivateHandoffs {
   }
   private async resumeExisting(p:Presence,link:Link,h:PrivateHandoff){
     if(!active(h))return publicView(h);
+    if(hasLegacyMemoryChoices(h)){
+      const before=h.ref;
+      h.selection.options.includeBotMemories=false;
+      if(h.edit)setChoices(h);
+      else {h.phase={state:'needsReview'};h.selection.choices=[];}
+      rotate(h);h=await this.save(p,link,h,before);
+    }
     if(h.session!==p.session){
       if(!h.messageId&&h.sentAt!==undefined){h=await this.send(p,link,h);if(!h.messageId)return publicView(h);}
       const before=h.ref;
@@ -241,8 +248,8 @@ export class PrivateHandoffs {
       }
       if(click.action==='finish'&&h.edit){
         const edit=h.edit,changes=candidateChanges(h);
-        if(!h.selection.selected.length&&!changes.length)throw new Error('请先选择要修改的草稿内容。');
         const rich=typedRichEdit({type:'richEdit',botId:agentIdSchema.parse(this.native.bot.appId),session:p.session,...edit,selected:h.selection.selected,...(changes.length&&{changes})});
+        if(!h.selection.selected.length&&!changes.length&&!rich.request)throw new Error('请先选择要修改的草稿内容。');
         await this.start(p,link,h,rich,start);return;
       }
       if(click.action==='finish'){

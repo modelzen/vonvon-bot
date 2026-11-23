@@ -127,7 +127,6 @@ export function sourceOmissionFields(content:RecipeRichContent,kept:ReadonlySet<
   for(const skill of content.skills)add(skill,'技能 · '+position(content.skills,skill.itemId)+' · '+skill.name);
   for(const file of content.files)add(file,'文件 · '+position(content.files,file.itemId)+' · '+file.name);
   for(const task of content.tasks)add(task,'任务 · '+position(content.tasks,task.itemId)+' · '+task.name);
-  for(const memory of content.memories)add(memory,'记忆 · '+position(content.memories,memory.itemId));
   return fields;
 }
 function sourceFields(content:RecipeRichContent):Field[]{
@@ -153,8 +152,6 @@ function sourceFields(content:RecipeRichContent):Field[]{
     position(content.files,file.itemId)+' → '+JSON.stringify(file.name)+' · '+uses[file.use]+' · '+Buffer.byteLength(text(file.text))+' 字节').join('\n')));
   if(content.tasks.length)fields.push(field('任务来源清单',content.tasks.map((task,index)=>
     '任务 '+(index+1)+' → '+JSON.stringify(task.name)+' · '+Buffer.byteLength(text(task.instruction))+' 字节').join('\n')));
-  if(content.memories.length)fields.push(field('记忆来源清单',content.memories.map((memory,index)=>
-    '记忆 '+(index+1)+' → '+Buffer.byteLength(text(memory.text))+' 字节').join('\n')));
   return fields;
 }
 function itemFields(content:RecipeRichContent,summary:boolean):Field[]{
@@ -172,7 +169,6 @@ function itemFields(content:RecipeRichContent,summary:boolean):Field[]{
     }
     for(const file of content.files)fields.push(...fileIdentity(file,content),field('文件用途',uses[file.use]),field('完整内容',text(file.text)));
     for(const task of content.tasks)fields.push(field('任务位置',position(content.tasks,task.itemId)),...taskFields(task));
-    for(const memory of content.memories)fields.push(field('记忆',text(memory.text)));
   }
   for(const step of content.setup){
     const {itemId:_id,originId:_origin,...value}=step;
@@ -222,7 +218,7 @@ function selectedItemReview(content:RecipeRichContent,itemId:string,kind:ItemKin
       const task=content.tasks.find(i=>i.itemId===itemId);
       if(task)return [field('任务位置',position(content.tasks,itemId,positions)),...taskFields(task)];break;
     }
-    case 'memory':subset.memories=content.memories.filter(i=>i.itemId===itemId);break;
+    case 'memory':throw new Error('配方不包含记忆，请重新准备。');
     case 'setup':subset.setup=content.setup.filter(i=>i.itemId===itemId);break;
     case 'cardBlock':{
       for(const setting of content.settings)if(setting.field==='presentation.cardDisplay'&&setting.value){
@@ -273,6 +269,7 @@ function addedItemId(before:RecipeRichContent,after:RecipeRichContent,kind:ItemK
   return added[0]!.itemId;
 }
 export function changeReviewFields(change:RecipeRichDraftChange,before:RecipeRichContent,after:RecipeRichContent,positions:Positions):Field[]{
+  if(change.op==='removeLegacyMemories')return [field('配方内容','本次修订排除旧配方中的记忆。群和 Bot 原有记忆不变。')];
   if(change.op==='setAccess')return [field('获取方式',change.value==='coded'?'凭码获取':'直接获取')];
   if(change.op==='setFinalLogo'||change.op==='addSetup'||change.op==='setSetup')throw new Error('此类改动需要额外核对');
   if(change.op==='copyItem'||change.op==='includeCandidate'){
