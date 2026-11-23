@@ -388,7 +388,13 @@ export class PrivateCreator{
     };
     if(selection.kind==='draft'){
       await this.source(p,selection.work);
-      await this.run(p,link,(s,actual,db)=>{commit(s,actual,db);delete s.current;s.focusDraft=selection.work.draftId;s.focusUntil=this.now()+ttl;});
+      const editing=await this.run(p,link,(s,actual,db)=>{
+        commit(s,actual,db);delete s.current;s.focusDraft=selection.work.draftId;s.focusUntil=this.now()+ttl;
+        return Object.values(db.operations).some(o=>o.bot===this.botKey&&o.accountId===p.account&&o.scope===p.scope&&o.binding===link.binding&&
+          sameRecipient(o.recipient,link.recipient)&&!o.revoked&&o.contextOpen&&(o.contextUntil??0)>this.now()&&o.terminalAt===undefined&&
+          o.view.purpose==='editDraft'&&o.view.draftId===selection.work.draftId&&['waiting','candidate'].includes(o.view.state));
+      });
+      if(editing)return;
       if(await this.retryCard(p,link,selection.work.draftId))return;
       await this.read(p,link,{kind:'draft',work:selection.work});
     }else{
@@ -451,6 +457,7 @@ export class PrivateCreator{
     const retry=/^\/recipe\s+retry$/i.test(text);
     if(msg.replyToMessageId&&selection.foreignQuote&&selection.active){await this.im.reply(recipient.chatId,msg.messageId,'请选择原作品的当前卡片。');return true;}
     if(selection.originalOp&&!intent)return false;
+    if(!current&&selection.matching&&change&&/^(name|summary|overview|version)$/i.test(change[1]!))return false;
     if(!intent&&!photo&&!change&&!issue&&!retry){
       if(!selection.active)return false;
       if(selection.matching)return false;
@@ -767,7 +774,7 @@ export class PrivateCreator{
             !(context.view.receipt?.status==='accepted'&&context.view.receipt.draftId===snap.work.draftId);
           const otherHandoff=Object.values(db.handoffs??{}).some(h=>h.creator&&h.account===p.account&&h.scope===p.scope&&h.binding===_l.binding&&
             sameRecipient(h.recipient,_l.recipient)&&h.expiresAt>this.now()&&['selecting','awaitingAttestations'].includes(h.phase.state)&&h.draftId!==snap.work.draftId);
-          if(s.focusDraft===snap.work.draftId||!s.focusDraft&&Object.keys(s.sources).length===1&&!otherContext&&!otherHandoff){
+          if(s.focusDraft===snap.work.draftId||!s.current&&!s.focusDraft&&Object.keys(s.sources).length===1&&!otherContext&&!otherHandoff){
             s.current={kind:'draft',snapshot:snap};s.focusUntil=this.now()+ttl;
           }
           const cmd:CreatorCommand={kind:'publish',snapshot:snap,snapshotDigest:snapshotHash(snap)};

@@ -2664,3 +2664,64 @@ it.each(['before','awaiting','dispatched','reselected'])('preserves the selected
   if(!('content'in preview.request))throw Error('missing source content');
   expect(preview.request.content.role).toBeUndefined();
 });
+
+it('keeps an explicitly selected version after a cancelled resumed draft edit',async()=>{
+  const {op,draftId}=await richChatContext();
+  clock+=31*60_000;await orch.shutdown();restart();await open();
+  orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});await attachCreator();
+  const g=kind(await rpc('groupSourceIdentity',{groupId}),'groupSourceIdentity');
+  const work={draftId,source:{preparationId:randomUUID(),groupId,identity:g.identity}};
+  await rpc('resumeContext',{operationId:op.operationId});
+  await rpc('creatorContinue',{selection:{kind:'draft',work,name:'草稿',version:'1'}});
+  const job=(await creatorJobs()).find(j=>j.task.kind==='read'&&j.task.read.kind==='draft');
+  if(job)await expect(rpc('creatorCheck',{id:job.id})).rejects.toThrow();
+  await rpc('cancel',{operationId:op.operationId});
+  await rpc('settle',{operationId:op.operationId,receipt:{operationId:op.operationId,status:'cancelled',stateRevision:3}});
+  const target={recipeId:randomUUID(),versionId:randomUUID()};
+  await rpc('creatorContinue',{selection:{kind:'version',target,name:'新选版本',version:'9'}});
+  const snapshot={work,format:'rich-v2',recipeId:null,parent:null,revision:2,public:{name:'草稿',summary:'简介',overview:'概览',version:'1',access:'direct'},
+    contentSha256:digest('角色'),parts:[],sections:[{title:'角色',pageHashes:[digest('角色')]}]};
+  if(job)await rpc('creatorAnswer',{id:job.id,answer:{kind:'snapshot',snapshot}});
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const current=await new AuthoringJournal(root,()=>clock).run(db=>Object.values(db.links)[0]!.creator!.current?.kind);
+  await orch.onMessage(msg('/recipe issue 2'));
+  expect([Boolean(job),current,lastCard().includes('确认生成')]).toEqual([false,'version',true]);
+});
+
+it.each(['fresh','resumed','quoted-resumed'] as const)('keeps selected version commands on their original rich edit, %s',async(mode)=>{
+  const {op,draftId}=await richChatContext(['version']);
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  const messageId=await ledger.run(db=>db.operations[op.operationId]!.carrier.messageId);
+  if(mode!=='fresh'){
+    clock+=31*60_000;await orch.shutdown();restart();await open();
+    orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});await attachCreator();
+    const g=kind(await rpc('groupSourceIdentity',{groupId}),'groupSourceIdentity');
+    const work={draftId,source:{preparationId:randomUUID(),groupId,identity:g.identity}};
+    await rpc('resumeContext',{operationId:op.operationId});
+    await rpc('creatorContinue',{selection:{kind:'draft',work,name:'草稿',version:'1'}});
+  }
+  await orch.onMessage({...msg('/recipe version 1.2'),...(mode==='quoted-resumed'&&{replyToMessageId:messageId})});
+  const st=await status(op.operationId);
+  expect([st.state,JSON.stringify(textSend.mock.calls)]).toEqual(['candidate',expect.anything()]);
+  const req=await ledger.run(db=>db.operations[op.operationId]!.rich?.request);
+  expect(req&&'payload'in req&&req.payload.changes).toMatchObject([{op:'setPublicText',field:'version',value:'1.2'}]);
+  expect(proposeRich).not.toHaveBeenCalled();
+});
+
+it('keeps an explicitly selected version when an earlier draft snapshot arrives',async()=>{
+  await link();await attachCreator();
+  const work={draftId:randomUUID(),source:null};
+  await rpc('creatorContinue',{selection:{kind:'draft',work,name:'草稿 A',version:'1'}});
+  const job=(await creatorJobs()).find(j=>j.task.kind==='read'&&j.task.read.kind==='draft')!;
+  const target={recipeId:randomUUID(),versionId:randomUUID()};
+  await rpc('creatorContinue',{selection:{kind:'version',target,name:'版本 B',version:'9'}});
+  const snapshot={work,format:'role-v1',recipeId:null,parent:null,revision:2,public:{name:'草稿 A',summary:'简介',overview:'概览',version:'1',access:'direct'},
+    contentSha256:digest('角色'),parts:[],sections:[{title:'角色',pageHashes:[digest('角色')]}]};
+  await rpc('creatorAnswer',{id:job.id,answer:{kind:'snapshot',snapshot}});
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const current=await new AuthoringJournal(root,()=>clock).run(db=>Object.values(db.links)[0]!.creator!.current);
+  await orch.onMessage(msg('/recipe issue 2'));
+  expect(current).toEqual({kind:'version',target,name:'版本 B',version:'9'});
+  expect(lastCard()).toContain('确认生成');
+});
