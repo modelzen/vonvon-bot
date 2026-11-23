@@ -122,7 +122,7 @@ export const viewFor = (tokens: Pick<SessionTokens, 'active'>): PeerView => (pee
  * `askBot`: a session's Bot process, asked about a ★ request (devices-4b 4.3); without it those are refused. `distribution`:
  * how this daemon was installed, for serverInfo's `update.*` (devices-ui-2 4.11).
  */
-export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl; environmentOptions?: EnvironmentServiceOptions; serviceActions?: ServiceSeams; bridgeImport?: BridgeImporter; diagnostics?: Parameters<typeof createSnapshotStore>[0]['diagnostics']; crashes?: Parameters<typeof createSnapshotStore>[0]['crashes']; startedAt?: number; sessionTokens?: SessionTokens; askBot?: AuthzDeps['askBot']; remote?: RemoteSeams; distribution?: () => Promise<{ kind: string }>; recipeInstall?: {apiOrigin: string; allowLoopbackForTests?: boolean} }): Promise<DaemonApi> {
+export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl; environmentOptions?: EnvironmentServiceOptions; serviceActions?: ServiceSeams; bridgeImport?: BridgeImporter; diagnostics?: Parameters<typeof createSnapshotStore>[0]['diagnostics']; crashes?: Parameters<typeof createSnapshotStore>[0]['crashes']; startedAt?: number; sessionTokens?: SessionTokens; askBot?: AuthzDeps['askBot']; remote?: RemoteSeams; distribution?: () => Promise<{ kind: string }>; recipeInstall?: {brokerOrigin?:string; apiOrigin: string; allowLoopbackForTests?: boolean} }): Promise<DaemonApi> {
   const startedAt = options.startedAt ?? Math.round(performance.timeOrigin);
   // How this daemon was installed, read once (it may ask npm) and kept; until it is known the server info says nothing of updates.
   let distribution: string | undefined;
@@ -247,6 +247,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
     const identity = holdDevice(paths.appDir, await loadOrCreateDevice(paths.appDir, machineId));
     const recipeOrigin = options.recipeInstall?.apiOrigin ?? configuredRecipeApiOrigin();
     const recipes = recipeOrigin && !options.service.readonlyPreview ? new RecipeInstaller({
+      ...(options.service.richRecipe ? {rich: {brokerOrigin: options.recipeInstall?.brokerOrigin ?? recipeOrigin, bot: options.service.richRecipe}} : {}),
       apiOrigin: recipeOrigin, allowLoopbackForTests: options.recipeInstall?.allowLoopbackForTests, device: identity.current,
       isInChat: async (botId, chatId, identity) => {
         if (!options.service.assertGroupMembership) throw new Error('无法确认 Bot 群成员身份');

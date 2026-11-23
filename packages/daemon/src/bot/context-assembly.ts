@@ -38,6 +38,7 @@ export interface ContextSources {
   soul: string;
   role: ParsedRole;
   supplement: string;
+  recipeContext?: string;
   /** The library project the group is bound to. */
   project?: { id: string; name: string };
   bot?: MemoryRead;
@@ -56,7 +57,7 @@ export interface ContextInput {
   botName?: string;
   bio?: string;
   place: ContextPlace;
-  row?: Pick<Project, 'projectId' | 'supplement' | 'migration' | 'profile'>;
+  row?: Pick<Project, 'projectId' | 'supplement' | 'migration' | 'profile' | 'richRecipe'>;
   nameOf?: ContextSources['nameOf'];
   /** Asked only when an entry came from another group. */
   chatNames?: () => Promise<ReadonlyMap<string, string>>;
@@ -89,6 +90,8 @@ export async function loadContextSources(input: ContextInput): Promise<ContextSo
   const failed: ContextSources['failed'] = {};
   const sources: ContextSources = {
     place: input.place, botName: input.botName ?? input.appId, ...(input.bio ? { bio: input.bio } : {}),
+    ...(input.place.kind === 'group' && input.row?.richRecipe ? {recipeContext: input.row.richRecipe.resolved.flatMap(item =>
+      item.kind === 'memories' || (item.kind === 'rules' && item.value.purpose === 'work') ? [String(item.value.text)] : []).join('\n\n')} : {}),
     soul, role, supplement: input.place.kind === 'group' ? supplementOf(input.row) : '', failed,
     ...(input.nameOf ? { nameOf: input.nameOf } : {}),
   };
@@ -297,6 +300,10 @@ export function assemble(src: ContextSources, mode: 'work' | 'comment' = 'work')
   const identity = identityLine(src);
   const role = roleBlock(src);
   const supplement = mode === 'work' ? supplementBlock(src) : { body: '', block: '' };
+  if (mode === 'work' && src.recipeContext) {
+    supplement.body += '\n' + src.recipeContext;
+    supplement.block += `\n[本群配方 · 工作规则与选中的记忆]\n${quote(src.recipeContext)}\n[/本群配方]`;
+  }
   const bot = currentOf(src.bot, 'bot', mode === 'comment' ? { onlyBranch: COMMENT_BRANCH } : {});
   const project = mode === 'work' ? currentOf(src.projectMemory, 'project') : undefined;
   const dm = mode === 'work' ? currentOf(src.dmMemory, 'dm') : undefined;

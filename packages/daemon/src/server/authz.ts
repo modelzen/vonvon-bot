@@ -157,7 +157,7 @@ export const RULES: ReadonlyMap<string, Rule> = new Map([
   ...rows('memory', 'list add edit archive', { dm: 'bot', group: 'bot', comment: 'deny' }),
   ...rows('memory', 'export events restore promote move branchRename branchMerge branchDelete confirm purge undo reseal seen newCounts', DM_ONLY),
   ...rows('contextPreview', 'get', DM_ONLY),
-  ...rows('recipeInstall', 'source ignoreVersion createdGroup prepare commit status cancel issuing reconcile'),
+  ...rows('recipeInstall', 'richCancel richIssuing richReconcile richPrepare richCommit richStatus richSetup source ignoreVersion createdGroup prepare commit status cancel issuing reconcile'),
   ...rows('recipeAuthoring', 'open close status beginLink inspectLink confirmLink reviewSource prepare edit inspectCandidate advance deliver resend cancel settle reconcile updateCard groupSourceIdentity operationSourceIdentity workflow answerField resumeContext'),
   ...rows('schedule', 'list create edit pause resume delete runNow', { dm: 'bot', group: 'bot', comment: 'not-group' }),
   ...rows('schedule', 'listBot', { dm: 'bot', group: 'deny', comment: 'not-group' }),

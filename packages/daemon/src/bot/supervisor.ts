@@ -604,6 +604,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
           if (!child?.enabled || !child.proc || !child.ipc) throw new AdminWriteError('这个 Bot 没在运行');
           return child.ipc.call({ kind: 'collaboration', request }, 180_000);
         },
+        richRecipe:async(botId,op)=>{const ipc=reachable(botId);if(!ipc)throw new AdminWriteError('请先启动此 Bot');return ipc.call(op,120000);},
         recipeAuthoring: async (botId, op) => {
           const ipc = reachable(botId);
           if (!ipc) throw new AdminWriteError('这个 Bot 没在运行');

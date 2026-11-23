@@ -1,3 +1,4 @@
+import {pendingRich} from './rich-journal';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
@@ -73,7 +74,8 @@ export function assertRecipeRemovalSafe(target: RegistryLocation): Promise<void>
   return mutateProjectStore(target, async stored => {
     const unsafe = Object.values(operations(stored)).some(operation => operation.cloudCompletion === 'required'
       || ((operation.status === 'prepared' || operation.status === 'in_progress') && (operation.issuerState !== 'unissued' || operation.authorization)));
-    if (unsafe) throw new RecipeRecoveryRequired('这个 Bot 还有待恢复的配方安装，请先恢复或取消原操作后再移除。');
+    const richOutstanding=pendingRich(stored,Date.now());
+    if (unsafe || richOutstanding) throw new RecipeRecoveryRequired('这个 Bot 还有待恢复的配方安装，请先恢复或取消原操作后再移除。');
     return {changed: false, value: undefined};
   });
 }
@@ -93,13 +95,14 @@ export class RecipeStore {
     return this.options.location?.(botId) ?? {file: botPaths(botId).projectsFile, dataRoot: paths.appDir};
   }
   private now(): number { return (this.options.now ?? Date.now)(); }
-  private async foreignUsage(botId: string, accountId: string, day: string, now: number): Promise<{active: number; created: number}> {
+  async foreignUsage(botId: string, accountId: string, day: string, now: number): Promise<{active: number; created: number}> {
     const usage = {active: 0, created: 0};
     for (const bot of (await loadBots()).bots) {
       if (bot.appId === botId) continue;
       let stored: Record<string, unknown>;
       try {stored = JSON.parse(await readFile(this.location(bot.appId).file, 'utf8'));}
       catch (error) {if (error instanceof Error && 'code' in error && error.code === 'ENOENT') continue; throw error;}
+      usage.active+=pendingRich(stored,now,accountId);
       usage.active += Object.values(operations(stored)).filter(operation => operation.accountId === accountId && active(operation, now)).length;
       const budget = budgetsOf(stored)[accountId];
       if (budget?.day === day) usage.created += budget.count;
@@ -114,6 +117,15 @@ export class RecipeStore {
     try { await Promise.race([Promise.resolve().then(() => check(botId, groupId, identity)), expired]); }
     finally { clearTimeout(timer); }
   }
+  async reserveRichBudget(stored:Record<string,unknown>,botId:string,account:string,now:number):Promise<void>{
+    const day=new Date(now).toISOString().slice(0,10),foreign=await this.foreignUsage(botId,account,day,now);
+    const legacy=Object.values(operations(stored)).filter(o=>o.accountId===account&&active(o,now)).length;
+    const rich=pendingRich(stored,now,account);
+    if(legacy+rich+foreign.active>=3)throw new Error('这个账号已有 3 个待完成安装');
+    const daily=Object.fromEntries(Object.entries(budgetsOf(stored)).filter(([,v])=>v.day===day));
+    if((daily[account]?.count??0)+foreign.created>=60)throw new Error('本日配方安装准备已达上限');
+    daily[account]={day,count:(daily[account]?.count??0)+1};stored.recipeInstallDaily=daily;
+  }
   async prepare(input: Prepare): Promise<RecipeInstallReply> {
     const request = copy(input);
     const incoming = parseManifest(request.manifest, request.manifestSha256);
@@ -122,6 +134,7 @@ export class RecipeStore {
         const row = rows.find(row => row.chatId === request.groupId && !row.dm);
         if (!row) throw new Error('请选择这个 Bot 已绑定的现有群');
         await this.requireMembership(request.botId, row.chatId, bot);
+        if(row.richRecipe)throw new Error('此群已安装完整配方，请使用对应的版本更新入口');
         const existing = row.recipeInstall;
         if (existing && existing.recipeId !== incoming.recipeId) throw new Error('这个群已使用另一份配方');
         if (existing && incoming.revision < existing.revision) throw new Error('不能安装旧版本配方');
@@ -163,7 +176,8 @@ export class RecipeStore {
             manifestSha256: reused.manifestSha256, ...review} as RecipeInstallReply};
         }
         const day = new Date(now).toISOString().slice(0, 10), foreign = await this.foreignUsage(request.botId, request.accountId, day, now);
-        if (foreign.active + Object.values(history).filter(operation => operation.accountId === request.accountId && active(operation, now)).length >= 3) throw new Error('这个账号已有 3 个待完成安装，请先完成或取消');
+        const hereRich=pendingRich(stored,now,request.accountId);
+        if (foreign.active + hereRich + Object.values(history).filter(operation => operation.accountId === request.accountId && active(operation, now)).length >= 3) throw new Error('这个账号已有 3 个待完成安装，请先完成或取消');
         const daily = Object.fromEntries(Object.entries(budgetsOf(stored)).filter(([, budget]) => budget.day === day));
         if (foreign.created + (daily[request.accountId]?.count ?? 0) >= 60) throw new Error('这个账号今天的本机准备次数已达上限');
         if (Object.keys(history).length >= MAX_OPERATIONS) throw new Error('本机安装记录已达上限，请先恢复待完成操作');
@@ -192,6 +206,15 @@ export class RecipeStore {
     return withRegisteredBot(request.botId, bot => mutateProjectStore(this.location(request.botId), async (_stored, rows) => {
       const row = rows.find(r => r.chatId === request.groupId && !r.dm);
       if (!row) throw new Error('群绑定已改变');
+      const active=row.richRecipe;
+      if(active){
+        const release=active.pointer.release, token=()=>sha256(JSON.stringify([this.options.targetPublicKey,bot,row.bindingIncarnation,active.pointer,active.ignoredVersionId]));
+        if(request.type==='ignoreVersion'){
+          if(request.sourceToken!==token()||request.recipeId!==release.recipeId||request.installedVersionId!==release.versionId||request.versionId===release.versionId)throw new Error('配方来源已改变');
+          active.ignoredVersionId=request.versionId;
+        }
+        return {changed:request.type==='ignoreVersion',value:{kind:'source',groupId:request.groupId,source:{recipeId:release.recipeId,versionId:release.versionId,revision:release.revision,authorId:release.authorId,installedAt:active.installedAt,sourceToken:token(),ignoredVersionId:active.ignoredVersionId}} as RecipeInstallReply};
+      }
       const source = row.recipeInstall;
       if (!source) {
         if (request.type === 'ignoreVersion') throw new Error('安装来源已改变，请重新检查。');

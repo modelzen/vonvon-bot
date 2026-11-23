@@ -394,6 +394,7 @@ describe('the bot-session column (unit)', () => {
       'admin.secrets', 'admin.setSecret', 'admin.removeSecret', 'admin.testSecret',
       'device.status', 'device.enable', 'device.disable', 'device.setPort', 'device.pair', 'device.clients', 'device.renameClient', 'device.revokeClient', 'device.rename',
       'settings.act.adminMember', 'memory.dmPeople',
+      'recipeInstall.richCancel','recipeInstall.richIssuing','recipeInstall.richReconcile','recipeInstall.richPrepare','recipeInstall.richCommit','recipeInstall.richStatus','recipeInstall.richSetup',
       'recipeInstall.source', 'recipeInstall.createdGroup', 'recipeInstall.ignoreVersion',
       'recipeInstall.prepare', 'recipeInstall.commit', 'recipeInstall.status', 'recipeInstall.cancel',
       'recipeInstall.issuing', 'recipeInstall.reconcile',
