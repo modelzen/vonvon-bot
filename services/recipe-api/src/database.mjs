@@ -16,7 +16,7 @@ const calls = Object.freeze({
   publishDraft: 'recipe_api.publish_draft($1::uuid,$2::int,$3::uuid)',
   library: 'recipe_api.library($1::uuid)',
   publications: 'recipe_api.publications()',
-  acquire: 'recipe_api.acquire($1::uuid,$2::text,$3::uuid)',
+  acquire: 'recipe_api.acquire($1::uuid,$2::text,$3::text)',
   issueCodes: 'recipe_api.issue_codes($1::uuid,$2::int,$3::uuid)',
   listCodes: 'recipe_api.list_codes($1::uuid,$2::uuid)',
   disableCode: 'recipe_api.disable_code($1::uuid)',
@@ -28,7 +28,9 @@ const calls = Object.freeze({
   cancelOperation: 'recipe_api.cancel_operation($1::uuid)',
   redeemOperation: 'recipe_api.possess_operation($1::uuid,$2::bytea,$3::bytea,$4::bytea)',
   completeOperation: 'recipe_api.possess_operation($1::uuid,$2::bytea,$3::bytea,$4::bytea,$5::text)',
+  sourceHistory: 'recipe_api.source_history($1::uuid[])',
   registerAuthoring: 'recipe_api.register_authoring($1::uuid,$2::jsonb)',
+  recoverAuthoring: 'recipe_api.recover_authoring($1::uuid)',
   getAuthoring: 'recipe_api.get_authoring($1::uuid)',
   cancelAuthoring: 'recipe_api.cancel_authoring($1::uuid)',
   authorizeAuthoring: 'recipe_api.authorize_authoring($1::uuid,$2::jsonb,$3::bytea,$4::bytea,$5::bytea,$6::bigint)',
@@ -38,14 +40,15 @@ const calls = Object.freeze({
 });
 
 const businessErrors = new Map(Object.entries({
+  source_unavailable:403, object_unavailable:409, object_capacity:429, object_stream_limit:429,
   auth_required: 401, account_disabled: 403, not_found: 404, forbidden: 403, invalid_input: 422, incomplete_setup: 422,
   conflict: 409, quota_exceeded: 422, rate_limited: 429, invalid_code: 422,
   operation_pending_limit: 429, operation_expired: 410, operation_clock_skew: 422,
   operation_cancelled: 409, invalid_operation_proof: 403,
-  proposal_active: 409,
+  proposal_active: 409, acquire_rate_limited: 429, request_upgrade_required: 409, integrity_error: 503,
 }));
 
-function makePool(connectionString) {
+export function makePool(connectionString) {
   const url = new URL(connectionString);
   if (!['postgresql:', 'postgres:'].includes(url.protocol) || !url.hostname) {
     throw new Error('Invalid RECIPE_DATABASE_URL');
@@ -121,6 +124,11 @@ export async function openDatabase(url, codeKey, issuer) {
           [identity.issuer, identity.subject]);
         await client.query("SELECT set_config('app.recipe_account',$1,true)", [mapped.account_id]);
       }
+      if (operation.startsWith('rich')) {
+        const {richExecute}=await import('./rich-database.mjs');
+        const result=await richExecute(client,operation,args);
+        await client.query('COMMIT');return result;
+      }
       if (operation === 'authorizeOperation') {
         const { rows:[context] } = await client.query('SELECT recipe_api.operation_context() AS result');
         const [operationId, request] = args;
@@ -146,7 +154,9 @@ export async function openDatabase(url, codeKey, issuer) {
       if (err.code === 'P0001' && businessErrors.has(err.message)) {
         // SQL publishing/issuing quotas use UTC calendar days.
         const dayMs = 86_400_000;
-        const retryAfter = err.message === 'rate_limited'
+        const retryAfter = err.message === 'acquire_rate_limited'
+          ? (/^[1-9][0-9]{0,12}$/.test(err.detail ?? '') && Number.isSafeInteger(Number(err.detail)) ? Number(err.detail) : undefined)
+          : err.message === 'rate_limited'
           ? Math.ceil((dayMs - Date.now() % dayMs) / 1000) : err.message === 'operation_pending_limit' ? 300 : undefined;
         throw new ApiError(businessErrors.get(err.message), err.message, retryAfter);
       }

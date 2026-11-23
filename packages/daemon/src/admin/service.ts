@@ -1,3 +1,4 @@
+import {groupIdentitySchema, type GroupIdentity} from '@vonvon/protocol';
 import { pendingGroupsFile, readPendingGroups, type PendingGroup } from '../project/pending-groups';
 import type { CollaborationRequest } from './collaboration';
 import {runtimeDistribution} from '../service/distribution';
@@ -20,7 +21,8 @@ import { parseJoinedGroups, parseGroupMembers, parseGroupMembership, type GroupM
 import { voiceView } from '../voice/view';
 import type { VoiceAction, VoiceView } from '../voice/types';
 import { readFile, realpath, rm, stat } from 'node:fs/promises';
-import { botIdentity, loadBots, setBotActivation, setBotBadgeNumber, removeBot, type BotIdentity } from '../config/bots';
+import { botIdentity, withRegisteredBot, loadBots, setBotActivation, setBotBadgeNumber, removeBot, type BotIdentity } from '../config/bots';
+import { active as activeAuthoring, AuthoringJournal, authoringBotKey } from '../recipe/authoring-journal';
 import { assertRecipeRemovalSafe, RecipeRecoveryRequired } from '../recipe/store';
 import { dmPreparationError, prepareDmProjectForBot } from '../bot/dm-project';
 import { botPaths, botDir, paths } from '../config/paths';
@@ -139,8 +141,11 @@ export interface AdminService {
   codexSetup?(opts?: { refresh?: boolean }): Promise<CodexSetup>;
   close?(): Promise<void>;
   pendingGroups?(botId: string): Promise<{ groups: PendingGroup[] }>;
+  readGroupIdentity?(botId: string, chatId: string): Promise<GroupIdentity>;
   joinedGroups?(botId: string, cursor?: string): Promise<JoinedGroups>;
   groupMembers?(botId: string, chatId: string, cursor?: string): Promise<GroupMembers>;
+  richRecipe?: (botId:string,op:import('../recipe/rich-installer').RichBotOp)=>Promise<unknown>;
+  recipeAuthoring?: (botId: string, op: import('../recipe/authoring-service').AuthoringIpc) => Promise<unknown>;
   assertGroupMembership?(botId: string, chatId: string, identity: BotIdentity): Promise<void>;
   /** dm-agent 7.3: a Feishu read, on the Bot `reach` comes to (admin/feishu-route.ts). Refusals are replies, not errors. */
   feishuRead?(reach: FeishuReach, request: Omit<FeishuReadRequest, 'only'>): Promise<FeishuReadReply>;
@@ -292,6 +297,7 @@ export class NotWiredYetError extends Error {
 
 export interface AdminBot {
   registeredAt?: number;
+  registrationId?: string;
   ownerName?: string;
   name: string;
   badgeNumber?: string;
@@ -330,6 +336,7 @@ export interface AdminProject {
   name: string;
   chatId: string;
   cwd: string;
+  bindingIncarnation?: string;
   /** The library project this binding belongs to (project/library.ts); absent until the daemon has linked the row. */
   projectId?: string;
   blank: boolean;
@@ -483,6 +490,8 @@ export interface AdminServiceDeps {
   executeSettingsRead?: (botId: string, op: AdminSettingsReadOp) => Promise<unknown>;
   codexTools?: CodexSetupService;
   executeCollaboration?: (botId: string, request: CollaborationRequest) => Promise<unknown>;
+  richRecipe?:AdminService['richRecipe'];
+  recipeAuthoring?: AdminService['recipeAuthoring'];
   executeGroups?: (botId: string, op: AdminGroupOp) => Promise<unknown>;
   executeWrite?: (botId: string, op: AdminWriteOp) => Promise<unknown>;
   /** Asks a running bot process to follow a project's new workspace (admin/library.ts `AdminLibraryOp`). */
@@ -543,6 +552,7 @@ function adminRow(p: Project): Omit<AdminProject, 'sessionCount'> {
     chatId: p.chatId,
     cwd: p.cwd,
     ...(isProjectId(p.projectId) ? { projectId: p.projectId } : {}),
+    ...(p.bindingIncarnation && {bindingIncarnation:p.bindingIncarnation}),
     blank: p.blank,
     branch: p.branch,
     kind: sessionModeOf(p),
@@ -732,6 +742,15 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       return { groups: groups.length > MAX_PENDING_GROUPS
         ? groups.sort((a, b) => b.addedAt - a.addedAt).slice(0, MAX_PENDING_GROUPS) : groups };
     },
+    async readGroupIdentity(botId, chatId) {
+      if (!deps.executeGroups) throw new NotWiredYetError('群聊信息');
+      const bot = (await loadBots()).bots.find(item => item.appId === botId);
+      if (!bot) throw new AdminWriteError('机器人已移除或重新注册');
+      const identity = botIdentity(bot);
+      const result = groupIdentitySchema.parse(await deps.executeGroups(botId, {kind: 'groupIdentity', chatId, identity}));
+      if (result.agentId !== botId || result.groupId !== chatId) throw new AdminWriteError('群聊身份响应与目标不一致');
+      return withRegisteredBot(botId, async () => result, identity);
+    },
     async joinedGroups(botId, cursor) {
       if (!deps.executeGroups) throw new NotWiredYetError('群列表');
       return parseJoinedGroups(await deps.executeGroups(botId, { kind: 'joinedGroups', cursor }));
@@ -740,6 +759,8 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       if (!deps.executeGroups) throw new NotWiredYetError('群成员');
       return parseGroupMembers(await deps.executeGroups(botId, { kind: 'groupMembers', chatId, cursor }));
     },
+    richRecipe:deps.richRecipe,
+    recipeAuthoring: deps.recipeAuthoring,
     async assertGroupMembership(botId, chatId, identity) {
       if (!deps.executeGroups) throw new NotWiredYetError('群成员身份');
       parseGroupMembership(await deps.executeGroups(botId, {kind: 'groupMembership', chatId, identity}));
@@ -791,6 +812,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
           tenant: b.tenant,
           botName: b.botName,
           registeredAt: b.createdAt,
+          ...(b.registrationId && {registrationId:b.registrationId}),
           ownerName: owners.get(b.appId, getAppRoleSnapshot(b.appId, b.tenant), run.running && !closing),
           avatarDataUrl: avatars.get(b.appId),
           // 与 config/bots.activeBots 同语义：从未配置过活跃集 → 回退 current。
@@ -1239,6 +1261,10 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         result = await removeBot(expected, {
           isRunning: async () => (await runState(appId)).running,
           cleanup: async () => {
+            const key = authoringBotKey(expected);
+            const pending = await new AuthoringJournal(paths.appDir, Date.now).run(ledger =>
+              Object.values(ledger.operations).some(op => op.bot === key && activeAuthoring(op)));
+            if (pending) throw new RecipeRecoveryRequired('这个 Bot 还有待恢复的配方草稿操作。请启用它，用原账号恢复或取消后再移除。');
             await assertRecipeRemovalSafe({file: botPaths(appId).projectsFile, dataRoot: paths.appDir});
             await removeSecret(secretKeyForApp(appId));
             await rm(botDir(appId), { recursive: true, force: true });

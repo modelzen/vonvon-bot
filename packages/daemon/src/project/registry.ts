@@ -45,6 +45,7 @@ export function cardDisplayPresentationDefaults(cfg:Partial<AppConfig>):ProjectP
 export interface Project {
   bindingIncarnation?: string;
   projectSettingsRevision?: number;
+  richRecipe?: import('../recipe/rich-state').RichRecipeState;
   recipeInstall?: import('../recipe/types').RecipeInstallation;
   /** Default for new sessions; omitted uses the provider's native default. */
   serviceTier?: import('../agent/types').ServiceTier;
@@ -427,7 +428,8 @@ async function writeStored(location: RegistryLocation, body: Record<string, unkn
   const nextProjects = directoryRows(next.projects);
   for (const row of nextProjects) {
     const priorBinding = oldProjects.find(project => project.chatId === row.chatId);
-    if (!row.dm) {
+    if (!row.dm && (!priorBinding || priorBinding.bindingIncarnation !== undefined || priorBinding.projectSettingsRevision !== undefined
+      || JSON.stringify(row) !== JSON.stringify(priorBinding))) {
       row.bindingIncarnation = typeof priorBinding?.bindingIncarnation === 'string' ? priorBinding.bindingIncarnation
         : priorBinding && typeof row.bindingIncarnation === 'string' ? row.bindingIncarnation : randomUUID();
       const settings = (value: DirectoryRow): string => JSON.stringify(Object.fromEntries(Object.entries(value)

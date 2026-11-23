@@ -715,7 +715,8 @@ export async function startDesktop(): Promise<void> {
         return verified ? keepOnQuit(verified) : false;
       },
       connectionLost: showConnectionLost,
-    }, devices, account, join(app.getPath('userData'),'recipe-install-journal.json'));
+    }, devices, account, join(app.getPath('userData'),'recipe-install-journal.json'),
+      join(app.getPath('userData'),'recipe-authoring-journal.json'));
     tray = createDesktopTray(icon, show, requestQuit);
     // U4: the daemon this app carries asks it to update when another device says so. Windows' app is updated on that
     // computer for 0.9.0 (owner 2026-11-02): its shell does not declare it can, as its daemon does not offer it.
