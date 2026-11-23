@@ -3,9 +3,18 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { describe, expect, it } from 'vitest';
 import { PROTOCOL_VERSION } from '@vonvon/protocol';
-import { FIXTURE_STARTED_AT, startFixture, socketClient } from './server-fixture';
+import { fakeService, FIXTURE_STARTED_AT, startFixture, socketClient } from './server-fixture';
 
 describe('local WebSocket handshake', () => {
+  it('advertises native recipe callbacks when the authoring service is available',async()=>{
+    const fixture=await startFixture(fakeService({recipeAuthoring:async()=>undefined}));
+    try {
+      const client=await socketClient(fixture.api.port,fixture.credential);
+      await client.ready();
+      expect(client.frames[0]).toHaveProperty('capabilities',expect.arrayContaining(['recipe.native-preview']));
+      await client.close();
+    } finally {await fixture.close();}
+  });
   it('accepts credentials, keeps a positive different version, and emits no unsolicited snapshot', async () => {
     const fixture = await startFixture();
     try {

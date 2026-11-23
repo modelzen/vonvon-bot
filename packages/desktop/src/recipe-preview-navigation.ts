@@ -23,17 +23,23 @@ export class RecipePreviewNavigation {
     return this.request(locator);
   }
 
-  request(input: DraftPreviewLocator): boolean {
+  request(input: DraftPreviewLocator, accountId?: string): boolean {
     const locator = draftPreviewLocatorSchema.parse(input);
-    const existing = this.pending().find(value => value.draftId === locator.draftId && value.revision === locator.revision);
-    const navigation = existing ?? {...locator, navigationId: randomUUID()};
+    const existing = this.pending().find(value => value.draftId === locator.draftId && value.revision === locator.revision && value.accountId === accountId);
+    const navigation = existing ?? {...locator, ...(accountId && {accountId}), navigationId: randomUUID()};
     if (!existing) this.queue.set(navigation.navigationId, navigation);
     for (const listener of this.listeners) listener({...navigation});
     return true;
   }
 
   pending(): DraftPreviewNavigation[] { return Array.from(this.queue.values(), value => ({...value})); }
-  acknowledge(navigationId: string): void { this.queue.delete(draftPreviewNavigationIdSchema.parse(navigationId)); }
+  retainAccount(accountId?: string): void {
+    for (const [id, navigation] of this.queue) if (navigation.accountId && navigation.accountId !== accountId) this.queue.delete(id);
+  }
+  acknowledge(navigationId: string, accountId?: string): void {
+    const id = draftPreviewNavigationIdSchema.parse(navigationId), owner = this.queue.get(id)?.accountId;
+    if (!owner || owner === accountId) this.queue.delete(id);
+  }
   onOpen(listener: (navigation: DraftPreviewNavigation) => void): () => void {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };

@@ -106,3 +106,19 @@ it('treats a fresh click of an already opened locator as a fresh reader navigati
   expect(current.route).not.toEqual(first);
   expect(current.route).toEqual({kind: 'draft', draftId, expectedRevision: 2, navigationId: next.navigationId});
 });
+
+it('cancels an account-bound preview when the account changes before the edit guard releases it',async()=>{
+  pending=async()=>[];
+  state.account={kind:'signedIn',accountId,displayName:'作者',provider:'github',persistence:'memory'};
+  const page=()=>root.render(<DraftGuardProvider><CommunityProvider><DirtyProbe/></CommunityProvider></DraftGuardProvider>);
+  await act(async()=>page());
+  const click=async(label:string)=>act(async()=>[...document.querySelectorAll('button')].find(button=>button.textContent===label)!.click());
+  await click('修改本地设置');
+  await act(async()=>emit({...navigation,accountId}));
+  expect(current.isOpen).toBe(false);
+  state.account={...state.account,accountId:draftId};
+  await act(async()=>page());
+  await click('放弃并离开');
+  expect(current.isOpen).toBe(false);expect(current.route).toEqual({kind:'catalog'});
+  expect(acknowledge).not.toHaveBeenCalled();
+});

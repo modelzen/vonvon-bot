@@ -467,7 +467,7 @@ export function installBridge(
       value=>send({type:'authoringPublished',value}),onAuthoringSaved,value=>{
         const current=account.status();
         if(disposed||current.kind!=='signedIn'||current.accountId!==value.accountId||account.lease?.(value.accountId)?.aborted!==false)throw changed();
-        recipePreview.request({draftId:value.draftId,revision:value.revision});
+        recipePreview.request({draftId:value.draftId,revision:value.revision},value.accountId);
       }));
   function onAuthoringSaved(value: AuthoringSaved) {
     creator.invalidateDraft(value.accountId, value.draftId);
@@ -614,7 +614,9 @@ export function installBridge(
     });
     register(desktopChannels.recipeUse,1,value=>recipeUseRequestSchema.parse(value),value=>recipes.request(value));
     register(desktopChannels.recipePreviewPending, 0, noArg, async () => recipePreview.pending());
-    register(desktopChannels.recipePreviewAcknowledge, 1, value => draftPreviewNavigationIdSchema.parse(value), async value => recipePreview.acknowledge(value));
+    register(desktopChannels.recipePreviewAcknowledge, 1, value => draftPreviewNavigationIdSchema.parse(value), async value => {
+      const actor=account.status();recipePreview.acknowledge(value,actor.kind==='signedIn'?actor.accountId:undefined);
+    });
     register(desktopChannels.community, 1, value => communityRequestSchema.parse(value), value => communityRequest(account, value, metadataJournal));
     register(desktopChannels.accountStatus, 0, noArg, async () => accountStatusSchema.parse(account.status()));
     register(desktopChannels.accountLogin, 0, noArg, async () => accountStatusSchema.parse(await account.login()));
@@ -648,7 +650,10 @@ export function installBridge(
     });
     registeredChannels.push(desktopChannels.subscribe);
     unsubscribers.push(recipePreview.onOpen(value => {creator.invalidateReviews(); send({type: 'recipePreview', value});}));
-    unsubscribers.push(account.onStatus(value => send({ type: 'account', value: accountStatusSchema.parse(value) })));
+    unsubscribers.push(account.onStatus(value => {
+      recipePreview.retainAccount(value.kind==='signedIn'?value.accountId:undefined);
+      send({ type: 'account', value: accountStatusSchema.parse(value) });
+    }));
     unsubscribers.push(devices.onState(value => send({ type: 'devices', value })));
     unsubscribers.push(devices.onView(change => { void onView(change); authoring.invalidateStale(); }));
     window.webContents.on('did-start-navigation', onNavigation);

@@ -36,6 +36,7 @@ export function CommunityProvider({shell, onUse, children}: {shell?: CommunitySh
   const currentAccount = useRef(accountId);
   currentAccount.current = accountId;
   const pendingPreview = useRef<DraftPreviewNavigation | undefined>(undefined);
+  const resumeBoundPreview = useRef<(() => void) | undefined>(undefined);
   useEffect(() => {
     if (!preview) return;
     let active = true;
@@ -53,6 +54,10 @@ export function CommunityProvider({shell, onUse, children}: {shell?: CommunitySh
       navigating = false;
       const navigation = pendingPreview.current;
       if (!active || !navigation) return;
+      if (navigation.accountId && navigation.accountId !== currentAccount.current) {
+        if (currentAccount.current) pendingPreview.current = undefined;
+        return;
+      }
       setDeparture(undefined);
       setRoute({route: {kind: 'draft', draftId: navigation.draftId, expectedRevision: navigation.revision, navigationId: navigation.navigationId}, owner: currentAccount.current});
       setOpen(true);
@@ -61,17 +66,27 @@ export function CommunityProvider({shell, onUse, children}: {shell?: CommunitySh
         pendingPreview.current = undefined;
       }
     };
+    const navigate = () => {
+      const navigation = pendingPreview.current;
+      if (!navigation) return;
+      if (navigation.accountId && navigation.accountId !== currentAccount.current) {
+        if (currentAccount.current) pendingPreview.current = undefined;
+        return;
+      }
+      if (!guard) openPending();
+      else if (!navigating) {
+        navigating = true;
+        if (!guard.navigate(openPending, cancelPending)) cancelPending();
+      }
+    };
+    resumeBoundPreview.current = () => {if (pendingPreview.current?.accountId) navigate();};
     const receive = (navigation: DraftPreviewNavigation) => {
       if (!active || seen.has(navigation.navigationId)) return;
       seen.add(navigation.navigationId);
       const previous = pendingPreview.current;
       if (previous && previous.navigationId !== navigation.navigationId) acknowledge(previous.navigationId);
       pendingPreview.current = navigation;
-      if (!guard) openPending();
-      else if (!navigating) {
-        navigating = true;
-        if (!guard.navigate(openPending, cancelPending)) cancelPending();
-      }
+      navigate();
     };
     const unsubscribe = preview.onOpen(navigation => {receivedLive = true; receive(navigation);});
     void preview.pending().then(queue => {
@@ -79,8 +94,9 @@ export function CommunityProvider({shell, onUse, children}: {shell?: CommunitySh
       if (!receivedLive) queue.forEach(receive);
       else for (const navigation of queue) if (!seen.has(navigation.navigationId)) acknowledge(navigation.navigationId);
     }).catch(() => {});
-    return () => {active = false; unsubscribe();};
+    return () => {active = false; resumeBoundPreview.current = undefined; unsubscribe();};
   }, [preview, guard]);
+  useEffect(() => {resumeBoundPreview.current?.();}, [accountId]);
   useEffect(() => {
     if (!accountId || !privateRoute || stored.owner !== undefined) return;
     setRoute(current => ({...current, owner: accountId}));

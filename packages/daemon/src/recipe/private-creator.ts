@@ -42,6 +42,7 @@ export type JobRecord={
   job:CreatorJob;state:'offer'|'active'|'unknown'|'finished';created:number;expiresAt:number;messageId?:string;originalCardId?:string;approvalGeneration?:number;
   workName?:string;botName?:string;groupName?:string;version?:VersionSelection;codeLabel?:string;
   preview?:{ref?:string;readId?:string;position?:string};previewOwner?:string;
+  previewRequest?:{session:string;cardSession:string;eventId?:string};
   attachment?:Attachment;originWork?:CreatorWork;answerDigest?:string;result?:CreatorAnswer;resultCard?:string;offerRef?:string;sourceChoice?:string;receiptCard?:boolean;
 };
 type DraftSelection={kind:'draft';snapshot:CreatorSnapshot};
@@ -185,45 +186,44 @@ export class PrivateCreator{
       return job.job.id;
     });
   }
-  private livePreview(s:CreatorLedger,p:Presence,owner:JobRecord|undefined){
+  private livePreview(s:CreatorLedger,session:string,owner:JobRecord|undefined){
     const offer=owner?.offerRef&&s.cards[owner.offerRef];
-    return Boolean(owner&&offer&&offer.session===p.session&&offer.expiresAt>this.now()&&['offer','unknown'].includes(owner.state));
+    return Boolean(owner&&offer&&offer.session===session&&offer.expiresAt>this.now()&&(owner.state==='unknown'||owner.state==='offer'&&owner.expiresAt>this.now()));
   }
-  private previewOwner(s:CreatorLedger,p:Presence,card:Card){
+  private previewOwner(s:CreatorLedger,session:string,card:Card){
     const actual=s.cards[card.ref];
-    if(!actual||actual.generation!==card.generation||actual.session!==p.session||actual.expiresAt<=this.now()||
+    if(!actual||actual.generation!==card.generation||actual.session!==session||actual.expiresAt<=this.now()||
       actual.needsUpdate||actual.cardId!==card.cardId||actual.messageId!==card.messageId)return;
     const owner=card.previewOwner?s.jobs[card.previewOwner]:Object.values(s.jobs).find(r=>r.offerRef===card.ref);
-    if(!owner||!this.livePreview(s,p,owner))return;
+    if(!owner||!this.livePreview(s,session,owner))return;
     if(card.previewOwner&&(owner.preview?.ref!==card.ref||card.previewApproval!==owner.offerRef))return;
     return owner;
   }
-  private appPreviewOwner(s:CreatorLedger,p:Presence,card:Card,read:Extract<CreatorRead,{kind:'openPreview'}>){
-    const owner=this.previewOwner(s,p,card),task=owner?.job.task;
+  private appPreviewOwner(s:CreatorLedger,card:Card,read:Extract<CreatorRead,{kind:'openPreview'}>){
+    const owner=this.previewOwner(s,card.session,card),task=owner?.job.task;
     if(!owner||owner.offerRef!==card.ref||task?.kind!=='command'||task.command.kind!=='publish'||
       task.command.snapshotDigest!==read.snapshotDigest||snapshotHash(task.command.snapshot)!==read.snapshotDigest||
       !same(task.command.snapshot.work,read.work))throw denied();
     return owner;
   }
-  private async openPreview(p:Presence,link:Link,card:Card,read:Extract<CreatorRead,{kind:'openPreview'}>,index:number){
+  private async openPreview(p:Presence,link:Link,card:Card,read:Extract<CreatorRead,{kind:'openPreview'}>,eventId:string|undefined){
     await this.source(p,read.work);
     await this.run(p,link,(s,_l,db)=>{
-      const owner=this.appPreviewOwner(s,p,card,read);
+      if(!p.nativePreview)throw denied();
+      const owner=this.appPreviewOwner(s,card,read);
       this.noPendingSave(db,p,link,read.work);
-      const sourceChoice=card.ref+'/'+card.generation+'/'+index;
-      const existing=Object.values(s.jobs).find(row=>row.sourceChoice===sourceChoice);
-      if(existing){
-        if(existing.state==='finished'){existing.state='active';delete existing.answerDigest;delete existing.resultCard;}
-        return;
-      }
+      const existing=Object.values(s.jobs).some(row=>row.previewOwner===owner.job.id&&row.originalCardId===card.cardId&&row.approvalGeneration===card.generation&&
+        (eventId?row.previewRequest?.eventId===eventId:row.previewRequest?.session===p.session&&row.state==='active'));
+      if(existing)return;
       const row=this.addJob(p,link,s,{kind:'read',read},'active',read.work);
+      row.previewRequest={session:p.session,cardSession:card.session,eventId};
       row.previewOwner=owner.job.id;row.originalCardId=card.cardId;row.messageId=card.messageId;
-      row.approvalGeneration=card.generation;row.sourceChoice=sourceChoice;
+      row.approvalGeneration=card.generation;
     });
   }
   private async preview(p:Presence,link:Link,clicked:Card,choice:Extract<Option['choice'],{kind:'detailPage'}>|Extract<CreatorRead,{kind:'page'}>){
     const start=await this.run(p,link,s=>{
-      const owner=this.previewOwner(s,p,clicked);
+      const owner=this.previewOwner(s,p.session,clicked);
       if(owner)return {work:owner.originWork,navigation:clicked.ref===owner.offerRef&&owner.preview?.ref?s.cards[owner.preview.ref]:undefined};
     });
     if(!start)return;
@@ -231,7 +231,7 @@ export class PrivateCreator{
     const nav=start.navigation;
     const missing=nav?.messageId&&nav.cardId&&await this.im.cardStatus(nav.messageId,link.recipient.chatId,nav.cardId)==='unavailable';
     const card=await this.run(p,link,s=>{
-      const row=this.previewOwner(s,p,clicked),task=row?.job.task;
+      const row=this.previewOwner(s,p.session,clicked),task=row?.job.task;
       if(!row||task?.kind!=='command')return;
       const cmd=task.command,preview=row.preview??={};
       const nav=preview.ref&&s.cards[preview.ref];
@@ -269,7 +269,7 @@ export class PrivateCreator{
     if(card.previewOwner){
       const work=await this.run(p,link,s=>{
         const owner=s.jobs[card.previewOwner!];
-        if(this.livePreview(s,p,owner)&&owner?.preview?.ref===card.ref&&s.cards[card.ref]?.generation===card.generation)return owner.originWork;
+        if(this.livePreview(s,p.session,owner)&&owner?.preview?.ref===card.ref&&s.cards[card.ref]?.generation===card.generation)return owner.originWork;
       });
       if(!work)return;
       await this.source(p,work);
@@ -588,7 +588,7 @@ export class PrivateCreator{
     else await this.im.reply(recipient.chatId,msg.messageId,'请选择可执行这个操作的草稿或已发布版本。');
     return true;
   }
-  async action(p:Presence,evt:CardActionEvent){
+  async action(p:Presence,evt:CardActionEvent,previewFrom?:string){
     if(!this.enabled||!physicalChat(evt.chatId))return;
     const raw=evt.raw as {operator?:{open_id?:string;tenant_key?:string}};
     if(!raw?.operator?.tenant_key||raw.operator.open_id!==evt.operator.openId)return;
@@ -604,11 +604,12 @@ export class PrivateCreator{
     const {ref,generation,index}=click;
     if(typeof ref!=='string'||!Number.isInteger(index))return;
     const c=await this.run(p,link,s=>s.cards[ref]);
-    if(!c||c.session!==p.session||c.expiresAt<=this.now()||c.generation!==generation||c.messageId!==evt.messageId||c.needsUpdate||!c.cardId||!c.options[index])return;
+    if(!c||c.session!==(previewFrom??p.session)||c.expiresAt<=this.now()||c.generation!==generation||c.messageId!==evt.messageId||c.needsUpdate||!c.cardId||!c.options[index])return;
+    const choice=c.options[index]!.choice;
+    if(previewFrom&&(choice.kind!=='read'||choice.read.kind!=='openPreview'))return;
     if(!await this.im.matches(evt.messageId,evt.chatId,c.cardId))return;
     await this.hooks.guard(p,recipient);
     this.hooks.interact(p);
-    const choice=c.options[index]!.choice;
     switch(choice.kind){
       case 'detailPage':return this.preview(p,link,c,choice);
       case 'codePage':return this.display(p,link,await this.run(p,link,s=>this.cards.codePage(s,p,choice.answer,choice.offset,c.version)));
@@ -647,7 +648,10 @@ export class PrivateCreator{
         await this.run(p,link,s=>{s.awaitLogo={draftId:choice.work.draftId,expiresAt:this.now()+300_000};});
         await this.im.reply(recipient.chatId,evt.messageId,'请发送一张图片或图片附件。');return;
       case 'read':
-        if(choice.read.kind==='openPreview')return this.openPreview(p,link,c,choice.read,index);
+        if(choice.read.kind==='openPreview'){
+          const identity=z.object({event_id:z.string().min(1).max(256)}).safeParse(evt.raw).data;
+          return this.openPreview(p,link,c,choice.read,identity&&digest(identity.event_id));
+        }
         if(choice.read.kind==='page')return this.preview(p,link,c,choice.read);
         await this.read(p,link,choice.read,c.version);return;
       case 'offer':{
@@ -675,7 +679,7 @@ export class PrivateCreator{
       }
     }
   }
-  async offlinePreview(evt:CardActionEvent){
+  async offlinePreview(evt:CardActionEvent,otherConnected=false){
     const click=creatorClick.safeParse(evt.action?.value).data;
     const raw=z.object({operator:z.object({open_id:z.string(),tenant_key:z.string()})}).safeParse(evt.raw).data;
     if(click?.verb!=='creator'||!raw||raw.operator.open_id!==evt.operator.openId||!physicalChat(evt.chatId)||!isAdmin(this.opts.cfg,evt.operator.openId))return;
@@ -687,7 +691,7 @@ export class PrivateCreator{
         card.cardId&&choice?.kind==='read'&&choice.read.kind==='openPreview')return card;
     });
     if(card?.cardId&&await this.im.matches(evt.messageId,evt.chatId,card.cardId))
-      await this.im.reply(evt.chatId,evt.messageId,'请先打开 App 再点击预览。');
+      await this.im.reply(evt.chatId,evt.messageId,otherConnected?'请在原 App 的「我的配方」查看这份草稿。':'请先打开 App 再点击预览。');
   }
   private noPendingSave(db:AuthoringLedger,p:Presence,link:Link,work?:CreatorWork,exceptId?:string){
     if(!work)return;
@@ -715,11 +719,10 @@ export class PrivateCreator{
       this.noPendingSave(db,p,link,work);
       const publications=Object.values(s.jobs).filter(r=>r.job.task.kind==='command'&&r.job.task.command.kind==='publish'&&r.job.task.command.snapshot.work.draftId===work.draftId);
       const existing=publications.find(pendingPublication)??publications.find(r=>r.state==='offer'&&publicationAt(r,work,revision)&&r.expiresAt>this.now())??
-        publications.find(r=>r.state==='finished'&&publicationAt(r,work,revision))??publications.find(r=>r.state==='offer');
+        publications.find(r=>r.state==='finished'&&publicationAt(r,work,revision))??publications.find(r=>r.state==='offer'&&r.expiresAt>this.now());
       if(existing){
         const task=existing.job.task;
         if(task.kind!=='command'||task.command.kind!=='publish'||!same(task.command.snapshot.work,work)||task.command.snapshot.revision!==revision)throw denied();
-        if(existing.state==='offer'&&existing.expiresAt<=this.now())throw denied();
         return existing;
       }
       const read=Object.values(s.jobs).find(r=>r.state==='active'&&r.job.task.kind==='read'&&r.job.task.read.kind==='draft'&&same(r.job.task.read.work,work));
@@ -731,6 +734,9 @@ export class PrivateCreator{
         let c=current.offerRef&&s.cards[current.offerRef];
         if(current.state==='unknown'&&(!c||c.expiresAt<=this.now()||c.session!==p.session))c=this.cards.approvalCard(p,s,current,true);
         if(!c||c.expiresAt<=this.now())throw denied();
+        if(!p.nativePreview&&c.options.some(o=>o.choice.kind==='read'&&o.choice.read.kind==='openPreview')){
+          const expiresAt=c.expiresAt;c=this.cards.approvalCard(p,s,current,current.state==='unknown');c.expiresAt=expiresAt;
+        }
         c.session=p.session;return c;
       });
       await this.display(p,link,card);
@@ -777,13 +783,13 @@ export class PrivateCreator{
           if(r.expiresAt<=this.now())throw denied();
           if(job.task.read.kind==='openPreview'){
             const owner=r.previewOwner?s.jobs[r.previewOwner]:undefined,card=owner?.offerRef?s.cards[owner.offerRef]:undefined;
-            if(!cardAvailable||!card||card.cardId!==r.originalCardId||card.messageId!==r.messageId||card.generation!==r.approvalGeneration||
-              this.appPreviewOwner(s,p,card,job.task.read)!==owner)throw denied();
+            if(!p.nativePreview||r.previewRequest?.session!==p.session||!cardAvailable||!card||card.session!==r.previewRequest.cardSession||card.cardId!==r.originalCardId||card.messageId!==r.messageId||card.generation!==r.approvalGeneration||
+              this.appPreviewOwner(s,card,job.task.read)!==owner)throw denied();
             this.noPendingSave(db,p,link,job.task.read.work);
           }
           if(job.task.read.kind==='page'){
             const owner=r.previewOwner?s.jobs[r.previewOwner]:undefined;
-            if(!cardAvailable||owner?.preview?.readId!==id||!this.livePreview(s,p,owner))throw denied();
+            if(!cardAvailable||owner?.preview?.readId!==id||!this.livePreview(s,p.session,owner))throw denied();
           }
           if(job.task.read.kind==='draft')this.noPendingSave(db,p,link,job.task.read.work);
           return {kind:'creatorChecked',job,mode:'read'};
@@ -813,13 +819,14 @@ export class PrivateCreator{
           for(const [id,r] of Object.entries(s.jobs)){
             if(r.job.task.kind==='read'&&r.job.task.read.kind==='openPreview'){
               const owner=r.previewOwner?s.jobs[r.previewOwner]:undefined,card=owner?.offerRef?s.cards[owner.offerRef]:undefined;
-              if(!card||!this.livePreview(s,p,owner)||card.generation!==r.approvalGeneration||card.cardId!==r.originalCardId||card.messageId!==r.messageId){
+              if(!card||card.session!==r.previewRequest?.cardSession||!this.livePreview(s,card.session,owner)||card.generation!==r.approvalGeneration||card.cardId!==r.originalCardId||card.messageId!==r.messageId){
                 delete s.jobs[id];continue;
               }
             }
             if(r.job.task.kind==='read'&&r.job.task.read.kind==='page'){
               const owner=r.previewOwner?s.jobs[r.previewOwner]:undefined;
-              if(!this.livePreview(s,p,owner)||owner?.preview?.readId!==id){
+              const offer=owner?.offerRef?s.cards[owner.offerRef]:undefined;
+              if(!offer||!this.livePreview(s,offer.session,owner)||owner?.preview?.readId!==id){
                 if(!r.previewOwner&&r.resultCard&&s.cards[r.resultCard]?.workId===r.job.task.read.work.draftId)delete s.cards[r.resultCard];
                 delete s.jobs[id];
                 if(owner?.preview?.readId===id){delete owner.preview.readId;delete owner.preview.position;}
@@ -850,12 +857,21 @@ export class PrivateCreator{
             if(!existing)this.addJob(p,link,s,{kind:'read',read:{kind:'draft',work}},'active',work);
           }
           for(const [id,time] of Object.entries(s.observed??{}))if(time+8*86400_000<=now)delete s.observed![id];
-          const pending=Object.values(s.jobs).filter(r=>r.state==='active'||r.state==='unknown');
+          const pending=Object.values(s.jobs).filter(r=>{
+            if(r.state!=='active'&&r.state!=='unknown')return false;
+            if(r.job.task.kind!=='read')return true;
+            if(r.job.task.read.kind==='openPreview')return p.nativePreview&&r.previewRequest?.session===p.session;
+            if(r.job.task.read.kind==='page'){
+              const ref=r.previewOwner&&s.jobs[r.previewOwner]?.offerRef;
+              return ref&&s.cards[ref]?.session===p.session;
+            }
+            return true;
+          });
           const offset=this.pollOffset%Math.max(1,pending.length);
           const next=[...pending.slice(offset),...pending.slice(0,offset)].slice(0,16).map(r=>r.job);
           this.pollOffset=offset+next.length;
           return {jobs:next,
-            cards:Object.values(s.cards).filter(c=>c.ref!==l.wake?.cardRef&&(!c.messageId||c.needsUpdate)&&c.session===p.session&&(!c.previewOwner||this.livePreview(s,p,s.jobs[c.previewOwner]))).slice(0,4)};
+            cards:Object.values(s.cards).filter(c=>c.ref!==l.wake?.cardRef&&(!c.messageId||c.needsUpdate)&&c.session===p.session&&(!c.previewOwner||this.livePreview(s,p.session,s.jobs[c.previewOwner]))).slice(0,4)};
         });
         for(const c of cards){
           if(c.previewOwner)await this.redeliver(p,link,c).catch(()=>undefined);
@@ -933,7 +949,7 @@ export class PrivateCreator{
         if(a.kind==='previewOpened'){
           if(!same(a.work,q.work)||a.snapshotDigest!==q.snapshotDigest||a.revision!==command.command.snapshot.revision)throw denied();
         }else if(a.kind==='rejected'){
-          card=this.cards.newCard(s,p,'暂时无法打开预览','请先打开 App 再点击预览。',[]);
+          card=this.cards.newCard(s,p,'无法核实这张卡的草稿','请在 App 的「我的配方」重新读取当前草稿，或在原私聊获取新的预览卡。',[]);
         }else throw denied();
       }else if(a.kind==='rejected'&&task.kind==='read'&&task.read.kind==='page'){
         const owner=r.previewOwner&&s.jobs[r.previewOwner];

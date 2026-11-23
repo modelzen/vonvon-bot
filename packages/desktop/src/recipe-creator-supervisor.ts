@@ -76,7 +76,7 @@ export class RecipeCreatorSupervisor {
       const {binding,scope}=discovered.association;
       if(expected&&(expected.binding!==binding||expected.scope!==scope))throw unavailable();
       const association={accountId,viewId,deviceId,deviceKey,botId,binding,scope};
-      const opened=expect(await rpc({type:'creatorOpen',accountId,botId,binding,scope,wakeId:discovered.wakeId}),'creatorSession');
+      const opened=expect(await rpc({type:'creatorOpen',accountId,botId,binding,scope,wakeId:discovered.wakeId,nativePreview:true}),'creatorSession');
       session=opened.session;
       if(opened.binding!==binding||opened.scope!==scope)throw unavailable();
       adopted=await this.authoring.adoptCreator({accountId,viewId,botId,lease:source,session,leaseMs:opened.leaseMs});check();

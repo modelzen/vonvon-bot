@@ -229,8 +229,10 @@ export class RecipeAuthoringController {
   async creatorSettled(handle:string,draftId:string){
     const h=this.handles.get(handle);if(!h?.creator)throw changed();
     await this.enqueue(h,async()=>{
-      await this.workflow(h);await this.refresh(h);
-      if([...h.operations.values()].some(op=>op.purpose==='editDraft'&&op.draftId===draftId&&!terminal(op)))
+      const status=expectKind(await this.daemon(h,{type:'status'}),'status');
+      if(!status.linked)throw changed();
+      if(status.operations.some(op=>op.purpose==='editDraft'&&op.draftId===draftId&&!terminal(op))||
+        status.reconciliation.some(op=>op.purpose==='editDraft'&&op.draftId===draftId&&!op.receipt))
         throw new AuthoringError('这份草稿的保存结果尚未确认，请稍后再查看。');
       return {kind:'closed'};
     });

@@ -26,7 +26,7 @@ import { operationUuid } from './manifest';
 export interface AuthoringPeer {id: string; device: string}
 export type AuthoringIpc = {kind: 'recipeAuthoring'; peer: AuthoringPeer; request: RecipeAuthoringRequest} |
   {kind: 'recipeAuthoringDisconnect'; peer: AuthoringPeer};
-export interface Presence {readonly peer: AuthoringPeer; readonly session: string; readonly account: string; readonly scope: string; readonly binding?: string; until: number; activity: number; activeAt: number}
+export interface Presence {readonly peer: AuthoringPeer; readonly session: string; readonly account: string; readonly scope: string; readonly binding?: string; readonly nativePreview?: true; until: number; activity: number; activeAt: number}
 interface Challenge {
   id: string; session: string; hash: Buffer; expiresAt: number; attempts: number;
   recipient?: Recipient; messageId?: string; evidence?: string;
@@ -252,7 +252,7 @@ export class AuthoringSession {
     if (req.type === 'creatorOpen') {
       const association = await this.creator.discover(peer,req.accountId);
       if (association.association?.binding !== req.binding || association.association.scope !== req.scope) refusal();
-      const p = this.p = {peer,session:randomUUID(),account:req.accountId,scope:req.scope,binding:req.binding,until:this.now()+LEASE,activity:0,activeAt:this.now()};
+      const p = this.p = {peer,session:randomUUID(),account:req.accountId,scope:req.scope,binding:req.binding,nativePreview:req.nativePreview,until:this.now()+LEASE,activity:0,activeAt:this.now()};
       await this.creator.open(p,req.binding,req.wakeId);
       return {kind:'creatorSession',session:p.session,binding:req.binding,scope:p.scope,leaseMs:LEASE};
     }
@@ -1034,10 +1034,10 @@ export class AuthoringSession {
       return true;
     });
   }
-  async onAction(evt: CardActionEvent) {
+  async onAction(evt: CardActionEvent,previewFrom?:string) {
     if(creatorClick.safeParse(evt.action?.value).data?.verb==='creator') {
       const p=this.p;
-      await this.serial(()=>p&&p.until>this.now()?this.creator.action(p,evt):this.creator.offlinePreview(evt)).catch(()=>undefined);
+      await this.serial(()=>p&&p.until>this.now()?this.creator.action(p,evt,previewFrom):this.creator.offlinePreview(evt)).catch(()=>undefined);
       return;
     }
     const value = handoffClick.safeParse(evt.action?.value).data ?? sourceClick.safeParse(evt.action?.value).data ?? click.safeParse(evt.action?.value).data, raw = operator.safeParse(evt.raw).data;

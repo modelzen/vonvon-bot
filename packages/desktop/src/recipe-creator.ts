@@ -38,6 +38,7 @@ function pages(text:string){
   result.push(page);return result;
 }
 export class RecipeCreatorExecutor {
+  private readonly opened=new WeakMap<CreatorAssociation,Map<string,Extract<CreatorAnswer,{kind:'previewOpened'}>>>();
   constructor(private readonly account:NativeAccount,private readonly journal:RecipeCreatorJournal,
     private readonly metadata:MetadataJournal,private readonly authoring:AuthoringJournal,private readonly onPublished?:(receipt:AuthoringPublished)=>void,
     private readonly onSaved?:(receipt:AuthoringSaved)=>void,
@@ -221,11 +222,16 @@ export class RecipeCreatorExecutor {
         const stored=this.journal.snapshot(read.snapshotDigest);
         if(!this.onPreview||!stored||!isDeepStrictEqual(stored.association,context.association)||
           !isDeepStrictEqual(stored.snapshot.work,read.work)||creatorSnapshotDigest(stored.snapshot)!==read.snapshotDigest)throw invalid();
+        const receipts=this.opened.get(context.association)??new Map<string,Extract<CreatorAnswer,{kind:'previewOpened'}>>();
+        const delivered=receipts.get(job.id);
+        if(delivered){if(delivered.snapshotDigest!==read.snapshotDigest)throw invalid();return delivered;}
         const current=await this.freeze(context,job,read.work,['read']);
         if(!this.sameSnapshot(current.snapshot,stored.snapshot)||(await this.checked(context,job)).mode!=='read')throw invalid();
         context.check();
         this.onPreview({accountId,draftId:read.work.draftId,revision:stored.snapshot.revision});
-        return {kind:'previewOpened',work:read.work,snapshotDigest:read.snapshotDigest,revision:stored.snapshot.revision};
+        const receipt={kind:'previewOpened' as const,work:read.work,snapshotDigest:read.snapshotDigest,revision:stored.snapshot.revision};
+        receipts.set(job.id,receipt);this.opened.set(context.association,receipts);
+        return receipt;
       }
       case 'page': {
         await this.verifyWork(context,job,read.work);
@@ -437,7 +443,7 @@ export class RecipeCreatorExecutor {
   }
   async run(context:CreatorContext,job:CreatorJob){
     const checked=await this.checked(context,job);
-    if(checked.mode==='preview')throw invalid();
+    if(checked.mode==='preview'||job.task.kind==='read'&&checked.mode!=='read')throw invalid();
     if(job.task.kind==='deliverCodes'){
       if(checked.mode!=='delivery')throw invalid();
       const account=await this.requireVersion(context,job,job.task.target,['delivery']);
@@ -456,6 +462,8 @@ export class RecipeCreatorExecutor {
     try{answer=job.task.kind==='read'?await this.read(context,job,job.task.read):await this.command(context,job);}
     catch(error){context.check();answer=error instanceof UnsupportedLegacyPublication?{kind:'rejected',reason:'invalid'}:job.task.kind==='command'&&this.journal.command(context.association.accountId,job.id)?{kind:'unknown'}:{kind:'rejected',reason:'unavailable'};}
     await this.checked(context,job);
-    expect(await context.rpc({type:'creatorAnswer',botId:context.association.botId,session:context.session,id:job.id,answer}),'creatorAck');context.check();
+    expect(await context.rpc({type:'creatorAnswer',botId:context.association.botId,session:context.session,id:job.id,answer}),'creatorAck');
+    this.opened.get(context.association)?.delete(job.id);
+    context.check();
   }
 }
