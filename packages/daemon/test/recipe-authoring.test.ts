@@ -2422,6 +2422,56 @@ it('INDEPENDENT replay of already resumed A does not change chosen B',async()=>{
   expect(await chosen()).toEqual(before);
 });
 
+it('resumes an expired saved-draft edit after restart and lets its explicit selection replace an older version focus',async()=>{
+  const {op,draftId}=await richChatContext();
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  clock+=31*60_000;
+  await orch.shutdown();restart();await open();
+  orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});
+  await attachCreator();
+  await rpc('creatorContinue',{selection:{kind:'version',target:{recipeId:randomUUID(),versionId:randomUUID()},name:'另一份旧版本',version:'8'}});
+  const before=await ledger.run(db=>structuredClone(db.operations[op.operationId]!));
+  expect(kind(await rpc('workflow'),'workflow').pausedContexts).toContain(op.operationId);
+  await rpc('resumeContext',{operationId:op.operationId});
+  await rpc('creatorContinue',{selection:{kind:'draft',work:{draftId,source:null},name:'原名称',version:'1'}});
+  proposeRich.mockResolvedValue({kind:'proposal',commands:[{action:'setPublicText',target:'T1',text:'恢复后名称'}]});
+  await orch.onMessage(msg('把名称改成恢复后名称'));
+  expect(proposeRich).toHaveBeenCalledTimes(1);
+  const after=await ledger.run(db=>db.operations[op.operationId]!);
+  expect(after.view).toMatchObject({operationId:op.operationId,draftId,baseRevision:2,state:'candidate'});
+  expect(after.rich?.base).toEqual(before.rich?.base);
+  expect(after.carrier.messageId).toBe(before.carrier.messageId);
+  expect(cloud.map(c=>c.action)).toEqual(['dispatch']);
+  await rpc('creatorContinue',{selection:{kind:'version',target:{recipeId:randomUUID(),versionId:randomUUID()},name:'明确重选版本',version:'9'}});
+  proposeRich.mockClear();
+  await orch.onMessage(msg('把名称改成版本标题'));
+  expect(proposeRich).not.toHaveBeenCalled();
+  expect(await ledger.run(db=>db.operations[op.operationId]!.view.payloadDigest)).toBe(after.view.payloadDigest);
+});
+
+it.each(['tenant','binding','account','scope','pendingCloud'] as const)('refuses to resume an expired edit after its %s changes without altering it',async(change)=>{
+  const {op}=await richChatContext();
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  clock+=31*60_000;
+  await orch.shutdown();restart();await open();
+  orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});
+  const before=await ledger.run(db=>{
+    const row=db.operations[op.operationId]!;
+    if(change==='tenant')row.recipient.tenantKey='another-tenant';
+    else if(change==='binding')row.binding=randomUUID();
+    else if(change==='account')row.accountId=randomUUID();
+    else if(change==='scope')row.scope='e'.repeat(64);
+    else row.view.state='pendingCloud';
+    return row;
+  });
+  const beforeCloud=structuredClone(cloud);
+  await expect(rpc('resumeContext',{operationId:op.operationId})).rejects.toThrow();
+  expect(await ledger.run(db=>db.operations[op.operationId])).toEqual(before);
+  expect(cloud).toEqual(beforeCloud);
+});
+
 it('INDEPENDENT withdrawn creator preview quote cannot create a metadata proposal for account A',async()=>{
   await link();await attachCreator();
   const snapshot=await openManualWork('A');

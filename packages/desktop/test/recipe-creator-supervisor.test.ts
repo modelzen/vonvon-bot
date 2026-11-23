@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {afterEach,expect,it,vi} from 'vitest';
-import {agentIdSchema,groupIdSchema,canonicalizeRichRecipeContent,type AccountStatus,type RecipeAuthoringRequest,type RecipeAuthoringReply} from '@vonvon/protocol';
+import {agentIdSchema,groupIdSchema,canonicalizeRichRecipeContent,type AccountStatus,type AuthoringOperation,type RecipeAuthoringRequest,type RecipeAuthoringReply} from '@vonvon/protocol';
 import type {VonvonClient} from '@vonvon/client/browser';
 import {RecipeCreatorSupervisor,type CreatorSourceLease} from '../src/recipe-creator-supervisor.js';
 import {RecipeCreatorExecutor} from '../src/recipe-creator.js';
@@ -17,7 +17,8 @@ function fixture(){
   const sessions=new Map<string,string>(),bindings=new Map<string,string>([[accountId,randomUUID()],[other,randomUUID()]]),rpcs:RecipeAuthoringRequest[]=[];
   const signals=new Map([[accountId,new AbortController()],[other,new AbortController()]]),listeners=new Set<()=>void>();let active=accountId;
   const status=():AccountStatus=>({kind:'signedIn',accountId:active,displayName:'作者',provider:'google',persistence:'memory'});
-  let handoff:Extract<RecipeAuthoringReply,{kind:'workflow'}>['handoff'];
+  const operations:AuthoringOperation[]=[];
+  let handoff:Extract<RecipeAuthoringReply,{kind:'workflow'}>['handoff'],groupIdentity='d'.repeat(64);
   const rpc=vi.fn(async(input:RecipeAuthoringRequest):Promise<RecipeAuthoringReply>=>{
     rpcs.push(input);
     switch(input.type){
@@ -27,10 +28,15 @@ function fixture(){
       case 'creatorPoll':return {kind:'creatorJobs',jobs:[]};
       case 'close':return {kind:'closed'};
       case 'workflow':return {kind:'workflow',activity:1,ageMs:0,pausedContexts:[],...(handoff&&{handoff})};
-      case 'status':return {kind:'status',linked:true,operations:[],reconciliation:[]};
+      case 'status':return {kind:'status',linked:true,operations,reconciliation:[]};
+      case 'resumeContext':{
+        const operation=operations.find(op=>op.operationId===input.operationId);
+        if(!operation)throw Error('missing operation');
+        return {kind:'operation',operation};
+      }
       case 'operationSourceIdentity':return {kind:'operationSourceIdentity',operationId:input.operationId,groupId,identity:'d'.repeat(64)};
       case 'beginDraftHandoff':return {kind:'handoff',handoff:{retryId:input.retryId,groupId,draftId:input.draftId,state:'selecting'}};
-      case 'groupSourceIdentity':return {kind:'groupSourceIdentity',groupId:input.groupId,identity:'d'.repeat(64)};
+      case 'groupSourceIdentity':return {kind:'groupSourceIdentity',groupId:input.groupId,identity:groupIdentity};
       case 'beginHandoff':return {kind:'handoff',handoff:{retryId:input.retryId,groupId:input.groupId,state:'selecting'}};
       case 'handoffStatus':return {kind:'handoff',handoff:{retryId:input.retryId,groupId,state:'awaitingAttestations'}};
       case 'answerHandoff':return {kind:'handoff',handoff:{retryId:input.request.retryId,groupId,state:'selecting'}};
@@ -56,8 +62,9 @@ function fixture(){
   cleanup.push(()=>authoring.closeAll());
   const executor=new RecipeCreatorExecutor(account,journal,metadata,history);
   const build=(sources:string[]=[])=>{const supervisor=new RecipeCreatorSupervisor(account,retain,()=>sources,journal,history,authoring,executor);cleanup.push(()=>supervisor.dispose());return supervisor;};
-  return {accountId,other,botId,groupId,deviceId,deviceKey,account,authoring,history,journal,request,references,retain,rpcs,sessions,build,
+  return {accountId,other,botId,groupId,deviceId,deviceKey,account,authoring,history,journal,request,references,retain,rpcs,sessions,operations,build,
     privateHandoff(){handoff={retryId:randomUUID(),ref:randomUUID(),generation:1,lease:'a'.repeat(64),versions:[randomUUID()]};return handoff;},
+    changeIdentity(){groupIdentity='e'.repeat(64);},
     switchAccount(){signals.get(active)!.abort();active=other;for(const listener of listeners)listener();},
   };
 }
@@ -117,6 +124,63 @@ it('discovers an existing rich draft original source by exact authenticated oper
   expect(f.rpcs.find(r=>r.type==='beginDraftHandoff')).toMatchObject({session:f.sessions.get(f.accountId),draftId,baseRevision:2,groupId:f.groupId,
     source:{sourceIntentId:preparationId,canonical:Buffer.from(document.canonicalUTF8).toString('base64url')}});
   expect(f.rpcs.filter(r=>r.type==='open')).toEqual([]);
+});
+
+async function existingRichDraft(state:'waiting'|'candidate'='waiting'){
+  const f=fixture(),supervisor=f.build(),draftId=randomUUID(),preparationId=randomUUID(),objectId=randomUUID();
+  await supervisor.associated(f.accountId,'local',f.botId);
+  const value=(value:string)=>({itemId:randomUUID(),originId:randomUUID(),value});
+  const document=canonicalizeRichRecipeContent({format:'rich-v2',schemaVersion:2,public:{name:value('原草稿'),summary:value(''),overview:value(''),version:value('1.1')},
+    settings:[],rules:[],skills:[],files:[],tasks:[],memories:[],setup:[],parts:[]});
+  const manifest={objectId,kind:'manifest',sha256:creatorSha(document.canonicalUTF8),bytes:document.canonicalUTF8.length,mediaType:'application/json'};
+  f.history.history.remember(f.journal.associations(f.accountId)[0]!,preparationId,'d'.repeat(64),f.groupId);
+  const operation:AuthoringOperation={operationId:randomUUID(),format:'rich-v2',purpose:'editDraft',draftId,baseRevision:2,state,createdAt:Date.now()-31*60_000,
+    targetPublicKey:f.deviceKey,nonceCommitment:f.deviceKey,deliveryUnknown:false,...(state==='candidate'&&{payloadDigest:'a'.repeat(64)})};
+  f.operations.push(operation);
+  f.request.mockImplementation(async(id,path)=>{
+    if(path==='/v1/me')return Response.json({accountId:id});
+    if(path==='/v2/drafts/'+draftId)return Response.json({format:'rich-v2',draftId,recipeId:null,revision:2,access:'direct',sourceIntentId:preparationId,
+      manifest,sourceManifest:manifest,logicalBytes:document.logicalBytes,retainedCandidateBytes:0});
+    if(path==='/v2/drafts/'+draftId+'/objects/'+objectId)return new Response(document.canonical);
+    throw Error(path);
+  });
+  return {...f,supervisor,draftId,preparationId,operation,continueDraft:()=>supervisor.continue({type:'creatorContinue',accountId:f.accountId,entry:{kind:'draft',draftId,revision:2}})};
+}
+
+it.each(['waiting','candidate'] as const)('continues the exact existing rich %s operation without starting another private handoff',async(state)=>{
+  const f=await existingRichDraft(state),{operation,draftId,preparationId}=f;
+  const before=structuredClone(operation);
+  expect(await f.continueDraft()).toEqual({kind:'creatorContinuing',accountId:f.accountId,viewId:'local',botId:f.botId});
+  expect(f.rpcs.filter(r=>r.type==='beginDraftHandoff')).toEqual([]);
+  expect(f.rpcs.filter(r=>r.type==='resumeContext')).toEqual([{type:'resumeContext',botId:f.botId,session:f.sessions.get(f.accountId),operationId:operation.operationId}]);
+  expect(f.rpcs.find(r=>r.type==='creatorContinue')).toMatchObject({selection:{kind:'draft',work:{draftId,source:{preparationId,groupId:f.groupId,identity:'d'.repeat(64)}},name:'原草稿',version:'1.1'}});
+  expect(operation).toEqual(before);
+  expect(f.request.mock.calls.some(([,path])=>path.includes('/authoring/'))).toBe(false);
+});
+
+it.each(['pendingCloud','cancelPending','needsReview','sending','pendingMain','deliveryUnknown','revision','duplicate','legacy'] as const)(
+  'leaves a saved-draft %s operation untouched when it cannot resume',async(reason)=>{
+    const f=await existingRichDraft();
+    if(reason==='deliveryUnknown')f.operation.deliveryUnknown=true;
+    else if(reason==='revision')f.operation.baseRevision=1;
+    else if(reason==='duplicate')f.operations.push({...f.operation,operationId:randomUUID()});
+    else if(reason==='legacy')delete f.operation.format;
+    else f.operation.state=reason;
+    const before=structuredClone(f.operations);
+    await expect(f.continueDraft()).rejects.toThrow();
+    expect(f.rpcs.filter(r=>['resumeContext','creatorContinue','beginDraftHandoff'].includes(r.type))).toEqual([]);
+    expect(f.operations).toEqual(before);
+    expect(f.request.mock.calls.some(([,path])=>path.includes('/authoring/'))).toBe(false);
+  });
+
+it.each(['account','source'] as const)('does not resume a saved draft through a changed %s',async(change)=>{
+  const f=await existingRichDraft();
+  if(change==='account')f.switchAccount();
+  else f.changeIdentity();
+  const before=structuredClone(f.operations);
+  await expect(f.continueDraft()).rejects.toThrow();
+  expect(f.rpcs.filter(r=>['resumeContext','creatorContinue','beginDraftHandoff'].includes(r.type))).toEqual([]);
+  expect(f.operations).toEqual(before);
 });
 
 it('opens exact historical version management with its real title/version without reading new-version inheritance',async()=>{

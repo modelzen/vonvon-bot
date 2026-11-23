@@ -7,6 +7,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
   authoringCandidateContentSchema,
+  decodeRichRecipeContent,
   desktopAuthoringReplySchema,
   desktopAuthoringRequestSchema,
   deviceReplySchema,
@@ -259,6 +260,20 @@ export class RecipeAuthoringController {
         original.identity!==await this.groupIdentity(h,original.groupId))throw recheck();
       const sourceBytes=await cloud.readMember(entry.draftId,meta.sourceManifest),groupName=h.groups.get(original.groupId);
       if(!groupName)throw recheck();
+      const status=expectKind(await this.daemon(h,{type:'status'}),'status');
+      if(!status.linked)throw recheck();
+      const existing=status.operations.filter(op=>op.purpose==='editDraft'&&op.draftId===entry.draftId&&!terminal(op));
+      if(existing.length){
+        const op=existing[0]!;
+        if(existing.length!==1||op.format!=='rich-v2'||op.baseRevision!==entry.revision||op.deliveryUnknown||!['waiting','candidate'].includes(op.state))throw recheck();
+        const resumed=await this.operation(h,{type:'resumeContext',operationId:op.operationId});
+        if(resumed.format!=='rich-v2'||resumed.purpose!=='editDraft'||resumed.draftId!==entry.draftId||resumed.baseRevision!==entry.revision||
+          resumed.deliveryUnknown||!['waiting','candidate'].includes(resumed.state))throw recheck();
+        const {content}=decodeRichRecipeContent(Buffer.from(canonical,'base64url'));
+        await this.daemon(h,{type:'creatorContinue',selection:{kind:'draft',work:{draftId:entry.draftId,
+          source:{preparationId:meta.sourceIntentId,groupId:original.groupId,identity:original.identity}},name:content.public.name.value,version:content.public.version.value}});
+        return {kind:'closed'};
+      }
       const scope={retryId:randomUUID(),groupId:original.groupId,draftId:entry.draftId};
       return this.beginHandoff(h,scope,{type:'beginDraftHandoff',...scope,groupName,identity:original.identity,baseRevision:entry.revision,canonical,
         source:{sourceIntentId:meta.sourceIntentId,canonical:sourceBytes.toString('base64url')}});

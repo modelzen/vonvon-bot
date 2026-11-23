@@ -388,7 +388,7 @@ export class PrivateCreator{
     };
     if(selection.kind==='draft'){
       await this.source(p,selection.work);
-      await this.run(p,link,(s,actual,db)=>{commit(s,actual,db);s.focusDraft=selection.work.draftId;s.focusUntil=this.now()+ttl;});
+      await this.run(p,link,(s,actual,db)=>{commit(s,actual,db);delete s.current;s.focusDraft=selection.work.draftId;s.focusUntil=this.now()+ttl;});
       if(await this.retryCard(p,link,selection.work.draftId))return;
       await this.read(p,link,{kind:'draft',work:selection.work});
     }else{
