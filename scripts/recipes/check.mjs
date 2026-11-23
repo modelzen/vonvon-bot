@@ -17,8 +17,9 @@ const db = join(tmp, 'db'), sock = join(tmp, 's');
 const json = { 'content-type': 'application/json' };
 const port = 5432; // Unix socket lives in our unique 0700 directory; no TCP listener.
 const pgEnv = { ...process.env, PGHOST:sock, PGPORT:String(port), PGDATABASE:'postgres', PGUSER:'bootstrap_test', PGPASSWORD:'' };
-const sql = stmt => pg('psql', ['-XAtq','-v','ON_ERROR_STOP=1','-c',stmt], {env:pgEnv});
+const sql = stmt => pg('psql', ['-XAtq','-v','ON_ERROR_STOP=1','-c',stmt], {env:pgEnv}).trim();
 const review=process.argv.includes('--review');
+const legacy={owner:randomUUID(),reader:randomUUID(),recipe:randomUUID(),version:randomUUID(),request:randomUUID()};
 let up=false, service, issuerServer,webServer;
 let reviewAuth=null;
 const closeServer = s => new Promise((resolve,reject)=>s.close(err => err ? reject(err) : resolve()));
@@ -28,8 +29,19 @@ try {
   pg('pg_ctl', ['-D',db,'-w','-l',join(tmp,'pg.log'),'-o',`-k '${sock}' -p ${port} -c listen_addresses='' -c unix_socket_permissions=0700`,'start']);
   up=true;
   const migrations=join(root,'supabase/migrations');
-  for (const f of readdirSync(migrations).filter(f=>f.endsWith('.sql')).sort())
+  for (const f of readdirSync(migrations).filter(f=>f.endsWith('.sql')).sort()) {
+    if (!review && f.endsWith('_recipe_accounts.sql')) {
+      sql(`insert into recipe_private.recipes(id,owner_id,revision) values('${legacy.recipe}','${legacy.owner}',1);
+        insert into recipe_private.versions(id,recipe_id,owner_id,revision,public_info,config,bytes)
+        values('${legacy.version}','${legacy.recipe}','${legacy.owner}',1,
+          '{"name":"legacy","summary":"retained","overview":"","version":"1","access":"coded"}',
+          '{"role":"LEGACY-PRIVATE"}',25);
+        insert into recipe_private.grants(actor,version_id,original_request,original_digest)
+        values('${legacy.reader}','${legacy.version}','${legacy.request}',
+          sha256(convert_to(jsonb_build_array('${legacy.version}'::uuid,null)::text,'UTF8')));`);
+    }
     pg('psql',['-Xq','-1','-v','ON_ERROR_STOP=1','-f',join(migrations,f)],{env:pgEnv,stdio:['ignore','ignore','pipe']});
+  }
   sql('create role recipe_check_login login noinherit; grant recipe_api to recipe_check_login');
   const {publicKey, privateKey}=generateKeyPairSync('ec',{namedCurve:'P-256'});
   const jwk={ ...publicKey.export({format:'jwk'}), kid:'local-fixture', alg:'ES256',use:'sig'};
@@ -84,7 +96,50 @@ try {
     console.log('本机验收（合成账号）：' + running.webOrigin + '  · Ctrl-C 关闭并清理临时库');
     await new Promise(resolve => { process.once('SIGINT', resolve); process.once('SIGTERM', resolve); });
   } else {
+    await request('/me',{status:401});
+    const accounts=await Promise.all(Array.from({length:24},()=>request('/me',{token:author})));
+    const accountId=accounts[0].accountId;
+    assert.notEqual(accountId,aid);
+    assert.deepEqual(Object.keys(accounts[0]),['accountId']);
+    assert.ok(accounts.every(a=>a.accountId===accountId));
+    assert.equal(sql(`select count(*) from recipe_private.account_identities where subject='${aid}'`),'1');
+    assert.notEqual((await request('/me',{token:jwt(accountId)})).accountId,accountId);
+    assert.deepEqual((await request('/me/publications',{token:jwt(accountId)})).items,[]);
+    assert.equal((await request('/me',{token:jwt(aid,{email:'other@example.com',app_metadata:{provider:'google'}})})).accountId,accountId);
+    assert.notEqual((await request('/me',{token:jwt(randomUUID(),{email:'other@example.com'})})).accountId,accountId);
+    await request('/me',{token:jwt(aid,{iss:issuer+'/other'}),status:401});
+    const legacyOwner=jwt(legacy.owner),legacyReader=jwt(legacy.reader);
+    assert.equal((await request('/me',{token:legacyOwner})).accountId,legacy.owner);
+    assert.equal((await request('/me',{token:legacyReader})).accountId,legacy.reader);
+    const legacyDetail='/recipes/'+legacy.recipe+'/versions/'+legacy.version;
+    for (const token of [legacyOwner,legacyReader]) assert.equal((await request(legacyDetail,{token})).config.role,'LEGACY-PRIVATE');
+    assert.ok(!('config' in await request(legacyDetail,{token:author})));
+    assert.equal((await request('/me/recipes',{token:legacyReader})).items[0].versionId,legacy.version);
+    await request('/versions/'+legacy.version+'/acquire',{method:'POST',token:legacyReader,body:{},key:legacy.request});
+    await assert.rejects(startLocalRecipeApi(root,{...env,RECIPE_AUTH_ISSUER:issuer+'/other/auth/v1'}),/identity_issuer_mismatch/);
+    assert.equal(sql(`select has_schema_privilege('recipe_api','recipe_private','USAGE')
+      or has_table_privilege('recipe_api','recipe_private.accounts','SELECT')
+      or has_table_privilege('recipe_api','recipe_private.account_identities','INSERT')
+      or has_table_privilege('recipe_api','recipe_private.identity_deployment','UPDATE')
+      or has_function_privilege('recipe_check_login','recipe_api.resolve_identity(text,uuid)','EXECUTE')`),'f');
+    sql('create role anon; create role authenticated');
+    for (const role of ['anon','authenticated']) {
+      assert.equal(sql(`select has_schema_privilege('${role}','recipe_api','USAGE')
+        or has_function_privilege('${role}','recipe_api.resolve_identity(text,uuid)','EXECUTE')
+        or has_function_privilege('${role}','recipe_api.bind_identity_issuer(text)','EXECUTE')`),'f');
+    }
     const pub={name:'开发晨报',summary:'只看本周变化',overview:'## 介绍',version:'1.0',access:'coded'};
+    const trimSpace='\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff';
+    let blankDraft;
+    for (const field of ['name','summary','version']) {
+      const body={public:{...pub,[field]:trimSpace},config:{role:''}};
+      blankDraft=await request(blankDraft?'/drafts/'+blankDraft.draftId:'/drafts',{
+        method:blankDraft?'PATCH':'POST',token:author,revision:blankDraft?.revision,body});
+      await request('/drafts/'+blankDraft.draftId+'/publish',{
+        method:'POST',token:author,body:{},revision:blankDraft.revision,status:422});
+      assert.equal((await request('/drafts/'+blankDraft.draftId,{token:author})).public[field],trimSpace);
+    }
+    await request('/drafts/'+blankDraft.draftId,{method:'DELETE',token:author,body:{},revision:blankDraft.revision});
     const setupStep={kind:'context',title:'准备代码',instructions:'PRIVATE-SETUP-SENTINEL',check:'能看到 README',required:true};
     const config={role:'PRIVATE-CONFIG-SENTINEL',setup:{steps:[setupStep]}};
     const unfinished={...config,setup:{steps:[{...setupStep,title:'\t\u3000'}]}};
@@ -105,11 +160,13 @@ try {
     const publicCatalog=JSON.stringify(await request('/community/recipes'));
     assert.ok(!publicCatalog.includes(config.role)&&!publicCatalog.includes(setupStep.instructions));
     assert.deepEqual((await request(detail,{token:author})).config,config);
+    assert.ok(!('config' in await request(detail)));
     await request('/me/recipes',{token:jwt(rid,{aud:'other'}),status:401});
     const claim='/versions/'+v.versionId+'/redeem';
     const key=randomUUID();
     await request(claim,{method:'POST',token:reader,body:{code:v.firstCode},key});
     await request(claim,{method:'POST',token:reader,body:{code:v.firstCode},key});
+    await request(claim,{method:'POST',token:reader,body:{code:'changed'},key,status:409});
     assert.deepEqual((await request(detail,{token:reader})).config,config);
     assert.equal((await request('/me/recipes',{token:reader})).items.length,1);
     assert.equal((await request('/me/recipes',{token:other})).items.length,0);
@@ -132,6 +189,22 @@ try {
     await request('/drafts',{method:'POST',token:author,body:{public:{...pub,version:'3'},config,recipeId:v.recipeId,sourceVersionId:v.versionId},status:409});
     await request('/versions/'+v2.versionId+'/acquire',{method:'POST',token:other,body:{}});
     assert.equal((await request('/me/recipes',{token:other})).items[0].versionId,v2.versionId);
+    const spare=await request('/versions/'+v.versionId+'/codes',{method:'POST',token:author,body:{count:2}});
+    for (const token of [author,other]) {
+      const noOpKey=randomUUID();
+      const noOp={method:'POST',token,body:{},key:noOpKey};
+      const acquired=await request('/versions/'+v2.versionId+'/acquire',noOp);
+      assert.deepEqual(await request('/versions/'+v2.versionId+'/acquire',noOp),acquired);
+      await request('/versions/'+v.versionId+'/acquire',{...noOp,status:409});
+      await request(claim,{method:'POST',token,body:{code:spare.items[0].code},key:noOpKey,status:409});
+    }
+    const alreadyGrantedKey=randomUUID();
+    const alreadyGranted={method:'POST',token:reader,body:{code:spare.items[0].code},key:alreadyGrantedKey};
+    await request(claim,alreadyGranted);
+    await request(claim,alreadyGranted);
+    await request(claim,{...alreadyGranted,body:{code:spare.items[1].code},status:409});
+    const unchanged=await request('/versions/'+v.versionId+'/codes',{token:author});
+    for (const code of spare.items) assert.equal(unchanged.items.find(c=>c.codeId===code.codeId).status,'available');
     // Two different accounts submit the same still-valid code at the same time.
     const issued=await request('/versions/'+v.versionId+'/codes',{method:'POST',token:author,body:{count:1}});
     const competitors=[jwt(randomUUID()),jwt(randomUUID())];
@@ -139,7 +212,45 @@ try {
     assert.equal(statuses.filter(s=>s===200).length,1);assert.ok(statuses.some(s=>s>=400&&s<500));
     const bodies=await Promise.all(competitors.map(token=>request(detail,{token})));
     assert.equal(bodies.filter(d=>d.config?.role===config.role).length,1);
-    console.log('PASS: real PostgreSQL + HTTP + signed identities: private draft, publish/replay, catalog, claim, version isolation, stale confirmation, old link, private library.');
+    const pausedDraft=await request('/drafts',{method:'POST',token:author,body:{public:pub,config}});
+    for (const status of ['stopped','disabled']) {
+      sql(`update recipe_private.accounts set status='${status}' where id='${accountId}'`);
+      for (const path of ['/me','/me/drafts','/me/recipes','/me/publications','/drafts/'+pausedDraft.draftId,
+        '/versions/'+v.versionId+'/codes',detail,'/community/recipes']) {
+        const response=await request(path,{token:author,status:403});
+        assert.equal(response.error.code,'account_disabled');
+      }
+      for (const [path,method,body] of [
+        ['/drafts','POST',{public:pub,config}],
+        ['/drafts/'+pausedDraft.draftId,'PATCH',{public:pub,config}],
+        ['/drafts/'+pausedDraft.draftId,'DELETE',{}],
+        ['/drafts/'+pausedDraft.draftId+'/publish','POST',{}],
+        ['/versions/'+v2.versionId+'/acquire','POST',{}],
+        [claim,'POST',{code:spare.items[0].code}],
+        ['/versions/'+v.versionId+'/codes','POST',{count:1}],
+        ['/codes/'+spare.items[0].codeId+'/disable','POST',{}],
+        ['/codes/'+spare.items[0].codeId+'/reveal','POST',{}],
+      ]) assert.equal((await request(path,{method,body,token:author,revision:pausedDraft.revision,status:403})).error.code,'account_disabled');
+      assert.ok(!('config' in await request(detail)));
+      sql(`update recipe_private.accounts set status='active' where id='${accountId}'`);
+    }
+    assert.equal((await request('/drafts/'+pausedDraft.draftId,{token:author})).revision,pausedDraft.revision);
+    assert.equal(sql(`select owner_id::text from recipe_private.versions where id='${v.versionId}'`),accountId);
+    assert.equal(sql(`select actor::text from recipe_private.grants where version_id='${v.versionId}' and actor='${(await request('/me',{token:reader})).accountId}'`),
+      (await request('/me',{token:reader})).accountId);
+    let remaining=500-Number(sql(`select count(*) from recipe_private.codes where owner_id='${accountId}'`));
+    let lastBatch;
+    while (remaining>0) {
+      const count=Math.min(100,remaining),key=randomUUID();
+      lastBatch={method:'POST',token:author,body:{count},key};
+      await request('/versions/'+v.versionId+'/codes',lastBatch);
+      remaining-=count;
+    }
+    await request('/versions/'+v.versionId+'/codes',lastBatch);
+    assert.equal((await request('/versions/'+v.versionId+'/codes',{
+      method:'POST',token:author,body:{count:1},status:429})).error.code,'rate_limited');
+    assert.equal(sql(`select count(*) from recipe_private.codes where owner_id='${accountId}'`),'500');
+    console.log('PASS: real PostgreSQL + HTTP: mapped identities, concurrent first login, legacy upgrade, issuer pin, disabled accounts, private scopes, idempotent grants and finite code quota.');
   }
 } finally {
   try { if(webServer?.listening)await closeServer(webServer);await service?.close(); } finally {

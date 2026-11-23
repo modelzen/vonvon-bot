@@ -24,7 +24,7 @@ export function createVerifier(issuer) {
       });
       if (typeof payload.sub !== 'string' || !UUID.test(payload.sub) ||
           payload.role !== 'authenticated' || payload.is_anonymous === true) throw authRequired();
-      return payload.sub.toLowerCase();
+      return { issuer, subject: payload.sub.toLowerCase() };
     } catch (err) {
       if (err instanceof ApiError) throw err;
       if (err instanceof errors.JWKSTimeout || err instanceof TypeError || err.code === 'ERR_JOSE_GENERIC') {
@@ -35,7 +35,7 @@ export function createVerifier(issuer) {
   };
 }
 
-export async function accountFromRequest(req, isPublic, verify) {
+export async function identityFromRequest(req, isPublic, verify) {
   const headers = req.headersDistinct.authorization;
   if (!headers) {
     if (isPublic) return null;

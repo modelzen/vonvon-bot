@@ -13,9 +13,11 @@
     "package:universal": "node ../../scripts/package-desktop.mjs"
   },
   "dependencies": {
+    "@supabase/auth-js": "2.119.0",
     "@vonvon/client": "0.1.0",
     "@vonvon/protocol": "0.1.0",
     "electron-updater": "6.8.11",
+    "image-size": "2.1.0",
     "ws": "8.22.0",
     "zod": "3.25.76"
   },

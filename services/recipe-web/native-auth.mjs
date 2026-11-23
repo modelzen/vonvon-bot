@@ -234,7 +234,7 @@ export function createNativeLogin({ publicOrigin, supabaseOrigin, publishableKey
       }
       if (url.pathname === '/auth/native/cancel' && req.method === 'POST') {
         await object(req, []);
-        if (!terminal.has(flow.status)) { flow.status = 'cancelled'; clearSecrets(flow); }
+        if (!terminal.has(expire(flow).status)) { flow.status = 'cancelled'; clearSecrets(flow); }
         json(res, browserView(flow)); return true;
       }
       throw new WebError(404, 'not_found');
