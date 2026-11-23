@@ -40,6 +40,7 @@ export type CreatorSnapshot = z.infer<typeof creatorSnapshotSchema>;
 const read = z.discriminatedUnion('kind', [
   z.object({kind:z.literal('works'),offset:ordinal}).strict(),
   z.object({kind:z.literal('draft'),work:creatorWorkSchema}).strict(),
+  z.object({kind:z.literal('openPreview'),work:creatorWorkSchema,snapshotDigest:digest}).strict(),
   z.object({kind:z.literal('page'),work:creatorWorkSchema,snapshotDigest:digest,section:ordinal,page:ordinal}).strict(),
   z.object({kind:z.literal('codes'),target:version,cursor}).strict(),
   z.object({kind:z.literal('parent'),target:version}).strict(),
@@ -81,6 +82,7 @@ const states = z.enum(['available','redeemed','disabled']);
 const answer = z.discriminatedUnion('kind', [
   z.object({kind:z.literal('works'),items:selection.array().max(16),nextOffset:ordinal.nullable()}).strict(),
   z.object({kind:z.literal('snapshot'),snapshot:creatorSnapshotSchema}).strict(),
+  z.object({kind:z.literal('previewOpened'),work:creatorWorkSchema,snapshotDigest:digest,revision:positive}).strict(),
   z.object({kind:z.literal('page'),snapshotDigest:digest,section:ordinal,page:ordinal,text:z.string().max(4096)}).strict(),
   z.object({kind:z.literal('codes'),target:version,items:z.array(z.object({codeId:uuid,suffix:z.string().max(8),status:states}).strict()).max(50),nextCursor:cursor}).strict(),
   z.object({kind:z.literal('parent'),target:version,inherited:inheritedPublicationSchema}).strict(),

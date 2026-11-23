@@ -2,7 +2,7 @@ import {isDeepStrictEqual} from 'node:util';
 import {z} from 'zod';
 import {creatorSnapshotSchema,recipeAuthoringReplySchema,validateWritableRichRecipeContent,recipePublicSchema,richMetadataRequestSchema,
   communityResponseSchemas,type CreatorJob,type CreatorAnswer,type CreatorRead,type CreatorWork,type CreatorVersion,type CreatorSnapshot,type RecipeDraft,type CommunityRequest,
-  type DesktopAuthoringReply,type AuthoringPublished,type AuthoringSaved,type RecipeAuthoringRequest,type RecipeAuthoringReply} from '@vonvon/protocol';
+  type DesktopAuthoringReply,type DraftPreviewLocator,type AuthoringPublished,type AuthoringSaved,type RecipeAuthoringRequest,type RecipeAuthoringReply} from '@vonvon/protocol';
 import type {NativeAccount} from './account-session.js';
 import {RecipeCreatorJournal,checkVersionSource,sameCreatorSource,creatorSha,creatorSnapshotDigest,type CreatorAssociation,type CreatorCommandRecord} from './recipe-creator-journal.js';
 import {creatorDraft,creatorJson,creatorCodes,publicationReceipt,issueReceipt,metadataReceipt,verifyMetadataReceipt,CreatorCloudRejected} from './recipe-creator-cloud.js';
@@ -40,7 +40,8 @@ function pages(text:string){
 export class RecipeCreatorExecutor {
   constructor(private readonly account:NativeAccount,private readonly journal:RecipeCreatorJournal,
     private readonly metadata:MetadataJournal,private readonly authoring:AuthoringJournal,private readonly onPublished?:(receipt:AuthoringPublished)=>void,
-    private readonly onSaved?:(receipt:AuthoringSaved)=>void) {}
+    private readonly onSaved?:(receipt:AuthoringSaved)=>void,
+    private readonly onPreview?:(locator:DraftPreviewLocator&{accountId:string})=>void) {}
   private async checked(context:CreatorContext,job:CreatorJob):Promise<Checked>{
     context.check();
     const reply=expect(recipeAuthoringReplySchema.parse(await context.rpc({type:'creatorCheck',botId:context.association.botId,session:context.session,id:job.id})),'creatorChecked');
@@ -216,6 +217,16 @@ export class RecipeCreatorExecutor {
         return {kind:'works',items:items.slice(read.offset,read.offset+16),nextOffset:items.length>read.offset+16?read.offset+16:null};
       }
       case 'draft':return {kind:'snapshot',snapshot:(await this.freeze(context,job,read.work)).snapshot};
+      case 'openPreview': {
+        const stored=this.journal.snapshot(read.snapshotDigest);
+        if(!this.onPreview||!stored||!isDeepStrictEqual(stored.association,context.association)||
+          !isDeepStrictEqual(stored.snapshot.work,read.work)||creatorSnapshotDigest(stored.snapshot)!==read.snapshotDigest)throw invalid();
+        const current=await this.freeze(context,job,read.work,['read']);
+        if(!this.sameSnapshot(current.snapshot,stored.snapshot)||(await this.checked(context,job)).mode!=='read')throw invalid();
+        context.check();
+        this.onPreview({accountId,draftId:read.work.draftId,revision:stored.snapshot.revision});
+        return {kind:'previewOpened',work:read.work,snapshotDigest:read.snapshotDigest,revision:stored.snapshot.revision};
+      }
       case 'page': {
         await this.verifyWork(context,job,read.work);
         const stored=this.journal.snapshot(read.snapshotDigest);

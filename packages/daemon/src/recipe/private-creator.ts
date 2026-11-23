@@ -198,6 +198,29 @@ export class PrivateCreator{
     if(card.previewOwner&&(owner.preview?.ref!==card.ref||card.previewApproval!==owner.offerRef))return;
     return owner;
   }
+  private appPreviewOwner(s:CreatorLedger,p:Presence,card:Card,read:Extract<CreatorRead,{kind:'openPreview'}>){
+    const owner=this.previewOwner(s,p,card),task=owner?.job.task;
+    if(!owner||owner.offerRef!==card.ref||task?.kind!=='command'||task.command.kind!=='publish'||
+      task.command.snapshotDigest!==read.snapshotDigest||snapshotHash(task.command.snapshot)!==read.snapshotDigest||
+      !same(task.command.snapshot.work,read.work))throw denied();
+    return owner;
+  }
+  private async openPreview(p:Presence,link:Link,card:Card,read:Extract<CreatorRead,{kind:'openPreview'}>,index:number){
+    await this.source(p,read.work);
+    await this.run(p,link,(s,_l,db)=>{
+      const owner=this.appPreviewOwner(s,p,card,read);
+      this.noPendingSave(db,p,link,read.work);
+      const sourceChoice=card.ref+'/'+card.generation+'/'+index;
+      const existing=Object.values(s.jobs).find(row=>row.sourceChoice===sourceChoice);
+      if(existing){
+        if(existing.state==='finished'){existing.state='active';delete existing.answerDigest;delete existing.resultCard;}
+        return;
+      }
+      const row=this.addJob(p,link,s,{kind:'read',read},'active',read.work);
+      row.previewOwner=owner.job.id;row.originalCardId=card.cardId;row.messageId=card.messageId;
+      row.approvalGeneration=card.generation;row.sourceChoice=sourceChoice;
+    });
+  }
   private async preview(p:Presence,link:Link,clicked:Card,choice:Extract<Option['choice'],{kind:'detailPage'}>|Extract<CreatorRead,{kind:'page'}>){
     const start=await this.run(p,link,s=>{
       const owner=this.previewOwner(s,p,clicked);
@@ -624,6 +647,7 @@ export class PrivateCreator{
         await this.run(p,link,s=>{s.awaitLogo={draftId:choice.work.draftId,expiresAt:this.now()+300_000};});
         await this.im.reply(recipient.chatId,evt.messageId,'请发送一张图片或图片附件。');return;
       case 'read':
+        if(choice.read.kind==='openPreview')return this.openPreview(p,link,c,choice.read,index);
         if(choice.read.kind==='page')return this.preview(p,link,c,choice.read);
         await this.read(p,link,choice.read,c.version);return;
       case 'offer':{
@@ -650,6 +674,20 @@ export class PrivateCreator{
         });
       }
     }
+  }
+  async offlinePreview(evt:CardActionEvent){
+    const click=creatorClick.safeParse(evt.action?.value).data;
+    const raw=z.object({operator:z.object({open_id:z.string(),tenant_key:z.string()})}).safeParse(evt.raw).data;
+    if(click?.verb!=='creator'||!raw||raw.operator.open_id!==evt.operator.openId||!physicalChat(evt.chatId)||!isAdmin(this.opts.cfg,evt.operator.openId))return;
+    const recipient={openId:evt.operator.openId,chatId:evt.chatId,tenantKey:raw.operator.tenant_key};
+    const card=await this.ledger.run(db=>{
+      const link=Object.values(db.links).find(link=>link.bot===this.botKey&&sameRecipient(link.recipient,recipient)&&link.creator?.cards[click.ref]);
+      const card=link?.creator?.cards[click.ref],choice=card?.options[click.index]?.choice;
+      if(card&&card.expiresAt>this.now()&&!card.needsUpdate&&card.generation===click.generation&&card.messageId===evt.messageId&&
+        card.cardId&&choice?.kind==='read'&&choice.read.kind==='openPreview')return card;
+    });
+    if(card?.cardId&&await this.im.matches(evt.messageId,evt.chatId,card.cardId))
+      await this.im.reply(evt.chatId,evt.messageId,'请先打开 App 再点击预览。');
   }
   private noPendingSave(db:AuthoringLedger,p:Presence,link:Link,work?:CreatorWork,exceptId?:string){
     if(!work)return;
@@ -722,7 +760,7 @@ export class PrivateCreator{
   private async allowedJob(p:Presence,link:Link,id:string):Promise<Extract<CreatorReply,{kind:'creatorChecked'}>>{
     const row=await this.currentJob(p,link,id);
     await this.source(p,row.originWork);
-    const mustCheckCard=row.job.task.kind==='read'&&row.job.task.read.kind==='page'||row.job.task.kind==='deliverCodes'||row.job.task.kind==='command'&&row.job.task.confirmation?.kind!=='app'&&row.state==='active'&&row.job.task.expiresAt>this.now();
+    const mustCheckCard=row.job.task.kind==='read'&&['page','openPreview'].includes(row.job.task.read.kind)||row.job.task.kind==='deliverCodes'||row.job.task.kind==='command'&&row.job.task.confirmation?.kind!=='app'&&row.state==='active'&&row.job.task.expiresAt>this.now();
     const cardAvailable=!mustCheckCard||Boolean(row.messageId&&row.originalCardId&&await this.im.matches(row.messageId,link.recipient.chatId,row.originalCardId));
     await this.hooks.guard(p,link.recipient);
     return this.run(p,link,(s,_l,db)=>{
@@ -737,6 +775,12 @@ export class PrivateCreator{
       switch(job.task.kind){
         case 'read':
           if(r.expiresAt<=this.now())throw denied();
+          if(job.task.read.kind==='openPreview'){
+            const owner=r.previewOwner?s.jobs[r.previewOwner]:undefined,card=owner?.offerRef?s.cards[owner.offerRef]:undefined;
+            if(!cardAvailable||!card||card.cardId!==r.originalCardId||card.messageId!==r.messageId||card.generation!==r.approvalGeneration||
+              this.appPreviewOwner(s,p,card,job.task.read)!==owner)throw denied();
+            this.noPendingSave(db,p,link,job.task.read.work);
+          }
           if(job.task.read.kind==='page'){
             const owner=r.previewOwner?s.jobs[r.previewOwner]:undefined;
             if(!cardAvailable||owner?.preview?.readId!==id||!this.livePreview(s,p,owner))throw denied();
@@ -767,6 +811,12 @@ export class PrivateCreator{
         const {jobs,cards}=await this.run(p,link,(s,l,db)=>{
           const now=this.now();
           for(const [id,r] of Object.entries(s.jobs)){
+            if(r.job.task.kind==='read'&&r.job.task.read.kind==='openPreview'){
+              const owner=r.previewOwner?s.jobs[r.previewOwner]:undefined,card=owner?.offerRef?s.cards[owner.offerRef]:undefined;
+              if(!card||!this.livePreview(s,p,owner)||card.generation!==r.approvalGeneration||card.cardId!==r.originalCardId||card.messageId!==r.messageId){
+                delete s.jobs[id];continue;
+              }
+            }
             if(r.job.task.kind==='read'&&r.job.task.read.kind==='page'){
               const owner=r.previewOwner?s.jobs[r.previewOwner]:undefined;
               if(!this.livePreview(s,p,owner)||owner?.preview?.readId!==id){
@@ -877,7 +927,15 @@ export class PrivateCreator{
         r.state='unknown';
         card=this.cards.approvalCard(p,s,r,true);r.resultCard=card.ref;return card;
       }
-      if(a.kind==='rejected'&&task.kind==='read'&&task.read.kind==='page'){
+      if(task.kind==='read'&&task.read.kind==='openPreview'){
+        const q=task.read,owner=r.previewOwner?s.jobs[r.previewOwner]:undefined,command=owner?.job.task;
+        if(command?.kind!=='command'||command.command.kind!=='publish')throw denied();
+        if(a.kind==='previewOpened'){
+          if(!same(a.work,q.work)||a.snapshotDigest!==q.snapshotDigest||a.revision!==command.command.snapshot.revision)throw denied();
+        }else if(a.kind==='rejected'){
+          card=this.cards.newCard(s,p,'暂时无法打开预览','请先打开 App 再点击预览。',[]);
+        }else throw denied();
+      }else if(a.kind==='rejected'&&task.kind==='read'&&task.read.kind==='page'){
         const owner=r.previewOwner&&s.jobs[r.previewOwner];
         if(!owner||owner.preview?.readId!==id)throw denied();
         delete owner.preview.position;

@@ -47,13 +47,37 @@ function fixture(){
     cancelLogin:async()=>state,dispose:async()=>{},recipeLink:(r,v)=>`https://vonvon.cc/recipes/${r}/versions/${v}`,request:async(id,path,init,beforeSend)=>{await beforeSend?.();return cloud(id,path,init);}};
   const journalPath=join(dir,'creator'),journal=new RecipeCreatorJournal(journalPath),metadata=new MetadataJournal(join(dir,'metadata')),authoring=new AuthoringJournal();
   cleanup.push(()=>authoring.history.close());
-  const publications=vi.fn(),saves=vi.fn();
-  const build=(saved=journal)=>new RecipeCreatorExecutor(native,saved,metadata,authoring,publications,saves);
+  const publications=vi.fn(),saves=vi.fn(),previews=vi.fn();
+  const build=(saved=journal)=>new RecipeCreatorExecutor(native,saved,metadata,authoring,publications,saves,previews);
   const context:CreatorContext={association,session,check(){if(revoked||accountSignal.signal.aborted)throw Error('revoked');},rpc:input=>client.recipeAuthoring!(input),settled:async()=>{}};
   const set=(task:CreatorJob['task'],nextMode=mode,id:string=randomUUID())=>{mode=nextMode;job=creatorReplies[2].parse({kind:'creatorJobs',jobs:[{id,binding:association.binding,scope:association.scope,task}]}).jobs[0]!;return job;};
   return {account:native,dir,journalPath,groupId,preparationId,identity,accountId,draftId,recipeId,versionId,firstCodeId,association,publicValue,draft,journal,metadata,authoring,context,cloud,answers,deliveries,rpcs,build,set,
-    mode:(next:typeof mode)=>{mode=next;},revoke:()=>{revoked=true;},accountSignal,publications,saves};
+    mode:(next:typeof mode)=>{mode=next;},revoke:()=>{revoked=true;},accountSignal,publications,saves,previews};
 }
+
+it.each(['valid','association','work','digest','source','revision','mode','lease'] as const)('opens the complete rich frozen preview only with the original %s evidence',async evidence=>{
+  const {f,work,read,cloudDraft}=richMetadataFixture();
+  await read();
+  const answer=f.answers.at(-1);if(answer?.kind!=='snapshot')throw Error('snapshot');
+  const snapshotDigest=creatorSnapshotDigest(answer.snapshot);
+  let context=f.context,selected=work,digest=snapshotDigest;
+  if(evidence==='association')context={...context,association:{...context.association,deviceKey:Buffer.alloc(32,8).toString('base64url')}};
+  if(evidence==='work')selected={...work,source:{...work.source,preparationId:randomUUID()}};
+  if(evidence==='digest')digest='f'.repeat(64);
+  if(evidence==='source')context={...context,rpc:async request=>{
+    const reply=await f.context.rpc(request);return reply.kind==='groupSourceIdentity'?{...reply,identity:'f'.repeat(64)}:reply;
+  }};
+  if(evidence==='revision')cloudDraft.revision++;
+  if(evidence==='lease')f.accountSignal.abort();
+  const job=f.set({kind:'read',read:{kind:'openPreview',work:selected,snapshotDigest:digest}},evidence==='mode'?'execute':'read');
+  await f.build().run(context,job).catch(()=>{});
+  if(evidence==='valid'){
+    expect(f.previews).toHaveBeenCalledExactlyOnceWith({accountId:f.accountId,draftId:f.draftId,revision:3});
+    expect(f.answers.at(-1)).toEqual({kind:'previewOpened',work,snapshotDigest,revision:3});
+  }else expect(f.previews).not.toHaveBeenCalled();
+  expect(f.publications).not.toHaveBeenCalled();expect(f.saves).not.toHaveBeenCalled();
+  expect(f.cloud.mock.calls.every(([_id,_path,init])=>(init?.method??'GET')==='GET')).toBe(true);
+});
 
 it('freezes every preview page once, binds access outside canonical, and serves only exact immutable pages',async()=>{
   const f=fixture(),executor=f.build(),work={draftId:f.draftId,source:null};

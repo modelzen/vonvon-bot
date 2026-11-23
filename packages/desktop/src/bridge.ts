@@ -464,7 +464,11 @@ export function installBridge(
   };
   const creator=new RecipeCreatorSupervisor(account,retainCreatorSource,()=>devices.state().devices.map(row=>row.id),creatorJournal,authoringJournal,authoring,
     new RecipeCreatorExecutor(account,creatorJournal,metadataJournal,authoringJournal,
-      value=>send({type:'authoringPublished',value}),onAuthoringSaved));
+      value=>send({type:'authoringPublished',value}),onAuthoringSaved,value=>{
+        const current=account.status();
+        if(disposed||current.kind!=='signedIn'||current.accountId!==value.accountId||account.lease?.(value.accountId)?.aborted!==false)throw changed();
+        recipePreview.request({draftId:value.draftId,revision:value.revision});
+      }));
   function onAuthoringSaved(value: AuthoringSaved) {
     creator.invalidateDraft(value.accountId, value.draftId);
     send({type:'authoringSaved',value});

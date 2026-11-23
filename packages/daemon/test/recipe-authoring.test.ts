@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { Client, DefaultCache, type LarkChannel, type NormalizedMessage } from '@larksuiteoapi/node-sdk';
-import { authoringAuthorizationSchema, agentIdSchema, groupIdSchema, recipeAuthoringRequestSchema, type AuthoringAuthorization, type AuthoringOperation, type RecipeAuthoringReply } from '@vonvon/protocol';
+import { authoringAuthorizationSchema, agentIdSchema, groupIdSchema, recipeAuthoringRequestSchema, type AuthoringAuthorization, type AuthoringOperation, type RecipeAuthoringReply, type RecipeAuthoringRequest, type AuthoringSaved } from '@vonvon/protocol';
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type {RichModelInput} from '../src/recipe/authoring-rich-model';
 import type { DraftInstructionParser, ReadDraftField } from '../src/recipe/draft-instruction';
@@ -3089,7 +3089,8 @@ it('APP PUBLICATION prepares one existing durable offer without approving and re
   expect(ready.state).toBe('offer');expect(await creatorJobs()).toEqual([]);
   expect(await rpc('creatorCheck',{id:ready.job.id})).toMatchObject({mode:'preview'});
   const rendered=[...cards.values()].at(-1)!;
-  expect(rendered).toContain('在 App 中预览');expect(rendered).toContain(snapshot.appPreviewUrl);
+  expect(rendered).toContain('在 App 中预览');expect(rendered).not.toContain(snapshot.appPreviewUrl);expect(rendered).not.toContain('open_url');
+  expect(JSON.parse(rendered).body.elements.filter((e:{tag:string})=>e.tag==='button')).toHaveLength(3);
   expect(rendered).toContain('确认发布 2');expect(rendered).not.toContain('禁止出现在短卡');expect(rendered).not.toContain('pageHashes');
   const confirmationId=randomUUID();
   await expect(rpc('creatorAppConfirm',{id:ready.job.id,snapshotDigest:'f'.repeat(64),confirmationId})).rejects.toThrow();
@@ -3109,7 +3110,7 @@ it('APP PUBLICATION prepares one existing durable offer without approving and re
 it('APP PUBLICATION refuses pending saves and changed revisions and keeps legacy short cards usable',async()=>{
   await link();await attachCreator();const snapshot=await openManualWork('旧快照');
   const ready=kind(await rpc('creatorPreview',{work:snapshot.work,revision:2}),'creatorPreview');
-  expect([...cards.values()].at(-1)).toContain('我的配方');expect([...cards.values()].at(-1)).not.toContain('在 App 中预览');
+  expect([...cards.values()].at(-1)).toContain('在 App 中预览');
   await expect(rpc('creatorPreview',{work:snapshot.work,revision:3})).rejects.toThrow();
   await rpc('edit',{draftId:snapshot.work.draftId,baseRevision:2});
   await expect(rpc('creatorPreview',{work:snapshot.work,revision:2})).rejects.toThrow();
@@ -3206,3 +3207,131 @@ it('APP PUBLICATION keeps multiple legal large editor answers outside the bounde
   const rows=await ledger.run(db=>Object.values(db.links).find(link=>link.creator)!.creator!.jobs);
   for(const id of ids){expect(rows[id]!.state).toBe('finished');expect(rows[id]!.answerDigest).toBeTruthy();expect(rows[id]!.result).toBeUndefined();}
 },60000);
+
+async function nativePreviewFixture(){
+  await link();await attachCreator();
+  const {RecipeCreatorExecutor}=await import(new URL('../../desktop/src/recipe-creator.ts',import.meta.url).href);
+  const {RecipeCreatorJournal}=await import(new URL('../../desktop/src/recipe-creator-journal.ts',import.meta.url).href);
+  const {MetadataJournal}=await import(new URL('../../desktop/src/community-metadata-journal.ts',import.meta.url).href);
+  const {AuthoringJournal:NativeHistory}=await import(new URL('../../desktop/src/recipe-authoring-journal.ts',import.meta.url).href);
+  const {RecipePreviewNavigation}=await import(new URL('../../desktop/src/recipe-preview-navigation.ts',import.meta.url).href);
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock),history=new NativeHistory();
+  const association=kind(await service.request(peer,recipeAuthoringRequestSchema.parse({type:'creatorDiscover',botId:appId,accountId:account})),'creatorBinding').association!;
+  const nativeAssociation={accountId:account,viewId:'local',deviceId:peer.device,deviceKey:Buffer.alloc(32,7).toString('base64url'),botId:agentIdSchema.parse(appId),binding:association.binding,scope:association.scope};
+  const work={draftId:randomUUID(),source:null},draft={draftId:work.draftId,recipeId:null,revision:2,public:{name:'原生回调预览',summary:'',overview:'完整内容',version:'2',access:'direct' as const},config:{role:'完整群角色'}};
+  const controller=new AbortController(),state={kind:'signedIn' as const,accountId:account,displayName:'本人',provider:'google' as const,persistence:'memory' as const};
+  const requests:Array<{path:string;method:string}>=[],answers:unknown[]=[],navigation=new RecipePreviewNavigation('vonvon-preview'),opened=vi.fn();
+  const published=vi.fn(),saved=vi.fn();
+  const native={status:()=>state,lease:(id:string)=>id===account?controller.signal:undefined,onStatus:()=>()=>{},login:async()=>state,logout:async()=>state,cancelLogin:async()=>state,dispose:async()=>{},
+    recipeLink:(r:string,v:string)=>`https://vonvon.cc/recipes/${r}/versions/${v}`,request:async(id:string,path:string,init?:RequestInit,beforeSend?:()=>void|Promise<void>)=>{
+      await beforeSend?.();expect(id).toBe(account);requests.push({path,method:init?.method??'GET'});
+      if(path==='/v2/drafts/'+work.draftId)return Response.json({error:{code:'not_found'}},{status:404});
+      if(path==='/v1/drafts/'+work.draftId)return Response.json(draft);
+      if(path.startsWith('/v1/drafts/'+work.draftId+'/creator-context?'))return Response.json({draftId:work.draftId,format:'role-v1',revision:draft.revision,sourceIntentId:null,parent:null});
+      throw Error(path);
+    }};
+  const journal=new RecipeCreatorJournal(),executor=new RecipeCreatorExecutor(native,journal,new MetadataJournal(),history,published,saved,(value:AuthoringSaved)=>{
+    opened(value);navigation.request({draftId:value.draftId,revision:value.revision});
+  });
+  const context={association:nativeAssociation,session,check:()=>controller.signal.throwIfAborted(),settled:async()=>{},rpc:async(req:RecipeAuthoringRequest)=>{
+    if(req.type==='creatorAnswer')answers.push(req.answer);
+    return service.request(peer,req);
+  }};
+  const initial=kind(await rpc('creatorPreview',{work,revision:2}),'creatorPreview');
+  await executor.run(context,initial.job);
+  const offer=kind(await rpc('creatorPreview',{work,revision:2}),'creatorPreview');
+  const choice=privateChoice('在 App 中预览'),messageCount=messages.size;
+  return {work,draft,ledger,history,journal,association,nativeAssociation,controller,requests,answers,navigation,opened,published,saved,executor,context,offer,choice,messageCount};
+}
+
+it('NATIVE PREVIEW sends the physical card through one durable readonly job into the existing native queue without approval or publication',async()=>{
+  const f=await nativePreviewFixture();
+  try{
+    await Promise.all([tap(f.choice),tap(f.choice)]);
+    const jobs=await creatorJobs();expect(jobs).toHaveLength(1);
+    const job=jobs[0]!;
+    expect(job.task).toMatchObject({kind:'read',read:{kind:'openPreview',work:f.work}});
+    expect(await rpc('creatorCheck',{id:job.id})).toMatchObject({mode:'read'});
+    const durable=await f.ledger.run(db=>Object.values(db.links).find(l=>l.binding===f.association.binding)!.creator!.jobs[job.id]);
+    expect(durable).toMatchObject({state:'active',originalCardId:expect.any(String),messageId:f.choice.messageId,previewOwner:f.offer.job.id});
+    await f.executor.run(f.context,job);
+    expect(f.opened).toHaveBeenCalledExactlyOnceWith({accountId:account,draftId:f.work.draftId,revision:2});
+    expect(f.navigation.pending()).toEqual([expect.objectContaining({draftId:f.work.draftId,revision:2})]);
+    expect(f.answers.at(-1)).toMatchObject({kind:'previewOpened',work:f.work,revision:2});
+    expect(messages.size).toBe(f.messageCount);expect(await creatorJobs()).toEqual([]);
+    expect(await rpc('creatorCheck',{id:f.offer.job.id})).toMatchObject({mode:'preview',job:{task:{approval:'0'.repeat(64)}}});
+    expect(f.requests.every(r=>r.method==='GET')).toBe(true);expect(f.published).not.toHaveBeenCalled();expect(f.saved).not.toHaveBeenCalled();
+    const finished=await f.ledger.run(db=>Object.values(db.links).find(l=>l.binding===f.association.binding)!.creator!.jobs[job.id]);
+    expect(finished).toMatchObject({state:'finished',answerDigest:expect.any(String)});expect(finished?.result).toBeUndefined();
+    f.navigation.acknowledge(f.navigation.pending()[0]!.navigationId);
+    await tap(f.choice);expect((await creatorJobs()).map(j=>j.id)).toEqual([job.id]);
+    await f.executor.run(f.context,job);expect(f.navigation.pending()).toHaveLength(1);
+  }finally{f.history.history.close();}
+});
+
+it.each(['sender','chat','tenant','message','card','generation','expired'] as const)('NATIVE PREVIEW rejects a wrong %s before enqueueing',async fault=>{
+  const f=await nativePreviewFixture();
+  try{
+    if(fault==='expired')clock+=31*60_000;
+    const click=structuredClone(f.choice);
+    if(fault==='generation')click.value.generation=Number(click.value.generation)+1;
+    if(fault==='message')click.messageId='om_forwarded';
+    if(fault==='card')[...messages.values()].find(m=>m.message_id===f.choice.messageId)!.card_id='card_replaced';
+    await tap(click,fault==='sender'?stranger:owner,fault==='chat'?'oc_wrong':chatId,fault==='tenant'?'other':tenant);
+    expect(f.opened).not.toHaveBeenCalled();
+    if(fault!=='expired')expect(await creatorJobs()).toEqual([]);
+  }finally{f.history.history.close();}
+});
+
+it.each(['work','snapshot','generation','card','identity','expired','account','revision','pendingSave','approved'] as const)('NATIVE PREVIEW refuses a durable job after %s changes',async fault=>{
+  const f=await nativePreviewFixture();
+  try{
+    await tap(f.choice);const job=(await creatorJobs())[0]!;
+    if(fault==='account')f.controller.abort();
+    else if(fault==='revision')f.draft.revision++;
+    else if(fault==='pendingSave')await rpc('edit',{draftId:f.work.draftId,baseRevision:2});
+    else if(fault==='approved')await tap(privateChoice('确认发布'));
+    else if(fault==='expired')clock+=31*60_000;
+    else if(fault==='card')[...messages.values()].find(m=>m.message_id===f.choice.messageId)!.card_id='card_replaced';
+    else await f.ledger.run(db=>{
+      const s=Object.values(db.links).find(l=>l.binding===f.association.binding)!.creator!,row=s.jobs[job.id]!;
+      if(row.job.task.kind!=='read'||row.job.task.read.kind!=='openPreview')throw Error('preview');
+      if(fault==='work')row.job.task.read.work.draftId=randomUUID();
+      if(fault==='snapshot')row.job.task.read.snapshotDigest='f'.repeat(64);
+      if(fault==='generation')s.cards[s.jobs[f.offer.job.id]!.offerRef!]!.generation++;
+      if(fault==='identity')row.originWork={...f.work,source:{preparationId:randomUUID(),groupId,identity:'f'.repeat(64)}};
+    });
+    await f.executor.run(f.context,job).catch(()=>{});
+    expect(f.opened).not.toHaveBeenCalled();expect(f.navigation.pending()).toEqual([]);expect(f.published).not.toHaveBeenCalled();
+    expect(f.requests.every(r=>r.method==='GET')).toBe(true);
+  }finally{f.history.history.close();}
+});
+
+it('NATIVE PREVIEW rejects a forged completion and retains the original offer for direct confirmation',async()=>{
+  const f=await nativePreviewFixture();
+  try{
+    await tap(f.choice);const job=(await creatorJobs())[0]!;
+    if(job.task.kind!=='read'||job.task.read.kind!=='openPreview')throw Error('preview');
+    const answer={kind:'previewOpened',work:f.work,snapshotDigest:job.task.read.snapshotDigest,revision:2};
+    for(const wrong of [{...answer,work:{...f.work,draftId:randomUUID()}},{...answer,snapshotDigest:'f'.repeat(64)},{...answer,revision:3}])
+      await expect(rpc('creatorAnswer',{id:job.id,answer:wrong})).rejects.toThrow();
+    const target={recipeId:randomUUID(),versionId:randomUUID()};
+    await expect(rpc('creatorAnswer',{id:job.id,answer:{kind:'published',target,draftId:f.work.draftId,draftRevision:2,revision:1,firstCodeId:null,
+      url:`https://vonvon.cc/recipes/${target.recipeId}/versions/${target.versionId}`}})).rejects.toThrow();
+    expect(f.opened).not.toHaveBeenCalled();
+    await f.executor.run(f.context,job);
+    await tap(privateChoice('确认发布'));
+    expect(await rpc('creatorCheck',{id:f.offer.job.id})).toMatchObject({mode:'execute',job:{task:{confirmation:{kind:'feishu-card'}}}});
+  }finally{f.history.history.close();}
+});
+
+it('NATIVE PREVIEW asks the original recipient to open App when its creator session is offline',async()=>{
+  const f=await nativePreviewFixture();
+  try{
+    service.disconnect(peer.id);textSend.mockClear();
+    await tap(f.choice,stranger);expect(textSend).not.toHaveBeenCalled();
+    await tap(f.choice);expect(JSON.stringify(textSend.mock.calls)).toContain('请先打开 App 再点击预览');
+    expect(f.opened).not.toHaveBeenCalled();expect(f.published).not.toHaveBeenCalled();
+  }finally{f.history.history.close();}
+});

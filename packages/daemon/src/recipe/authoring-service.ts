@@ -1037,7 +1037,7 @@ export class AuthoringSession {
   async onAction(evt: CardActionEvent) {
     if(creatorClick.safeParse(evt.action?.value).data?.verb==='creator') {
       const p=this.p;
-      if(p) await this.serial(()=>this.creator.action(p,evt)).catch(()=>undefined);
+      await this.serial(()=>p&&p.until>this.now()?this.creator.action(p,evt):this.creator.offlinePreview(evt)).catch(()=>undefined);
       return;
     }
     const value = handoffClick.safeParse(evt.action?.value).data ?? sourceClick.safeParse(evt.action?.value).data ?? click.safeParse(evt.action?.value).data, raw = operator.safeParse(evt.raw).data;

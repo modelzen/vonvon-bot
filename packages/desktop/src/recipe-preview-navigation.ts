@@ -20,10 +20,14 @@ export class RecipePreviewNavigation {
   open(raw: unknown): boolean {
     const locator = parseDraftPreview(raw, this.scheme);
     if (!locator) return false;
+    return this.request(locator);
+  }
+
+  request(input: DraftPreviewLocator): boolean {
+    const locator = draftPreviewLocatorSchema.parse(input);
     const existing = this.pending().find(value => value.draftId === locator.draftId && value.revision === locator.revision);
-    if (existing) return true;
-    const navigation = {...locator, navigationId: randomUUID()};
-    this.queue.set(navigation.navigationId, navigation);
+    const navigation = existing ?? {...locator, navigationId: randomUUID()};
+    if (!existing) this.queue.set(navigation.navigationId, navigation);
     for (const listener of this.listeners) listener({...navigation});
     return true;
   }

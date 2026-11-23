@@ -240,6 +240,7 @@ export async function startDesktop(): Promise<void> {
 
   const recipePreviewScheme = previewBuild ? 'vonvon-preview' : 'vonvon';
   const recipePreview = new RecipePreviewNavigation(recipePreviewScheme);
+  recipePreview.onOpen(show);
   captureRecipePreviewLaunches(recipePreview, {
     onOpenUrl: listener => { app.on('open-url', listener); },
     onSecondInstance: listener => { app.on('second-instance', (_event, argv) => listener(argv)); },

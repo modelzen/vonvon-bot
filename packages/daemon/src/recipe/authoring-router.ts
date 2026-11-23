@@ -174,6 +174,7 @@ export class AuthoringRouter {
       const epoch=await this.journal.run(db=>bindings.map(l=>db.links[l.key]?.creator?.cards[click.ref]).find(c=>c?.messageId===evt.messageId)?.session);
       const s=sessions.find(s=>s.creator.enabled&&s.presence?.session===epoch);
       if(s)await s.onAction(evt);
+      else await this.idle.creator.offlinePreview(evt);
       return;
     }
     if(sessions.length>1){

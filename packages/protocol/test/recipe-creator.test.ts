@@ -3,6 +3,16 @@ import {expect,it} from 'vitest';
 import {recipeAuthoringRequestSchema as request, recipeAuthoringReplySchema as reply,desktopAuthoringRequestSchema,desktopAuthoringReplySchema,creatorSnapshotSchema} from '../src/index.js';
 
 const id = randomUUID(), hash = 'a'.repeat(64), botId = 'cli_bot';
+it('keeps App navigation a bounded readonly job and acknowledgement without publish parameters',()=>{
+  const read={kind:'openPreview',work:{draftId:id,source:null},snapshotDigest:hash};
+  const job={id,binding:id,scope:hash,task:{kind:'read',read}};
+  expect(reply.safeParse({kind:'creatorJobs',jobs:[job]}).success).toBe(true);
+  for(const extra of [{confirmationId:id},{revision:2},{approval:hash},{publish:true}])
+    expect(reply.safeParse({kind:'creatorJobs',jobs:[{...job,task:{kind:'read',read:{...read,...extra}}}]}).success).toBe(false);
+  const answer={kind:'previewOpened',work:read.work,snapshotDigest:hash,revision:2};
+  expect(request.safeParse({type:'creatorAnswer',botId,session:id,id,answer}).success).toBe(true);
+  expect(request.safeParse({type:'creatorAnswer',botId,session:id,id,answer:{...answer,canonical:'large'}}).success).toBe(false);
+});
 it('uses separate discovery and binding-checked activation on owner authoring RPC', () => {
   expect(request.safeParse({type:'creatorDiscover',botId,accountId:id}).success).toBe(true);
   expect(request.safeParse({type:'creatorOpen',botId,accountId:id,binding:id,scope:hash,wakeId:null}).success).toBe(true);

@@ -1,11 +1,38 @@
 import { getConfig } from 'app-builder-lib/out/util/config/config.js';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { captureRecipePreviewLaunches, parseDraftPreview, RecipePreviewNavigation } from '../src/recipe-preview-navigation.js';
 const draftId = '8d85af21-e80d-4665-a6b8-ccf162dc1923';
 const link = `vonvon-preview://recipes/drafts/${draftId}?revision=2`;
 
 describe('draft preview navigation', () => {
+  it('uses the same retained locator queue for native callbacks and strict URL launches', () => {
+    const nav = new RecipePreviewNavigation('vonvon-preview'), show = vi.fn();
+    nav.onOpen(show);
+    nav.request({draftId, revision: 2});
+    expect(show).toHaveBeenCalledOnce();
+    expect(nav.open(link)).toBe(true);
+    expect(nav.pending()).toHaveLength(1);
+    expect(show).toHaveBeenCalledTimes(2);
+    nav.acknowledge(nav.pending()[0].navigationId);
+    nav.request({draftId, revision: 2});
+    expect(show).toHaveBeenCalledTimes(3);
+    expect(() => nav.request({draftId, revision: 0})).toThrow();
+    expect(() => nav.request(Object.assign({draftId, revision: 2}, {publish: true}))).toThrow();
+  });
+
+  it('wires native preview opens to the existing window and Dock restore path', () => {
+    const main = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
+    expect(main).toContain('recipePreview.onOpen(show)');
+    const show = main.slice(main.indexOf('const show ='), main.indexOf('const show =') + 2400);
+    expect(show).toContain('current.show()');
+    expect(show).toContain('current.focus()');
+    expect(show).toContain('app.dock.show()');
+    const bridge = readFileSync(new URL('../src/bridge.ts', import.meta.url), 'utf8');
+    expect(bridge).toContain("current.kind!=='signedIn'||current.accountId!==value.accountId");
+    expect(bridge).toContain('recipePreview.request({draftId:value.draftId,revision:value.revision})');
+  });
   it('resolved packager configuration isolates preview and stable protocol handlers', async () => {
     const project = fileURLToPath(new URL('../', import.meta.url));
     const stable = await getConfig(project, 'electron-builder.yml', undefined);
@@ -38,8 +65,9 @@ describe('draft preview navigation', () => {
     const off = nav.onOpen(listener);
     expect(nav.open(link)).toBe(true);
     expect(nav.pending()).toEqual([first]);
+    expect(listener).toHaveBeenCalledExactlyOnceWith(first);
     nav.open(link.replace('revision=2', 'revision=3'));
-    expect(listener).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledTimes(2);
     off();
     const pending = nav.pending();
     pending[0].revision = 99;

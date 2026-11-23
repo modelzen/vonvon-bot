@@ -71,8 +71,7 @@ export class CreatorCards {
     if(c.kind==='publish'){
       const snap=c.snapshot,pub=snap.public;
       title='预览发布';label='确认发布 '+pub.version;
-      text=[pub.name+' · '+pub.version,pub.access==='coded'?'凭分享码获取':'直接获取','草稿修订 '+snap.revision,
-        ...(!snap.appPreviewUrl?['请打开 App 的「我的配方」查看完整内容。']:[])].join('\n');
+      text=[pub.name+' · '+pub.version,pub.access==='coded'?'凭分享码获取':'直接获取','草稿修订 '+snap.revision].join('\n');
       if(!retry)choices.push({label:'继续修改内容',choice:{kind:'edit',id:row.job.id}});
     }else if(c.kind==='metadata'){
       title='采用公开信息修改';label='采用修改';
@@ -93,8 +92,8 @@ export class CreatorCards {
     }
     if(retry){title='核对原请求';text+='\n上次操作的结果尚未确定。重新确认后会核验同一次请求。';label='重新确认并重试';}
     choices.unshift({label,choice:{kind:'approve',id:row.job.id,retry}});
+    if(c.kind==='publish')choices.unshift({label:'在 App 中预览',choice:{kind:'read',read:{kind:'openPreview',work:c.snapshot.work,snapshotDigest:c.snapshotDigest}}});
     const card=this.newCard(s,p,title,text,choices,work?.draftId);
-    if(c.kind==='publish'&&c.snapshot.appPreviewUrl)card.appPreviewUrl=c.snapshot.appPreviewUrl;
     if(row.preview?.readId){delete s.jobs[row.preview.readId];delete row.preview.readId;}
     if(row.preview){
       delete row.preview.position;
