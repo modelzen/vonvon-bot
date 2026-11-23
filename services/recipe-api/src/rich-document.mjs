@@ -1,5 +1,5 @@
 import {createHmac,createHash} from 'node:crypto';
-import {canonicalizeRichRecipeContent,recipeRichAuthoringPayloadSchema,recipeRichOriginEdgeSchema,validatePublishableRichRecipeContent} from '../../../packages/protocol/dist/index.js';
+import {canonicalizeRichRecipeContent,recipeRichAuthoringPayloadSchema,recipeRichOriginEdgeSchema,validatePublishableRichRecipeContent,validateWritableRichRecipeContent} from '../../../packages/protocol/dist/index.js';
 import {ApiError,badInput} from './errors.mjs';
 import {objectKeys,uuid} from './input.mjs';
 import {credentialField} from './credential-shapes.mjs';
@@ -27,6 +27,15 @@ export function parseRichPayload(value) {
   if (!result.success) throw badInput();
   if (result.data.purpose==='prepareDraft') document(result.data.content);
   return result.data;
+}
+export function writableDocument(value) {
+  const result=document(value);
+  try {return validateWritableRichRecipeContent(result.content);} catch {throw badInput();}
+}
+export function validateRichWritePayload(payload) {
+  if(payload.purpose==='prepareDraft')writableDocument(payload.content);
+  else if(payload.changes.some(change=>change.op==='copyItem'&&change.source.kind==='memory'||
+    change.op==='includeCandidate'&&change.value.kind==='memory'))throw badInput();
 }
 function entries(content) {
   const items=[];
@@ -144,6 +153,7 @@ export function applyChanges(original,changes,resolveCandidate,seed,newParts=[],
   }
   function applyChange(c) {
     if(c.op==='setAccess')return;
+    if(c.op==='removeLegacyMemories'){content.memories=[];return;}
     if(c.op==='setFinalLogo') {
       if(content.finalLogo){
         if(content.finalLogo.itemId!==c.itemId)throw badInput();

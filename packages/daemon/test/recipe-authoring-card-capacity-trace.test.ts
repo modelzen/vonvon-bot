@@ -184,6 +184,27 @@ it('proves cumulative source omissions and public edits while retaining the init
   if(forged.request&&'content'in forged.request)forged.request.content.public.name.value='forged snapshot';
   expect(richCardReview({...op,richSourceOriginal:forged})).toBeUndefined();
   for(const mutate of mutations){const bad=structuredClone(rich);mutate(bad);expect(richCardReview({...op,rich:bad})).toBeUndefined();}
+  const unknown=structuredClone(op);unknown.rich!.source!.selected.push(randomUUID());
+  await expect(chatRichProposal(unknown,'/recipe version 4.0',new AbortController().signal)).rejects.toThrow('选择的草稿条目不存在');
+});
+
+it('retains selected files shared by a surviving skill after another source skill is omitted',async()=>{
+  const content=fixture(2),first=content.skills[0]!;
+  content.skills.push({...first,...identity(),name:'保留技能'});
+  const rich=capture(content),op={view:{operationId:randomUUID()},rich} as LocalOperation;
+  const result=await chatRichProposal(op,'排除第一个技能',new AbortController().signal,{proposeRich:async input=>({kind:'proposal',commands:[
+    {action:'omit',target:'T'+(input.selected.findIndex(item=>item.itemId===first.itemId)+1),valueJson:'null'},
+  ]})});
+  if(result.kind!=='proposal')throw Error('missing proposal');
+  rich.request=result.request;
+  if('newFields'in result)rich.newFields=result.newFields;
+  if(result.sourcePublicValues)rich.sourcePublicValues=result.sourcePublicValues;
+  if('richSourceOriginal'in result){op.richSourceOriginal=result.richSourceOriginal;rich.sourceOmitted=result.sourceOmitted;}
+  const continued=await chatRichProposal(op,'/recipe version 2.0',new AbortController().signal);
+  if(continued.kind!=='proposal'||!('content'in continued.request))throw Error('missing continued proposal');
+  expect(continued.request.content.skills.map(skill=>skill.name)).toEqual(['保留技能']);
+  expect(continued.request.content.files.map(file=>file.itemId)).toEqual(content.files.map(file=>file.itemId));
+  expect(rich.sourceOmitted).toEqual([first.itemId]);
 });
 
 it('persists the largest content and source Logo input with the omission proof in a separate verified blob',async()=>{

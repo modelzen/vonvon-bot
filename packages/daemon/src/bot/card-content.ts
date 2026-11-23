@@ -1,6 +1,8 @@
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { log } from '../core/logger';
 
+export const PRIVATE_RECIPE_CODES_TITLE = '本人分享码';
+
 /**
  * Recover the real text of an `interactive` (card 2.0) message that Feishu
  * delivers to bots only as a downgraded placeholder.
@@ -57,6 +59,7 @@ export function parseRawCardWrapper(bodyContent: string): unknown {
 export function extractRawCardText(jsonCard: unknown): string {
   const out: string[] = [];
   visit(jsonCard, out);
+  if(out.includes(PRIVATE_RECIPE_CODES_TITLE))return PRIVATE_RECIPE_CODES_TITLE;
   const seen = new Set<string>();
   const lines: string[] = [];
   for (const piece of out) {
@@ -142,6 +145,7 @@ export function extractSendCardText(card: unknown): string {
   const c = card as Record<string, unknown>;
   const out: string[] = [];
   const header = (c.header ?? localized(c.i18n_header)) as { title?: unknown } | undefined;
+  if(textOf(header?.title)===PRIVATE_RECIPE_CODES_TITLE)return PRIVATE_RECIPE_CODES_TITLE;
   push(out, textOf(header?.title));
   const body = c.body as { elements?: unknown; i18n_elements?: unknown } | undefined;
   sendElements(body?.elements ?? localized(body?.i18n_elements) ?? c.elements ?? localized(c.i18n_elements), out);

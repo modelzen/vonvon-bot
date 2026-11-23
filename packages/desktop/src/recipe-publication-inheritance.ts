@@ -2,12 +2,26 @@ import {createHash} from 'node:crypto';
 import type {InheritedPublication} from '@vonvon/protocol';
 import type {NativeAccount} from './account-session.js';
 import {richCommunity} from './community-rich.js';
-import {richAuthoringCloud} from './recipe-authoring-rich-cloud.js';
+import {communityRequest} from './community-api.js';
+import {AuthoringError} from './recipe-authoring-cloud.js';
+import {richAuthoringCloud,UnavailableSourceItems} from './recipe-authoring-rich-cloud.js';
+
+export class UnsupportedLegacyPublication extends AuthoringError {
+  constructor(action:'parent'|'withdraw'){super(action==='parent'?'这个旧格式版本暂不支持直接准备新版。可继续管理原版本，或从群配置创建一份独立配方。':'这个旧格式版本暂不支持撤下。请继续使用原版本的分享码管理。');}
+}
 
 export async function inheritedPublication(account:NativeAccount,accountId:string,recipeId:string,versionId:string,check:()=>void):Promise<InheritedPublication>{
   const signal=account.lease?.(accountId);
   if(!signal)throw new Error('请重新核对当前账号。');
-  const attested=await richAuthoringCloud(account,accountId,signal,check).sourceItems(versionId);
+  let attested;
+  try{attested=await richAuthoringCloud(account,accountId,signal,check).sourceItems(versionId);}
+  catch(error){
+    if(error instanceof UnavailableSourceItems){
+      const legacy=await communityRequest(account,{type:'detail',accountId,recipeId,versionId});check();
+      if(legacy.owned&&legacy.format!=='rich-v2')throw new UnsupportedLegacyPublication('parent');
+    }
+    throw error;
+  }
   if(attested.authorId!==accountId)throw new Error('只能从本人发布的版本准备新版。');
   const community=richCommunity(account,accountId,check);
   const detail=await community.detail(recipeId,versionId);
