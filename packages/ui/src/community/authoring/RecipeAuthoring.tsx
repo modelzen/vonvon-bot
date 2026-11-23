@@ -410,17 +410,20 @@ function PrivateFlow({
       (groupId && value.handoff.groupId !== groupId)
     )
       throw new Error('请求来源已变化，请重新核对。');
+    if (!draftId && value.handoff.state === 'cancelled') localStorage.removeItem(scope);
     setHandoff(value.handoff);
+    return value.handoff;
   }
   async function progressFor(s: Session, id: string) {
     const epoch = generation.current;
     const reply = await request(s, {type: 'handoffStatus', handle: s.handle, retryId: id});
     if (epoch !== generation.current) return;
-    adopt(reply, id);
+    const current = adopt(reply, id);
     if (reply?.kind === 'handoff' && reply.handoff.operationId) {
       const updated = await request(s, {type: 'status', handle: s.handle});
       if (epoch === generation.current && updated?.kind === 'session' && updated.handle === s.handle) setSession(updated);
     }
+    return current;
   }
   async function begin(s: Session) {
     const id = retry.current ?? storedHandoff(scope)?.retryId ?? crypto.randomUUID();
@@ -488,7 +491,8 @@ function PrivateFlow({
       const record = storedHandoff(scope);
       if (record && (resume || attempt)) {
         retry.current = record.retryId;
-        await progressFor(next, record.retryId);
+        const restored = await progressFor(next, record.retryId);
+        if (active && !draftId && restored?.state === 'cancelled') onRestart();
       } else await begin(next);
     })()
       .catch((reason) => {

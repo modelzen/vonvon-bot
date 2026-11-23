@@ -193,6 +193,51 @@ it('opens over the creator workspace, links the actual private recipient, and se
   await click('取消准备');expect(dialog('准备配方')?.textContent).toContain('已取消本次准备');
 });
 
+it.each(['dialog','application'] as const)('returns to source selection after confirmed cancellation and reopening the %s',async(kind)=>{
+  linked=true;await draw();await chooseSource();await click('确认');
+  const retryId=currentHandoff!.retryId;
+  await click('取消准备');expect(dialog('准备配方')?.textContent).toContain('已取消本次准备');
+  await click('关闭');
+  if(kind==='application') {
+    await act(async()=>root.unmount());root=createRoot(document.getElementById('root')!);
+    await draw();await click('社区');await click('创作中心');
+  }
+  const before=calls.length;
+  await click('准备配方');
+  expect(dialog('准备配方')?.querySelectorAll('select')).toHaveLength(2);
+  expect(dialog('准备配方')?.textContent).not.toContain('已取消本次准备');
+  expect(calls.slice(before)).toEqual([]);
+  await click('确认');
+  expect(calls.filter(r=>r.type==='beginHandoff').map(r=>r.retryId)).toEqual([retryId,currentHandoff!.retryId]);
+  expect(currentHandoff!.retryId).not.toBe(retryId);
+});
+
+it('retires a historical cancelled preparation after checking it and lets the next confirmation start a new one',async()=>{
+  linked=true;await draw();await chooseSource();await click('确认');
+  const retryId=currentHandoff!.retryId;
+  await click('关闭');
+  currentHandoff={...currentHandoff!,state:'cancelled'};
+  await act(async()=>root.unmount());root=createRoot(document.getElementById('root')!);
+  await draw();await click('社区');await click('创作中心');await click('准备配方');
+  expect(calls.filter(r=>r.type==='handoffStatus').at(-1)).toMatchObject({retryId});
+  expect(dialog('准备配方')?.querySelectorAll('select')).toHaveLength(2);
+  expect(dialog('准备配方')?.textContent).not.toContain('已取消本次准备');
+  expect(calls.filter(r=>r.type==='beginHandoff')).toHaveLength(1);
+  await click('确认');
+  expect(currentHandoff!.retryId).not.toBe(retryId);
+  expect(calls.filter(r=>r.type==='beginHandoff')).toHaveLength(2);
+});
+
+it.each(['selecting','deliveryUnknown','prepared'] as const)('restores a %s preparation instead of returning to source selection or sending another card',async(state)=>{
+  linked=true;await draw();await chooseSource();await click('确认');
+  const retryId=currentHandoff!.retryId;
+  currentHandoff={...currentHandoff!,state};
+  await click('关闭');await click('准备配方');
+  expect(dialog('准备配方')?.querySelector('select')).toBeNull();
+  expect(calls.filter(r=>r.type==='handoffStatus').at(-1)).toMatchObject({retryId});
+  expect(calls.filter(r=>r.type==='beginHandoff')).toHaveLength(1);
+});
+
 it('retains the retry identity across uncertain delivery and reopens only the accepted draft',async()=>{
   vi.useFakeTimers();linked=true;
   let lose=true;
