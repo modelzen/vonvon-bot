@@ -347,6 +347,8 @@ export interface AgentThread {
   readonly releaseAfterRun?: boolean;
   /** Codex accepted feedback_prepare on thread/start. A resumed rollout uses its stored tool set. */
   readonly startedWithFeedbackTool?: boolean;
+  /** Both private-chat recipe resource functions were accepted on thread/start. */
+  readonly startedWithResourceTools?: boolean;
   /** false once the underlying agent process has died (crash / kill / close) —
    * the thread is unusable and must be evicted from the live cache so
    * resolveThread's resume fallback can take over. */

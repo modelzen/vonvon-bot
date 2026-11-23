@@ -28,6 +28,8 @@ export interface SessionRecord {
   titleJobKey?: string;
   /** The native Codex thread that accepted feedback_prepare on start. */
   feedbackToolSessionId?: string;
+  /** The native Codex thread that accepted both private-chat resource tools. */
+  resourceToolSessionId?: string;
   model?: string;
   effort?: ReasoningEffort;
   /** Session override; omitted inherits the project's current default. */
@@ -414,6 +416,7 @@ function put(store: StoreFile, rec: SessionRecord): void {
   const held = store.sessions[idx]!;
   const earlier = earlierAfter(held, rec.sessionId);
   if (held.feedbackToolSessionId === rec.sessionId) rec = {...rec, feedbackToolSessionId: rec.sessionId};
+  if (held.resourceToolSessionId === rec.sessionId) rec = {...rec, resourceToolSessionId: rec.sessionId};
   store.sessions[idx] = earlier ? { ...rec, earlier } : rec;
 }
 

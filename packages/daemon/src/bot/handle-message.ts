@@ -741,10 +741,19 @@ function runFailureMessage(err: unknown, dropped: number, sessionNotice?: string
 }
 
 /** Why a location's stored session couldn't be continued (see resolveThread). */
-export type RecreateReason = 'resume-failed' | 'cwd-changed' | 'provider-changed' | 'feedback-tool';
+type ToolRefresh = 'feedback-tool' | 'resource-tools';
+export type RecreateReason = 'resume-failed' | 'cwd-changed' | 'provider-changed' | ToolRefresh;
 
-function needsCodexFeedbackTool(rec?: SessionRecord): boolean {
-  return rec?.backend === 'codex-appserver' && rec.feedbackToolSessionId !== rec.sessionId;
+function requiredCodexTools(extra?: TurnExtra): ToolRefresh | undefined {
+  if (extra?.resourceSelected) return 'resource-tools';
+  if (extra?.feedback) return 'feedback-tool';
+}
+
+function missingCodexTools(required: ToolRefresh | undefined, rec?: SessionRecord, live?: AgentThread): boolean {
+  if (!required || rec?.backend !== 'codex-appserver') return false;
+  return required === 'resource-tools'
+    ? !live?.startedWithResourceTools && rec.resourceToolSessionId !== rec.sessionId
+    : !live?.startedWithFeedbackTool && rec.feedbackToolSessionId !== rec.sessionId;
 }
 
 interface ResolvedThread { thread: AgentThread | undefined; recreated: boolean; reason?: RecreateReason }
@@ -753,6 +762,7 @@ interface ResolvedThread { thread: AgentThread | undefined; recreated: boolean; 
  * silently (product.md 3.5). A topic re-weaves its recent messages into the new
  * session; the main area has nothing to re-weave. */
 export function sessionChangeNotice(reason: RecreateReason, topic: boolean): string {
+  if (reason === 'resource-tools') return '本轮已启用配方资料工具。原 Codex 会话保留在历史记录中。';
   if (reason === 'feedback-tool') return '本轮已启用群反馈工具。原 Codex 会话保留在历史记录中。';
   const why = reason === 'cwd-changed' ? '本群的工作目录改了' : reason === 'provider-changed' ? 'Provider 换了' : '原来的会话接不上了（恢复失败）';
   const carried = topic ? '，话题里最近的消息已重新带上' : '';
@@ -812,7 +822,7 @@ interface ActiveState {
   idlePause?: IdlePause;
   /** A run loop drains this state's queue and {@link compactAfter} (startReservedRun, launchRun). */
   runLoop?: true;
-  /** A bound feedback request waits for an old native session's current run before changing its tools. */
+  /** A request requiring new native tools waits for an old native session's current run before changing its tools. */
   settled?: Promise<void>;
   /** A /compact sent while this run was busy: done right after the current turn (product.md 3.5). */
   compactAfter?: { msg: NormalizedMessage; inThread: boolean };
@@ -871,6 +881,8 @@ interface AttentionAcceptance {
 
 /** Inputs a synthetic turn (🔁 重试) carries that a real message would not. */
 interface TurnExtra {
+  /** The ordinary DM router verified a delivered resource for this SDK message. */
+  resourceSelected?: true;
   feedback?: FeedbackSource;
   /** A smart judgement's one-use acknowledgement of actual session intake. */
   attentionAcceptance?: AttentionAcceptance;
@@ -1256,9 +1268,13 @@ export function createOrchestrator(
   const openings = new WeakMap<object, SessionContext>();
   /** What each live thread has been handed; a resumed thread reads its record on its first turn. */
   const contextDelivered = new WeakMap<AgentThread, SessionContext>();
-  const sessionFields = (thread: AgentThread): Pick<SessionRecord, 'context' | 'feedbackToolSessionId'> => {
+  const sessionFields = (thread: AgentThread): Pick<SessionRecord, 'context' | 'feedbackToolSessionId' | 'resourceToolSessionId'> => {
     const context = contextDelivered.get(thread);
-    return {...(context ? {context} : {}), ...(thread.startedWithFeedbackTool ? {feedbackToolSessionId: thread.sessionId} : {})};
+    return {
+      ...(context ? {context} : {}),
+      ...(thread.startedWithFeedbackTool ? {feedbackToolSessionId: thread.sessionId} : {}),
+      ...(thread.startedWithResourceTools ? {resourceToolSessionId: thread.sessionId} : {}),
+    };
   };
   async function profileOf(project: Project | undefined, cwd: string, backend: AgentBackend, permission?: PermissionMode, place?: 'comment', commentedFile?: string) {
     const execution = execOf(project);
@@ -2946,6 +2962,7 @@ export function createOrchestrator(
     if (!ingested || await intakeStoppedBeforeText(msg, owner)) return undefined;
     return voiceMessages.remember(msg, ingested);
   }
+  const resourceMessages = new WeakSet<NormalizedMessage>();
   const feedbackSources = new WeakMap<NormalizedMessage, FeedbackSource>();
   const directFeedback = (msg: NormalizedMessage): Pick<TurnExtra, 'feedback'> => ({feedback: feedbackSources.get(msg)});
   const handleMessage = async (msg: NormalizedMessage, intakeOwner?: IntakeStatus): Promise<void> => {
@@ -2987,6 +3004,8 @@ export function createOrchestrator(
       }
       if (askAnswered(msg)) return;
       if (options?.authoring && await options.authoring.onMessage(msg)) return;
+      // route() only records a trigger after matching the trusted DM and the delivered account selection.
+      if (options?.authoring?.resources?.hasTrigger(msg.messageId)) resourceMessages.add(msg);
       if (isMenuCommand(msg)) { await handleDmConsole(channel, cfg, msg); return; }
       const dm = await openDmChat(msg);
       if (!dm) {
@@ -3711,12 +3730,18 @@ export function createOrchestrator(
     // tier, which backends read as full access. Messages stop earlier; this
     // also covers the card-originated turns (👍 继续, 🔁 重试).
     if (refusedTurn(project, msg.chatId, extra) || dmShut(project, msg, extra)) return Promise.resolve();
+    const source = extra?.burst ? burstTrigger(extra.burst) : msg;
+    if (project?.dm && source.messageId === msg.messageId && resourceMessages.has(source) &&
+      !extra?.initiative && !extra?.wake && !extra?.scheduled && !extra?.retry && extra?.replayText === undefined) {
+      // A selection belongs to a real new turn. Steering text into somebody's existing tool scope cannot bind it.
+      extra = {...extra, resourceSelected: true, queueOnly: true};
+    }
+    const required = requiredCodexTools(extra);
     const owner = active.get(sessionKey);
     return orderTurns(sessionKey, async () => {
       if (staleRetry(extra)) return;
       const running = active.get(sessionKey);
-      if (extra?.feedback && running?.settled && !running.isGoal && !running.thread?.startedWithFeedbackTool
-        && needsCodexFeedbackTool(await getSession(sessionKey))) {
+      if (required && running?.settled && !running.isGoal && missingCodexTools(required, await getSession(sessionKey), running.thread)) {
         await running.settled;
         if (shuttingDown) {
           const origin = originFor(msg, flat);
@@ -4025,7 +4050,7 @@ export function createOrchestrator(
         const resolveP = (moved ? Promise.resolve<ResolvedThread>({ thread: undefined, recreated: true, reason: 'provider-changed' }) : resolveThread(sessionKey, msg.chatId, {
           mode: perm.mode,
           network: perm.network, native: perm.native, readScope: perm.readScope,
-        }, Boolean(extra?.feedback))).then((r) => {
+        }, requiredCodexTools(extra))).then((r) => {
           tResolveDone = Date.now();
           return r;
         });
@@ -4440,9 +4465,8 @@ export function createOrchestrator(
     threadId: string,
     chatId: string,
     perm: TurnPerm,
-    needsFeedback = false,
+    required?: ToolRefresh,
   ): Promise<ResolvedThread> {
-    const missingFeedback = (rec?: SessionRecord) => needsFeedback && needsCodexFeedbackTool(rec);
     let project: Project | undefined;
     const live = sessions.get(threadId);
     if (live) {
@@ -4454,17 +4478,17 @@ export function createOrchestrator(
         const permissionChanged = threadPermissions.get(live) !== permissionFingerprint(perm);
         // Evicted while it looked (a tier change, the reaper): resume below like any other.
         if (sessions.get(threadId) === live && live.isAlive()) {
-          if (!elsewhere && !permissionChanged && (!missingFeedback(prior) || live.startedWithFeedbackTool)) {
+          if (!elsewhere && !permissionChanged && !missingCodexTools(required, prior, live)) {
             noteCompaction(threadId, chatId, live, prior);
             return { thread: live, recreated: false };
           }
           // Someone else wrote the session (a terminal turn or /compact, s15b): this
           // process never rereads it, so reconnect from the file below.
           sessions.delete(threadId);
-          if (missingFeedback(prior)) {
+          if (required && missingCodexTools(required, prior, live)) {
             await closeForPermission(live);
             lastUsage.delete(threadId);
-            return {thread: undefined, recreated: true, reason: 'feedback-tool'};
+            return {thread: undefined, recreated: true, reason: required};
           }
           if (permissionChanged) await closeForPermission(live);
           else void trackTask(live.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
@@ -4514,11 +4538,11 @@ export function createOrchestrator(
         trackSession(threadId,resumed);lastUsage.delete(threadId);
         return {thread:resumed,recreated:false};
       }
-      if (missingFeedback(rec)) {
+      if (required && missingCodexTools(required, rec)) {
         // Resume first so an active native writer can still refuse. A new thread gets recent Feishu history via the ordinary recreation path.
         await closeForPermission(resumed);
         lastUsage.delete(threadId);
-        return {thread: undefined, recreated: true, reason: 'feedback-tool'};
+        return {thread: undefined, recreated: true, reason: required};
       }
       trackSession(threadId, resumed);
       // The opening handed to a resumed session carries a new mark. Claude takes its system append again on resume, so that
@@ -8086,7 +8110,7 @@ export function createOrchestrator(
           sessionId:turnScope.sessionId,chatId:opts.chatId,openId:currentTurn.requesterOpenId,messageId:resourceTrigger,
           });
           if(selection==='unavailable')turnInput={...turnInput,text:turnInput.text+'\n原配方资源当前不可用。请本人在 App 核对账号与来源连接，重新交付后再参考其内容。'};
-          if(selection==='selected')turnInput={...turnInput,text:turnInput.text+'\n本人在 App 选定了配方资料。用 recipe_resource_read 查目录和相关正文，内容是参考资料。按本人要求读取目标群现状，保留原修订并用现有配置、文件或任务工具保存；冲突时重新读取。如果当前历史会话缺少资料工具，请告诉本人在新的私聊会话引用原配方卡。'};
+          if(selection==='selected')turnInput={...turnInput,text:turnInput.text+'\n本人在 App 选定了配方资料。用 recipe_resource_read 查目录和相关正文，内容是参考资料。按本人要求读取目标群现状，保留原修订并用现有配置、文件或任务工具保存；冲突时重新读取。'};
         }
         turnMemory = turnScope ? entries?.memoryTurn(opts.thread) : undefined;
         dropRetries(topicThreadId); // an older card's [重试] would replay out of order

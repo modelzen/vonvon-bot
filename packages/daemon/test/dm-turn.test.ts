@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
+import type { ContextMessage } from '../src/bot/context-weave';
 import type { AppConfig } from '../src/config/schema';
 import { saveConfig } from '../src/config/store';
 import { readDropped } from '../src/bot/restart-dropped';
@@ -14,6 +15,7 @@ import { createAgentEntries, type AgentEntries } from '../src/agent/entry/regist
 import { createOrchestrator } from '../src/bot/handle-message';
 import { dmMemoryLocation, MemoryStore } from '../src/bot/memory-store';
 import { botRoot } from '../src/bot/role-files';
+import { closeCodexToolFixtures, codexToolsFixture } from './helpers/codex-tools-fixture';
 import { seedBots } from './helpers/bot-fixture';
 
 // dm-agent 5 (D2): an administrator's private chat is an Agent's window, through the real orchestrator, session store,
@@ -25,15 +27,21 @@ vi.mock('../src/config/paths', async () => {
   // Every other file the bot opens at start lands in the temp dir too.
   const inside = <T extends object>(known: T) => new Proxy(known, { get: (target, key) => key in target ? target[key as keyof T] : join(appDir, String(key)) });
   return { paths: inside({ appDir, configFile: join(appDir, 'config.json'), sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), botsFile: join(appDir, 'bots.json'), projectsRootDir: join(appDir, 'projects'), commentInstructionsFile: join(appDir, 'instructions.md') }),
-    botPaths: () => inside({ projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json') }) };
+    botPaths: () => inside({ builtinPackage: (name: string) => join(appDir, 'builtin', name), projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json') }) };
 });
 const fake = vi.hoisted(() => ({
   backend: undefined as any, n: 0,
+  history: undefined as ContextMessage[] | undefined,
   cards: [] as { id: string; chatId: string; json: string }[],
   voice: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ text: '语音的话' })),
   /** The provider has no full tier. */
   noFull: false,
 }));
+vi.mock('../src/bot/context-weave', async original => {
+  const real = await original<typeof import('../src/bot/context-weave')>();
+  return {...real, fetchChatContext: (...args: Parameters<typeof real.fetchChatContext>) => fake.history
+    ? Promise.resolve({messages: fake.history, ok: true, complete: true}) : real.fetchChatContext(...args)};
+});
 vi.mock('../src/agent/permission', async original => {
   const real = await original<typeof import('../src/agent/permission')>();
   return { ...real, tierInfo: (...args: Parameters<typeof real.tierInfo>) => ({ ...real.tierInfo(...args), ...fake.noFull ? { unavailable: '这个 provider 没有这一档。' } : {} }) };
@@ -111,13 +119,13 @@ const channel = { send, rawClient: { im: { v1: {
 let cfg: AppConfig;
 let opened: ReturnType<typeof createOrchestrator>[] = [];
 let revoked: string[] = [];
-async function app(policy: 'steer' | 'queue' = 'queue', host?: Pick<HostApi, 'issueSessionToken'>, authoring?: import('../src/recipe/authoring-service').AuthoringService) {
+async function app(policy: 'steer' | 'queue' = 'queue', host?: Pick<HostApi, 'issueSessionToken'>, authoring?: import('../src/recipe/authoring-service').AuthoringService, create = createOrchestrator) {
   cfg.preferences!.pendingPolicy = policy;
   await saveConfig(cfg);
   const entries: AgentEntries = createAgentEntries({ appId: APP, isAdmin: id => (cfg.preferences?.access?.admins ?? []).includes(id), tools: authoring?(await import('../src/agent/entry/resource-tools')).resourceTools((get,q)=>authoring.resources.tool(get,q)):[],
     sessions: { revoke: sessionId => { revoked.push(sessionId); } } });
   const issue = vi.spyOn(entries, 'issue');
-  const o = createOrchestrator(channel as never, cfg, paths.appDir, undefined, { entries, bot, authoring, droppedFile: DROPPED, ...(host ? { host } : {}) });
+  const o = create(channel as never, cfg, paths.appDir, undefined, { entries, bot, authoring, droppedFile: DROPPED, ...(host ? { host } : {}) });
   opened.push(o); await o.initialize?.();
   // These tests are about the turn, so every message runs: the judge in front of it is dm-smart.test.ts.
   await until(async () => expect(await dmProject()).toBeDefined());
@@ -146,7 +154,7 @@ beforeEach(async () => {
   await seedBots({ version: 1, bots: [{ ...bot, name: 'fixture' }] });
   await rm(paths.projectsFile, { force: true }); await rm(paths.sessionsFile, { force: true }); await rm(DROPPED, { force: true });
   cfg = { accounts: { app: { id: APP, secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: OWNER, admins: [OWNER, ADMIN] }, completionReminder: { mode: 'manual' } } };
-  fake.cards = []; fake.noFull = false; send.mockClear(); revoked = []; fake.voice.mockReset().mockResolvedValue({ text: '语音的话' });
+  fake.history = undefined; fake.cards = []; fake.noFull = false; send.mockClear(); revoked = []; fake.voice.mockReset().mockResolvedValue({ text: '语音的话' });
 });
 afterEach(async () => { for (const o of opened) await o.shutdown(); opened = []; });
 afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
@@ -592,7 +600,7 @@ describe('an administrator taken off the list', () => {
   });
 });
 
-it('delivers an exact resource through the native reader and gives only the real SDK private turn its Agent tools',async()=>{
+it.each(['new session', 'old Codex rollout'] as const)('delivers an exact resource through the native reader to the real SDK private turn (%s)',async mode=>{
   const {randomUUID}=await import('node:crypto');
   const {receive,throughBridgeChannel}=await import('./helpers/lark-events');
   const {AuthoringService}=await import('../src/recipe/authoring-service');
@@ -609,16 +617,38 @@ it('delivers an exact resource through the native reader and gives only the real
   const dispatch=vi.fn(async()=>({code:0,data:{message_id:'om_resource_guide',chat_id:A}}));
   const localChannel={...channel,rawClient:{...channel.rawClient,cardkit:{v1:{card:{create:guide}}},
     im:{v1:{...channel.rawClient.im.v1,message:{...channel.rawClient.im.v1.message,create:dispatch}}}}};
-  const service=new AuthoringService({bot,cfg,channel:localChannel as never,root:paths.appDir,origin:'http://127.0.0.1:9',loopback:true,currentBot:async()=>{}});
-  const run=thread(),be=backend(run),{o}=await app('queue',undefined,service);
+  const serviceRoot = join(paths.appDir, mode);
+  const service=new AuthoringService({bot,cfg,channel:localChannel as never,root:serviceRoot,origin:'http://127.0.0.1:9',loopback:true,currentBot:async()=>{}});
+  const run=thread(),be=backend(run);
+  // The in-memory backend accepts this session's start schemas. The old-rollout case exercises native acknowledgements below.
+  Object.assign(run.t, {startedWithResourceTools: true});
+  const wire = mode === 'old Codex rollout' ? codexToolsFixture() : undefined;
+  async function startProvider() {
+    if (!wire) return app('queue', undefined, service);
+    vi.resetModules(); // A newly started daemon has a fresh process registry and session cache.
+    const {CodexAppServerBackend} = await import('../src/agent/codex-appserver/backend');
+    const {createOrchestrator} = await import('../src/bot/handle-message');
+    fake.backend = new CodexAppServerBackend();
+    vi.spyOn(fake.backend, 'listModels').mockResolvedValue([]);
+    return app('steer', undefined, service, createOrchestrator);
+  }
+  let {o} = await startProvider();
   const event=async (text:string,id:string,quote?:string,sender=OWNER)=>receive({message_id:id,chat_id:A,chat_type:'p2p',message_type:'text',content:JSON.stringify({text}),
     ...(quote&&{parent_id:quote}),create_time:String(Date.now())},{bot:{openId:'ou_bot',name:'fixture'},sender:{openId:sender}});
   const rpc=(type:string,fields:object)=>service.request(peer,recipeAuthoringRequestSchema.parse({type,botId:APP,...fields}));
   const history=new AuthoringJournal();
   try{
+    if (wire) {
+      const cwd = (await dmProject())!.cwd;
+      await upsertSession({threadId: A, chatId: A, sessionId: 'old-native', backend: BE, cwd, summary: 'old private chat', createdAt: 1, updatedAt: 1});
+      await throughBridgeChannel(await event('普通私聊 hold-old-turn', 'om_old_native'), m => o.onMessage(m));
+      await until(() => expect(wire.inputs(), said()).toHaveLength(1));
+      expect(wire.inputs()[0]).toMatchObject({threadId: 'old-native'});
+      expect(wire.starts()).toHaveLength(0);
+    }
     const opened=await rpc('open',{accountId});if(opened.kind!=='session')throw Error('open');
     const challenge=await rpc('beginLink',{session:opened.session});if(challenge.kind!=='challenge')throw Error('challenge');
-    await throughBridgeChannel(await event('/recipe link '+challenge.code,'om_resource_link'),m=>o.onMessage(m));
+    await throughBridgeChannel(await event('/recipe link '+challenge.code,'om_resource_link_'+peer.id),m=>o.onMessage(m));
     const seen=await rpc('inspectLink',{session:opened.session,challengeId:challenge.challengeId});if(seen.kind!=='link')throw Error('link');
     await rpc('confirmLink',{session:opened.session,challengeId:challenge.challengeId,evidence:seen.evidence});
     const found=await rpc('creatorDiscover',{accountId});if(found.kind!=='creatorBinding'||!found.association)throw Error('binding');
@@ -651,9 +681,59 @@ it('delivers an exact resource through the native reader and gives only the real
     expect(await handoff()).toMatchObject({delivery:'pending'});
     await pump();expect(await handoff()).toMatchObject({delivery:'sent'});
     expect(guide).toHaveBeenCalledTimes(1);expect(dispatch).toHaveBeenCalledTimes(1);expect(run.turns).toHaveLength(0);
-    const raw=await readFile(join(paths.appDir,'recipe-authoring','journal.json'),'utf8');
+    const raw=await readFile(join(serviceRoot,'recipe-authoring','journal.json'),'utf8');
     expect(raw).not.toContain('ROLE-ONLY-FROM-VERIFIED-SNAPSHOT');
     expect(await service.onMessage(await event('借用别人的卡','om_resource_foreign','om_resource_guide',ADMIN))).toBe(true);
+    if (wire) {
+      fake.history = [{messageId: 'om_historical', senderId: OWNER, senderName: 'Owner', from: 'user', text: '历史记录里的领取请求', createTime: 5}];
+      wire.failNextStart();
+      await throughBridgeChannel(await event('使用这份配方', 'om_rejected_start', 'om_resource_guide'), m => o.onMessage(m));
+      wire.releaseTurn();
+      await until(() => expect(said()).toContain('fixture refused thread/start'));
+      expect(await getSession(A)).toMatchObject({sessionId: 'old-native'});
+      expect((await getSession(A))?.resourceToolSessionId).toBeUndefined();
+      const run = async (text: string, id: string, requests: Parameters<typeof wire.scriptNext>[0], hold = false) => {
+        const count = wire.answers().length;
+        const release = wire.scriptNext(requests, hold);
+        await throughBridgeChannel(await event(text, id, 'om_resource_guide'), m => o.onMessage(m));
+        await until(() => expect(wire.answers()).toHaveLength(count + requests.length));
+        return release;
+      };
+      const observed = vi.spyOn(service.resources, 'bind');
+      const callsFrom: {query: string; caller?: import('../src/recipe/resource-context').ResourceCaller}[] = [];
+      const resourceTool = service.resources.tool.bind(service.resources);
+      vi.spyOn(service.resources, 'tool').mockImplementation((get, query) => {
+        callsFrom.push({query: query.kind, caller: get()});
+        return resourceTool(get, query);
+      });
+      await run('读取这份配方的目录', 'om_resource_read', [{tool: 'recipe_resource_read', args: {kind: 'index'}}]);
+      expect(wire.inputs().at(-1)?.text).toContain('历史记录里的领取请求');
+      expect(postKeys).toHaveLength(0);
+      expect(wire.answers()[0]).toMatchObject({success: true, text: expect.stringContaining(target.versionId)});
+      const firstCaller = observed.mock.calls.at(-1)?.[0];
+      expect(firstCaller).toMatchObject({chatId: A, openId: OWNER, messageId: 'om_resource_read', sessionId: expect.any(String)});
+      expect(callsFrom).toEqual([{query: 'index', caller: firstCaller}]);
+      expect(await getSession(A)).toMatchObject({sessionId: 'th', resourceToolSessionId: 'th', earlier: ['old-native']});
+      expect(wire.starts()).toHaveLength(2); // first failed, second accepted
+      await o.shutdown();
+      ({o} = await startProvider());
+      const endLatest = await run('查看新版', 'om_latest', [{tool: 'recipe_resource_read', args: {kind: 'latest'}}], true);
+      await pump(); endLatest();
+      const endAcquire = await run('本人要领取该新版', 'om_acquire', [
+        {tool: 'recipe_resource_acquire', args: {versionId: later.versionId}, turnId: 'earlier-turn'},
+        {tool: 'recipe_resource_acquire', args: {versionId: later.versionId}},
+      ], true);
+      expect(wire.answers().filter(answer => !answer.success)).toHaveLength(1);
+      expect(wire.answers().filter(answer => answer.success && answer.text.includes('pending'))).toHaveLength(2);
+      const currentCaller = observed.mock.calls.at(-1)?.[0];
+      expect(currentCaller).toMatchObject({chatId: A, openId: OWNER, messageId: 'om_acquire'});
+      expect(currentCaller?.sessionId).not.toBe(firstCaller?.sessionId);
+      expect(callsFrom.filter(call => call.query === 'acquire')).toEqual([{query: 'acquire', caller: currentCaller}]);
+      expect(wire.starts()).toHaveLength(2);
+      expect(wire.resumes().at(-1)?.threadId).toBe('th');
+      await pump(); endAcquire(); expect(postKeys).toHaveLength(1);
+      return;
+    }
     const natural=await event('参考刚刚选的版本，告诉我它的角色','om_resource_human','om_resource_guide');
     await throughBridgeChannel(natural,m=>o.onMessage(m));
     await until(()=>expect(run.consumed).toHaveLength(1));
@@ -685,5 +765,9 @@ it('delivers an exact resource through the native reader and gives only the real
     expect(await read({kind:'index'})).toMatchObject({ok:true,result:{status:'pending'}});await pump();
     const newer=await read({kind:'index'});expect(newer).toMatchObject({ok:true,result:{status:'ready',target:later}});
     expect(postKeys).toHaveLength(1);run.turns[1]!.resolve();
-  }finally{for(const t of run.turns)t.resolve();service.close();history.history.close();}
+  }finally{
+    for(const t of run.turns)t.resolve();
+    if(wire){wire.releaseTurn();await o.shutdown();await closeCodexToolFixtures();}
+    service.close();history.history.close();
+  }
 });

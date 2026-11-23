@@ -31,6 +31,7 @@ import { AppServerClient } from './app-server-client';
 import { admitCodexWorkspaceLayout } from './workspace-admission';
 import { codexFilesystem, codexInstallRoot, codexShellReadRoot, type CodexInstallRoot, codexWorkspaceRoots, verifyCodexWorkspaceEcho } from './workspace-policy';
 import { CONNECTOR_SCHEDULING_OFF, NATIVE_MEMORY_OFF, NATIVE_SCHEDULING_OFF } from './memory-config';
+import { resourceToolNames } from '../entry/resource-tools';
 import { FEEDBACK_PREPARE } from '../entry/feedback-tool';
 import { startDynamicTools } from './dynamic-tools';
 import { connectGated, refillWarmPool, takeWarmClient, utilityRequest } from './client-pool';
@@ -342,6 +343,7 @@ class CodexThread implements AgentThread {
     private readonly entry?: AgentEntry,
     private readonly supportsEffort?: (model: string) => boolean,
     readonly startedWithFeedbackTool?: boolean,
+    readonly startedWithResourceTools?: boolean,
   ) {
     if (entry) client.hostTools(sessionId, { entry, turnAcked: (turnId, ms) => this.turnAcked(turnId, ms) });
   }
@@ -1064,8 +1066,9 @@ export class CodexAppServerBackend implements AgentBackend {
       await client.close().catch((closeErr: unknown) => log.fail('agent', closeErr, { phase: 'start-close' }));
       throw err;
     }
+    const offered = new Set(tools.dynamicTools?.flatMap(namespace => namespace.tools.map(tool => tool.name)));
     return new CodexThread(client, res.thread.id, opts.model, opts.effort, opts.serviceTier, nativeServiceTier, false, undefined, opts.entry,
-      this.threadEffortSupport(), tools.dynamicTools?.some(ns => ns.tools.some(tool => tool.name === FEEDBACK_PREPARE)));
+      this.threadEffortSupport(), offered.has(FEEDBACK_PREPARE), [...resourceToolNames].every(name => offered.has(name)));
   }
 
   async resumeThread(opts: ResumeThreadOptions): Promise<AgentThread> {

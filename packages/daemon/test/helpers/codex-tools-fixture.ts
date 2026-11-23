@@ -33,26 +33,32 @@ function script(threadId, turnId, text, done) {
     // Ordinary orchestrator prompts ask the fake model to use only a tool its native rollout advertised.
     const rollout = path.join(__dirname, 'tools-' + threadId);
     const tools = fs.existsSync(rollout) ? JSON.parse(fs.readFileSync(rollout, 'utf8')) : [];
-    instruction = {calls: text.includes('反馈测试') && tools.some(ns => ns.tools.some(t => t.name === 'feedback_prepare'))
+    const scripted = path.join(__dirname, 'next-turn');
+    if (fs.existsSync(scripted)) {
+      const planned = JSON.parse(fs.readFileSync(scripted, 'utf8'));
+      fs.unlinkSync(scripted);
+      instruction = {...planned, calls: planned.calls.filter(c => tools.some(ns => ns.tools.some(t => t.name === c.tool)))};
+    } else instruction = {calls: text.includes('反馈测试') && tools.some(ns => ns.tools.some(t => t.name === 'feedback_prepare'))
       ? [{tool: 'feedback_prepare', args: {summary: {kind: 'bug', title: '标题', description: '说明'}}}] : []};
   }
   const { calls: list, early } = instruction;
-  let open = list.length;
-  const requests = list.map(c => {
-    const id = 'call-' + ++calls;
-    waiting.set(id, () => { if (--open === 0) done(); });
-    return { id, method: 'item/tool/call', params: { threadId: c.threadId || threadId, turnId: c.turnId || turnId,
-      callId: 'c' + calls, namespace: 'vonvon_bot', tool: c.tool, arguments: c.args || {} } };
-  });
-  return { early, send: () => {
-    if (requests.length) return requests.forEach(send);
-    if (!text.includes('hold-old-turn')) return done();
+  function finish() {
+    const release = instruction.hold || (text.includes('hold-old-turn') && 'release-turn');
+    if (!release) return done();
     const timer = setInterval(() => {
-      if (!fs.existsSync(path.join(__dirname, 'release-turn'))) return;
+      if (!fs.existsSync(path.join(__dirname, release))) return;
       clearInterval(timer);
       done();
     }, 10);
-  } };
+  }
+  let open = list.length;
+  const requests = list.map(c => {
+    const id = 'call-' + ++calls;
+    waiting.set(id, () => { if (--open === 0) finish(); });
+    return { id, method: 'item/tool/call', params: { threadId: c.threadId || threadId, turnId: c.turnId || turnId,
+      callId: 'c' + calls, namespace: 'vonvon_bot', tool: c.tool, arguments: c.args || {} } };
+  });
+  return {early, send: () => requests.length ? requests.forEach(send) : finish()};
 }
 require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
   const m = JSON.parse(line), p = m.params || {};
@@ -60,6 +66,11 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', li
   if (m.id === undefined) return;
   if (m.method === 'thread/start' || m.method === 'thread/resume') {
     if (!p.ephemeral) note(m.method === 'thread/start' ? 'starts' : 'resumes', p); // not the warm pool's thread
+    const failStart = path.join(__dirname, 'fail-start');
+    if (m.method === 'thread/start' && !p.ephemeral && fs.existsSync(failStart)) {
+      fs.unlinkSync(failStart);
+      return send({id: m.id, error: {code: -32000, message: 'fixture refused thread/start'}});
+    }
     if (m.method === 'thread/start' && !p.ephemeral) fs.writeFileSync(path.join(__dirname, 'tools-th'), JSON.stringify(p.dynamicTools || []));
     send({ id: m.id, result: { thread: { id: p.threadId || 'th' }, cwd: p.cwd, runtimeWorkspaceRoots: p.runtimeWorkspaceRoots,
       approvalPolicy: p.approvalPolicy, sandbox: { type: 'dangerFullAccess' } } });
@@ -138,7 +149,14 @@ export function codexToolsFixture(feedbackEnabled?: (chatId: string) => boolean)
       goal: (calls: Call[]) => drain(thread.runGoal(JSON.stringify({ calls }))),
     };
   }
+  let scripts = 0;
   return {
+    scriptNext(calls: Call[], hold = false) {
+      const release = 'release-script-' + ++scripts;
+      writeFileSync(join(dir, 'next-turn'), JSON.stringify({calls, ...(hold ? {hold: release} : {})}));
+      return () => writeFileSync(join(dir, release), '');
+    },
+    failNextStart: () => writeFileSync(join(dir, 'fail-start'), ''),
     execute, open, releaseTurn: () => writeFileSync(join(dir, 'release-turn'), ''), inputs: () => read('inputs'), starts: () => read('starts'), resumes: () => read('resumes'),
     /** The process that ran the latest turn. */
     pid: () => read('pids').at(-1)?.pid as number | undefined,
