@@ -45,7 +45,7 @@ it('supports retry after read and save failures while retaining input', async ()
   expect(document.body.textContent).toContain('暂时无法读取');
   handle = async () => ({authorId: accountId, displayName: '旧署名'}); await click('重试');
   await fill('保留的输入'); handle = async () => {throw new Error('offline');}; await click('保存署名');
-  expect(document.querySelector('input')!.value).toBe('保留的输入'); expect(document.body.textContent).toContain('署名未能保存');
+  expect(document.querySelector('input')!.value).toBe('保留的输入'); expect(document.body.textContent).toContain('保存结果尚未确认');
   handle = async () => ({authorId: accountId, displayName: '保留的输入'}); await click('保存署名');
   expect(document.body.textContent).toContain('公开署名已保存');
 });
@@ -65,4 +65,44 @@ it('blocks duplicate saves and discards their completion after an account switch
   await draw(otherId); await act(async () => save.resolve({authorId: accountId, displayName: '旧账号响应'}));
   expect(document.querySelector('input')!.value).toBe('另一署名');
   expect(document.body.textContent).not.toContain('公开署名已保存');
+});
+
+it('reconciles a committed save whose response was lost and permits reverting it', async () => {
+  let cloud = '旧署名';
+  handle = async request => {
+    if (request.type === 'saveProfile') {cloud = request.displayName; throw new Error('response lost');}
+    return {authorId: accountId, displayName: cloud};
+  };
+  await draw(); await fill('想撤回的署名'); await click('保存署名');
+  expect(cloud).toBe('想撤回的署名');
+  expect(requests.map(request => request.type)).toEqual(['profile', 'saveProfile', 'profile']);
+  expect(document.body.textContent).toContain('已重新核对云端署名');
+  await fill('旧署名'); expect(button('保存署名').disabled).toBe(false);
+  await click('保存署名'); expect(cloud).toBe('旧署名');
+});
+it('allows explicit overwrite of an uncertain remote value and read-only retry', async () => {
+  let cloud = '旧署名', offline = false;
+  handle = async request => {
+    if (request.type === 'saveProfile') {cloud = request.displayName; offline = true; throw new Error('response lost');}
+    if (offline) throw new Error('offline');
+    return {authorId: accountId, displayName: cloud};
+  };
+  await draw(); await fill('新署名'); await click('保存署名');
+  expect(document.body.textContent).toContain('保存结果尚未确认');
+  await fill('旧署名'); expect(button('保存署名').disabled).toBe(false);
+  await click('保存署名'); expect(cloud).toBe('旧署名');
+  expect(requests.filter(request => request.type === 'saveProfile')).toHaveLength(2);
+  offline = false; await click('重新读取');
+  expect(document.body.textContent).not.toContain('保存结果尚未确认');
+  expect(button('保存署名').disabled).toBe(true);
+  expect(requests.filter(request => request.type === 'saveProfile')).toHaveLength(2);
+});
+it('discards late reconciliation after switching accounts', async () => {
+  const check = deferred<CommunityResponses['profile']>();
+  await draw(); await fill('旧账号提交');
+  handle = request => request.type === 'saveProfile' ? Promise.reject(new Error('lost')) : request.accountId === accountId ? check.promise : Promise.resolve({authorId: otherId, displayName: '另一署名'});
+  await click('保存署名'); await draw(otherId);
+  await act(async () => check.resolve({authorId: accountId, displayName: '迟到署名'}));
+  expect(document.querySelector('input')!.value).toBe('另一署名');
+  expect(document.body.textContent).not.toContain('已重新核对');
 });

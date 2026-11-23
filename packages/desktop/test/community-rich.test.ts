@@ -65,3 +65,31 @@ it.each(['library','publications'] as const)('loads bounded public logos for %s 
   expect((await communityRequest(f.account,{type,accountId})).items[0]?.logo).toBe('data:image/webp;base64,AQID');
   missing=true;expect((await communityRequest(f.account,{type,accountId})).items[0]).toEqual(item);
 });
+
+it.each(['🦉'.repeat(31), '🦉'.repeat(60), '\u3000作者\u3000'])('preserves a valid saved public name through the actual rich detail boundary', async displayName => {
+  const f = fixture();
+  f.account.status = () => ({kind: 'signedIn', accountId, displayName: 'Login', provider: 'github', persistence: 'memory'});
+  const creator = {authorId: accountId, displayName};
+  f.account.request = async (_id, path) => path === '/v2/me/profile' ? Response.json(creator) : f.request(path);
+  const saved = await communityRequest(f.account, {type: 'saveProfile', accountId, requestId: objectId, displayName});
+  f.detail.creator = saved;
+  expect((await communityRequest(f.account, {type: 'profile', accountId})).displayName).toBe(displayName);
+  expect((await communityRequest(f.account, {type: 'detail', recipeId, versionId})).creator).toEqual(creator);
+});
+it.each(['🦉'.repeat(60), '\u3000作者\u3000'])('uses the same public name rule for catalog, library, publications and legacy detail', async displayName => {
+  const f = fixture();
+  f.account.status = () => ({kind: 'signedIn', accountId, displayName: 'Login', provider: 'github', persistence: 'memory'});
+  const creator = {authorId: accountId, displayName};
+  const item = {recipeId, versionId, revision: 1, public: f.detail.public, creator};
+  f.request.mockImplementation(async path => {
+    if (path.startsWith('/v2/community/recipes')) return Response.json({heroKind: 'latest', hero: item, items: [item], nextCursor: null});
+    if (path === '/v2/me/recipes') return Response.json({items: [item], nextCursor: null});
+    if (path === '/v2/me/publications') return Response.json({items: [item]});
+    if (path.startsWith('/v2/recipes/')) return new Response(null, {status: 404});
+    return Response.json({...item, owned: false, acquired: false, public: {...item.public, access: 'coded'}});
+  });
+  expect((await communityRequest(f.account, {type: 'catalog'})).items[0]?.creator).toEqual(creator);
+  expect((await communityRequest(f.account, {type: 'library', accountId})).items[0]?.creator).toEqual(creator);
+  expect((await communityRequest(f.account, {type: 'publications', accountId})).items[0]?.creator).toEqual(creator);
+  expect((await communityRequest(f.account, {type: 'detail', recipeId, versionId})).creator).toEqual(creator);
+});

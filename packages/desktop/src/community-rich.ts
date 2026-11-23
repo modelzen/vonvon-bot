@@ -1,11 +1,11 @@
 import {createHash} from 'node:crypto';
 import {z} from 'zod';
 import {decodeRichRecipeContent, verifyRichRecipeRelease, recipeRichManifestObjectSchema, recipeRichReleaseSchema,
-  recipePublicSchema, recipeRoleDraftSchema, recipeSummarySchema, type RecipeDetail, type RecipeDraft, type CommunityResponses} from '@vonvon/protocol';
+  publicDisplayNameSchema, recipePublicSchema, recipeRoleDraftSchema, recipeSummarySchema, type RecipeDetail, type RecipeDraft, type CommunityResponses} from '@vonvon/protocol';
 import type {NativeAccount} from './account-session.js';
 
 const uuid = z.string().uuid();
-const creator = z.object({authorId:uuid,displayName:z.string().min(1).max(60).refine(value=>value===value.trim()&&!/[@\p{Cc}]/u.test(value))}).strict();
+const creator = z.object({authorId:uuid,displayName:publicDisplayNameSchema}).strict();
 const access = z.enum(['direct','coded']);
 const revision = z.number().int().positive().max(2147483647);
 export const richCloudDetailSchema = z.object({recipeId: uuid, versionId: uuid, revision, public: recipePublicSchema,
