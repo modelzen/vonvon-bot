@@ -34,3 +34,4 @@ export * from './smart-rules.js';
 export * from './decision-effort.js';
 export * from './decision-providers.js';
 export * from './schedule.js';
+export * from "./desktop-account.js";

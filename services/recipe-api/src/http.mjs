@@ -1,10 +1,11 @@
 import { createServer } from 'node:http';
-import { accountFromRequest } from './auth.mjs';
+import { identityFromRequest } from './auth.mjs';
 import { ApiError, badInput } from './errors.mjs';
 import { bodyJson, checkDraft, expectedRevision, objectKeys, queryParams, requestKey, uuid } from './input.mjs';
 import { codeAttempts } from './limiter.mjs';
 
 const endpoints = [
+  ['GET', '/me', 'me'],
   ['GET', '/community/recipes', 'catalog', true],
   ['GET', '/recipes/:r/versions/:v', 'versionDetail', true],
   ['GET', '/me/drafts', 'listDrafts'],
@@ -108,10 +109,10 @@ export function createRecipeServer({ verify, execute, attempts = codeAttempts() 
         if (!req.url.startsWith('/') || req.url.startsWith('//')) throw badInput();
         const url = new URL(req.url, 'http://localhost');
         const route = identify(req, url);
-        const account = await accountFromRequest(req, route.isPublic, verify);
+        const identity = await identityFromRequest(req, route.isPublic, verify);
         const [operation, args] = await inputFor(req, url, route);
-        if (route.action === 'redeem') finishAttempt = attempts.begin(account);
-        const result = await execute(account, operation, args);
+        if (route.action === 'redeem') finishAttempt = attempts.begin(identity.issuer + '\0' + identity.subject);
+        const result = await execute(identity, operation, args);
         const response = JSON.stringify(result);
         finishAttempt?.(false);
         finishAttempt = undefined;

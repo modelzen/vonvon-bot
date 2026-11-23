@@ -21,7 +21,7 @@ test('Supabase signed access tokens require the project, account role, key and e
     exp: Math.floor(Date.now()/1000)+120};
   const sign = (fields = {}, header = {alg:'ES256',kid:'project-test'}, key = privateKey) =>
     new SignJWT({...claims,...fields}).setProtectedHeader(header).sign(key);
-  assert.equal(await verify(await sign()), account);
+  assert.deepEqual(await verify(await sign()), {issuer,subject:account});
   for (const bad of [{iss:issuer+'/other'},{aud:'anon'},{role:'service_role'},{sub:'missing'},
     {exp: 1},{exp:undefined},{is_anonymous:true}]) {
     await assert.rejects(verify(await sign(bad)), {status:401});

@@ -2,11 +2,15 @@
 
 Node 22.12 及以上通过 HTTP 提供首批文字配方的目录、草稿、发布、获取和分享码操作。进程默认监听 127.0.0.1:4317。浏览器使用同源网页登录服务，后者凭用户的 Supabase access token 调用此 API，桌面客户端可直接使用 Bearer token。
 
-在隔离数据库按文件名前的时间戳顺序运行 [SQL 迁移](../../supabase/migrations)，每个文件单独事务执行，记录已执行的版本，升级时只执行新增迁移。创建专用数据库登录并授予 recipe_api 角色。应用启动时检查专用登录的权限，事务内切换至 recipe_api，使用已验证 JWT 的 sub 作为这次操作的账号。
+在隔离数据库按文件名前的时间戳顺序运行 [SQL 迁移](../../supabase/migrations)，每个文件单独事务执行，记录已执行的版本，升级时只执行新增迁移。创建专用数据库登录并授予 recipe_api 角色。应用启动时检查专用登录的权限，事务内切换至 recipe_api，根据已验证 JWT 的 `(issuer, subject)` 映射独立业务账号 UUID，再绑定到本次事务。映射不使用邮箱、昵称或客户端传入的账号 ID。
+
+`GET /v1/me` 要求 Bearer token，只返回 `{ "accountId": "UUID" }`。新业务 UUID 与 Auth subject 不同；并发首次登录只建立一个账号。Supabase 已关联的提供方使用同一个 subject，因此映射到同一个业务账号。服务不自行按邮箱合并账号。
+
+账号迁移前先排空并停止所有旧 API 实例，再执行新增迁移并启动新版；迁移后不能混跑旧进程或直接回滚旧 API。账号迁移保留旧作者、领取者和回执中的业务 UUID。迁移后的首次服务启动在接收 HTTP 前，从 `RECIPE_AUTH_ISSUER` 持久固定本数据库的签发方，并原子建立旧 UUID 的身份映射。首次启动必须使用原有数据所属的可信项目签发方。后续使用不同 issuer 启动会失败，也不能通过首次用户请求更改归属。将来迁移 Auth 项目需要管理员审核并迁移映射；修改环境变量不会转移权益。账号状态为 `stopped` 或 `disabled` 时，通过格式校验与入口限流的请求在访问业务数据前返回 403 `account_disabled`，不继续读取私人内容或写入数据。
 
 | 环境变量 | 配置 |
 | --- | --- |
-| RECIPE_AUTH_ISSUER | 本项目签发方的完整 HTTPS 地址，以 /auth/v1 结尾。开发环境可使用 HTTP loopback 地址。签发方需启用 ES256 或 RS256，服务从该地址下的 .well-known/jwks.json 取公钥。 |
+| RECIPE_AUTH_ISSUER | 本项目签发方的完整 HTTPS 地址，以 /auth/v1 结尾。每个数据库只绑定一个签发方。开发环境可使用 HTTP loopback 地址。签发方需启用 ES256 或 RS256，服务从该地址下的 .well-known/jwks.json 取公钥。 |
 | RECIPE_DATABASE_URL | 专用 PostgreSQL 登录的连接字符串。远端使用 TLS 并验证服务器证书，私有 CA 可由 Node 的 NODE_EXTRA_CA_CERTS 配置。本地测试可在 localhost URL 的 host 查询参数指定专用 Unix socket 目录。 |
 | RECIPE_CODE_KEY | 针对此环境固定的独立 32 字节随机密钥，使用 64 个十六进制字符表示。须与数据库备份分别保管。现有可用码依赖此密钥，变更前须安排迁移。 |
 | PORT | 可选，默认 4317。 |
