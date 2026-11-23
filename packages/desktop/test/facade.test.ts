@@ -1,3 +1,4 @@
+import {agentIdSchema, groupIdSchema} from '@vonvon/protocol';
 import { describe, expect, it } from 'vitest';
 import { desktopChannels } from '../src/ipc-contract.js';
 import { createDesktopFacades, type FacadeTransport } from '../src/facade.js';
@@ -23,6 +24,22 @@ function harness() {
 }
 
 describe('synchronous desktop facade', () => {
+  it('exposes only validated account status and replays it to a remounted shell listener', async () => {
+    const h = harness();
+    const { account } = createDesktopFacades(h.transport).shell;
+    expect(Object.keys(account).sort()).toEqual(['cancelLogin', 'login', 'logout', 'onStatus', 'status']);
+    const statuses: unknown[] = [];
+    h.event({ type: 'account', value: { kind: 'signedOut' } });
+    const stop = account.onStatus(status => statuses.push(status));
+    h.event({ type: 'account', value: { kind: 'signingIn', access_token: 'sensitive' } });
+    h.event({ type: 'account', value: { kind: 'signingIn' } });
+    stop();
+    h.event({ type: 'account', value: { kind: 'signedOut' } });
+    expect(statuses).toEqual([{ kind: 'signedOut' }, { kind: 'signingIn' }]);
+    h.replies.set(desktopChannels.accountStatus, async () => ({ ok: true, value: { kind: 'signedOut', refresh_token: 'secret' } }));
+    await expect(account.status()).rejects.toThrow();
+  });
+
   it('forwards service and login actions through dedicated shell IPC', async () => {
     const h = harness();
     const requests: Array<{ channel: string; args: unknown[] }> = [];
@@ -395,8 +412,8 @@ describe('devices-ui-1a facade', () => {
     const a = shell.devices.clientFor(A);
     expect(shell.devices.clientFor(A)).toBe(a);
     expect(() => shell.devices.clientFor('not-a-device')).toThrow();
-    const seen: number[] = [];
-    a.watchSnapshots(value => seen.push(value.revision));
+    const seen: Array<number | 'new connection'> = [];
+    const unsubscribe = a.watchSnapshots(value => seen.push(value.revision), () => seen.push('new connection'));
     h.event({ type: 'snapshot', view: A, value: snapshot(5) });
     h.event({ type: 'snapshot', view: B, value: snapshot(9) });
     h.event({ type: 'snapshot', view: 'local', value: snapshot(9) });
@@ -405,7 +422,10 @@ describe('devices-ui-1a facade', () => {
     h.event({ type: 'snapshot', view: A, value: snapshot(4) });
     h.event({ type: 'reattached', view: A });
     h.event({ type: 'snapshot', view: A, value: snapshot(1) });
-    expect(seen).toEqual([5, 1]);
+    expect(seen).toEqual([5, 'new connection', 1]);
+    unsubscribe();
+    h.event({ type: 'reattached', view: A });
+    expect(seen).toEqual([5, 'new connection', 1]);
     const read = { type: 'read', scope: { kind: 'host' } } as const;
     await a.settings(read).catch(() => {});
     await a.close();
@@ -445,4 +465,22 @@ describe('devices-ui-1a facade', () => {
     await expect(shell.devices.switchTo(B)).rejects.toMatchObject({ message: '设备列表里没有这台设备。', code: 'unknown_device' });
     expect(h.calls.slice(-3)).toEqual([desktopChannels.devicesState, desktopChannels.devicesRemove, desktopChannels.devicesSwitch]);
   });
+});
+
+
+it('validates minimal exact group identity replies through the captured device client facade', async () => {
+  const request = {type: 'readGroupIdentity' as const, agentId: agentIdSchema.parse('cli_exact'), groupId: groupIdSchema.parse('oc_exact')};
+  const calls: unknown[][] = [];
+  let value: unknown = {kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: '平台群'};
+  const facade = createDesktopFacades({receive: () => () => {}, invoke: async (channel, ...args) => {
+    if (channel === desktopChannels.subscribe) return {ok: true, value: undefined};
+    calls.push([channel, ...args]); return {ok: true, value};
+  }});
+  const client = facade.shell.devices.clientFor('11111111-1111-4111-8111-111111111111');
+  expect(await client.run(request)).toEqual(value);
+  expect(calls).toEqual([[desktopChannels.run, request, '11111111-1111-4111-8111-111111111111']]);
+  for (const invalid of [{kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: ' '},
+    {kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: '平台群', description: 'not allowed'}]) {
+    value = invalid; await expect(client.run(request)).rejects.toThrow();
+  }
 });

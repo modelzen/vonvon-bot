@@ -83,7 +83,7 @@ test('Linux runs the server install smoke last, for full scope or a daemon chang
 
 test('Windows full builds and typechecks all packages, then runs supported acceptance tests', () => {
   const plan = createPlan('full', packages, sourceRoot, 'win32');
-  assert.deepEqual(plan.slice(0, 3).map(command => command.args),
+  assert.deepEqual(plan.filter(command => !command.args.includes('verify:built')).slice(0, 3).map(command => command.args),
     [['run', 'build'], ['run', 'typecheck'], ['run', 'lint']]);
   assert.equal(plan.some(command => command.executable === 'npm' &&
     command.args.join(' ') === 'run test'), false);
@@ -123,15 +123,47 @@ test('missing workspace test script fails before any command runs', () => {
   assert.throws(() => createPlan('affected', ['ui'], root), /has no test script/);
 });
 
-test('runner stops at the first failing command', () => {
+test('runner stops when built verification fails before source checks', () => {
   const calls = [];
   assert.throws(() => runPlan([
     { executable: 'npm', args: ['run', 'build'] },
-    { executable: 'npm', args: ['run', 'test'] },
-    { executable: 'npm', args: ['run', 'lint'] },
+    { executable: 'npm', args: ['--workspace', 'packages/daemon', 'run', 'verify:built'] },
+    { executable: 'npm', args: ['run', 'typecheck'] },
   ], '/tmp', (executable, args) => {
     calls.push([executable, args]);
-    return { status: args.includes('test') ? 2 : 0 };
+    return { status: args.includes('verify:built') ? 2 : 0 };
   }), /failed \(2\)/);
   assert.equal(calls.length, 2);
+});
+
+
+test('built verification follows the complete dependency build and only selects declared workspace checks', () => {
+  const root = fixture();
+  for (const name of ['protocol', 'daemon']) {
+    writeFileSync(join(root, 'packages', name, 'package.json'), JSON.stringify({
+      scripts: { test: 'test', 'verify:built': 'node scripts/verify-built.mjs' },
+    }));
+  }
+  writeFileSync(join(root, installSmoke), '');
+  for (const platform of ['linux', 'darwin']) {
+    for (const scope of ['affected', 'full']) {
+      const selected = scope === 'full' ? packages : ['daemon', 'desktop'];
+      const plan = createPlan(scope, selected, root, platform);
+      const checks = plan.filter(command => command.args.includes('verify:built'));
+      assert.deepEqual(checks.map(command => command.args), (scope === 'full' ? ['protocol', 'daemon'] : ['daemon'])
+        .map(name => ['--workspace', `packages/${name}`, 'run', 'verify:built']));
+      assert.deepEqual(plan[0].args, ['run', 'build']);
+      assert.deepEqual(plan.slice(1, 1 + checks.length), checks);
+    }
+  }
+  assert.equal(createPlan('affected', ['ui', 'desktop'], root, 'darwin')
+    .some(command => command.args.includes('verify:built')), false);
+});
+
+test('Windows includes built checks without changing its specialized source suites', () => {
+  const plan = createPlan('full', packages, sourceRoot, 'win32');
+  assert.deepEqual(plan.filter(command => command.args.includes('verify:built')).map(command => command.args), [
+    ['--workspace', 'packages/protocol', 'run', 'verify:built'],
+    ['--workspace', 'packages/daemon', 'run', 'verify:built'],
+  ]);
 });

@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>创作中心 · Vonvon</title><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/studio.css"><script type="module" src="/studio.mjs"></script></head>
+<body><header class="shell studio-bar"><a href="/">← 社区</a><span>Vonvon</span></header>
+<main class="shell studio"><h1>创作中心</h1><p class="muted">准备私人草稿，核对后发布到社区。</p><div id="notice" role="status" aria-live="polite"></div>
+<section id="login" hidden><a href="/?login=1&amp;next=studio">登录后继续</a></section>
+<section id="workspace" hidden><div class="studio-top"><h2>私人草稿</h2><button type="button" id="new">新建文字草稿</button></div><ul id="drafts" class="entries"></ul>
+<form id="editor" hidden><h2>编辑草稿</h2><small>本次试用支持文字配方；这里填写的角色说明不会改变任何现有 Bot。</small>
+<h3>公开介绍</h3><p class="muted">名称、简介、概览和版本对所有人可见，包括凭码配方。</p><label>配方名称<input name="name" maxlength="120"></label><label>一句话简介<input name="summary" maxlength="480"></label><label>概览 · Markdown<textarea name="overview" rows="4" placeholder="介绍使用场景、依赖和技能的运行方式。"></textarea></label>
+<div class="columns"><label>版本<input name="version" placeholder="例如 1.0"></label><label>获取方式<select name="access"><option value="direct">直接获取</option><option value="coded">凭分享码获取</option></select></label></div>
+<h3>配方配置</h3><p id="scope-label" class="muted"></p><label>角色说明<textarea name="role" rows="5" placeholder="这个角色如何协助使用者？"></textarea></label>
+<details id="additional-notes" hidden><summary>补充说明</summary><div id="additional-notes-body"></div><button id="remove-legacy-notes" type="button">移除旧补充说明</button><p>保存后生效，已发布版本不受影响。</p></details>
+<p class="actions"><button type="submit">保存草稿</button><button type="button" id="review">预览发布</button></p></form>
+<section id="result" hidden><h2>已发布</h2><p><a id="published" href="/">查看社区详情</a></p><p id="initial-code"></p></section>
+<section id="records"><h2>我的发布</h2><p class="muted" id="record-note"></p><ul class="entries" id="history"></ul></section>
+<section id="codes" hidden><h2>分享码</h2><p id="code-for"></p><label>本次生成数量<input id="amount" type="number" min="1" max="100" value="1"></label><p><button type="button" id="issue">生成分享码</button></p><pre id="newcodes"></pre><ul id="code-list" class="entries"></ul><button type="button" id="more" hidden>更多分享码</button></section>
+</section><dialog id="confirm"><h2>确认发布到社区？</h2><p>确认后，此版本不能修改。</p><dl id="preview"></dl><div class="actions"><button type="button" id="back">返回编辑</button><button type="button" id="publish">确认发布</button></div></dialog></main></body></html>

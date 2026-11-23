@@ -117,8 +117,8 @@ it('uses 群组 as the primary destination while retaining project memory counts
   const shell = nodes(AppShell({page: 'collaboration', view: 'projects', title: '项目管理', newCounts: {bots: 1, projects: 3}, children: null, onNavigate: vi.fn(), onOpenList}));
   const nav = shell.find(node => node.props['aria-label'] === '主要导航')!;
   const buttons = nodes(nav.props.children).filter(node => node.type === 'button');
-  expect(buttons.map(button => [button.props.children].flat()[0])).toEqual(['此刻', 'Bot', '群组']);
-  buttons[2]!.props.onClick();
+  expect(buttons.map(button => [button.props.children].flat()[0])).toEqual(['此刻', '社区', 'Bot', '群组']);
+  buttons[3]!.props.onClick();
   expect(onOpenList).toHaveBeenCalledWith('groups');
-  expect(nodes(buttons[2]!.props.children).find(node => node.type === 'small')!.props.children.join('')).toBe('新记忆 3');
+  expect(nodes(buttons[3]!.props.children).find(node => node.type === 'small')!.props.children.join('')).toBe('新记忆 3');
 });

@@ -384,7 +384,7 @@ describe('the bot-session column (unit)', () => {
   // dm-agent 6.2. Every row, by name, so that a row added later is decided here and not by accident.
   it('refuses a private chat exactly what it may not do, saying where to do it, and takes the rest to its Bot process', async () => {
     const refused = new Set([
-      'command.registerAgent', 'command.refreshAgentCredentials', 'command.deleteAgent', 'command.restartHost',
+      'command.registerAgent', 'command.refreshAgentCredentials', 'command.deleteAgent', 'command.restartHost', 'command.readGroupIdentity',
       'machine.status', 'machine.service.install', 'machine.service.start', 'machine.service.stop', 'machine.service.uninstall', 'machine.setServiceSkipped',
       'machine.startHost', 'machine.stopHost', 'machine.checkCoreUpdate', 'machine.applyCoreUpdate', 'machine.coreUpdateStatus', 'machine.desktopUpdateReport',
       'machine.bridgeImport.detect', 'machine.bridgeImport.preflight', 'machine.bridgeImport.start', 'machine.bridgeImport.status', 'machine.bridgeImport.rollback',
@@ -394,6 +394,12 @@ describe('the bot-session column (unit)', () => {
       'admin.secrets', 'admin.setSecret', 'admin.removeSecret', 'admin.testSecret',
       'device.status', 'device.enable', 'device.disable', 'device.setPort', 'device.pair', 'device.clients', 'device.renameClient', 'device.revokeClient', 'device.rename',
       'settings.act.adminMember', 'memory.dmPeople',
+      'recipeInstall.richCancel','recipeInstall.richIssuing','recipeInstall.richReconcile','recipeInstall.richPrepare','recipeInstall.richCommit','recipeInstall.richStatus','recipeInstall.richSetup',
+      'recipeInstall.source', 'recipeInstall.createdGroup', 'recipeInstall.ignoreVersion',
+      'recipeInstall.prepare', 'recipeInstall.commit', 'recipeInstall.status', 'recipeInstall.cancel',
+      'recipeInstall.issuing', 'recipeInstall.reconcile',
+      ...'advance answerField beginLink cancel close confirmLink deliver edit groupSourceIdentity inspectCandidate inspectLink open operationSourceIdentity prepare reconcile resend resumeContext reviewSource settle status updateCard workflow richSourceOptions richInventory richPrepare richEdit richReadMember richMembers richBindMembers richInspect richAdvance'
+        .split(' ').map(type => 'recipeAuthoring.' + type),
     ]);
     const onHost = new Set(['snapshot.get', 'admin.negotiate', 'admin.daemonStatus']);
     for (const [kind, rule] of RULES) expect(rule.places.dm, kind).toBe(refused.has(kind) ? 'deny' : onHost.has(kind) ? 'host' : 'bot');
@@ -801,4 +807,9 @@ describe('a Bot session against the daemon', () => {
       await other.client.close();
     } finally { await fixture.close(); }
   });
+});
+
+
+it.each(['dm', 'group', 'comment'] as const)('keeps exact group identity reads owner-only in %s sessions', async place => {
+  expect(await authorize(peer(place), request('command', {type: 'readGroupIdentity', agentId: BOT, groupId: GROUP}), deps)).toMatchObject({ok: false});
 });
