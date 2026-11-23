@@ -121,7 +121,7 @@ export const desktopAuthoringReplySchema = z.discriminatedUnion('kind', [
     z.object({kind:z.literal('pending')}).strict(),
     z.object({kind:z.literal('published'),publication:authoringPublishedSchema}).strict(),
   ])}).strict(),
-  z.object({kind:z.literal('creatorContinuing'),accountId:uuid,viewId:viewIdSchema,botId:agentIdSchema}).strict(),
+  z.object({kind:z.literal('creatorContinuing'),accountId:uuid,viewId:viewIdSchema,botId:agentIdSchema,tenant:z.enum(['feishu','lark']),botName:name}).strict(),
   z.object({kind:z.literal('creatorSourceRequired'),options:z.array(creatorSource.extend({botName:name})).max(64)}).strict(),
   handoffUnavailableSchema,
   z.object({kind:z.literal('handoffRestored'),session:desktopAuthoringSessionSchema,handoff:authoringHandoffSchema}).strict(),

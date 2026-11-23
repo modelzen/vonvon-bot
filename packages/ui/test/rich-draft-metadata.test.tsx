@@ -89,7 +89,7 @@ it('reads complete rich content through five shared tabs without editing, publis
   }
   await click('能力'); expect(document.body.textContent).toContain('SETUP_SKILL_BODY');
   await click('沟通方式'); expect(document.body.textContent).toContain('语音回复');
-  await click('在飞书继续创作'); expect(resume).toHaveBeenCalledWith(draft);
+  await click('继续创作'); expect(resume).toHaveBeenCalledWith(draft);
   expect(requests).toEqual([{type: 'draft', accountId, draftId}]);
   expect(authoringRequests).toEqual([]);
 });
@@ -100,7 +100,7 @@ it('preserves complete legacy role data without conversion and names unnamed wor
   expect(document.querySelector('h1')?.textContent).toBe('未命名配方');
   expect(document.body.textContent).toContain('LEGACY_NOTES_KEEP');
   await click('能力'); expect(document.body.textContent).toContain('LEGACY_ROLE_KEEP');
-  await click('在飞书继续创作'); expect(resume).toHaveBeenCalledWith(draft);
+  await click('继续创作'); expect(resume).toHaveBeenCalledWith(draft);
   expect(requests.map(request => request.type)).toEqual(['draft']);
 });
 
@@ -109,12 +109,12 @@ it('refreshes only the exact draft and account and never accepts a read below th
   await saved(3, otherAccount); await saved(3, accountId, accountId);
   expect(requests).toHaveLength(1);
   draft = richDraft(2); await saved(3);
-  expect(button('在飞书继续创作').disabled).toBe(true);
+  expect(button('继续创作').disabled).toBe(true);
   expect(document.body.textContent).toContain('尚未读取到最新内容');
   await saved(2); expect(requests).toHaveLength(2);
   draft = richDraft(3, {name: '最新修订'}); await click('重新读取');
   expect(document.querySelector('h1')?.textContent).toBe('最新修订');
-  expect(button('在飞书继续创作').disabled).toBe(false);
+  expect(button('继续创作').disabled).toBe(false);
 });
 
 it('ignores a late older read and failure after a newer saved notification', async () => {
@@ -126,7 +126,7 @@ it('ignores a late older read and failure after a newer saved notification', asy
   await saved(3);
   await act(async () => finishOld(richDraft(2, {name: '过期读取'})));
   expect(document.querySelector('h1')?.textContent).toBe('第三次修订');
-  expect(button('在飞书继续创作').disabled).toBe(false);
+  expect(button('继续创作').disabled).toBe(false);
 });
 
 it('retains saved notifications received while the initial draft read is pending', async () => {
@@ -140,7 +140,7 @@ it('retains saved notifications received while the initial draft read is pending
   await act(async () => finishInitial(richDraft(1)));
   expect(document.querySelector('h1')).toBeNull();
   draft = richDraft(4); send = async () => draft; await click('重新读取');
-  expect(button('在飞书继续创作').disabled).toBe(false);
+  expect(button('继续创作').disabled).toBe(false);
 });
 
 it('leaves deleted or unreadable work visible only as stale content with continuation and deletion disabled', async () => {
@@ -149,7 +149,7 @@ it('leaves deleted or unreadable work visible only as stale content with continu
   await saved(2);
   expect(document.body.textContent).toContain('配方已删除');
   expect(document.querySelector('h1')?.textContent).toBe('产品群待办');
-  expect(button('在飞书继续创作').disabled).toBe(true);
+  expect(button('继续创作').disabled).toBe(true);
   expect(button('删除未发布配方').disabled).toBe(true);
   await click('返回我的配方'); expect(back).toHaveBeenCalledOnce();
 });
@@ -218,7 +218,7 @@ it('keeps the original displayed draft while recovering an uncertain publication
   await draw(); await click('发布到社区'); await click('确认发布');
   expect(document.body.textContent).toContain('正在核对发布结果');
   expect(button('发布到社区').disabled).toBe(true);
-  expect(button('在飞书继续创作').disabled).toBe(true);
+  expect(button('继续创作').disabled).toBe(true);
   await click('核对发布结果');
   expect(document.body.textContent).toContain('已发布到社区');
   expect(authoringRequests.filter(request => request.type === 'confirmPublication')).toEqual([

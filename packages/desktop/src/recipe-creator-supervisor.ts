@@ -1,7 +1,7 @@
 import {isDeepStrictEqual} from 'node:util';
 import {randomUUID} from 'node:crypto';
 import {z} from 'zod';
-import {deviceReplySchema,recipeAuthoringReplySchema,type DesktopAuthoringReply,type DesktopAuthoringRequest,type RecipeAuthoringRequest,type RecipeAuthoringReply,type RecipeDraft,type CreatorWork,type CreatorAnswer,type CreatorJob,type GroupId} from '@vonvon/protocol';
+import {desktopAuthoringReplySchema,deviceReplySchema,recipeAuthoringReplySchema,type DesktopAuthoringReply,type DesktopAuthoringRequest,type RecipeAuthoringRequest,type RecipeAuthoringReply,type RecipeDraft,type CreatorWork,type CreatorAnswer,type CreatorJob,type GroupId} from '@vonvon/protocol';
 import type {NativeAccount} from './account-session.js';
 import type {RecipeDeviceLease} from './recipe-use.js';
 import {RecipeAuthoringController} from './recipe-authoring.js';
@@ -365,6 +365,11 @@ export class RecipeCreatorSupervisor {
     const worker=await this.open(input.accountId,selected.viewId,selected.botId,expected);if(!worker)throw unavailable();
     check();
     worker.context.check();
+    const snapshot=await worker.source.client.snapshot();
+    worker.context.check();
+    const bot=snapshot.agents.find(bot=>bot.id===worker.association.botId);
+    if(snapshot.stale||snapshot.host.kind!=='connected'||!bot?.running||bot.connection!=='connected'||!bot.tenant)throw unavailable();
+    const continuation=desktopAuthoringReplySchema.parse({kind:'creatorContinuing',accountId:input.accountId,viewId:selected.viewId,botId:selected.botId,tenant:bot.tenant,botName:bot.name});
     const creatorHandle=worker.contextHandle;
     if(roleDraft){
       expect(await worker.context.rpc({type:'creatorContinue',botId:worker.association.botId,session:worker.session,
@@ -372,7 +377,7 @@ export class RecipeCreatorSupervisor {
     }else await this.authoring.creatorBegin(creatorHandle,input.entry);
     worker.context.check();
     if(input.entry.kind==='version')this.journal.rememberVersion(worker.association,input.entry.versionId);
-    return {kind:'creatorContinuing',accountId:input.accountId,viewId:selected.viewId,botId:selected.botId};
+    return continuation;
   }
   dispose(){if(this.stop.signal.aborted)return;this.invalidateReviews();this.stop.abort();clearInterval(this.reconnect);this.unsubscribe();for(const worker of this.workers.values())worker.stop();}
 }

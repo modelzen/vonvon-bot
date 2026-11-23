@@ -1407,7 +1407,7 @@ it('continues through the public shell IPC on its fixed local source after hide 
   h.account.request.mockImplementation(async()=>Response.json({accountId}));
   Object.assign(h.owner.client,{
     device:async()=>({kind:'deviceStatus',status:{device:{id:REMOTE_A,name:'本机',publicKey:Buffer.alloc(32,4).toString('base64url')},remote:{addresses:[],port:3000},clients:{active:1,total:1}}}),
-    snapshot:async()=>({agents:[{id:botId,name:'原 Bot'}],groups:[{id:groupId,name:'原群'}],memberships:[{agentId:botId,groupId}]}),
+    snapshot:async()=>({stale:false,host:{kind:'connected'},agents:[{id:botId,name:'原 Bot',running:true,connection:'connected',tenant:'feishu'}],groups:[{id:groupId,name:'原群'}],memberships:[{agentId:botId,groupId}]}),
     recipeAuthoring:async(r:RecipeAuthoringRequest):Promise<RecipeAuthoringReply>=>{
       calls.push(r);
       switch(r.type){
@@ -1425,7 +1425,7 @@ it('continues through the public shell IPC on its fixed local source after hide 
   });
   const {shell}=createDesktopFacades({invoke:(channel,...args)=>h.invoke(channel,...args),receive:()=>()=>{}});
   const input={type:'creatorContinue' as const,accountId,entry:{kind:'source' as const,viewId:'local',botId,groupId}};
-  expect(await shell.recipeAuthoring.request(input)).toEqual({kind:'creatorContinuing',accountId,viewId:'local',botId});
+  expect(await shell.recipeAuthoring.request(input)).toEqual({kind:'creatorContinuing',accountId,viewId:'local',botId,tenant:'feishu',botName:'原 Bot'});
   await shell.hideWindow();await h.devs.show(remoteView(REMOTE_A,remoteClient()));
   expect(await shell.recipeAuthoring.request(input)).toMatchObject({kind:'creatorContinuing',viewId:'local'});
   expect(calls.filter(r=>r.type==='creatorOpen')).toHaveLength(1);

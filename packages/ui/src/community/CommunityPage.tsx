@@ -8,7 +8,7 @@ import {Button, InlineNotice} from '../reference/components/ui';
 import {useShellCapabilities} from '../client-context';
 import {useAccount, accountStatusText} from '../account-context';
 import {useDraftGuard} from '../settings/DraftGuard';
-import {useCommunity, type CommunityRoute} from './community-context';
+import {useCommunity, type CommunityRoute, type RecipeWorkspaceTab} from './community-context';
 import {CopyButton, RecipeCard, RecipeDetails, RecipeMark} from './RecipeContent';
 import {RecipeDraftPage} from './RecipeDraftPage';
 import {RecipeAuthoringPage} from './authoring/RecipeAuthoring';
@@ -36,7 +36,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   const [preparation,setPreparation]=useState<{parent?:{recipeId:string;versionId:string};draft?:RecipeDraft}>();
   useEffect(()=>setPreparation(undefined),[route]);
   const [tab, setTab] = useState<'recipes' | 'rental'>('recipes');
-  const [workspaceTab, setWorkspaceTab] = useState<'drafts' | 'published'>('drafts');
+  const workspaceTab = route.kind === 'workspace' ? route.tab : undefined;
   const {generation: catalogGeneration, query, search, result: catalog} = community.catalog;
   const catalogHasRecipes = useRef(false);
   if (catalog?.hero || catalog?.items.length) catalogHasRecipes.current = true;
@@ -47,6 +47,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   const [library, setLibrary] = useState<CommunityResponses['library']>();
   const [drafts, setDrafts] = useState<CommunityResponses['drafts']['items']>();
   const [publications, setPublications] = useState<RecipeSummary[]>();
+  const workspaceReads = useRef(new Map<RecipeWorkspaceTab, number>());
   const [detail, setDetail] = useState<RecipeDetail>();
   const [shareUrl, setShareUrl] = useState<string>();
   const uncertainWithdrawals = useRef(new Set<string>());
@@ -100,14 +101,21 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
         setDetail(result);
         const link = await shell.request({type: 'shareLink', recipeId: route.recipe.recipeId, versionId: route.recipe.versionId});
         if (active && current === generation.current) setShareUrl(link.url);
-      } else if (accountId && route.kind === 'library') {
+      } else if (accountId && route.kind === 'workspace' && route.tab === 'acquired') {
+        if (workspaceReads.current.get(route.tab) === refresh) return;
         setBusy(true);
         const result = await shell.request({type: 'library', accountId});
-        if (active && current === generation.current) setLibrary(result);
+        if (active && current === generation.current) {setLibrary(result); workspaceReads.current.set(route.tab, refresh);}
       } else if (accountId && route.kind === 'workspace') {
+        if (workspaceReads.current.get(route.tab) === refresh) return;
         setBusy(true);
-        const [d, p] = await Promise.all([shell.request({type: 'drafts', accountId}), shell.request({type: 'publications', accountId})]);
-        if (active && current === generation.current) {setDrafts(d.items); setPublications(p.items);}
+        if (route.tab === 'drafts') {
+          const result = await shell.request({type: 'drafts', accountId});
+          if (active && current === generation.current) {setDrafts(result.items); workspaceReads.current.set(route.tab, refresh);}
+        } else {
+          const result = await shell.request({type: 'publications', accountId});
+          if (active && current === generation.current) {setPublications(result.items); workspaceReads.current.set(route.tab, refresh);}
+        }
       }
     };
     void request().catch(e => {if (active && current === generation.current) setError(e instanceof Error ? e.message : '读取未完成。');}).finally(() => {if (active && current === generation.current) setBusy(false);});
@@ -115,17 +123,19 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   }, [shell, accountId, route, search, refresh, route.kind === 'catalog' ? catalogGeneration : 0]);
   useEffect(() => authoring?.onSaved?.(event => {
     if (event.accountId !== accountId) return;
+    workspaceReads.current.delete('drafts');
     if (route.kind === 'workspace') setRefresh(value => value + 1);
     if (route.kind === 'draft' && route.draftId === event.draftId) setPreparation(current => current?.draft?.draftId === event.draftId && current.draft.revision < event.revision ? undefined : current);
   }), [authoring, accountId, route]);
   function published(event: AuthoringPublished) {
     if (!live.current || event.accountId !== accountId) return;
     invalidateCatalog();
+    workspaceReads.current.clear();
     const current = navigation.current;
     if (current.route.kind === 'workspace') setRefresh(value => value + 1);
     if (current.isOpen && current.route.kind === 'draft' && current.route.draftId === event.draftId) {
       setPreparation(undefined);
-      community.open({kind: 'detail', recipe: {recipeId: event.recipeId, versionId: event.versionId}, privateView: true});
+      community.open({kind: 'detail', recipe: {recipeId: event.recipeId, versionId: event.versionId}, privateView: true, from: 'published'});
     }
   }
   useEffect(() => authoring?.onPublished?.(published), [authoring, accountId]);
@@ -152,7 +162,8 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
         submitted.current.delete(selected.versionId);
         editCode(selected.versionId, '');
         setCodeDialog(false);
-        setNotice('已获取，已保存在你的账号中。可以稍后从「已获取」添加到群聊。');
+        workspaceReads.current.delete('acquired');
+        setNotice('已获取，已保存在你的账号中。可以稍后从「我的配方」的「已获取」添加到群聊。');
         community.onUse?.(next);
       }
       return next;
@@ -198,21 +209,22 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
     setDetail(next);
     uncertainWithdrawals.current.delete(selected.versionId);
     setWithdrawal('closed');
+    workspaceReads.current.delete('published');
     if (next.state === 'withdrawn') {
       setNotice('此版本已撤下。已有获取者仍可查看和重新添加，已安装的配置会保留。');
       invalidateCatalog();
     } else setNotice('已确认此版本仍在发布中。如需撤下，请重新确认。');
   }
   const login = <div className="community-empty"><h2>登录后继续</h2><p>{accountStatusText(account.status, account.supported)}</p><GlowButton variant="dark" disabled={!account.supported || account.status?.kind === 'signingIn'} onClick={() => void account.login()}>登录</GlowButton></div>;
-  const privatePage = route.kind === 'library' || route.kind === 'workspace' || route.kind === 'draft' || route.kind === 'detail' && route.privateView;
-  const sourceDialog = preparation && <RecipeAuthoringPage {...preparation} onBack={() => setPreparation(undefined)} onWorkspace={() => {setPreparation(undefined); open({kind: 'workspace'});}}/>;
-  if (route.kind === 'draft' && accountId) return <><RecipeDraftPage key={route.navigationId ?? route.draftId} shell={shell} accountId={accountId} draftId={route.draftId} expectedRevision={route.expectedRevision} onContinueInChat={authoring ? draft => setPreparation({draft}) : undefined} onPublished={published} onBack={() => open({kind: 'workspace'})}/>{sourceDialog}</>;
+  const privatePage = route.kind === 'workspace' || route.kind === 'draft' || route.kind === 'detail' && (route.privateView || route.from !== undefined);
+  const sourceDialog = preparation && <RecipeAuthoringPage {...preparation} onBack={() => setPreparation(undefined)} onWorkspace={() => {setPreparation(undefined); open({kind: 'workspace', tab: 'drafts'});}}/>;
+  if (route.kind === 'draft' && accountId) return <><RecipeDraftPage key={route.navigationId ?? route.draftId} shell={shell} accountId={accountId} draftId={route.draftId} expectedRevision={route.expectedRevision} onContinueInChat={authoring ? draft => setPreparation({draft}) : undefined} onPublished={published} onBack={() => open({kind: 'workspace', tab: 'drafts'})}/>{sourceDialog}</>;
   return <div className="community-page">
     {route.kind === 'catalog' && <header className="community-heading community-page-heading"><h1>社区</h1><nav className="community-tabs" aria-label="社区类型"><button type="button" aria-current={tab === 'recipes' ? 'page' : undefined} onClick={() => {setTab('recipes'); if (route.kind !== 'catalog') open({kind: 'catalog'});}}>Bot 配方</button><button type="button" aria-current={tab === 'rental' ? 'page' : undefined} onClick={() => {setTab('rental'); if (route.kind !== 'catalog') open({kind: 'catalog'});}}>Bot 租赁 <span>敬请期待</span></button></nav></header>}
-    {route.kind === 'catalog' && tab === 'recipes' && <div className="community-section-heading"><div><h2>{search ? '搜索结果' : catalog?.heroKind === 'featured' ? '场景精选' : '最新配方'}</h2>{!search && catalog?.heroKind === 'featured' && <p>Vonvon 编辑推荐</p>}</div><div className="community-actions"><Button variant="ghost" onClick={() => open({kind: 'library'})}><Bookmark size={14}/>已获取<ChevronRight size={12}/></Button><Button variant="ghost" onClick={() => open({kind: 'workspace'})}><NotebookPen size={14}/>我的配方<ChevronRight size={12}/></Button></div></div>}
-    {route.kind !== 'catalog' && <BackButton label={route.kind === 'detail' && route.from === 'library' ? '返回已获取' : '返回 Bot 配方'} onClick={() => {setTab('recipes'); open({kind: route.kind === 'detail' ? route.from ?? 'catalog' : 'catalog'});}}/>}
+    {route.kind === 'catalog' && tab === 'recipes' && <div className="community-section-heading"><div><h2>{search ? '搜索结果' : catalog?.heroKind === 'featured' ? '场景精选' : '最新配方'}</h2>{!search && catalog?.heroKind === 'featured' && <p>Vonvon 编辑推荐</p>}</div><div className="community-actions"><Button variant="ghost" onClick={() => open({kind: 'workspace', tab: 'acquired'})}><Bookmark size={14}/>已获取<ChevronRight size={12}/></Button><Button variant="ghost" onClick={() => open({kind: 'workspace', tab: 'acquired'})}><NotebookPen size={14}/>我的配方<ChevronRight size={12}/></Button></div></div>}
+    {route.kind !== 'catalog' && <BackButton label={route.kind === 'detail' && route.from ? '返回我的配方' : '返回 Bot 配方'} onClick={() => {setTab('recipes'); open(route.kind === 'detail' && route.from ? {kind: 'workspace', tab: route.from} : {kind: 'catalog'});}}/>}
     {error && <InlineNotice title="社区请求未完成" tone="warning" actions={<Button size="sm" onClick={() => {if (route.kind === 'catalog') community.setCatalog(old => ({...old, result: undefined})); setRefresh(old => old + 1);}}>重试读取</Button>}>{error}</InlineNotice>}
-    {notice && <InlineNotice title="操作完成">{notice}</InlineNotice>}
+    {notice && <InlineNotice title="操作完成" actions={detail?.acquired && !detail.owned ? <Button onClick={() => open({kind: 'workspace', tab: 'acquired'})}>查看已获取</Button> : undefined}>{notice}</InlineNotice>}
     {privatePage && !accountId ? login : <>
       {route.kind === 'catalog' && <>
 
@@ -224,13 +236,13 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
           {catalog?.nextCursor && <div><Button disabled={busy} onClick={() => void run(async () => {const current = generation.current; const next = await shell.request({type: 'catalog', ...(accountId ? {accountId} : {}), query: search, cursor: catalog.nextCursor!}); if (live.current && current === generation.current) setCatalog(old => old ? {...old, items: uniqueRecipes(old.items, next.items), nextCursor: next.nextCursor} : next);})}>加载更多</Button></div>}
         </>}
       </>}
-      {route.kind === 'library' && <section className="community-workspace-section"><h2>已获取</h2>{library?.items.length === 0 && <div className="community-empty"><h2>还没有获取配方</h2><p>从社区获取后，任何设备登录这个账号都可以继续使用。</p></div>}<div className="community-grid">{library?.items.map(recipe => <RecipeCard key={recipe.versionId} recipe={recipe} context="library" onOpen={() => open({kind: 'detail', recipe: {recipeId: recipe.recipeId, versionId: recipe.versionId}, from: 'library'})}/>)}</div>
-        {library?.nextCursor && <div><Button disabled={busy} onClick={() => void run(async () => {const current = generation.current; const next = await shell.request({type: 'library', accountId: accountId!, cursor: library.nextCursor!}); if (live.current && current === generation.current) setLibrary(old => old ? {...old, items: uniqueRecipes(old.items, next.items), nextCursor: next.nextCursor} : next);})}>加载更多</Button></div>}</section>}
       {route.kind === 'workspace' && <>
-        <div className="community-heading community-studio-heading"><div><h2>我的配方</h2><p>在私聊中创作和发布，在这里查看完整配置、管理版本与分享码。</p></div><div className="community-actions"><GlowButton variant="dark" onClick={() => setPreparation({})}>分享配方</GlowButton></div></div>
-        <nav className="community-workspace-tabs" aria-label="我的配方内容"><button type="button" aria-current={workspaceTab === 'drafts' ? 'page' : undefined} onClick={() => setWorkspaceTab('drafts')}>创作中 <span>{drafts?.length ?? 0}</span></button><button type="button" aria-current={workspaceTab === 'published' ? 'page' : undefined} onClick={() => setWorkspaceTab('published')}>已发布 <span>{publications?.length ?? 0}</span></button></nav>
-        <section hidden={workspaceTab !== 'drafts'} className="community-workspace-section">{drafts?.length === 0 && <p className="community-muted">还没有创作中的配方。可以直接在 Bot 私聊中开始，或从群聊分享配置。</p>}{Boolean(drafts?.length) && <div className="community-list">{drafts?.map(draft => <div className="community-list-row community-studio-row" key={draft.draftId}><RecipeMark name={draft.public.name}/><div><strong>{draft.public.name || '未命名配方'}</strong>{draft.public.summary && <p className="community-row-summary">{draft.public.summary}</p>}<small>{draft.public.version || '未指定版本'} · 创作中</small></div><Button onClick={() => open({kind: 'draft', draftId: draft.draftId})}>查看配方</Button></div>)}</div>}</section>
-        <section hidden={workspaceTab !== 'published'} className="community-workspace-section">{publications?.length === 0 && <p className="community-muted">发布后，你可以在这里维护版本和分享码。</p>}{Boolean(publications?.length) && <div className="community-list">{publications?.map(recipe => <div className="community-list-row community-studio-row" key={recipe.versionId}><RecipeMark name={recipe.public.name} logo={recipe.logo}/><div><strong>{recipe.public.name}</strong>{recipe.public.summary && <p className="community-row-summary">{recipe.public.summary}</p>}<small>{recipe.public.version} · {recipe.public.access === 'coded' ? '凭分享码获取' : '直接获取'}</small></div><Button onClick={() => open({kind: 'detail', recipe: {recipeId: recipe.recipeId, versionId: recipe.versionId}, privateView: true})}>管理此版本</Button></div>)}</div>}</section>
+        <div className="community-heading community-studio-heading"><div><h2>我的配方</h2><p>查看已获取的配方，继续创作，管理已发布版本与分享码。</p></div><div className="community-actions"><GlowButton variant="dark" onClick={() => setPreparation({})}>创作配方</GlowButton></div></div>
+        <nav className="community-workspace-tabs" aria-label="我的配方内容">{([['acquired', '已获取'], ['drafts', '创作中'], ['published', '已发布']] as const).map(([value, label]) => <button key={value} type="button" aria-current={workspaceTab === value ? 'page' : undefined} onClick={() => open({kind: 'workspace', tab: value})}>{label}</button>)}</nav>
+        <section hidden={workspaceTab !== 'acquired'} className="community-workspace-section">{library?.items.length === 0 && <div className="community-empty"><h2>还没有获取配方</h2><p>从社区获取后，任何设备登录这个账号都可以继续使用。</p></div>}<div className="community-grid">{library?.items.map(recipe => <RecipeCard key={recipe.versionId} recipe={recipe} context="library" onOpen={() => open({kind: 'detail', recipe: {recipeId: recipe.recipeId, versionId: recipe.versionId}, from: 'acquired'})}/>)}</div>
+        {library?.nextCursor && <div><Button disabled={busy} onClick={() => void run(async () => {const current = generation.current; const next = await shell.request({type: 'library', accountId: accountId!, cursor: library.nextCursor!}); if (live.current && current === generation.current) setLibrary(old => old ? {...old, items: uniqueRecipes(old.items, next.items), nextCursor: next.nextCursor} : next);})}>加载更多</Button></div>}</section>
+        <section hidden={workspaceTab !== 'drafts'} className="community-workspace-section">{drafts?.length === 0 && <p className="community-muted">还没有创作中的配方。点击「创作配方」，选择已有 Bot 和群聊，在私聊中开始。</p>}{Boolean(drafts?.length) && <div className="community-list">{drafts?.map(draft => <div className="community-list-row community-studio-row" key={draft.draftId}><RecipeMark name={draft.public.name}/><div><strong>{draft.public.name || '未命名配方'}</strong>{draft.public.summary && <p className="community-row-summary">{draft.public.summary}</p>}<small>{draft.public.version || '未指定版本'} · 创作中</small></div><Button onClick={() => open({kind: 'draft', draftId: draft.draftId})}>查看配方</Button></div>)}</div>}</section>
+        <section hidden={workspaceTab !== 'published'} className="community-workspace-section">{publications?.length === 0 && <p className="community-muted">发布后，你可以在这里维护版本和分享码。</p>}{Boolean(publications?.length) && <div className="community-list">{publications?.map(recipe => <div className="community-list-row community-studio-row" key={recipe.versionId}><RecipeMark name={recipe.public.name} logo={recipe.logo}/><div><strong>{recipe.public.name}</strong>{recipe.public.summary && <p className="community-row-summary">{recipe.public.summary}</p>}<small>{recipe.public.version} · {recipe.public.access === 'coded' ? '凭分享码获取' : '直接获取'}</small></div><Button onClick={() => open({kind: 'detail', recipe: {recipeId: recipe.recipeId, versionId: recipe.versionId}, privateView: true, from: 'published'})}>管理此版本</Button></div>)}</div>}</section>
       </>}
       {route.kind === 'detail' && detail && <>
         <RecipeDetails recipe={detail} share={shareUrl && <CopyButton key={shareUrl} value={shareUrl}/>} action={detail.owned || detail.acquired ? <GlowButton variant="dark" disabled={!community.onUse} onClick={() => community.onUse?.(detail)}>添加到群聊</GlowButton> : <GlowButton variant="dark" disabled={busy} onClick={() => {if (detail.public.access === 'coded' && accountId) {setError(undefined); setCodeDialog(true);} else void run(acquire);}}>获取配方</GlowButton>}

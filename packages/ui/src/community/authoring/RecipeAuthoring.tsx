@@ -1,5 +1,5 @@
 import {useEffect, useRef, useState, type ReactNode} from 'react';
-import type {AgentId, DesktopAuthoringReply, DesktopAuthoringRequest, DesktopSnapshot, GroupId, RecipeAuthoringShell, ViewId} from '@vonvon/protocol';
+import type {DesktopAuthoringReply, DesktopAuthoringRequest, DesktopSnapshot, RecipeAuthoringShell, RecipeDraft, ViewId} from '@vonvon/protocol';
 import {useAccount} from '../../account-context';
 import {useActiveDevice, useClient, useDevicesState, useShellCapabilities} from '../../client-context';
 import {GlowButton} from '../../GlowButton';
@@ -15,10 +15,8 @@ type SourceChoice = NonNullable<ContinueRequest['source']>;
 type Session = Extract<DesktopAuthoringReply, {kind: 'session'}>;
 type Challenge = Extract<DesktopAuthoringReply, {kind: 'challenge'}>;
 type Link = Extract<DesktopAuthoringReply, {kind: 'link'}>;
-export type AuthoringSource = {botId: AgentId; groupId: GroupId};
 type Props = {
-  source?: AuthoringSource;
-  draft?: {draftId: string; revision: number};
+  draft?: Pick<RecipeDraft, 'draftId' | 'revision' | 'public'>;
   parent?: {recipeId: string; versionId: string};
   onBack: () => void;
   onWorkspace: () => void;
@@ -27,7 +25,7 @@ type Flow =
   | {kind: 'pending'}
   | Extract<DesktopAuthoringReply, {kind: 'creatorSourceRequired' | 'creatorContinuing'}>
   | {kind: 'link'; session: Session; challenge: Challenge; link?: Link};
-const errorMessage = (reason: unknown) => reason instanceof Error ? reason.message : '暂时无法连接来源 Bot。';
+const errorMessage = (reason: unknown) => reason instanceof Error ? reason.message : '暂时无法连接来源 Bot，请重试。';
 const detach = (shell: RecipeAuthoringShell, handle: string) => void shell.request({type: 'detach', handle}).catch(() => {});
 
 function SourceDialog({title, onBack, footer, children}: {title: string; onBack: () => void; footer?: ReactNode; children: ReactNode}) {
@@ -48,45 +46,43 @@ function useSnapshot() {
 export function RecipeAuthoringPage(props: Props) {
   const account = useAccount(), device = useActiveDevice(), shell = useShellCapabilities()?.recipeAuthoring;
   const snapshot = useSnapshot();
-  const title = props.draft ? '在飞书继续创作' : props.parent ? '创作新版本' : '分享配方';
+  const title = props.draft ? '继续创作' : props.parent ? '创作新版本' : '创作配方';
   if (account.status?.kind !== 'signedIn') return <SourceDialog title={title} onBack={props.onBack} footer={<GlowButton variant="dark" disabled={!account.supported} onClick={() => void account.login()}>登录</GlowButton>}><p>登录后可以在自己的 Bot 私聊中创作和发布配方。</p></SourceDialog>;
   if (!shell) return <SourceDialog title={title} onBack={props.onBack}><p>此设备暂不支持私聊创作，请更新桌面应用。</p></SourceDialog>;
   const accountId = account.status.accountId;
-  const entry: ContinueRequest['entry'] | undefined = props.draft ? {kind: 'draft', draftId: props.draft.draftId, revision: props.draft.revision} : props.parent && !props.source ? {kind: 'version', ...props.parent} : undefined;
-  const scope = JSON.stringify([accountId, device.id, entry, props.source]);
+  const entry: ContinueRequest['entry'] | undefined = props.draft ? {kind: 'draft', draftId: props.draft.draftId, revision: props.draft.revision} : props.parent ? {kind: 'version', ...props.parent} : undefined;
+  const scope = JSON.stringify(entry ? [accountId, entry] : [accountId, device.id]);
   return entry
     ? <ContinueFlow key={scope} {...props} title={title} shell={shell} accountId={accountId} entry={entry} viewId={device.id} snapshot={snapshot}/>
     : <SourcePicker key={scope} {...props} title={title} shell={shell} accountId={accountId} viewId={device.id} snapshot={snapshot}/>;
 }
 
 function SourcePicker(props: Props & {title: string; shell: RecipeAuthoringShell; accountId: string; viewId: ViewId; snapshot?: DesktopSnapshot}) {
-  const {snapshot, source, viewId, title, onBack} = props;
-  const [botId, setBotId] = useState<AgentId>();
-  const [groupId, setGroupId] = useState<GroupId>();
-  const sourceIncarnation = useRef<string | undefined>(undefined);
+  const {snapshot, viewId, title, onBack} = props;
+  const [botId, setBotId] = useState<SourceChoice['botId']>();
+  const [groupId, setGroupId] = useState<Extract<ContinueRequest['entry'], {kind: 'source'}>['groupId']>();
   const [selection, setSelection] = useState<{entry: Extract<ContinueRequest['entry'], {kind: 'source'}>; incarnation: string}>();
   const bots = snapshot?.agents.filter(bot => bot.running) ?? [];
   const bindings = snapshot?.memberships.filter(binding => !binding.stale && binding.enabled && bots.some(bot => bot.id === binding.agentId) && snapshot.groups.some(group => group.id === binding.groupId)) ?? [];
   const availableBots = bots.filter(bot => bindings.some(binding => binding.agentId === bot.id));
-  const bot = availableBots.find(bot => bot.id === (source?.botId ?? botId ?? (availableBots.length === 1 ? availableBots[0]?.id : undefined)));
+  const bot = availableBots.find(bot => bot.id === (botId ?? (availableBots.length === 1 ? availableBots[0]?.id : undefined)));
   const memberships = bindings.filter(binding => binding.agentId === bot?.id);
-  const membership = memberships.find(binding => binding.groupId === (source?.groupId ?? groupId ?? (memberships.length === 1 ? memberships[0]?.groupId : undefined)));
+  const membership = memberships.find(binding => binding.groupId === (groupId ?? (memberships.length === 1 ? memberships[0]?.groupId : undefined)));
   const group = snapshot?.groups.find(group => group.id === membership?.groupId);
   const ready = snapshot?.host.kind === 'connected' && !snapshot.stale;
   const incarnation = JSON.stringify([bot?.registrationId, bot?.registeredAt, membership?.bindingIncarnation]);
-  const chosen = bot && group ? {kind: 'source', viewId, botId: bot.id, groupId: group.id, ...(props.parent && {parent: props.parent})} satisfies ContinueRequest['entry'] : undefined;
-  if (source && ready && chosen && sourceIncarnation.current === undefined) sourceIncarnation.current = incarnation;
-  const entry = source ? chosen : selection?.entry;
-  if (ready && entry && chosen && entry.botId === chosen.botId && entry.groupId === chosen.groupId && (!selection || selection.incarnation === incarnation) && (!source || sourceIncarnation.current === incarnation)) return <ContinueFlow {...props} entry={entry}/>;
-  const problem = !snapshot ? '正在读取 Bot 与群聊…' : !ready ? '来源设备暂不可用，请恢复连接后再试。' : source || selection ? '原 Bot 或群绑定已变化，请回到群组核对来源。' : !availableBots.length ? '当前设备没有可分享的群内 Bot。请先连接 Bot 与群聊。' : undefined;
-  return <SourceDialog title={title} onBack={onBack} footer={<><Button onClick={onBack}>取消</Button>{problem && ready ? <GlowButton variant="dark" onClick={() => {onBack(); window.dispatchEvent(new CustomEvent(OPEN_SETTING_EVENT, {detail: {page: 'collaboration', view: bots.length ? 'groups' : 'agents'}}));}}>前往{bots.length ? '群组' : 'Bot'}</GlowButton> : <GlowButton variant="dark" disabled={!chosen || Boolean(problem)} onClick={() => {if (chosen) setSelection({entry: chosen, incarnation});}}>在飞书继续</GlowButton>}</>}>
-    <p>选择要在私聊中整理和分享的群内 Bot 配置。</p>
+  const chosen = bot && group ? {kind: 'source', viewId, botId: bot.id, groupId: group.id} satisfies ContinueRequest['entry'] : undefined;
+  const entry = selection?.entry;
+  if (ready && entry && chosen && entry.botId === chosen.botId && entry.groupId === chosen.groupId && selection?.incarnation === incarnation) return <ContinueFlow {...props} entry={entry}/>;
+  const problem = !snapshot ? '正在读取 Bot 与群聊…' : !ready ? '来源设备暂不可用，请恢复连接后再试。' : selection ? '原 Bot 或群绑定已变化，请回到群组核对来源。' : !availableBots.length ? '当前设备没有可用于创作的群内 Bot。请先连接 Bot 与群聊。' : undefined;
+  return <SourceDialog title={title} onBack={onBack} footer={<><Button onClick={onBack}>取消</Button>{problem && ready ? <GlowButton variant="dark" onClick={() => {onBack(); window.dispatchEvent(new CustomEvent(OPEN_SETTING_EVENT, {detail: {page: 'collaboration', view: bots.length ? 'groups' : 'agents'}}));}}>前往{bots.length ? '群组' : 'Bot'}</GlowButton> : <GlowButton variant="dark" disabled={!chosen || Boolean(problem)} onClick={() => {if (chosen) setSelection({entry: chosen, incarnation});}}>前往私聊创作</GlowButton>}</>}>
+    <p>选择已有 Bot 和群聊，整理成自己的配方。</p>
     {problem ? <p role="status">{problem}</p> : <div className="recipe-source-fields"><label>Bot<select aria-label="配方来源 Bot" value={bot?.id ?? ''} onChange={event => {setBotId(availableBots.find(bot => bot.id === event.target.value)?.id); setGroupId(undefined);}}><option value="">选择 Bot</option>{availableBots.map(bot => <option key={bot.id} value={bot.id}>{bot.name}</option>)}</select></label><label>群聊<select aria-label="配方来源群聊" value={group?.id ?? ''} onChange={event => setGroupId(memberships.find(binding => binding.groupId === event.target.value)?.groupId)}><option value="">选择群聊</option>{memberships.map(binding => <option key={binding.groupId} value={binding.groupId}>{snapshot?.groups.find(group => group.id === binding.groupId)?.name}</option>)}</select></label></div>}
-    <p className="recipe-source-help">创作内容仅自己可见。在私聊中修改，再从卡片打开 App 预览，或直接确认发布。</p>
+    <p className="recipe-source-help">点击「前往私聊创作」后，Bot 会主动发送引导卡，并打开你与它的私聊。创作内容仅自己可见；首次使用需验证本人私聊。</p>
   </SourceDialog>;
 }
 
-function ContinueFlow({shell, accountId, entry, title, onBack, onWorkspace, viewId, snapshot}: Props & {shell: RecipeAuthoringShell; accountId: string; entry: ContinueRequest['entry']; title: string; viewId: ViewId; snapshot?: DesktopSnapshot}) {
+function ContinueFlow({shell, accountId, entry, title, draft, onBack, onWorkspace, viewId, snapshot}: Props & {shell: RecipeAuthoringShell; accountId: string; entry: ContinueRequest['entry']; title: string; viewId: ViewId; snapshot?: DesktopSnapshot}) {
   const capabilities = useShellCapabilities();
   const devices = useDevicesState();
   const [flow, setFlow] = useState<Flow>({kind: 'pending'});
@@ -104,6 +100,10 @@ function ContinueFlow({shell, accountId, entry, title, onBack, onWorkspace, view
     if (reply.kind === 'creatorContinuing' && (reply.accountId !== accountId || source && (reply.viewId !== source.viewId || reply.botId !== source.botId) || entry.kind === 'source' && (reply.viewId !== entry.viewId || reply.botId !== entry.botId))) throw new Error('私聊创作来源已变化，请重新核对。');
     if (reply.kind === 'creatorContinuing' && association.current) {detach(shell, association.current.handle); association.current = undefined;}
     setFlow(reply);
+    if (reply.kind === 'creatorContinuing') await openPrivateChat(reply);
+  }
+  async function openPrivateChat(target: Extract<DesktopAuthoringReply, {kind: 'creatorContinuing'}>) {
+    await openExternalUrl(botChatUrl(target.botId, target.tenant), 'bot-chat', capabilities);
   }
   async function associate(source: SourceChoice) {
     selectedSource.current = source;
@@ -161,7 +161,7 @@ function ContinueFlow({shell, accountId, entry, title, onBack, onWorkspace, view
   }
   const footer = flow.kind === 'creatorContinuing' ? <>
     <Button onClick={onWorkspace}>查看我的配方</Button>
-    <GlowButton variant="dark" onClick={onBack}>完成</GlowButton>
+    <GlowButton variant="dark" disabled={busy} onClick={() => void run(() => openPrivateChat(flow))}>打开 Bot 私聊</GlowButton>
   </> : flow.kind === 'link' ? <>
     <Button disabled={busy} onClick={onBack}>稍后继续</Button>
     {tenant && <Button onClick={() => void run(() => openExternalUrl(botChatUrl(flow.session.target.botId, tenant), 'bot-chat', capabilities))}>打开 Bot 私聊</Button>}
@@ -174,10 +174,12 @@ function ContinueFlow({shell, accountId, entry, title, onBack, onWorkspace, view
     {(error || flow.kind === 'creatorSourceRequired' && !flow.options.length) && <GlowButton variant="dark" disabled={busy} onClick={() => void run(start)}>重试连接</GlowButton>}
   </>;
   return <SourceDialog title={title} onBack={onBack} footer={footer}>
+    {draft && <p>配方：{draft.public.name || '未命名配方'}</p>}
     {flow.kind === 'pending' && <p role="status">{busy ? '正在连接私聊创作…' : '私聊连接尚未完成。'}</p>}
     {flow.kind === 'creatorContinuing' && <>
-      <p>可以回到 Bot 私聊继续创作。</p>
-      <p className="recipe-source-help">在私聊中修改内容，再从卡片打开 App 查看完整预览，或直接确认发布。App 预览页也可以发布。未发布内容会保存在「我的配方」。</p>
+      <p>Bot 已发送创作引导卡。请在「{flow.botName}」的本人私聊中继续创作。</p>
+      <p className="recipe-source-help">来源设备：{devices?.devices.find(device => device.id === flow.viewId)?.name ?? (flow.viewId === 'local' ? '这台电脑' : '原来源设备')}</p>
+      <p className="recipe-source-help">在私聊中修改内容，再从卡片打开 App 查看完整预览，或直接确认发布。App 预览页也可以发布。未发布内容会保存在「我的配方」的「创作中」。关闭此窗口后仍可在私聊继续。</p>
     </>}
     {flow.kind === 'creatorSourceRequired' && <>
       <p>这份作品尚未找到确切的来源。请选择已关联的 Bot，继续由本人核对。</p>

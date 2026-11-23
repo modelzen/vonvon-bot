@@ -43,7 +43,7 @@ test('library cards describe an owned entry without asking for another code and 
 test('a library detail returns to that library while shared URLs remain the fixed version path', async t => {
   const h = await runtime(t, path + '?from=library');
   assert.equal(h.document.querySelector('a[aria-label="返回已获取"]').getAttribute('href'), '/library');
-  [...h.document.querySelectorAll('button')].find(button => button.textContent === '分享链接').click();
+  [...h.document.querySelectorAll('button')].find(button => button.textContent === '复制链接').click();
   await h.settle();
   assert.deepEqual(h.copied, ['https://recipes.example' + path]);
 });

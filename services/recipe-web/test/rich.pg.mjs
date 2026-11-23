@@ -97,7 +97,7 @@ test('real PostgreSQL API, member broker and shipped Web modules preserve rich s
   assert.equal(anonymous.window.document.querySelector('main script, main img[src="x"]'), null);
   assert.equal(anonymous.window.document.querySelector('main').innerHTML.includes('<script>alert(1)</script>'), false);
   assert.equal(anonymous.find('发布'), undefined); assert.equal(anonymous.find('管理分享码'), undefined);
-  await anonymous.click('分享链接');
+  await anonymous.click('复制链接');
   assert.equal(anonymous.window.document.querySelector('input[aria-label="手动复制"]').value, fixture.publicOrigin + directPath);
   const locked = await browser(t, fixture, codedPath);
   assert.equal(locked.find('能力'), undefined); assert.match(locked.text(), /获取此版本后/);
@@ -137,7 +137,7 @@ test('real PostgreSQL API, member broker and shipped Web modules preserve rich s
   assert.ok(publications.items.some(item => item.versionId === coded.versionId));
   const studio = await browser(t, fixture, '/studio', author);
   assert.equal(studio.window.document.querySelector('main h1').textContent, '在 Vonvon Bot 中创作');
-  assert.match(studio.text(), /草稿.*已发布版本.*分享码.*App/s);
+  assert.match(studio.text(), /已获取.*创作中.*已发布.*App/s);
   assert.equal(studio.window.document.querySelector('main form,main input,main textarea'), null);
   assert.deepEqual(studio.calls.map(call => call.path), ['/auth/session']);
   const authorDetail = await browser(t, fixture, codedPath, author);

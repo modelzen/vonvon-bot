@@ -48,8 +48,9 @@ function fixture(journal=new RecipeCreatorJournal()){
       default:throw Error('unexpected '+input.type);
     }
   });
+  const snapshot=vi.fn(async()=>({stale:false,host:{kind:'connected'},agents:[{id:botId,name:'原 Bot',running:true,connection:'connected',tenant:'feishu'}],memberships:[{agentId:botId,groupId}],groups:[{id:groupId,name:'原群'}]}));
   const client={recipeAuthoring:rpc,device:async()=>({kind:'deviceStatus',status:{device:{id:deviceId,name:'原设备',publicKey:deviceKey},remote:{addresses:[],port:3000},clients:{active:1,total:1}}}),
-    snapshot:async()=>({agents:[{id:botId,name:'原 Bot',running:true}],memberships:[{agentId:botId,groupId}],groups:[{id:groupId,name:'原群'}]})} as unknown as VonvonClient;
+    snapshot} as unknown as VonvonClient;
   const references:Array<{owner:AbortController;release:ReturnType<typeof vi.fn>}> = [];
   const retain=vi.fn(async(viewId:string,signal:AbortSignal):Promise<CreatorSourceLease>=>{
     const owner=new AbortController(),release=vi.fn(()=>owner.abort()),activeSignal=AbortSignal.any([signal,owner.signal]);references.push({owner,release});
@@ -68,7 +69,7 @@ function fixture(journal=new RecipeCreatorJournal()){
   const published=vi.fn();
   const executor=new RecipeCreatorExecutor(account,journal,metadata,history,published);
   const build=(sources:string[]=[],records=journal)=>{const supervisor=new RecipeCreatorSupervisor(account,retain,()=>sources,records,history,authoring,records===journal?executor:new RecipeCreatorExecutor(account,records,metadata,history,published));cleanup.push(()=>supervisor.dispose());return supervisor;};
-  return {accountId,other,botId,groupId,deviceId,deviceKey,account,authoring,history,journal,published,request,references,retain,rpcs,rpc,sessions,operations,build,
+  return {accountId,other,botId,groupId,deviceId,deviceKey,account,authoring,history,journal,published,request,references,retain,rpcs,rpc,sessions,operations,build,snapshot,
     privateHandoff(){handoff={retryId:randomUUID(),ref:randomUUID(),generation:1,lease:'a'.repeat(64),versions:[randomUUID()]};return handoff;},
     changeIdentity(){groupIdentity='e'.repeat(64);},
     switchAccount(){signals.get(active)!.abort();active=other;for(const listener of listeners)listener();},
@@ -125,7 +126,7 @@ it('discovers an existing rich draft original source by exact authenticated oper
     throw Error(path);
   });
   expect(f.history.history.locator(f.accountId,preparationId)).toBeUndefined();
-  expect(await supervisor.continue({type:'creatorContinue',accountId:f.accountId,entry:{kind:'draft',draftId,revision:2}})).toEqual({kind:'creatorContinuing',accountId:f.accountId,viewId:'local',botId:f.botId});
+  expect(await supervisor.continue({type:'creatorContinue',accountId:f.accountId,entry:{kind:'draft',draftId,revision:2}})).toEqual({kind:'creatorContinuing',accountId:f.accountId,viewId:'local',botId:f.botId,tenant:'feishu',botName:'原 Bot'});
   expect(f.history.history.locator(f.accountId,preparationId)).toMatchObject({deviceId:f.deviceId,deviceKey:f.deviceKey,botId:f.botId,groupId:f.groupId,identity:'d'.repeat(64)});
   expect(f.rpcs.find(r=>r.type==='beginDraftHandoff')).toMatchObject({session:f.sessions.get(f.accountId),draftId,baseRevision:2,groupId:f.groupId,
     source:{sourceIntentId:preparationId,canonical:Buffer.from(document.canonicalUTF8).toString('base64url')}});
@@ -156,7 +157,7 @@ async function existingRichDraft(state:'waiting'|'candidate'='waiting'){
 it.each(['waiting','candidate'] as const)('continues the exact existing rich %s operation without starting another private handoff',async(state)=>{
   const f=await existingRichDraft(state),{operation,draftId,preparationId}=f;
   const before=structuredClone(operation);
-  expect(await f.continueDraft()).toEqual({kind:'creatorContinuing',accountId:f.accountId,viewId:'local',botId:f.botId});
+  expect(await f.continueDraft()).toEqual({kind:'creatorContinuing',accountId:f.accountId,viewId:'local',botId:f.botId,tenant:'feishu',botName:'原 Bot'});
   expect(f.rpcs.filter(r=>r.type==='beginDraftHandoff')).toEqual([]);
   expect(f.rpcs.filter(r=>r.type==='resumeContext')).toEqual([{type:'resumeContext',botId:f.botId,session:f.sessions.get(f.accountId),operationId:operation.operationId}]);
   expect(f.rpcs.find(r=>r.type==='creatorContinue')).toMatchObject({selection:{kind:'draft',work:{draftId,source:{preparationId,groupId:f.groupId,identity:'d'.repeat(64)}},name:'原草稿',version:'1.1'}});
@@ -393,4 +394,41 @@ it('APP PUBLICATION gives controlled source recovery guidance without exposing t
   expect(error).toBeInstanceOf(AuthoringError);
   if(!(error instanceof AuthoringError))throw Error('expected safe authoring failure');
   expect(error.message).toContain('保持原来源 Bot 在线');expect(error.message).not.toContain('private-secret');
+});
+
+it('returns the original source Bot tenant and name validated before starting a creator handoff',async()=>{
+  const f=fixture(),supervisor=f.build();
+  const original=await f.snapshot();
+  f.snapshot.mockResolvedValue({...original,agents:[{...original.agents[0]!,tenant:'lark',name:'原 Lark Bot'}]});
+  const reply=await supervisor.continue({type:'creatorContinue',accountId:f.accountId,entry:{kind:'source',viewId:'local',botId:f.botId,groupId:f.groupId}});
+  expect(reply).toEqual({kind:'creatorContinuing',accountId:f.accountId,viewId:'local',botId:f.botId,tenant:'lark',botName:'原 Lark Bot'});
+  const started=f.rpc.mock.calls.findIndex(([request])=>request.type==='beginHandoff');
+  expect(started).toBeGreaterThanOrEqual(0);
+  expect(f.snapshot.mock.invocationCallOrder.at(-1)).toBeLessThan(f.rpc.mock.invocationCallOrder[started]!);
+});
+it.each(['readFailure','missingBot','stoppedBot','disconnectedBot','missingTenant','staleSnapshot','disconnectedSource','invalidName'])('stops %s before a new creator card or handoff is sent',async failure=>{
+  const f=fixture(),supervisor=f.build();
+  await supervisor.associated(f.accountId,'local',f.botId);
+  const next=await f.snapshot();
+  if(failure==='readFailure')f.snapshot.mockRejectedValueOnce(new Error('Synthetic source snapshot failure'));
+  else{
+    if(failure==='missingBot')next.agents=[];
+    if(failure==='stoppedBot')next.agents[0]!.running=false;
+    if(failure==='disconnectedBot')next.agents[0]!.connection='disconnected';
+    if(failure==='missingTenant')Reflect.deleteProperty(next.agents[0]!,'tenant');
+    if(failure==='staleSnapshot')next.stale=true;
+    if(failure==='disconnectedSource')next.host.kind='disconnected';
+    if(failure==='invalidName')next.agents[0]!.name='';
+    f.snapshot.mockResolvedValueOnce(next);
+  }
+  await expect(supervisor.continue({type:'creatorContinue',accountId:f.accountId,entry:{kind:'source',viewId:'local',botId:f.botId,groupId:f.groupId}})).rejects.toThrow();
+  expect(f.rpcs.filter(request=>['creatorContinue','beginHandoff','beginDraftHandoff'].includes(request.type))).toEqual([]);
+});
+it('rechecks the original account lease after metadata arrives before sending a creator card',async()=>{
+  const f=fixture(),supervisor=f.build();
+  await supervisor.associated(f.accountId,'local',f.botId);
+  const next=await f.snapshot();
+  f.snapshot.mockImplementationOnce(async()=>{f.switchAccount();return next;});
+  await expect(supervisor.continue({type:'creatorContinue',accountId:f.accountId,entry:{kind:'source',viewId:'local',botId:f.botId,groupId:f.groupId}})).rejects.toThrow();
+  expect(f.rpcs.filter(request=>['creatorContinue','beginHandoff','beginDraftHandoff'].includes(request.type))).toEqual([]);
 });
