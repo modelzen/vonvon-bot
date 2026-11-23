@@ -3,6 +3,8 @@ import { identityFromRequest } from './auth.mjs';
 import { ApiError, badInput } from './errors.mjs';
 import { bodyJson, checkDraft, expectedRevision, objectKeys, queryParams, requestKey, uuid } from './input.mjs';
 import { codeAttempts } from './limiter.mjs';
+import { operationInput } from './operation-input.mjs';
+import { authoringInput, checkDraftPatch } from './authoring-input.mjs';
 
 const endpoints = [
   ['GET', '/me', 'me'],
@@ -16,14 +18,26 @@ const endpoints = [
   ['PATCH', '/drafts/:d', 'editDraft'],
   ['DELETE', '/drafts/:d', 'deleteDraft'],
   ['POST', '/drafts/:d/publish', 'publishDraft'],
+  ['POST', '/drafts/:d/patch', 'patchDraft'],
   ['POST', '/versions/:v/acquire', 'direct'],
   ['POST', '/versions/:v/redeem', 'redeem'],
   ['POST', '/versions/:v/codes', 'issueCodes'],
   ['GET', '/versions/:v/codes', 'listCodes'],
   ['POST', '/codes/:c/disable', 'disableCode'],
   ['POST', '/codes/:c/reveal', 'revealCode'],
+  ['GET', '/versions/:v/install-preview', 'installPreview'],
+  ['POST', '/operations/:o/authorize', 'authorizeOperation'],
+  ['POST', '/operations/:o/cancel', 'cancelOperation'],
+  ['POST', '/operations/:o/redeem', 'redeemOperation', 'possession'],
+  ['POST', '/operations/:o/complete', 'completeOperation', 'possession'],
+  ['POST', '/authoring/:o/register', 'registerAuthoring'],
+  ['GET', '/authoring/:o', 'getAuthoring'],
+  ['POST', '/authoring/:o/cancel', 'cancelAuthoring'],
+  ['POST', '/authoring/:o/authorize', 'authorizeAuthoring'],
+  ['POST', '/authoring/:o/dispatch', 'dispatchAuthoring', 'possession'],
+  ['POST', '/authoring/:o/accept', 'acceptAuthoring', 'possession'],
 ].map(([method, path, action, isPublic = false]) => ({
-  method, action, isPublic, regex: new RegExp('^(?:/api)?/v1' + path.replace(/:[rvdc]/g, '([^/]+)') + '$'),
+  method, action, isPublic, regex: new RegExp('^(?:/api)?/v1' + path.replace(/:[rvdco]/g, '([^/]+)') + '$'),
 }));
 
 function identify(req, url) {
@@ -36,13 +50,21 @@ function identify(req, url) {
 
 async function inputFor(req, url, {action, ids}) {
   const { q, cursor } = queryParams(url, action === 'catalog' ? ['q','cursor'] : ['listCodes','library'].includes(action) ? ['cursor'] : []);
+  if (action.endsWith('Authoring')) return [action, authoringInput(action, ids[0],
+    req.method === 'GET' ? {} : await bodyJson(req, action === 'acceptAuthoring' ? 196608 : 2048))];
   if (req.method === 'GET') {
     if (action === 'catalog') return [action, [q, cursor]];
     if (action === 'listCodes' || action === 'library') return [action, [...ids, cursor]];
     return [action, ids];
   }
+  if (action.endsWith('Operation')) return [action, operationInput(action, ids[0], await bodyJson(req, 2048))];
   const key = requestKey(req);
   const body = await bodyJson(req);
+  if (action === 'patchDraft') {
+    checkDraftPatch(body);
+    if (body.draftId !== ids[0]) throw badInput();
+    return [action,[ids[0],body,key]];
+  }
   if (action === 'createDraft' || action === 'editDraft') {
     const isNew = action === 'createDraft';
     checkDraft(body, isNew);
@@ -109,7 +131,8 @@ export function createRecipeServer({ verify, execute, attempts = codeAttempts() 
         if (!req.url.startsWith('/') || req.url.startsWith('//')) throw badInput();
         const url = new URL(req.url, 'http://localhost');
         const route = identify(req, url);
-        const identity = await identityFromRequest(req, route.isPublic, verify);
+        if (route.isPublic === 'possession' && req.headersDistinct.authorization) throw badInput();
+        const identity = route.isPublic === 'possession' ? null : await identityFromRequest(req, route.isPublic, verify);
         const [operation, args] = await inputFor(req, url, route);
         if (route.action === 'redeem') finishAttempt = attempts.begin(identity.issuer + '\0' + identity.subject);
         const result = await execute(identity, operation, args);
