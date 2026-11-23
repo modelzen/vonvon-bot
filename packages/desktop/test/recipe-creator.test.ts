@@ -61,7 +61,8 @@ it('freezes every preview page once, binds access outside canonical, and serves 
   const answer=f.answers.at(-1);if(answer?.kind!=='snapshot')throw Error('snapshot');
   const digest=creatorSnapshotDigest(answer.snapshot),stored=f.journal.snapshot(digest)!;
   expect(stored.pages.flat().every(page=>page.length<=4096)).toBe(true);
-  expect(stored.pages[1]!.join('')).toBe(JSON.stringify(f.draft.config,null,2));
+  expect(answer.snapshot.sections[1]!.title).toBe('角色');
+  expect(stored.pages[1]!.join('')).toBe(f.draft.config.role);
   expect(creatorSnapshotDigest({...answer.snapshot,public:{...answer.snapshot.public,access:'direct'}})).not.toBe(digest);
   f.cloud.mockClear();
   await executor.run(f.context,f.set({kind:'read',read:{kind:'page',work,snapshotDigest:digest,section:1,page:2}},'read'));
@@ -172,7 +173,17 @@ it('verifies rich bytes and every part, retains the exact parent, and refuses me
   const publicText=(value:string)=>({itemId:randomUUID(),originId:randomUUID(),value});
   const file={itemId:randomUUID(),originId:randomUUID(),name:'SKILL.md',use:'skillDescription',text:{kind:'part' as const,objectId:partId}};
   const content={format:'rich-v2',schemaVersion:2,public:{name:publicText(f.publicValue.name),summary:publicText(f.publicValue.summary),overview:publicText('概览'),version:publicText('1.1')},
-    settings:[],rules:[],skills:[{itemId:randomUUID(),originId:randomUUID(),name:'示例技能',entryFileId:file.itemId,fileIds:[file.itemId]}],files:[file],tasks:[],memories:[] as unknown[],setup:[],parts:[{objectId:partId,kind:'text',sha256:creatorSha(text),bytes:Buffer.byteLength(text),mediaType:'text/plain;charset=utf-8'}]};
+    role:{itemId:randomUUID(),originId:randomUUID(),text:{kind:'inline',value:'你是可靠的研究助手。'}},
+    settings:[{...publicText(''),field:'sessionMode',value:'smart'},
+      {...publicText(''),field:'response.noMention',value:false},
+      {...publicText(''),field:'presentation.completionTemplate',value:null},
+      {...publicText(''),field:'model.recommendation',value:{backend:'custom-backend',selection:{kind:'explicit',model:'default',effort:'high',custom:true}}}],
+    rules:[{itemId:randomUUID(),originId:randomUUID(),purpose:'work',text:{kind:'inline',value:'保留证据来源。'}}],
+    skills:[{itemId:randomUUID(),originId:randomUUID(),name:'示例技能',entryFileId:file.itemId,fileIds:[file.itemId]}],files:[file],
+    tasks:[{itemId:randomUUID(),originId:randomUUID(),name:'每周回顾',instruction:{kind:'inline',value:'整理本周事项，不要发送。'},
+      spec:{kind:'weekly',days:[1,5],time:'18:30'},timeZone:{kind:'recommended',iana:'Asia/Shanghai'},placement:'newTopic'}],
+    memories:[] as unknown[],setup:[{itemId:randomUUID(),originId:randomUUID(),kind:'tool',title:'可选工具说明',instructions:'按需要安装。',required:false,check:'查看版本号',action:{kind:'manual'}}],
+    parts:[{objectId:partId,kind:'text',sha256:creatorSha(text),bytes:Buffer.byteLength(text),mediaType:'text/plain;charset=utf-8'}]};
   let document=canonicalizeRichRecipeContent(content),corrupt=false;
   f.cloud.mockImplementation(async(_id,path)=>{
     const manifest={objectId:manifestId,kind:'manifest',sha256:creatorSha(document.canonicalUTF8),bytes:document.canonicalUTF8.length,mediaType:'application/json'};
@@ -187,7 +198,19 @@ it('verifies rich bytes and every part, retains the exact parent, and refuses me
   const frozen=f.answers.at(-1);expect(frozen).toMatchObject({kind:'snapshot',snapshot:{parent:{recipeId:f.recipeId,versionId:f.versionId},parts:content.parts}});
   if(frozen?.kind!=='snapshot')throw Error('snapshot');
   const saved=f.journal.snapshot(creatorSnapshotDigest(frozen.snapshot))!;
-  expect(saved.pages.flat().join('')).toContain(text);
+  const readable=saved.pages.map(section=>section.join('')).join('\n');
+  expect(saved.canonical).toBe(Buffer.from(document.canonicalUTF8).toString('base64url'));
+  expect(frozen.snapshot.contentSha256).toBe(creatorSha(document.canonicalUTF8));
+  expect(frozen.snapshot.sections.map(section=>section.title)).toContain('补充说明');
+  const bodySection=frozen.snapshot.sections.findIndex(section=>section.title==='SKILL.md');
+  expect(bodySection).toBeGreaterThanOrEqual(0);
+  expect(saved.pages[bodySection]!.join('')).toBe(text);
+  for(const value of ['你是可靠的研究助手。','会话模式','智能会话','无需提及 Bot','关闭','完成通知模板','未指定',
+    '推荐模型','custom-backend','default','high','保留证据来源。','示例技能','SKILL.md','技能说明',
+    '每周回顾','整理本周事项，不要发送。','每周','18:30','Asia/Shanghai','新话题','可选工具说明','按需要安装。','查看版本号'])expect(readable).toContain(value);
+  for(const internal of ['itemId','originId','objectId','sha256',file.itemId,partId,creatorSha(text)])expect(readable).not.toContain(internal);
+  expect(readable).toContain('安装后暂停');
+  expect(readable).not.toContain('准备步骤');
   corrupt=true;
   await f.build().run(f.context,f.set({kind:'read',read:{kind:'draft',work}},'read'));
   expect(f.answers.at(-1)).toEqual({kind:'rejected',reason:'unavailable'});
