@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {agentIdSchema,type RecipeAuthoringRequest,type RecipeAuthoringReply,type AuthoringHandoff} from '@vonvon/protocol';
 import type {z} from 'zod';
-import {AuthoringJournal,sameRecipient,type AuthoringLedger,type Link,type Recipient} from './authoring-journal';
+import {AuthoringJournal,linkKey,sameRecipient,selectCreatorBinding,type AuthoringLedger,type Link,type Recipient} from './authoring-journal';
 import {AuthoringIm,candidateConfirmation} from './authoring-im';
 import {groupSourceIdentity} from './authoring-source';
 import {preparedRich,readRichSource,richSkillOptions,typedRichEdit,richCardReview,type RichNativeOptions,type RichLocalDraft} from './authoring-rich-flow';
@@ -13,7 +13,7 @@ type Restore=Extract<RecipeAuthoringRequest,{type:'restoreHandoff'}>;
 type Answer=Extract<RecipeAuthoringRequest,{type:'answerHandoff'}>;
 type Presence={session:string;account:string;scope:string};
 type Target={rich:RichLocalDraft;sourceIdentity:string;draftId?:string;baseRevision?:number;instructionId:string;
-  handoff:{id:string;ref:string;groupId:string};sourceCard:{cardId:string;messageId:string;createdAt:number;seq:number}};
+  handoff:{id:string;ref:string;groupId:string;generation:number;cardId:string;messageId:string};sourceCard:{cardId:string;messageId:string;createdAt:number;seq:number}};
 type Start=(target:Target)=>Promise<RecipeAuthoringReply>;
 const changed=()=>new Error('身份或群来源已变化，请回到 App 重新准备。');
 function bound(h:PrivateHandoff,p:Presence,link:Link){
@@ -33,13 +33,23 @@ export class PrivateHandoffs {
     return this.ledger.run(db=>{
       this.live(p);
       const h=db.handoffs?.[id];
-      if(!h||!bound(h,p,link)||!Object.values(db.links).some(l=>l.binding===link.binding&&sameRecipient(l.recipient,link.recipient)))throw changed();
+      const actual=db.links[linkKey(p.scope,p.account)];
+      if(!h||!bound(h,p,link)||actual?.bot!==link.bot||actual.binding!==link.binding||!sameRecipient(actual.recipient,link.recipient))throw changed();
       return edit(h);
     });
   }
-  private async save(p:Presence,link:Link,h:PrivateHandoff,previous:string){
-    return this.transaction(p,link,h.retryId,row=>{
-      if(row.ref!==previous||row.expiresAt<=this.now()||row.phase.state==='cancelled')throw changed();
+  private async save(p:Presence,link:Link,h:PrivateHandoff,previous:string,click?:PrivateHandoff,select?:(db:AuthoringLedger,actual:Link)=>void){
+    return this.ledger.run(db=>{
+      this.live(p);
+      const actual=db.links[linkKey(p.scope,p.account)],row=db.handoffs?.[h.retryId];
+      if(!actual||actual.bot!==link.bot||actual.binding!==link.binding||!sameRecipient(actual.recipient,link.recipient)||!row||!bound(row,p,actual)||
+        row.ref!==previous||row.expiresAt<=this.now()||row.phase.state==='cancelled')throw changed();
+      if(click&&(row.phase.state!=='selecting'||row.session!==p.session||row.generation!==click.generation||row.cardId!==click.cardId||row.messageId!==click.messageId))throw changed();
+      if(select){
+        if(!active(h)||h.session!==p.session)throw changed();
+        select(db,actual);selectCreatorBinding(db,actual,this.now());
+      }
+      if(click&&h.phase.state==='awaitingAttestations')selectCreatorBinding(db,actual,this.now());
       Object.assign(row,h);
       if(!h.edit)delete row.edit;
       return row;
@@ -161,7 +171,7 @@ export class PrivateHandoffs {
       throw error;
     }
   }
-  private async resumeExisting(p:Presence,link:Link,h:PrivateHandoff){
+  private async resumeExisting(p:Presence,link:Link,h:PrivateHandoff,select?:(db:AuthoringLedger,actual:Link)=>void){
     if(!active(h))return publicView(h);
     if(hasLegacyMemoryChoices(h)){
       const before=h.ref;
@@ -178,12 +188,13 @@ export class PrivateHandoffs {
       else await this.choices(p,h);
       h=await this.save(p,link,h,before);
     }else if(!h.cardId){await this.choices(p,h);h=await this.save(p,link,h,h.ref);}
+    if(select){const before=h.ref;rotate(h);h=await this.save(p,link,h,before,undefined,select);}
     return publicView(await this.send(p,link,h));
   }
-  async continuePrivate(p:Presence,link:Link,id:string){
+  async continuePrivate(p:Presence,link:Link,id:string,select:(db:AuthoringLedger,actual:Link)=>void){
     const row=await this.transaction(p,link,id,h=>{if(!h.creator||!active(h)||h.expiresAt<=this.now())throw changed();return h;});
     await this.identity(p,row);
-    return this.resumeExisting(p,link,row);
+    return this.resumeExisting(p,link,row,select);
   }
   async status(p:Presence,link:Link,id:string,cancel:boolean){
     const h=await this.transaction(p,link,id,row=>{
@@ -202,7 +213,7 @@ export class PrivateHandoffs {
   private async start(p:Presence,link:Link,h:PrivateHandoff,rich:RichLocalDraft,start:Start){
     await this.identity(p,h);
     const reply=await start({rich,instructionId:h.retryId,sourceIdentity:h.identity,draftId:h.edit?.draftId,baseRevision:h.edit?.baseRevision,
-      handoff:{id:h.retryId,ref:h.ref,groupId:h.groupId},sourceCard:{cardId:h.cardId!,messageId:h.messageId!,createdAt:h.sentAt!,seq:h.generation}});
+      handoff:{id:h.retryId,ref:h.ref,groupId:h.groupId,generation:h.generation,cardId:h.cardId!,messageId:h.messageId!},sourceCard:{cardId:h.cardId!,messageId:h.messageId!,createdAt:h.sentAt!,seq:h.generation}});
     if(reply.kind!=='operation')throw changed();
     h.phase={state:'prepared',operationId:reply.operation.operationId};delete h.edit;
     return publicView(h);
@@ -250,6 +261,7 @@ export class PrivateHandoffs {
     if(!await this.im.matches(messageId,recipient.chatId,h.cardId))return;
     interact();
     if(!h.messageId)h=await this.transaction(p,link,h.retryId,row=>{if(row.ref!==click.ref)throw changed();row.messageId=messageId;return row;});
+    const clicked=structuredClone(h);
     if(click.action==='cancel'){await this.status(p,link,h.retryId,true);return;}
     try{
       await this.identity(p,h);
@@ -273,7 +285,7 @@ export class PrivateHandoffs {
       }else{
         toggleChoice(h,click);await this.choices(p,h);rotate(h);
       }
-      await this.save(p,link,h,click.ref);await this.refresh(p,link,h);
+      await this.save(p,link,h,click.ref,clicked);await this.refresh(p,link,h);
     }catch(error){
       this.live(p);
       await this.im.reply(recipient.chatId,messageId,error instanceof Error&&/^(请选择|请先|本次选择|所选内容超过|每次最多)/.test(error.message)?error.message:'来源或卡片暂时无法核对，请从 App 继续本次准备。');

@@ -20,7 +20,7 @@ const cardActions = vi.spyOn(AuthoringService.prototype,'onAction');
 const { blankPublic, digest, dispatchDigest, freezePayload, makeAuthoringProof } = await import('../src/recipe/authoring-wire');
 const { createOrchestrator } = await import('../src/bot/handle-message');
 const { useBotDir, botPaths } = await import('../src/config/paths');
-const { addProject, mutateProjectByChatId, removeProject } = await import('../src/project/registry');
+const { addProject, getProjectByChatId, mutateProjectByChatId, removeProject } = await import('../src/project/registry');
 const bot = {appId:'cli_authoring', tenant:'feishu' as const, createdAt:1, registrationId:randomUUID()};
 const peer = {id:randomUUID(), device:randomUUID()}, otherPeer = {id:randomUUID(), device:'other-device'};
 const appId = bot.appId, groupId = groupIdSchema.parse('oc_source'), chatId = 'oc_private';
@@ -38,7 +38,8 @@ let bodies: {path:string;body:string}[], cloud: {action:string;body:Record<strin
 let messages: Map<string,{message_id:string;chat_id:string;card_id:string}>, cards: Map<string,string>;
 const textSend = vi.fn(async (..._args: unknown[])=>({messageId:'om_fixed'}));
 let loseSend = false, loseAccept = false, loseDispatch = false;
-let onMembership:(()=>void)|undefined;
+let onMembership:(()=>void|Promise<void>)|undefined;
+let onCardMatch:(()=>Promise<void>)|undefined;
 let privateLogo:Buffer|undefined;
 let updateFault: 'drop' | 'loseReply' | 'conflict' | 'expired' | undefined;
 const updateKeys = new Set<string>();
@@ -74,7 +75,7 @@ beforeEach(async () => {
   cardActions.mockClear();
   proposeRich.mockReset();
   propose.mockReset().mockRejectedValue(new Error('offline')); readDraftField.mockReset();
-  updateFault=undefined;updateKeys.clear();onMembership=undefined;
+  updateFault=undefined;updateKeys.clear();onMembership=undefined;onCardMatch=undefined;
   privateLogo=undefined;
   n = 0;clock=Date.now();bodies=[];cloud=[];messages=new Map();cards=new Map();results.clear();loseSend=loseAccept=loseDispatch=false;
   await rm(join(root,'recipe-authoring'),{recursive:true,force:true});
@@ -90,10 +91,11 @@ beforeEach(async () => {
     if(privateLogo&&path.includes('/resources/img_fixture')){res.writeHead(200,{'content-type':'image/png'}).end(privateLogo);return;}
     let value: unknown = {code:0,data:{}};
     if (path.includes('tenant_access_token')) value = {code:0,tenant_access_token:'synthetic-token',expire:7200};
-    else if (path.includes('is_in_chat')) {onMembership?.();value = {code:0,data:{is_in_chat:true}};}
+    else if (path.includes('is_in_chat')) {await onMembership?.();value = {code:0,data:{is_in_chat:true}};}
     else if (path === '/open-apis/cardkit/v1/cards' && req.method === 'POST') {
       const id = 'card_'+ ++n; cards.set(id,data.data); value = {code:0,data:{card_id:id}};
     } else if (path === '/open-apis/cardkit/v1/cards/id_convert') {
+      await onCardMatch?.();
       value = {code:0,data:{card_id:[...messages.values()].find(m => m.message_id === data.message_id)?.card_id}};
     } else if (path.startsWith('/open-apis/cardkit/v1/cards/') && req.method === 'PUT') {
       if (updateFault === 'drop') { res.destroy(); return; }
@@ -1512,17 +1514,293 @@ it.each(['original','draft','baseRevision','purpose','instruction','originalGrou
 });
 
 
-async function editHandoff(){
+async function editHandoff(withRole=false,baseRevision=4){
   const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
   const field=(value:string)=>({itemId:randomUUID(),originId:randomUUID(),value});
   const canonical=Buffer.from(canonicalizeRichRecipeContent({format:'rich-v2',schemaVersion:2,
     public:{name:field('周报'),summary:field(''),overview:field(''),version:field('1')},
+    ...(withRole&&{role:{itemId:randomUUID(),originId:randomUUID(),text:{kind:'inline' as const,value:sourceRole}}}),
     settings:[],files:[],skills:[],tasks:[],memories:[],rules:[],setup:[],parts:[]}).canonicalUTF8).toString('base64url');
   const identity=kind(await rpc('groupSourceIdentity',{groupId}),'groupSourceIdentity').identity;
-  const arg={...beginInput(),draftId:randomUUID(),baseRevision:4,identity,canonical,source:{sourceIntentId:randomUUID(),canonical}};
+  const arg={...beginInput(),draftId:randomUUID(),baseRevision,identity,canonical,source:{sourceIntentId:randomUUID(),canonical}};
   await rpc('beginDraftHandoff',arg);
   return arg;
 }
+
+it('routes an unquoted R1 version and role edit with four retained links through restricted authoring intake',async()=>{
+  await link();
+  const {AuthoringJournal,linkKey}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  await ledger.run(db=>{
+    const current=Object.values(db.links)[0]!;
+    for(let i=0;i<3;i++)db.links[linkKey('retained-'+i,randomUUID())]={...structuredClone(current),binding:randomUUID()};
+  });
+  const arg=await editHandoff(true,1);
+  await tap(privateChoice('☐ 版本'));await tap(privateChoice('☐ 群角色'));
+  await tap(privateChoice('确认本次修改范围'));
+  const handoff=kind(await rpc('handoffStatus',{retryId:arg.retryId}),'handoff').handoff;
+  const op=await status(handoff.operationId!);
+  await rpc('richAdvance',{operationId:op.operationId,destinationDraftId:arg.draftId,authorization:{...await auth(op,'dispatch'),format:'rich-v2'}});
+  const sourceBefore=await readFile(join(botPaths(appId).dir,'projects.json'),'utf8');
+  proposeRich.mockImplementationOnce(async(input:RichModelInput)=>({kind:'proposal',commands:input.selected.map((item,index)=>item.kind==='publicText'
+    ?{action:'setPublicText',target:'T'+(index+1),text:'1.1'}
+    :{action:'edit',target:'T'+(index+1),valueJson:JSON.stringify({kind:'inline',value:'周报编辑'})})}));
+  const accepted=vi.spyOn(service,'onMessage');
+  const ordinaryIntake=vi.spyOn(await import('../src/project/registry'),'rememberDmChat');
+  await orch.onMessage(msg('版本改成 1.1，群角色改成周报编辑，其他不变，先保存预览，不发布。'));
+  expect(ordinaryIntake).not.toHaveBeenCalled();ordinaryIntake.mockRestore();
+  expect(await accepted.mock.results.at(-1)!.value).toBe(true);
+  expect(proposeRich).toHaveBeenCalledTimes(1);
+  expect(proposeRich.mock.calls[0]![0].selected.map((item:RichModelInput['selected'][number])=>[item.kind,item.field])).toEqual([['publicText','version'],['role',undefined]]);
+  const candidate=kind(await rpc('richInspect',{operationId:op.operationId,preview:true}),'richCandidate').request;
+  expect(candidate).toMatchObject({payload:{baseRevision:1,changes:[{op:'setPublicText',field:'version',value:'1.1'},{op:'setRoleText',value:{kind:'inline',value:'周报编辑'}}]}});
+  expect(await getProjectByChatId(chatId)).toBeUndefined();
+  expect(cloud.map(c=>c.action)).toEqual(['dispatch']);
+  expect(await readFile(join(botPaths(appId).dir,'projects.json'),'utf8')).toBe(sourceBefore);
+  expect(await ledger.run(db=>Object.keys(db.links))).toHaveLength(4);
+});
+
+async function anotherAuthor(){
+  const author={id:randomUUID(),device:peer.device},accountId=randomUUID();
+  const opened=kind(await service.request(author,recipeAuthoringRequestSchema.parse({type:'open',botId:appId,accountId})),'session');
+  const request=(type:string,extra:object={})=>service.request(author,recipeAuthoringRequestSchema.parse({type,botId:appId,session:opened.session,...extra}));
+  const challenge=kind(await request('beginLink'),'challenge');
+  await service.onMessage(msg('/recipe link '+challenge.code));
+  const seen=kind(await request('inspectLink',{challengeId:challenge.challengeId}),'link');
+  await request('confirmLink',{challengeId:challenge.challengeId,evidence:seen.evidence});
+  return {author,accountId,request};
+}
+async function anotherRichDraft(canonical:string){
+  const other=await anotherAuthor(),draftId=randomUUID();
+  const {decodeRichRecipeContent}=await import('@vonvon/protocol');
+  const content=decodeRichRecipeContent(Buffer.from(canonical,'base64url')).content;
+  const op=kind(await other.request('richEdit',{draftId,baseRevision:1,canonical,selected:[content.public.name.itemId]}),'operation').operation;
+  await other.request('richAdvance',{operationId:op.operationId,destinationDraftId:draftId,authorization:{...await auth(op,'dispatch'),accountId:other.accountId,format:'rich-v2'}});
+  return {...other,op,draftId};
+}
+
+it.each([false,true])('keeps the newer account selected when a source or version attestation arrives late, inherited=%s',async(inherited)=>{
+  await link();
+  const {AuthoringJournal,linkKey}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  const arg=beginInput(),versionId=randomUUID();
+  await rpc('beginHandoff',{...arg,...(inherited&&{sourceVersionId:versionId,inherited:{accountId:account,versionId,public:{name:'旧版本',summary:'',overview:'',version:''},access:'direct'}})});
+  await tap(privateChoice('群角色'));await tap(privateChoice('确认所选来源'));
+  const request=kind(await rpc('workflow'),'workflow').handoff!;
+  expect(await ledger.run(db=>Object.values(db.links).filter(l=>l.creator?.chosenUntil).map(l=>l.binding))).toHaveLength(1);
+  const other=await anotherAuthor();
+  const selected=kind(await other.request('edit',{draftId:randomUUID(),baseRevision:1}),'operation').operation;
+  const selection=()=>ledger.run(db=>Object.entries(db.links).filter(([,l])=>(l.creator?.chosenUntil??0)>clock).map(([key])=>key));
+  const expected=await ledger.run(db=>linkKey(db.operations[selected.operationId]!.scope,other.accountId));
+  expect(await selection()).toEqual([expected]);
+  await rpc('answerHandoff',{request,attestations:[]});
+  await expect(rpc('answerHandoff',{request,attestations:[]})).rejects.toThrow();
+  expect(await selection()).toEqual([expected]);
+  expect(await service.onMessage(msg('今天天气如何'))).toBe(true);
+  expect(proposeRich).not.toHaveBeenCalled();
+});
+
+it('routes a quoted original to its account without replacing or renewing the newer default',async()=>{
+  const {op,content}=await richChatContext(['name']);
+  const {AuthoringJournal,linkKey}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  const first=await ledger.run(db=>db.operations[op.operationId]!);
+  const other=await anotherRichDraft(first.rich!.base!.canonical);
+  const before=await ledger.run(db=>db.links[linkKey(first.scope,other.accountId)]!.creator!.chosenUntil);
+  clock+=1000;
+  proposeRich.mockResolvedValueOnce({kind:'proposal',commands:[{action:'setPublicText',target:'T1',text:'只改甲'}]});
+  expect(await service.onMessage({...msg('名称改成只改甲'),replyToMessageId:first.carrier.messageId})).toBe(true);
+  expect(proposeRich).toHaveBeenCalledTimes(1);
+  expect(kind(await rpc('richInspect',{operationId:op.operationId,preview:true}),'richCandidate').request).toMatchObject({payload:{changes:[{op:'setPublicText',itemId:content.public.name.itemId,value:'只改甲'}]}});
+  expect(await ledger.run(db=>db.operations[other.op.operationId]!.rich!.request)).toBeUndefined();
+  expect(await ledger.run(db=>db.links[linkKey(first.scope,other.accountId)]!.creator!.chosenUntil)).toBe(before);
+  expect(await ledger.run(db=>db.links[linkKey(first.scope,account)]!.creator!.chosenUntil)).toBeUndefined();
+  const count=proposeRich.mock.calls.length;
+  expect(await service.onMessage({...msg('不要修改任何内容'),replyToMessageId:'om_unknown_card'})).toBe(true);
+  expect(proposeRich).toHaveBeenCalledTimes(count);expect(replies()).toContain('重发');
+});
+
+it.each(['missing','expired','ambiguous'] as const)('recovers a %s account selection with live edits instead of choosing a retained link',async(state)=>{
+  const {op}=await richChatContext();
+  const {AuthoringJournal,linkKey}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  const original=await ledger.run(db=>{
+    const row=db.operations[op.operationId]!,link=db.links[linkKey(row.scope,row.accountId)]!;
+    for(let i=0;i<3;i++)db.links[linkKey('old-'+i,randomUUID())]={...structuredClone(link),binding:randomUUID()};
+    for(const l of Object.values(db.links)){
+      delete l.creator?.chosenUntil;
+      if(state==='expired')l.creator!.chosenUntil=clock-1;
+    }
+    if(state==='ambiguous')for(const l of Object.values(db.links))l.creator!.chosenUntil=clock+60_000;
+    return row;
+  });
+  expect(await service.onMessage(msg('名称改成重新核验'))).toBe(true);
+  expect(proposeRich).not.toHaveBeenCalled();expect(replies()).toContain('重新选择账号');
+  proposeRich.mockResolvedValueOnce({kind:'proposal',commands:[{action:'setPublicText',target:'T1',text:'引用继续'}]});
+  expect(await service.onMessage({...msg('名称改成引用继续'),replyToMessageId:original.carrier.messageId})).toBe(true);
+  expect(proposeRich).toHaveBeenCalledTimes(1);
+  expect(await ledger.run(db=>Object.keys(db.links))).toHaveLength(4);
+});
+
+it.each(['tenant','incomplete','chat','sender','expiredPresence'] as const)('never parses an edit from the wrong %s authoring identity',async(change)=>{
+  const {op}=await richChatContext();
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock),before=await ledger.run(db=>db.links);
+  const message=msg('名称改成拒绝',undefined,change==='sender'?stranger:owner,change==='chat'?'oc_wrong_private':chatId);
+  if(change==='incomplete')message.raw={};
+  if(change==='tenant')message.raw={sender:{sender_type:'user',sender_id:{open_id:owner},tenant_key:'wrong'},message:{message_id:message.messageId,chat_id:chatId,chat_type:'p2p'}};
+  if(change==='expiredPresence')clock+=46_000;
+  if(change==='chat'||change==='sender')message.replyToMessageId=await ledger.run(db=>db.operations[op.operationId]!.carrier.messageId);
+  expect(await service.onMessage(message)).toBe(true);
+  expect(proposeRich).not.toHaveBeenCalled();expect(await ledger.run(db=>db.links)).toEqual(before);
+});
+
+it('rechecks a newer account choice committed during asynchronous source validation before parsing',async()=>{
+  await link();const arg=await editHandoff(true,1);
+  await tap(privateChoice('版本'));await tap(privateChoice('确认本次修改范围'));
+  const id=kind(await rpc('handoffStatus',{retryId:arg.retryId}),'handoff').handoff.operationId!,op=await status(id);
+  await rpc('richAdvance',{operationId:id,destinationDraftId:arg.draftId,authorization:{...await auth(op,'dispatch'),format:'rich-v2'}});
+  const other=await anotherAuthor();
+  onMembership=async()=>{
+    onMembership=undefined;
+    await other.request('edit',{draftId:randomUUID(),baseRevision:1});
+  };
+  expect(await service.onMessage(msg('版本改成 1.1'))).toBe(true);
+  expect(proposeRich).not.toHaveBeenCalled();
+  expect(replies()).toContain('重发本条修改');
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  expect(await new AuthoringJournal(root,()=>clock).run(db=>db.operations[id]!.seenInstructions)).toBeUndefined();
+});
+
+it('renews only an accepted current instruction and restores ordinary chat after explicit end',async()=>{
+  const {op}=await richChatContext();
+  const {AuthoringJournal,linkKey}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock),key=await ledger.run(db=>linkKey(db.operations[op.operationId]!.scope,account));
+  const before=await ledger.run(db=>db.links[key]!.creator!.chosenUntil);
+  clock+=1000;
+  const message=msg('名称改成有效续期');
+  proposeRich.mockResolvedValueOnce({kind:'proposal',commands:[{action:'setPublicText',target:'T1',text:'有效续期'}]});
+  expect(await service.onMessage(message)).toBe(true);
+  const renewed=await ledger.run(db=>db.links[key]!.creator!.chosenUntil);
+  expect(renewed).toBe(before!+1000);
+  clock+=1000;expect(await service.onMessage(message)).toBe(true);
+  expect(await ledger.run(db=>db.links[key]!.creator!.chosenUntil)).toBe(renewed);
+  await service.onMessage(msg('/recipe end'));
+  expect(await service.onMessage(msg('今天天气如何'))).toBe(false);
+  expect(await service.onMessage({...msg('普通引用'),replyToMessageId:'om_unrelated'})).toBe(false);
+});
+
+it.each([false,true])('does not let an old account button replace a newer choice, asynchronous replacement=%s',async(duringLookup)=>{
+  await link();const other=await anotherAuthor();
+  await service.onMessage(msg('我的配方'));
+  const old=privateChoice('关联 1');
+  const {AuthoringJournal,linkKey}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  const chooseOther=()=>other.request('edit',{draftId:randomUUID(),baseRevision:1});
+  if(duringLookup)onCardMatch=async()=>{onCardMatch=undefined;await chooseOther();};
+  else {await tap(old);await chooseOther();}
+  await tap(old);
+  const expected=await ledger.run(db=>linkKey(Object.values(db.operations).find(o=>o.accountId===other.accountId)!.scope,other.accountId));
+  expect(await ledger.run(db=>Object.entries(db.links).filter(([,l])=>(l.creator?.chosenUntil??0)>clock).map(([key])=>key))).toEqual([expected]);
+  expect(await ledger.run(db=>Object.values(db.links).filter(l=>l.wake))).toHaveLength(duringLookup?0:1);
+});
+
+it('refuses an account button whose current ref has multiple valid owners',async()=>{
+  await link();await anotherAuthor();await service.onMessage(msg('我的配方'));
+  const button=privateChoice('关联 1');
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  const before=await ledger.run(db=>{
+    const links=Object.values(db.links);
+    links[1]!.creator!.accountChoice=structuredClone(links[0]!.creator!.accountChoice!);
+    return db.links;
+  });
+  await tap(button);
+  expect(await ledger.run(db=>db.links)).toEqual(before);
+  expect(proposeRich).not.toHaveBeenCalled();
+});
+
+it.each(['draft','version'] as const)('selects an original %s works button once while background answers and replay preserve a newer account',async(kindOfWork)=>{
+  await link();await attachCreator();
+  await service.onMessage(msg('/recipe works'));
+  const list=(await creatorJobs()).find(j=>j.task.kind==='read'&&j.task.read.kind==='works')!;
+  const other=await anotherAuthor();
+  await other.request('edit',{draftId:randomUUID(),baseRevision:1});
+  const selection=kindOfWork==='draft'?{kind:'draft',work:{draftId:randomUUID(),source:null},name:'原作品',version:'1'}:
+    {kind:'version',target:{recipeId:randomUUID(),versionId:randomUUID()},name:'原作品',version:'1'};
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock),chosen=()=>ledger.run(db=>Object.entries(db.links).filter(([,l])=>(l.creator?.chosenUntil??0)>clock).map(([key])=>key));
+  const before=await chosen();
+  await rpc('creatorAnswer',{id:list.id,answer:{kind:'works',items:[selection],nextOffset:null}});
+  expect(await chosen()).toEqual(before);
+  const button=privateChoice('原作品');
+  await tap(button);
+  const a=await ledger.run(db=>Object.keys(db.links).find(key=>key!==before[0])!);
+  expect(await chosen()).toEqual([a]);
+  await other.request('edit',{draftId:randomUUID(),baseRevision:1});
+  await tap(button);expect(await chosen()).toEqual(before);
+  expect(await ledger.run(db=>Object.values(db.links).some(l=>l.creator?.accountChoice))).toBe(false);
+});
+
+it('selects legacy role editing at its user commit and lets its focused natural instruction reach the existing parser',async()=>{
+  await link();await attachCreator();const work=await openManualWork('旧格式');
+  const edit=privateChoice('继续修改内容');
+  const other=await anotherAuthor();await other.request('edit',{draftId:randomUUID(),baseRevision:1});
+  await tap(edit);
+  const op=kind(await rpc('status'),'status').operations.find(o=>o.draftId===work.work.draftId)!;
+  expect(op).toBeDefined();await advance(op,'dispatch');
+  propose.mockResolvedValueOnce({kind:'proposal',changes:[{field:'name',action:'set',before:'',value:'修改旧格式'}]});
+  expect(await service.onMessage(msg('把名称改成修改旧格式'))).toBe(true);
+  expect(propose).toHaveBeenCalledTimes(1);expect((await status(op.operationId)).state).toBe('candidate');
+  await other.request('edit',{draftId:randomUUID(),baseRevision:1});
+  await tap(edit);
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  expect(await new AuthoringJournal(root,()=>clock).run(db=>Object.values(db.operations).filter(o=>o.accountId===account))).toHaveLength(1);
+});
+
+it('keeps an unfinished selection on another account from intercepting the selected draft instruction',async()=>{
+  await link();const arg=await editHandoff(true,1);
+  const other=await anotherRichDraft(arg.canonical);
+  proposeRich.mockResolvedValueOnce({kind:'proposal',commands:[{action:'setPublicText',target:'T1',text:'乙作品'}]});
+  expect(await service.onMessage(msg('名称改成乙作品'))).toBe(true);
+  expect(proposeRich).toHaveBeenCalledTimes(1);
+  expect(kind(await other.request('status'),'status').operations).toMatchObject([{operationId:other.op.operationId,state:'candidate'}]);
+  expect(await rpc('handoffStatus',{retryId:arg.retryId})).toMatchObject({handoff:{state:'selecting'}});
+});
+
+it('commits a rich edit and its account selection together or retains the original handoff after journal failure',async()=>{
+  await link();const arg=await editHandoff(true,1);
+  await tap(privateChoice('版本'));const finish=privateChoice('确认本次修改范围');
+  const file=join(root,'recipe-authoring','journal.json'),before=await readFile(file,'utf8');
+  const writer=vi.spyOn(await import('../src/server/atomic-file'),'writeFileAtomic').mockRejectedValueOnce(new Error('fixture journal unavailable'));
+  await tap(finish);writer.mockRestore();
+  expect(await readFile(file,'utf8')).toBe(before);
+  expect(kind(await rpc('status'),'status').operations).toEqual([]);
+  await tap(finish);
+  expect(await rpc('handoffStatus',{retryId:arg.retryId})).toMatchObject({handoff:{state:'prepared'}});
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  expect(await new AuthoringJournal(root,()=>clock).run(db=>Object.values(db.links).filter(l=>(l.creator?.chosenUntil??0)>clock))).toHaveLength(1);
+});
+
+it('keeps background reopen, restore and poll from reselecting an older creator binding',async()=>{
+  await link();await attachCreator();
+  await service.onMessage(msg('/recipe create'));await tap(privateChoice('PRIVATE-GROUP-SENTINEL'));
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock),handoff=await ledger.run(db=>Object.values(db.handoffs!)[0]!);
+  const other=await anotherAuthor();await other.request('edit',{draftId:randomUUID(),baseRevision:1});
+  const chosen=()=>ledger.run(db=>Object.values(db.links).filter(l=>(l.creator?.chosenUntil??0)>clock).map(l=>[l.binding,l.creator!.chosenUntil]));
+  const before=await chosen();
+  await attachCreator();await creatorJobs();
+  await rpc('restoreHandoff',{retryId:handoff.retryId,expected:{kind:'source',groupId}});
+  expect(await chosen()).toEqual(before);
+  await service.onMessage({...msg('/recipe works'),replyToMessageId:handoff.messageId});
+  const list=(await creatorJobs()).find(j=>j.task.kind==='read'&&j.task.read.kind==='works')!;
+  await rpc('creatorAnswer',{id:list.id,answer:{kind:'works',items:[],nextOffset:null}});
+  const resume=privateChoice('继续选择');await tap(resume);
+  expect(await chosen()).not.toEqual(before);
+  await other.request('edit',{draftId:randomUUID(),baseRevision:1});
+  await tap(resume);expect(await chosen()).toEqual(before);
+});
 
 it('restores a legacy private selection without memory text and reviews cleanup alone in the same chat',async()=>{
   await link();

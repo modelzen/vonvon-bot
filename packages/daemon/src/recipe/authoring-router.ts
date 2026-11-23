@@ -4,10 +4,11 @@ import {recipeAuthoringRequestSchema, type RecipeAuthoringRequest} from '@vonvon
 import {assertBotIdentity} from '../config/bots';
 import {paths} from '../config/paths';
 import {isAdmin} from '../config/schema';
-import {AuthoringJournal, authoringBotKey, linkKey, sameRecipient} from './authoring-journal';
+import {AuthoringJournal, authoringBotKey, linkKey, sameRecipient, type AuthoringRoute} from './authoring-journal';
 import {fromMessage, type AuthoringOptions, type AuthoringPeer, type AuthoringSession} from './authoring-service';
 import {creatorIntent,creatorClick} from './private-creator';
 import {AuthoringIm} from './authoring-im';
+import {draftIntent} from './draft-instruction';
 
 export class AuthoringRouter {
   private readonly sessions = new Set<AuthoringSession>();
@@ -87,7 +88,8 @@ export class AuthoringRouter {
     const active=[...this.sessions].filter(s=>s.presence&&s.presence.until>this.now()&&this.now()-s.presence.activeAt<30*60_000);
     if(!recipient){
       if(msg.chatType==='p2p'&&await this.journal.run(db=>Object.values(db.links).some(l=>l.bot===this.botKey&&l.recipient.chatId===msg.chatId&&
-        l.recipient.openId===msg.senderId&&(l.creator?.focusUntil??0)>this.now())))return true;
+        l.recipient.openId===msg.senderId&&((l.creator?.focusUntil??0)>this.now()||Object.values(db.operations).some(o=>o.bot===l.bot&&sameRecipient(o.recipient,l.recipient)&&o.contextOpen)||
+        Object.values(db.handoffs??{}).some(h=>h.binding===l.binding&&sameRecipient(h.recipient,l.recipient)&&['selecting','awaitingAttestations'].includes(h.phase.state))))))return true;
       return this.idle.onMessage(msg);
     }
     if(/^\/recipe\s+link\b/i.test(text)){
@@ -96,24 +98,49 @@ export class AuthoringRouter {
       return (session??this.idle).onMessage(msg);
     }
     const intent=creatorIntent(text)??(/^\/recipe\s+(?:name|summary|overview|version|access|logo|retry|issue)\b/i.test(text)?'works':undefined);
-    const own=await this.journal.run(db=>Object.entries(db.links).filter(([,l])=>l.bot===this.botKey&&sameRecipient(l.recipient,recipient)).map(([key,l])=>({key,binding:l.binding})));
-    let links=own;
-    if(own.length>1){
-      const quoted=msg.replyToMessageId&&await this.journal.run(db=>own.find(l=>
-        Object.values(db.links[l.key]?.creator?.cards??{}).some(c=>c.messageId===msg.replyToMessageId)||
-        Object.values(db.operations).some(o=>o.binding===l.binding&&o.carrier.messageId===msg.replyToMessageId)||
-        Object.values(db.handoffs??{}).some(h=>h.binding===l.binding&&h.messageId===msg.replyToMessageId))?.binding);
-      const selection=quoted||await this.journal.run(db=>Object.values(db.links).find(l=>sameRecipient(l.recipient,recipient)&&l.bot===this.botKey&&l.creator?.chosenUntil&&l.creator.chosenUntil>this.now())?.binding);
-      links=own.filter(l=>l.binding===selection);
-      if(!links.length && intent){
-        if(isAdmin(this.opts.cfg,recipient.openId))await this.idle.creator.chooseAccount(own,recipient,msg.messageId,intent);
-        return true;
+    const snapshot=await this.journal.run(db=>{
+      const now=this.now(),rows=Object.entries(db.links).filter(([,l])=>l.bot===this.botKey&&sameRecipient(l.recipient,recipient));
+      const own=rows.map(([key,l])=>({key,binding:l.binding}));
+      const operations=Object.values(db.operations).filter(o=>o.bot===this.botKey&&sameRecipient(o.recipient,recipient));
+      const handoffs=Object.values(db.handoffs??{}).filter(h=>own.some(l=>l.key===linkKey(h.scope,h.account)&&l.binding===h.binding)&&sameRecipient(h.recipient,recipient));
+      const quoted=msg.replyToMessageId?rows.filter(([key,l])=>
+        Object.values(l.creator?.cards??{}).some(c=>c.messageId===msg.replyToMessageId)||
+        operations.some(o=>linkKey(o.scope,o.accountId)===key&&o.binding===l.binding&&o.carrier.messageId===msg.replyToMessageId)||
+        handoffs.some(h=>linkKey(h.scope,h.account)===key&&h.binding===l.binding&&h.messageId===msg.replyToMessageId)):[];
+      const chosen=rows.filter(([,l])=>(l.creator?.chosenUntil??0)>now);
+      const context=operations.some(o=>o.contextOpen&&!o.revoked&&(o.terminalAt===undefined||o.view.state==='completed'&&(o.contextUntil??0)>now))||
+        handoffs.some(h=>['selecting','awaitingAttestations'].includes(h.phase.state))||rows.some(([,l])=>(l.creator?.focusUntil??0)>now);
+      const knownQuote=Boolean(msg.replyToMessageId&&(quoted.length||operations.some(o=>o.carrier.messageId===msg.replyToMessageId)||handoffs.some(h=>h.messageId===msg.replyToMessageId)));
+      const incomplete=Object.values(db.links).some(l=>l.bot===this.botKey&&l.recipient.openId===recipient.openId&&l.recipient.chatId===recipient.chatId&&!sameRecipient(l.recipient,recipient));
+      const foreignQuote=Boolean(msg.replyToMessageId&&(Object.values(db.operations).some(o=>o.bot===this.botKey&&o.carrier.messageId===msg.replyToMessageId&&!sameRecipient(o.recipient,recipient))||
+        Object.values(db.links).some(l=>l.bot===this.botKey&&!sameRecipient(l.recipient,recipient)&&Object.values(l.creator?.cards??{}).some(c=>c.messageId===msg.replyToMessageId))||
+        Object.values(db.handoffs??{}).some(h=>db.links[linkKey(h.scope,h.account)]?.bot===this.botKey&&h.messageId===msg.replyToMessageId&&!sameRecipient(h.recipient,recipient))));
+      const target=msg.replyToMessageId?quoted.length===1?quoted[0]:undefined:chosen.length===1?chosen[0]:!context&&(intent||draftIntent(text))&&rows.length===1?rows[0]:undefined;
+      let route:AuthoringRoute|undefined;
+      if(target){
+        const address={key:target[0],binding:target[1].binding},until=target[1].creator?.chosenUntil;
+        route=msg.replyToMessageId?{...address,kind:'quoted'}:chosen.length===1&&until!==undefined?{...address,kind:'chosen',chosenUntil:until}:{...address,kind:'intent'};
       }
-      if(!links.length)return Boolean(intent||/^\/recipe\b/i.test(text)||await this.journal.run(db=>own.some(l=>(db.links[l.key]?.creator?.focusUntil??0)>this.now())));
+      return {own,context,knownQuote,incomplete:incomplete||foreignQuote,route,ambiguous:chosen.length>1};
+    });
+    const {own,route}=snapshot;
+    const recover=async()=>{await this.im.reply(recipient.chatId,msg.messageId,'请引用原配方卡，或发送“我的配方”重新选择账号后重发本条修改。');return true;};
+    if(snapshot.incomplete)return true;
+    if(!route){
+      if(!msg.replyToMessageId&&intent&&own.length&&isAdmin(this.opts.cfg,recipient.openId)){
+        await this.idle.creator.chooseAccount(own,recipient,msg.messageId,intent);return true;
+      }
+      if(snapshot.context||snapshot.knownQuote||snapshot.ambiguous)return recover();
+      return this.idle.onMessage(msg);
     }
+    const links=own.filter(l=>l.key===route.key&&l.binding===route.binding);
     const match=active.filter(s=>{const p=s.presence!;return links.some(l=>l.key===linkKey(p.scope,p.account)&&(!p.binding||p.binding===l.binding));});
     const original=match.find(s=>s.creator.enabled)??match[0];
-    if(original)return original.onMessage(msg);
+    if(original){
+      if(await original.onMessage(msg,route))return true;
+      if(snapshot.context||snapshot.knownQuote||route.kind==='chosen')return recover();
+      return false;
+    }
     if(intent&&links.length===1&&isAdmin(this.opts.cfg,recipient.openId)){
       await (this.opts.currentBot?.()??assertBotIdentity(this.opts.bot));
       await this.journal.run(db=>{
@@ -124,8 +151,7 @@ export class AuthoringRouter {
       });
       await this.im.reply(recipient.chatId,msg.messageId,'已保留本次请求。原账号的 Vonvon 连接后会在这里继续。');return true;
     }
-    const paused=links.length===1&&await this.journal.run(db=>(db.links[links[0]!.key]?.creator?.focusUntil??0)>this.now());
-    if(paused){await this.im.reply(recipient.chatId,msg.messageId,'本次创作已保留，原账号恢复连接后可继续。');return true;}
+    if(snapshot.context||snapshot.knownQuote||route.kind==='chosen')return recover();
     return this.idle.onMessage(msg);
   }
   async onAction(evt:CardActionEvent){

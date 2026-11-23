@@ -6,7 +6,7 @@ vi.mock('../src/recipe/authoring-source',()=>({groupSourceIdentity:vi.fn(async()
 vi.mock('../src/recipe/authoring-rich-flow',async load=>({...await load<object>(),readRichSource:async()=>state.inventory}));
 import {PrivateHandoffs} from '../src/recipe/authoring-handoff';
 import {bindRichMembers,chatRichProposal,richCardReview,type RichLocalDraft} from '../src/recipe/authoring-rich-flow';
-import {AuthoringJournal,maintain,newCarrier,type AuthoringLedger,type Link} from '../src/recipe/authoring-journal';
+import {AuthoringJournal,linkKey,maintain,newCarrier,type AuthoringLedger,type Link} from '../src/recipe/authoring-journal';
 import {groupSourceIdentity} from '../src/recipe/authoring-source';
 import type {PrivateHandoff} from '../src/recipe/authoring-handoff-menu';
 import {candidateConfirmation,type AuthoringIm} from '../src/recipe/authoring-im';
@@ -20,7 +20,7 @@ function fixture(inherit=true,now=()=>1000){
  const logo=Buffer.from('524946460e000000574542505650384c020000002f00','hex').toString('base64url');
  const inherited:InheritedPublication={accountId:account,versionId,public:{name:'本人名称',summary:'本人摘要',overview:'完整介绍',version:''},access:'coded',logo};
  const recipient={openId:'ou_test',chatId:groupId,tenantKey:'tenant'},link:Link={bot:'cli_inherit',binding:'binding',recipient,sources:[]};
- const db={version:1 as const,handoffs:{} as Record<string,PrivateHandoff>,links:{link},operations:{} as Record<string,LocalOperation>,daily:{}} satisfies AuthoringLedger;
+ const db={version:1 as const,handoffs:{} as Record<string,PrivateHandoff>,links:{[linkKey('scope',account)]:link},operations:{} as Record<string,LocalOperation>,daily:{}} satisfies AuthoringLedger;
  class MemoryJournal extends AuthoringJournal {
   override async run<T>(edit:(value:AuthoringLedger)=>T):Promise<T>{maintain(db,now());return structuredClone(edit(db));}
  }

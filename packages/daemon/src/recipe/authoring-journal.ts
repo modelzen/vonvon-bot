@@ -70,6 +70,28 @@ export interface AuthoringLedger {
   version: 1; links: Record<string, Link>; operations: Record<string, LocalOperation>;
   daily: Record<string, {day: string; count: number}>;
 }
+const CREATOR_SELECTION_TTL = 30 * 60_000;
+export function selectCreatorBinding(db: AuthoringLedger, current: Link, now: number) {
+  for (const link of Object.values(db.links)) if (link.bot === current.bot && sameRecipient(link.recipient,current.recipient) && link.creator) {
+    delete link.creator.chosenUntil;
+    delete link.creator.accountChoice;
+  }
+  (current.creator ??= {jobs:{},cards:{}}).chosenUntil = now + CREATOR_SELECTION_TTL;
+}
+export function renewCreatorBinding(db: AuthoringLedger, current: Link, now: number) {
+  const chosen = Object.values(db.links).filter(link => link.bot === current.bot && sameRecipient(link.recipient,current.recipient) &&
+    (link.creator?.chosenUntil ?? 0) > now);
+  if (chosen.length === 1 && chosen[0] === current) current.creator!.chosenUntil = now + CREATOR_SELECTION_TTL;
+}
+export type AuthoringRoute = {key:string;binding:string} & ({kind:'chosen';chosenUntil:number}|{kind:'quoted'}|{kind:'intent'});
+export class CreatorSelectionChanged extends Error {}
+export function matchesAuthoringRoute(db: AuthoringLedger, current: Link, route: AuthoringRoute, now: number) {
+  if (db.links[route.key] !== current || current.binding !== route.binding) return false;
+  if (route.kind === 'quoted') return true;
+  const chosen = Object.values(db.links).filter(link => link.bot === current.bot && sameRecipient(link.recipient,current.recipient) &&
+    (link.creator?.chosenUntil ?? 0) > now);
+  return route.kind === 'intent' ? chosen.length === 0 : chosen.length === 1 && chosen[0] === current && current.creator?.chosenUntil === route.chosenUntil;
+}
 export const active = (op: LocalOperation) => op.terminalAt === undefined;
 export function discardAuthoringMaterial(op: LocalOperation) {
   delete op.richDispatch; delete op.secret; delete op.nonce; delete op.dispatchAuthorization; delete op.payload; delete op.source;
