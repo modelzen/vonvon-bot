@@ -1,16 +1,25 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>创作中心 · Vonvon</title><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/studio.css"><script type="module" src="/studio.mjs"></script></head>
-<body><header class="shell studio-bar"><a href="/">← 社区</a><span>Vonvon</span></header>
-<main class="shell studio"><h1>创作中心</h1><p class="muted">准备私人草稿，核对后发布到社区。</p><div id="notice" role="status" aria-live="polite"></div>
-<section id="login" hidden><a href="/?login=1&amp;next=studio">登录后继续</a></section>
-<section id="workspace" hidden><div class="studio-top"><h2>私人草稿</h2><button type="button" id="new">新建文字草稿</button></div><ul id="drafts" class="entries"></ul>
-<form id="editor" hidden><h2>编辑草稿</h2><small>本次试用支持文字配方；这里填写的角色说明不会改变任何现有 Bot。</small>
-<h3>公开介绍</h3><p class="muted">名称、简介、概览和版本对所有人可见，包括凭码配方。</p><label>配方名称<input name="name" maxlength="120"></label><label>一句话简介<input name="summary" maxlength="480"></label><label>概览 · Markdown<textarea name="overview" rows="4" placeholder="介绍使用场景、依赖和技能的运行方式。"></textarea></label>
-<div class="columns"><label>版本<input name="version" placeholder="例如 1.0"></label><label>获取方式<select name="access"><option value="direct">直接获取</option><option value="coded">凭分享码获取</option></select></label></div>
-<h3>配方配置</h3><p id="scope-label" class="muted"></p><label>角色说明<textarea name="role" rows="5" placeholder="这个角色如何协助使用者？"></textarea></label>
-<details id="additional-notes" hidden><summary>补充说明</summary><div id="additional-notes-body"></div><button id="remove-legacy-notes" type="button">移除旧补充说明</button><p>保存后生效，已发布版本不受影响。</p></details>
-<p class="actions"><button type="submit">保存草稿</button><button type="button" id="review">预览发布</button></p></form>
-<section id="result" hidden><h2>已发布</h2><p><a id="published" href="/">查看社区详情</a></p><p id="initial-code"></p></section>
-<section id="records"><h2>我的发布</h2><p class="muted" id="record-note"></p><ul class="entries" id="history"></ul></section>
-<section id="codes" hidden><h2>分享码</h2><p id="code-for"></p><label>本次生成数量<input id="amount" type="number" min="1" max="100" value="1"></label><p><button type="button" id="issue">生成分享码</button></p><pre id="newcodes"></pre><ul id="code-list" class="entries"></ul><button type="button" id="more" hidden>更多分享码</button></section>
-</section><dialog id="confirm"><h2>确认发布到社区？</h2><p>确认后，此版本不能修改。</p><dl id="preview"></dl><div class="actions"><button type="button" id="back">返回编辑</button><button type="button" id="publish">确认发布</button></div></dialog></main></body></html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="same-origin"><meta name="color-scheme" content="light dark">
+<title>创作中心 · Vonvon Bot</title><link rel="icon" href="/mark.png"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/studio.css">
+<script type="module" src="/studio.mjs"></script>
+</head><body>
+<header class="mast"><div class="bar shell">
+<a href="/" class="brand"><img src="/mark.png" width="28" height="28" alt="">Vonvon Bot</a>
+<nav class="actions" aria-label="社区导航"><a href="/library" id="library-link">已获取</a><a href="/studio" aria-current="page">创作中心</a><button class="secondary" id="account" type="button" hidden>登录</button></nav>
+</div></header>
+<main class="shell studio" id="main" data-page="app-guide">
+<div class="page-top"><div class="intro"><p class="eyebrow">创作中心</p><h1>在 Vonvon Bot 中创作</h1><p class="muted">把本地 Bot 和群聊中已有的配置整理成配方，再分享给社区。</p></div></div>
+<section aria-labelledby="prepare-title"><h2 id="prepare-title">从本地群配置准备配方</h2>
+<ol class="setup-list">
+<li><strong>在 App 中准备配方</strong><p>打开 Vonvon Bot App，进入「社区」→「创作中心」→「准备配方」，选择 Bot 和已有群聊。</p></li>
+<li><strong>在飞书私聊中整理</strong><p>按 App 中的提示，在飞书与所选 Bot 私聊，整理这份配方的内容和介绍。</p></li>
+<li><strong>回到 App 核对并发布</strong><p>检查配方来源、内容和公开介绍，确认无误后在 App 中发布。</p></li>
+</ol></section>
+<section class="panel intro" aria-labelledby="manage-title"><h2 id="manage-title">已有配方也在 App 中管理</h2><p>私人草稿、已发布版本和分享码，都在 App 的「社区」→「创作中心」中管理。</p><p class="muted">如果你从旧草稿链接来到这里，请在 App 的创作中心查看已有草稿。你的云端草稿和已发布内容会保留。</p></section>
+<p class="muted studio-note">社区网站用于浏览和领取配方。领取后，在 App 登录同一账号即可使用。</p>
+<div class="actions"><a class="button" href="/">浏览社区</a><a class="secondary" href="/library">查看已获取</a></div>
+</main>
+<dialog id="modal"></dialog><div id="feedback" role="status" aria-live="polite"></div>
+</body></html>

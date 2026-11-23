@@ -20,7 +20,7 @@ npm start
 
 浏览器在同一 origin 发起 `/api/v1/…` 和 `/api/v2/…` 请求。公开入口必须将两个前缀都交给这个 Web BFF，由它检查会话、Origin 和 CSRF 绑定，再转交 API。原生 App 的 `/v2/…` Bearer 请求继续路由到 API 或 broker；不能把浏览器的 `/api/v2/…` 直接转到它们。
 
-rich 详情固定到 URL 中的 recipeId 和 versionId。BFF 验证 canonical manifest、release 哈希、被引用成员的大小与哈希，并只向浏览器返回已校验内容、解析后的文字及归一化 WebP Logo。凭码概览只读取公共 Logo，不请求 manifest 或私有成员。浏览器没有任意对象读取或本机安装接口。网页领取只把权益保存到当前账号，用户在 App 登录同一账号后添加到群聊。rich 作品可在网页创作中心完整查看；准备新版仍在 App 中核对来源并确认。role-v1 原有编辑、发布和分享码管理继续可用。
+rich 详情固定到 URL 中的 recipeId 和 versionId。BFF 验证 canonical manifest、release 哈希、被引用成员的大小与哈希，并只向浏览器返回已校验内容、解析后的文字及归一化 WebP Logo。凭码概览只读取公共 Logo，不请求 manifest 或私有成员。浏览器没有任意对象读取或本机安装接口。网页领取只把权益保存到当前账号，用户在 App 登录同一账号后添加到群聊。网页创作中心无需登录即可查看 App 创作步骤，不提供手动编辑或发布入口。配方从本地 Bot 和已有群聊的配置开始，在飞书私聊中整理，再回 App 核对发布；草稿、已发布版本和分享码也在 App 中管理。旧草稿链接仍进入这份说明，云端内容保留，后端 owner API 兼容保持不变。
 
 OAuth 回程会立即跳转到干净的原始版本页面，登录本身不会消耗分享码。
 

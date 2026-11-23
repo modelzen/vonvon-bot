@@ -1,4 +1,5 @@
 const main = document.querySelector('#main');
+const appGuide = main.dataset.page === 'app-guide';
 const dialog = document.querySelector('#modal');
 const accountButton = document.querySelector('#account');
 const params = new URLSearchParams(location.search);
@@ -393,7 +394,7 @@ try {
   accountButton.hidden = false; accountButton.textContent = session.signedIn ? '账号' : '登录';
   if (location.pathname === '/') await home();
   else if (location.pathname === '/library') await library();
-  else await detail();
+  else if (!appGuide) await detail();
   if (params.has('auth')) message('登录未完成，请重试。');
   if (params.get('login') === '1') openLogin(params.get('next') === 'studio' ? '/studio' : '/');
   if (params.has('login') || params.has('auth')) {
@@ -401,7 +402,7 @@ try {
     history.replaceState(history.state, '', url);
   }
 } catch (e) {
-  main.replaceChildren(detailBack(), empty(e.status === 404 ? '找不到这份配方' : '暂时无法打开', null, button('重试', () => location.reload(), 'secondary')));
+  if (!appGuide) main.replaceChildren(detailBack(), empty(e.status === 404 ? '找不到这份配方' : '暂时无法打开', null, button('重试', () => location.reload(), 'secondary')));
 }
 let checkingSession = false;
 async function checkSession() {
@@ -411,7 +412,7 @@ async function checkSession() {
     const current = await request('/auth/session');
     if (current.signedIn !== session.signedIn || current.displaySession !== session.displaySession) {
       ++detailGeneration; closeDialog();
-      main.replaceChildren();
+      if (!appGuide) main.replaceChildren();
       location.reload();
     }
   } catch { /* A later action will report any connection or session error. */ }

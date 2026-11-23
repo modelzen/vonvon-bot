@@ -136,12 +136,10 @@ test('real PostgreSQL API, member broker and shipped Web modules preserve rich s
   const publications = await get('/api/v2/me/publications', author).then(response => response.json());
   assert.ok(publications.items.some(item => item.versionId === coded.versionId));
   const studio = await browser(t, fixture, '/studio', author);
-  await until(() => studio.window.document.querySelector('#history a'));
-  assert.ok(studio.window.document.querySelector('#history a[href="' + codedPath + '"]'));
-  assert.equal(studio.find('准备新版'), undefined);
-  await studio.click('如何编辑');
-  assert.match(studio.window.document.querySelector('#notice').textContent, /App 的创作中心准备新版/);
-  assert.equal(studio.calls.some(call => call.options.method === 'POST'), false);
+  assert.equal(studio.window.document.querySelector('main h1').textContent, '在 Vonvon Bot 中创作');
+  assert.match(studio.text(), /草稿.*已发布版本.*分享码.*App/s);
+  assert.equal(studio.window.document.querySelector('main form,main input,main textarea'), null);
+  assert.deepEqual(studio.calls.map(call => call.path), ['/auth/session']);
   const authorDetail = await browser(t, fixture, codedPath, author);
   await authorDetail.click('能力'); assert.match(authorDetail.text(), /样例技能/);
   const directReader = await browser(t, fixture, directPath, other);
@@ -170,31 +168,24 @@ test('real PostgreSQL API, member broker and shipped Web modules preserve rich s
   console.log('PASS real HTTP: exact-version rich direct full tabs; coded intro only; normalized Logo; code retry and opaque-key recovery; cross-account/CSRF; XSS text; legacy detail.');
 });
 
-test('the shipped creator UI removes incomplete legacy notes and publishes the same PostgreSQL draft',async t=>{
+test('the App guide preserves a legacy PostgreSQL draft while owner API editing and publication remain compatible',async t=>{
   const fixture=await richFixture(t);
   const original={public:{name:'旧稿兼容验证',summary:'私人草稿',overview:'公开介绍保持原样',version:'1.0',access:'coded'},config:{role:'PRIVATE_ROLE_KEEP',setup:{steps:[{kind:'tool',title:'',instructions:'',required:true}]}}};
   const draft=await fixture.request('/v1/drafts',original,{key:crypto.randomUUID()});
   const rejected=await fetch(fixture.apiHost+'/v1/drafts/'+draft.draftId+'/publish',{method:'POST',headers:{authorization:'Bearer '+fixture.tokens.author,'content-type':'application/json','idempotency-key':crypto.randomUUID(),'if-match':'"1"'},body:'{}'});
   assert.equal(rejected.ok,false);assert.equal((await rejected.json()).error.code,'incomplete_setup');
   const author=await fixture.login('author'),studio=await browser(t,fixture,'/studio',author);
-  await studio.click('打开');
-  assert.equal(studio.window.document.querySelector('[data-field="instructions"]'),null);
-  assert.equal(studio.window.document.querySelector('#additional-notes').hidden,false);
-  await studio.click('移除旧补充说明');
-  assert.equal(studio.calls.some(call=>call.options.method==='PATCH'),false);
+  assert.equal(studio.window.document.querySelector('main h1').textContent,'在 Vonvon Bot 中创作');
+  assert.equal(studio.window.document.querySelector('main form,main input,main textarea'),null);
+  assert.deepEqual(studio.calls.map(call=>call.path),['/auth/session']);
   const before=await fixture.request('/v1/drafts/'+draft.draftId);
   assert.deepEqual(before.config.setup,original.config.setup);
-  await studio.click('保存草稿');await until(()=>studio.window.document.querySelector('#notice').textContent==='私人草稿已保存。');
-  const saved=await fixture.request('/v1/drafts/'+draft.draftId);
+  assert.equal(before.revision,1);
+  const saved=await fixture.request('/v1/drafts/'+draft.draftId,{public:original.public,config:{role:original.config.role}},{method:'PATCH',key:crypto.randomUUID(),revision:1});
   assert.equal(saved.draftId,draft.draftId);assert.equal(saved.revision,2);
   assert.deepEqual(saved.config,{role:'PRIVATE_ROLE_KEEP'});assert.equal(saved.public.overview,original.public.overview);
-  await studio.click('预览发布');assert.equal(studio.window.document.querySelector('#confirm').open,true);
-  await studio.click('确认发布');await until(()=>studio.window.document.querySelector('#notice').textContent==='本版本已发布。');
-  const writes=studio.calls.filter(call=>call.options.method==='PATCH'||call.path.endsWith('/publish'));
-  assert.deepEqual(writes.map(call=>call.path),['/api/v1/drafts/'+draft.draftId,'/api/v1/drafts/'+draft.draftId+'/publish']);
-  assert.equal(writes[1].options.headers['if-match'],'"2"');
-  const path=new URL(studio.window.document.querySelector('#published').href).pathname;
-  const published=await fixture.request('/v1'+path);
+  const version=await fixture.request('/v1/drafts/'+draft.draftId+'/publish',{},{key:crypto.randomUUID(),revision:2});
+  const published=await fixture.request('/v1'+detailPath(version));
   assert.deepEqual(published.config,{role:'PRIVATE_ROLE_KEEP'});assert.equal(published.public.overview,original.public.overview);
 });
 
