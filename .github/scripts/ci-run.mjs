@@ -60,6 +60,13 @@ export function createPlan(scope, selected, root = projectRoot, platform = proce
     throw new Error('Root workspace build order differs from CI dependency order');
   }
   const plan = [{ executable: 'npm', args: ['run', 'build'] }];
+  for (const name of selected) {
+    const workspace = `packages/${name}`;
+    const packageManifest = JSON.parse(readFileSync(join(root, workspace, 'package.json'), 'utf8'));
+    if (typeof packageManifest.scripts?.['verify:built'] === 'string') {
+      plan.push({ executable: 'npm', args: ['--workspace', workspace, 'run', 'verify:built'] });
+    }
+  }
   if (platform === 'win32') {
     for (const script of ['typecheck', 'lint']) {
       if (scope === 'full') plan.push({ executable: 'npm', args: ['run', script] });

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,8 +7,9 @@ import { fileURLToPath } from 'node:url';
 
 const entry = fileURLToPath(new URL('../bin/vonvon.mjs', import.meta.url));
 const home = await mkdtemp(join(tmpdir(), 'vonvon-built-daemon-'));
+const env = { ...process.env, HOME: home, VONVON_HOME: join(home, 'data') };
 const child = spawn(process.execPath, [entry, 'daemon', 'run', '--port', '0'], {
-  env: { ...process.env, HOME: home, VONVON_HOME: join(home, 'data') },
+  env,
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let output = '';
@@ -28,7 +29,14 @@ try {
     child.once('error', error => { clearTimeout(timeout); reject(error); });
     child.once('exit', code => { clearTimeout(timeout); reject(new Error(`Daemon exited ${code} before readiness:\n${output}`)); });
   });
-  child.kill('SIGTERM');
+  const status = spawnSync(process.execPath, [entry, 'daemon', 'status', '--json'], { env, encoding: 'utf8', timeout: 10_000 });
+  assert.equal(status.status, 0, status.stderr);
+  const running = JSON.parse(status.stdout);
+  assert.equal(running.running, true);
+  assert.equal(running.pid, child.pid, 'Only stop the daemon started by this check');
+  const stop = spawnSync(process.execPath, [entry, 'daemon', 'stop', '--json'], { env, encoding: 'utf8', timeout: 15_000 });
+  assert.equal(stop.status, 0, stop.stderr);
+  assert.equal(JSON.parse(stop.stdout).stopped, true);
   const result = await Promise.race([
     exited,
     new Promise((_, reject) => {
