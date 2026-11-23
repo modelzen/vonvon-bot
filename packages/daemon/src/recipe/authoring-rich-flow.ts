@@ -361,7 +361,10 @@ function richChatSnapshot(op:LocalOperation){
   if(!content)throw new Error('缺少本次草稿快照。');
   const captured=op.richSourceOriginal?.request;
   if(original&&captured&&'content'in captured){
-    const omitted=new Set(itemsOf(captured.content).filter(item=>rich.sourceOmitted?.includes(item.itemId)).map(item=>item.itemId));
+    const remaining=structuredClone(captured);
+    omitSourceItems(remaining,new Set(rich.sourceOmitted));
+    const kept=new Set(itemsOf(remaining.content).map(item=>item.itemId));
+    const omitted=new Set(itemsOf(captured.content).filter(item=>!kept.has(item.itemId)).map(item=>item.itemId));
     selected=selected.filter(id=>!omitted.has(id));
   }
   const targets=richEditTargets(content,selected);

@@ -66,11 +66,11 @@ export class PrivateHandoffs {
     this.live(p);setChoices(h,inv,skills);
   }
   private async refresh(p:Presence,link:Link,h:PrivateHandoff){
-    if(!h.cardId||!h.messageId)return;
+    if(!h.cardId)return;
     this.live(p);
     const body=handoffCard(h);
     const result=await this.im.updateJson(h.cardId,h.generation,h.ref,body);
-    if(result==='updated'||result==='conflict'&&await this.im.showsJson(h.messageId,h.recipient.chatId,body)){
+    if(result==='updated'||result==='conflict'&&h.messageId&&await this.im.showsJson(h.messageId,h.recipient.chatId,body)){
       await this.transaction(p,link,h.retryId,row=>{if(row.ref===h.ref)delete row.cardDirty;});
       delete h.cardDirty;return;
     }
@@ -82,6 +82,10 @@ export class PrivateHandoffs {
     if(!h.cardId){
       const cardId=await this.im.createJson(handoffCard(h));
       h=await this.transaction(p,link,h.retryId,row=>{if(row.ref!==h.ref||!active(row))throw changed();row.cardId=cardId;return row;});
+    }else{
+      const before=h.ref;
+      rotate(h);h=await this.save(p,link,h,before);
+      await this.refresh(p,link,h);
     }
     h=await this.transaction(p,link,h.retryId,row=>{if(row.ref!==h.ref||!active(row))throw changed();row.sentAt??=this.now();return row;});
     let messageId:string;

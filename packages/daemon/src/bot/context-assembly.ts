@@ -302,7 +302,7 @@ export function assemble(src: ContextSources, mode: 'work' | 'comment' = 'work')
   const supplement = mode === 'work' ? supplementBlock(src) : { body: '', block: '' };
   if (mode === 'work' && src.recipeContext) {
     supplement.body += '\n' + src.recipeContext;
-    supplement.block += `\n[本群配方 · 工作规则与选中的记忆]\n${quote(src.recipeContext)}\n[/本群配方]`;
+    supplement.block += `\n[本群配方 · 工作规则]\n${quote(src.recipeContext)}\n[/本群配方]`;
   }
   const bot = currentOf(src.bot, 'bot', mode === 'comment' ? { onlyBranch: COMMENT_BRANCH } : {});
   const project = mode === 'work' ? currentOf(src.projectMemory, 'project') : undefined;

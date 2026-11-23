@@ -32,6 +32,12 @@ export type { RichJournal } from './rich-journal';
 const location = (id: string) => ({ file: botPaths(id).projectsFile, dataRoot: paths.appDir });
 const hash = (v: unknown) => sha256(canonicalLocal(v));
 const frozen = (row: Project) => hash(row);
+const reviewHash = (input: unknown[]) => hash([...input, 'recipe-memory-excluded-v1']);
+function currentDirectReview(op: RichJournal) {
+  const input = [op.bot, op.group, op.rowDigest, op.preview, op.intent.targetPublicKey];
+  return op.reviewToken === reviewHash(input) || op.reviewToken === reviewHash([...input, 'directUpdate']);
+}
+const changedPlan = '配方准备的内容已改变，请重新预览后确认。';
 export const richStatus = (op: RichJournal): RecipeInstallReply => ({
   kind: 'richStatus',
   operationId: op.id,
@@ -50,6 +56,11 @@ export function expireRich(op: RichJournal, now: number) {
     op.status = 'rejected';
     op.settled = true;
     op.reason = '本机准备已过期';
+  } else if (op.status === 'prepared' && op.issuerState === 'unissued' &&
+    op.intent.purpose === 'updateDirectRichRecipe' && !currentDirectReview(op)) {
+    op.status = 'rejected';
+    op.settled = true;
+    op.reason = changedPlan;
   }
 }
 export const readRichJournal = (bot: string, id: string) =>
@@ -134,7 +145,7 @@ export async function prepareRich(
           value: { text: row.recipeInstall.base.role },
         });
       const local = localRecipeItems(row, incoming);
-      const token = hash([bot, groupId, frozen(row), preview, key,...(request.authority?[request.authority]:[])]);
+      const token = reviewHash([bot, groupId, frozen(row), preview, key,...(request.authority?[request.authority]:[])]);
       if (request.choices && request.reviewToken !== token) throw new Error('预览已变化');
       const merged = mergeRecipeItems(base, local, incoming, request.choices);
       if (merged.conflicts.length || request.reviewToken !== token)
@@ -157,7 +168,12 @@ export async function prepareRich(
         plan = hash([token, choices, merged.resolved]);
       const ledger = history(stored);
       const now = Date.now();
-      for (const o of Object.values(ledger)) expireRich(o, now);
+      let invalidated = false;
+      for (const o of Object.values(ledger)) {
+        const before = o.status;
+        expireRich(o, now);
+        invalidated ||= o.status !== before;
+      }
       const reused = Object.values(ledger).find(
         (o) =>
           o.reviewToken === token &&
@@ -165,12 +181,17 @@ export async function prepareRich(
           o.status === 'prepared' &&
           o.issuerState === 'unissued',
       );
-      if (reused)
-        return {
-          changed: false,
+      if (reused) {
+        if (reused.intent.purpose === 'updateDirectRichRecipe' && reused.intent.localPlanSha256 !== plan) {
+          reused.status = 'rejected';
+          reused.settled = true;
+          reused.reason = changedPlan;
+        } else return {
+          changed: missing || invalidated,
           durableRead: true,
           value: { kind: 'richPrepared', operationId: reused.id, intent: reused.intent, reviewToken: token },
         };
+      }
       for (const [id, o] of Object.entries(ledger)) if (o.settled && now - o.createdAt > 8 * 86400000) delete ledger[id];
       if (
         Object.keys(ledger).length >= 512 ||
@@ -238,13 +259,13 @@ export async function applyRich(bot: BotIdentity, input: Activation, schedules: 
     const row = await readDurableProjectStore(loc, (stored) =>
       (stored.projects as Project[]).find((r) => r.chatId === op.group && !r.dm),
     );
-    const stale = () =>
+    const reject = (reason: string) =>
       editRichJournal(bot.appId, op.id, (j) => {
         j.status = 'rejected';
-        j.reason = '群设置或绑定已改变';
+        j.reason = reason;
       });
     if (!row || frozen(row) !== op.rowDigest) {
-      await stale();
+      await reject('群设置或绑定已改变');
       return;
     }
     const previousBase = await baseline(row, root);
@@ -255,8 +276,25 @@ export async function applyRich(bot: BotIdentity, input: Activation, schedules: 
         originId: content.role.originId,
         value: { text: row.recipeInstall.base.role },
       });
-    const merged = mergeRecipeItems(previousBase, localRecipeItems(row, incoming), incoming, op.choices);
-    if (merged.conflicts.length) throw new Error('配方仍有待处理冲突');
+    let merged: ReturnType<typeof mergeRecipeItems>;
+    try {
+      merged = mergeRecipeItems(previousBase, localRecipeItems(row, incoming), incoming, op.choices);
+    } catch (error) {
+      if (op.intent.purpose !== 'updateDirectRichRecipe' || !(error instanceof Error) ||
+        !['配方冲突选择已过期，请重新预览', '配方条目来源或类型已改变'].includes(error.message)) throw error;
+      await reject(changedPlan);
+      return;
+    }
+    if (merged.conflicts.length) {
+      if (op.intent.purpose !== 'updateDirectRichRecipe') throw new Error('配方仍有待处理冲突');
+      await reject(changedPlan);
+      return;
+    }
+    if (op.intent.purpose === 'updateDirectRichRecipe' &&
+      op.intent.localPlanSha256 !== hash([op.reviewToken, op.choices, merged.resolved])) {
+      await reject(changedPlan);
+      return;
+    }
     const { resolved } = merged;
     const package_ = await stageRichRecipeGeneration({
       installationId: op.install,
