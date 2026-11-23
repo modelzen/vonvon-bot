@@ -7,7 +7,8 @@ import {useShellCapabilities} from '../client-context';
 import {allowedExternalUrl, openExternalUrl} from '../url-actions';
 
 export const recipeSections = ['概览', '模型与权限', '能力', '沟通方式', '记忆', '任务'] as const;
-type Section = typeof recipeSections[number];
+export type RecipeSection = typeof recipeSections[number];
+type Section = RecipeSection;
 
 
 export function RecipeMark({name, logo}: {name: string; logo?: string}) {
@@ -77,13 +78,15 @@ export function RecipeOverview({recipe, draft}: {recipe: Pick<RecipeDetail, 'pub
   </>;
 }
 
-export function RecipeDetails({recipe, action, management, share, draft}: {draft?:boolean;recipe: RecipeDetail; action?: ReactNode; management?: ReactNode; share?: ReactNode}) {
-  const [section, setSection] = useState<Section>('概览');
+export function RecipeDetails({recipe, action, management, share, draft, heading, overview, overviewFooter, section: selectedSection, onSectionChange}: {draft?:boolean;recipe: RecipeDetail; action?: ReactNode; management?: ReactNode; share?: ReactNode; heading?: ReactNode; overview?: ReactNode; overviewFooter?: ReactNode; section?: RecipeSection; onSectionChange?: (section: RecipeSection) => void}) {
+  const [localSection, setLocalSection] = useState<Section>('概览');
+  const section = selectedSection ?? localSection;
+  const setSection = (value: RecipeSection) => {setLocalSection(value); onSectionChange?.(value);};
   const allowed = Boolean(recipe.config || recipe.rich);
   return <article className="community-detail">
-    <header className="community-detail-heading"><RecipeMark name={recipe.public.name} logo={recipe.logo}/><div><h1>{recipe.public.name}</h1><p>{recipe.public.summary}</p></div><div className="community-actions">{share}{action}</div></header>
+    {heading ?? <header className="community-detail-heading"><RecipeMark name={recipe.public.name} logo={recipe.logo}/><div><h1>{recipe.public.name}</h1><p>{recipe.public.summary}</p></div><div className="community-actions">{share}{action}</div></header>}
     <div className="community-detail-layout"><nav aria-label="配方详细信息">{recipeSections.filter(item => allowed || item === '概览').map(item => <button type="button" key={item} aria-current={section === item ? 'page' : undefined} onClick={() => setSection(item)}>{item}</button>)}</nav>
-      <div className="community-detail-content">{section === '概览' ? <><RecipeOverview recipe={recipe} draft={draft}/>{!allowed && <p className="community-access-note">获取此版本后，可以查看完整配置。</p>}{management}</> : recipe.rich ? <RichConfiguration view={recipe.rich} section={section}/> : recipe.config && <RecipeConfiguration config={recipe.config} section={section}/>}</div></div>
+      <div className="community-detail-content">{section === '概览' ? <>{overview ?? <RecipeOverview recipe={recipe} draft={draft}/>}{overviewFooter}{!allowed && <p className="community-access-note">获取此版本后，可以查看完整配置。</p>}{management}</> : recipe.rich ? <RichConfiguration view={recipe.rich} section={section}/> : recipe.config && <RecipeConfiguration config={recipe.config} section={section}/>}</div></div>
   </article>;
 }
 

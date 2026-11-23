@@ -6,6 +6,7 @@ import {useActiveDevice, useShellCapabilities} from '../../client-context';
 import {Button, InlineNotice} from '../../reference/components/ui';
 import {useCommunity} from '../community-context';
 import {CopyButton} from '../RecipeContent';
+import {GroupShareHistory} from './GroupSourceHistory';
 import {RecipeAuthoringPage} from './RecipeAuthoring';
 import '../community.css';
 
@@ -19,6 +20,8 @@ function GroupShareSession({botId, groupId, accountId}: {botId: AgentId; groupId
   const device = useActiveDevice();
   const shell = useShellCapabilities();
   const community = useCommunity();
+  const [prepare,setPrepare]=useState(false);
+  const [history,setHistory]=useState(false);
   const [source, setSource] = useState<DesktopRecipeSourceReply>();
   const [detail, setDetail] = useState<RecipeDetail>();
   const [url, setUrl] = useState<string>();
@@ -44,6 +47,9 @@ function GroupShareSession({botId, groupId, accountId}: {botId: AgentId; groupId
     {error && <InlineNotice title="配方来源未能读取" tone="warning" actions={<Button onClick={() => setRefresh(value => value + 1)}>重新读取</Button>}>{error}</InlineNotice>}
     {source?.source && <section className="community-workspace-section"><h3>{own ? '本群使用的已发布版本' : '本群使用的配方来源'}</h3><p>{detail?.public.name ?? '正在读取配方介绍…'}{detail && ` · ${detail.public.version}`}</p>{!own && <p className="community-muted">这是其他作者的作品。分享原版本链接会保留作者与版本；获取资格不授予重新发布的权利。</p>}<div className="community-actions">{url && <CopyButton value={url}/>}<Button disabled={!detail} onClick={() => {if (detail) community?.open({kind:'detail',recipe:{recipeId:detail.recipeId,versionId:detail.versionId},...own ? {privateView:true} : {}});}}>{own ? '管理此版本' : '查看原配方'}</Button></div></section>}
     {source?.source && !own && <InlineNotice title="核对独立自有内容" tone="warning">本群含有其他作者的来源。只可分享你能独立验证为自有的内容，受限来源不能导出。来源检查不通过时会停止。</InlineNotice>}
-    <RecipeAuthoringPage source={{botId,groupId}} onSaved={draftId => community?.open({kind:'draft',draftId})}/>
+    <div className="community-actions"><Button variant="primary" onClick={()=>{setHistory(false);setPrepare(true);}}>从本群准备配方</Button>
+      {accountId&&shell?.recipeAuthoring&&<Button onClick={()=>setHistory(v=>!v)}>{history?'收起分享历史':'本群分享历史'}</Button>}</div>
+    {history&&accountId&&shell?.recipeAuthoring&&<GroupShareHistory shell={shell.recipeAuthoring} accountId={accountId} viewId={device.id} botId={botId} groupId={groupId}/>}
+    {prepare&&<RecipeAuthoringPage source={{botId,groupId}} onBack={()=>setPrepare(false)} onSaved={draftId=>{setPrepare(false);community?.open({kind:'draft',draftId});}}/>}
   </div>;
 }

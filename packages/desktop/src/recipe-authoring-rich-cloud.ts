@@ -7,6 +7,8 @@ interface AccountTransport {request(accountId:string,path:string,init:RequestIni
 const uuid=z.string().uuid();
 const sha=(bytes:Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
 class MissingRichOperation extends Error {}
+class ForbiddenRichResource extends Error {}
+export class UnavailableSourceItems extends Error {}
 export function richTerminal(raw:unknown){
   const v=z.object({format:z.literal('rich-v2'),operationId:uuid,status:z.enum(['accepted','expired','cancelled']),stateRevision:z.number().int().positive().optional(),
     draftId:uuid.optional(),revision:z.number().int().positive().optional(),outcome:z.literal('unknown').optional()}).safeParse(raw);
@@ -20,7 +22,7 @@ export function richAuthoringCloud(account:AccountTransport,accountId:string,sig
     const active=init.signal?AbortSignal.any([signal,init.signal]):signal;
     check();signal.throwIfAborted();
     const response=await account.request(accountId,path,{...init,signal:active},check);
-    if(!response.ok||!response.body){await response.body?.cancel();if(response.status===404)throw new MissingRichOperation();throw fail();}
+    if(!response.ok||!response.body){await response.body?.cancel();if(response.status===404)throw new MissingRichOperation();if(response.status===403)throw new ForbiddenRichResource();throw fail();}
     const reader=response.body.getReader(), chunks:Uint8Array[]=[];
     let bytes=0;
     try {for(;;){
@@ -49,18 +51,28 @@ export function richAuthoringCloud(account:AccountTransport,accountId:string,sig
           r.nonceCommitment!==op.nonceCommitment||op.purpose==='editDraft'&&op.draftId!==r.destinationDraftId)throw fail();
       return r.destinationDraftId;
     },
-    async draft(draftId:string,revision:number){
+    async draftMetadata(draftId:string,revision:number){
       const meta=z.object({format:z.literal('rich-v2'),draftId:uuid,revision:z.number().int(),sourceIntentId:uuid,manifest:recipeRichManifestObjectSchema,
         sourceManifest:recipeRichManifestObjectSchema}).parse(await json('/v2/drafts/'+uuid.parse(draftId)));
       if(meta.draftId!==draftId||meta.revision!==revision)throw fail();
+      return meta;
+    },
+    async draft(draftId:string,revision:number){
+      const meta=await this.draftMetadata(draftId,revision);
       const bytes=await this.readMember(draftId,meta.manifest);
       decodeRichRecipeContent(bytes);
       return {canonical:bytes.toString('base64url'),meta};
     },
     async sourceItems(versionId:string){
-      const attested=richSourceAttestationSchema.parse(await json('/v2/versions/'+uuid.parse(versionId)+'/source-items'));
-      if(attested.versionId!==versionId)throw fail();
-      return attested;
+      try {
+        const attested=richSourceAttestationSchema.parse(await json('/v2/versions/'+uuid.parse(versionId)+'/source-items'));
+        if(attested.versionId!==versionId)throw fail();
+        return attested;
+      } catch(error) {
+        if(error instanceof MissingRichOperation||error instanceof ForbiddenRichResource)
+          throw new UnavailableSourceItems('所选版本已不可用或无法读取。');
+        throw error;
+      }
     },
     async authorize(op:string,stage:'dispatch'|'accept',payloadDigest:string){
       const binding=richAuthoringAuthorizationSchema.parse(await json(route(op)+'/authorize',{stage,stateRevision:stage==='dispatch'?1:2,payloadDigest}));

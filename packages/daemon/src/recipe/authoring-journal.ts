@@ -50,6 +50,7 @@ export interface LocalOperation {
   view: AuthoringOperation;
   accountId: string; scope: string; bot: string; binding: string; recipient: Recipient; carrier: Carrier;
   secret?: string; nonce?: string; source?: Source; sourceIdentity?: string; payload?: string; proposalDigest?: string;
+  originalGroup?:{groupId:string;identity:string};
   rich?: RichLocalDraft;
   richSaved?:NonNullable<RichLocalDraft['base']>;
   editApproval?: string;
@@ -63,6 +64,7 @@ export function editApproval(op: LocalOperation, payloadDigest: string) {
     op.view.targetPublicKey, op.view.nonceCommitment, op.view.draftId, op.view.baseRevision, payloadDigest]));
 }
 export interface AuthoringLedger {
+  handoffs?: Record<string, import('./authoring-handoff-menu').PrivateHandoff>;
   version: 1; links: Record<string, Link>; operations: Record<string, LocalOperation>;
   daily: Record<string, {day: string; count: number}>;
 }
@@ -79,6 +81,12 @@ export function retire(op: LocalOperation, state: 'completed' | 'cancelled' | 'e
   discardAuthoringMaterial(op);
 }
 export function maintain(ledger: AuthoringLedger, now: number) {
+  for(const [id,h] of Object.entries(ledger.handoffs??{})){
+    if(h.expiresAt+7*DAY<=now){delete ledger.handoffs![id];continue;}
+    if(h.expiresAt<=now&&!['prepared','cancelled','needsReview'].includes(h.phase.state)){
+      h.phase={state:'expired'};delete h.edit;
+    }
+  }
   for (const [id, op] of Object.entries(ledger.operations)) {
     if (active(op) && op.view.createdAt + DAY <= now) {
       // An accept response may have been lost. Keep tracking until the original account settles it, even after cloud retention.

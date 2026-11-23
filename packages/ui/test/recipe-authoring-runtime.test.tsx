@@ -10,7 +10,10 @@ import {
 import {createDesktopFacades} from '../../desktop/src/facade';
 import {desktopChannels} from '../../desktop/src/ipc-contract';
 import {DesktopRoot} from '../src/devices/DesktopRoot';
-import * as authoringUi from '../src/community/authoring/RecipeAuthoring';
+import * as authoringUi from '../src/community/authoring/LegacyDraftChat';
+import {readFileSync} from 'node:fs';
+import {resolve} from 'node:path';
+import {canonicalizeRichRecipeContent,recipeRichDraftSchema,type AuthoringHandoff} from '@vonvon/protocol';
 import {A, B, devicesState} from './devices-fixture';
 
 const accountA = '44444444-4444-4444-8444-444444444444';
@@ -27,7 +30,7 @@ const snapshot = (view: unknown) => {
   const botId = 'cli_author_' + suffix;
   const groupId = 'oc_author_' + suffix;
   return desktopSnapshotSchema.parse({revision:1,observedAt:1,stale:false,host:{kind:'connected',ownership:'attached',version:'0.10.1'},jobs:[],tools:[],
-    agents:[{id:botId,name:'Bot '+suffix.toUpperCase(),enabled:true,running:true,connection:'connected',activation:'active'}],
+    agents:[{id:botId,name:'Bot '+suffix.toUpperCase(),tenant:'feishu',enabled:true,running:true,connection:'connected',activation:'active'}],
     groups:[{id:groupId,name:'群聊 '+suffix.toUpperCase()}],
     memberships:[{id:JSON.stringify([botId,groupId]),agentId:botId,groupId,name:'群聊 '+suffix.toUpperCase(),directory:'/tmp/synthetic-authoring',backend:'codex-appserver',conversation:'threads',response:'mention',permission:{administrator:'full',member:'full',network:false},stale:false,enabled:true}],
     application:{platform:'linux',version:'0.10.1',loginItem:false,dataPath:'/tmp/synthetic-authoring'},
@@ -48,6 +51,8 @@ let draft: RecipeDraft;
 let authoring: (request: DesktopAuthoringRequest) => Promise<DesktopAuthoringReply>;
 let cloud: (request: CommunityRequest) => Promise<unknown>;
 let sourceRecord: unknown;
+let currentHandoff:AuthoringHandoff|undefined;
+let deviceSnapshot= snapshot;
 let facade: ReturnType<typeof createDesktopFacades>;
 const success = (value: unknown) => ({ok:true,value});
 const text = () => document.querySelector('main')?.textContent ?? '';
@@ -65,26 +70,9 @@ async function fill(label: string,value: string) {
   return input!;
 }
 async function chooseSource() {
-  await click('社区'); await click('创作中心'); await click('分享群聊配方');
-  const target = document.querySelector<HTMLButtonElement>('.authoring-source-list button');
-  expect(target?.textContent).toContain('Bot A');
-  await act(async () => target!.click()); await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="选择已绑定群聊"] button')!.click());
-}
-async function linkMyself() {
-  await click('关联我的飞书私聊');
-  expect(document.querySelector<HTMLInputElement>('[aria-label="私聊关联命令"]')?.value).toBe('/recipe link 0123456789abcdefabcd');
-  recipient = true; await click('我已发送，核对收件人');
-  expect(text()).toContain('ou_verified'); expect(text()).toContain('tenant_verified');
-  expect(calls.some(request=>request.type==='confirmLink')).toBe(false);
-  await click('确认是我的私聊');
-}
-async function prepare() {
-  await click('读取并核对来源');
-  expect(text()).toContain('只整理公开资料');
-  const send = [...document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='发送私人草稿卡片')!;
-  expect(send.disabled).toBe(true);
-  await act(async () => document.querySelector<HTMLInputElement>('.community-checkbox input')!.click());
-  await click('发送私人草稿卡片');
+  await click('社区');await click('创作中心');await click('准备配方');
+  const fields=dialog('准备配方')!.querySelectorAll('select');
+  expect(Array.from(fields).map(select=>select.selectedOptions[0]?.textContent)).toEqual(['Bot A','群聊 A']);
 }
 async function openDraftChat(editing=false) {
   linked=true;await draw();await click('社区');await click('创作中心');await click('查看草稿');
@@ -108,14 +96,24 @@ function op(session:Session,state:DesktopAuthoringOperation['state']='waiting'):
   return reply.operation;
 }
 async function defaultAuthoring(request: DesktopAuthoringRequest):Promise<DesktopAuthoringReply> {
-  if (request.type==='open') {
+  if (request.type==='open'||request.type==='openDraftSource') {
+    const botId=request.type==='open'?request.botId:snapshot(request.viewId).agents[0]!.id;
     const handle = `00000000-0000-4000-8000-${String(++nextHandle).padStart(12,'0')}`;
-    const next = desktopAuthoringReplySchema.parse({kind:'session',handle,target:{accountId:request.accountId,accountName:request.accountId===accountA?'账号甲':'账号乙',viewId:request.viewId,botId:request.botId,botName:request.botId===botA?'Bot A':'Bot B'},linked,operations:operations.filter(item=>item.target.accountId===request.accountId&&item.target.viewId===request.viewId&&item.target.botId===request.botId)});
+    const next = desktopAuthoringReplySchema.parse({kind:'session',handle,target:{accountId:request.accountId,accountName:request.accountId===accountA?'账号甲':'账号乙',viewId:request.viewId,botId,botName:botId===botA?'Bot A':'Bot B'},linked,operations:operations.filter(item=>item.target.accountId===request.accountId&&item.target.viewId===request.viewId&&item.target.botId===botId),...(request.type==='openDraftSource'&&{sourceGroup:{groupId:groupA,groupName:'群聊 A'}})});
     if (next.kind!=='session') throw new Error('Expected session fixture'); sessions.set(handle,next);return next;
   }
   const session = sessionFor(request);
   switch(request.type) {
     case 'detach': case 'close': sessions.delete(request.handle);return {kind:'closed'};
+    case 'beginHandoff':case 'beginDraftHandoff':{
+      currentHandoff={retryId:request.retryId,groupId:snapshot(session.target.viewId).groups[0]!.id,state:'selecting',...(request.type==='beginDraftHandoff'&&{draftId:request.draftId})};
+      return {kind:'handoff',handoff:currentHandoff};
+    }
+    case 'handoffStatus':case 'cancelHandoff':{
+      if(!currentHandoff||currentHandoff.retryId!==request.retryId)throw new Error('来源请求不存在。');
+      if(request.type==='cancelHandoff')currentHandoff={...currentHandoff,state:'cancelled'};
+      return {kind:'handoff',handoff:currentHandoff};
+    }
     case 'sourceHistory': return {kind:'sourceHistory',entries:[],nextCursor:null};
     case 'status': return {...session,linked,operations:operations.filter(item=>item.target.accountId===session.target.accountId&&item.target.viewId===session.target.viewId&&item.target.botId===session.target.botId)};
     case 'beginLink': return {kind:'challenge',challengeId,code:'0123456789abcdefabcd',expiresAt:Date.now()+300000};
@@ -138,7 +136,7 @@ beforeEach(() => {
   HTMLElement.prototype.scrollIntoView=vi.fn();
   Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:vi.fn(async()=>{})}});
   document.body.innerHTML='<div id="root"></div>';root=createRoot(document.getElementById('root')!);
-  status=signedIn();sourceRecord=null;calls=[];cloudCalls=[];sessions=new Map();nextHandle=0;linked=false;recipient=false;operations=[];
+  localStorage.clear();deviceSnapshot=snapshot;currentHandoff=undefined;status=signedIn();sourceRecord=null;calls=[];cloudCalls=[];sessions=new Map();nextHandle=0;linked=false;recipient=false;operations=[];
   draft={draftId,recipeId:null,revision:1,public:{name:'同一份私人草稿',summary:'本人填写的公开简介',overview:'',version:'1',access:'direct'},config:{role:'只整理公开资料'}};
   authoring=defaultAuthoring;
   cloud=async request=>{
@@ -153,7 +151,7 @@ beforeEach(() => {
     try {
       if(channel===desktopChannels.subscribe)return success(undefined);
       if(channel===desktopChannels.accountStatus)return success(status);
-      if(channel===desktopChannels.snapshot)return success(snapshot(args.at(-1)));
+      if(channel===desktopChannels.snapshot)return success(deviceSnapshot(args.at(-1)));
       if(channel===desktopChannels.memory)return success({kind:'newCounts',projects:{},bots:{},dm:{}});
       if(channel===desktopChannels.run)return success({kind:'pendingGroups',groups:[]});
       if(channel===desktopChannels.admin)return success({kind:'judgeUsage',days:[],unreadBots:0});
@@ -172,88 +170,92 @@ async function draw(view=A) {
   await act(async()=>{emit({type:'devices',value:devicesState({id:view})});emit({type:'account',value:status});root.render(<DesktopRoot fallback={facade.client} shell={facade.shell}/>);});
 }
 
-it('selects an existing group before linking, confirms the actual recipient, attests the reviewed role and opens the original accepted draft',async()=>{
+it('opens over the creator workspace, links the actual private recipient, and sends once without reading source files in the App',async()=>{
   await draw();await chooseSource();
-  expect(calls).toHaveLength(1);expect(calls[0]).toEqual({type:'open',accountId:accountA,viewId:A,botId:botA,groupId:groupA});
-  await linkMyself();await prepare();
-  expect(calls.find(request=>request.type==='prepare')).toMatchObject({groupId:groupA,reviewToken:evidence,sourceAttested:true});
-  expect(text()).toContain('等待本人在飞书操作');expect(text()).not.toContain('私人草稿已保存');
-  operations=[{...operations[0]!,state:'completed',receipt:{operationId,status:'accepted',stateRevision:3,draftId,revision:1}}];
-  await click('重新核验并继续');
-  expect(text()).toContain('同一份私人草稿');expect(cloudCalls.filter(request=>request.type==='draft')).toEqual([{type:'draft',accountId:accountA,draftId}]);
-  expect(calls.some(request=>request.type==='detach')).toBe(true);expect(calls.some(request=>request.type==='close')).toBe(false);expect(calls.some(request=>request.type==='accept')).toBe(false);
+  expect(text()).toContain('草稿箱');
+  expect(calls).toEqual([]);
+  await click('确认');
+  expect(calls.map(r=>r.type)).toEqual(['open','beginLink']);
+  expect(calls[0]).toMatchObject({accountId:accountA,viewId:A,botId:botA,groupId:groupA});
+  await click('我已发送，核对收件人');
+  expect(dialog('准备配方')?.textContent).toContain('尚未收到关联命令');
+  recipient=true;await click('我已发送，核对收件人');
+  expect(dialog('准备配方')?.textContent).toContain('ou_verified');
+  expect(calls.find(r=>r.type==='beginHandoff')).toBeUndefined();
+  await click('这不是我，重新关联');expect(dialog('准备配方')?.textContent).not.toContain('ou_verified');
+  await click('我已发送，核对收件人');await click('确认是我的私聊');
+  expect(calls.filter(r=>r.type==='beginHandoff')).toHaveLength(1);
+  expect(calls).toContainEqual({type:'confirmLink',handle:[...sessions.keys()][0],challengeId,evidence});
+  expect(dialog('准备配方')?.textContent).toContain('请在 Bot 私聊里选择内容');
+  expect(dialog('准备配方')?.querySelector('input[type=checkbox]')).toBeNull();
+  expect(calls.some(r=>['richInventory','richSourceOptions','richPrepare','accept'].includes(r.type))).toBe(false);
+  await click('取消准备');expect(dialog('准备配方')?.textContent).toContain('已取消本次准备');
 });
 
-it('keeps unconfirmed or wrong recipients unsent, replaces the challenge and cancels by closing its handle',async()=>{
-  await draw();await chooseSource();await click('关联我的飞书私聊');await click('我已发送，核对收件人');
-  expect(text()).toContain('尚未收到有效');expect(calls.some(request=>request.type==='prepare'||request.type==='confirmLink')).toBe(false);
-  recipient=true;await click('我已发送，核对收件人');await click('这不是我，重新关联');
-  expect(text()).not.toContain('ou_verified');expect(calls.filter(request=>request.type==='beginLink')).toHaveLength(2);
-  const handle=calls.find(request=>request.type==='open');expect(handle).toBeDefined();
-  await click('取消关联');expect(calls.filter(request=>request.type==='close')).toHaveLength(1);expect(calls.filter(request=>request.type==='open')).toHaveLength(2);
-  expect(calls.some(request=>request.type==='confirmLink')).toBe(false);
+it('retains the retry identity across uncertain delivery and reopens only the accepted draft',async()=>{
+  vi.useFakeTimers();linked=true;
+  let lose=true;
+  authoring=async r=>{const result=await defaultAuthoring(r);if(r.type==='beginHandoff'&&lose){lose=false;throw new Error('发送结果待核实');}return result;};
+  await draw();await chooseSource();await click('确认');
+  expect(dialog('准备配方')?.textContent).toContain('发送结果待核实');
+  const initial=calls.find(r=>r.type==='beginHandoff')!;
+  await click('关闭');await click('准备配方');
+  expect(calls.filter(r=>r.type==='beginHandoff')).toHaveLength(1);
+  expect(calls.filter(r=>r.type==='handoffStatus').at(-1)).toMatchObject({retryId:initial.retryId});
+  expect(dialog('准备配方')?.textContent).toContain('请在 Bot 私聊里选择内容');
+  const session=[...sessions.values()][0]!;
+  operations=[{...op(session,'completed'),receipt:{status:'accepted',operationId,draftId,revision:1,stateRevision:3}}];
+  currentHandoff={...currentHandoff!,state:'prepared',operationId};
+  await act(async()=>vi.advanceTimersByTimeAsync(2000));expect(dialog('准备配方')?.textContent).toContain('私人草稿已保存');
+  const view=Array.from(dialog('准备配方')!.querySelectorAll('button')).find(b=>b.textContent==='查看草稿')!;
+  await act(async()=>view.click());
+  expect(cloudCalls.filter(r=>r.type==='draft')).toEqual([{type:'draft',accountId:accountA,draftId}]);
 });
 
-it('shows exact typed candidate content without renderer accept, and distinguishes cancellation pending from cancelled',async()=>{
-  linked=true;await draw();await chooseSource();await prepare();
-  operations=[{...operations[0]!,state:'candidate',payloadDigest:evidence}];await click('重新核验并继续');await click('在 App 核对候选');
-  expect(text()).toContain('已核对的新角色');expect(text()).toContain('请在本人飞书私聊确认');expect(calls.some(request=>request.type==='accept')).toBe(false);
-  await click('取消此请求');expect(text()).toContain('正在取消，等待云端确认');expect(text()).not.toContain('已取消');
-  operations=[{...operations[0]!,state:'cancelled',receipt:{operationId,status:'cancelled',stateRevision:3}}];await click('重新核验并继续');expect(text()).toContain('已取消');
-  expect(cloudCalls.some(request=>request.type==='deleteDraft')).toBe(false);
+it('revalidates the original retry after a disconnected session, without dispatching a second request',async()=>{
+  linked=true;await draw();await chooseSource();await click('确认');
+  const retryId=currentHandoff!.retryId;
+  await click('关闭');
+  authoring=async r=>{if(r.type==='handoffStatus')throw new Error('请重新核验本人私聊。');return defaultAuthoring(r);};
+  await click('准备配方');expect(dialog('准备配方')?.textContent).toContain('重新核验本人私聊');
+  await click('重试本次准备');expect(calls.filter(r=>r.type==='beginHandoff').map(r=>r.retryId)).toEqual([retryId,retryId]);
 });
 
-it('retains complete read-only instructions and requirement labels in an older in-flight candidate',async()=>{
-  linked=true;await draw();await chooseSource();await prepare();
-  authoring=async request=>request.type==='inspectCandidate'?{kind:'candidate',operation:operations[0]!,payloadDigest:evidence,
-    content:{public:{name:'旧候选',summary:'待确认',overview:'原介绍',version:'1',access:'direct'},config:{role:'原角色',setup:{steps:[
-      {kind:'tool',title:'旧工具说明',instructions:'请先核对工具。',required:true,check:'确认可用'},
-      {kind:'context',title:'旧上下文说明',instructions:'按需补充资料。',required:false},
-    ]}}}}:defaultAuthoring(request);
-  operations=[{...operations[0]!,state:'candidate',payloadDigest:evidence}];
-  await click('重新核验并继续');await click('在 App 核对候选');
-  for(const value of ['旧工具说明','请先核对工具。','确认可用','必需','旧上下文说明','按需补充资料。','可选'])expect(text()).toContain(value);
-  expect(calls.some(request=>request.type==='accept')).toBe(false);
+it.each(['stopped','unbound'] as const)('gives a %s Bot one actionable destination without opening a private session',async(kind)=>{
+  deviceSnapshot=view=>{const s=snapshot(view);if(kind==='stopped')s.agents[0]!.running=false;else s.memberships=[];return s;};
+  await draw();await click('社区');await click('创作中心');await click('准备配方');
+  const box=dialog('准备配方')!;
+  expect(box.querySelector('select')).toBeNull();expect(box.textContent).toContain(kind==='stopped'?'前往 Bot':'前往群组');
+  expect(calls).toEqual([]);
 });
 
-it('backs off foreground waiting polls and shows errors without reporting success',async()=>{
-  vi.useFakeTimers();linked=true;await draw();await chooseSource();await prepare();
-  let fail=true;authoring=async request=>{if(request.type==='status'&&fail)throw new Error('当前账号已不是 Bot 管理员，请重新核验。');return defaultAuthoring(request);};
-  await act(async()=>vi.advanceTimersByTimeAsync(2000));expect(text()).toContain('当前账号已不是');expect(text()).not.toContain('私人草稿已保存');
-  expect(calls.filter(request=>request.type==='status')).toHaveLength(1);
-  await act(async()=>vi.advanceTimersByTimeAsync(3999));expect(calls.filter(request=>request.type==='status')).toHaveLength(1);
-  fail=false;await act(async()=>vi.advanceTimersByTimeAsync(1));expect(calls.filter(request=>request.type==='status')).toHaveLength(2);expect(text()).not.toContain('当前账号已不是');
-});
-
-it('creates fresh handles for account A/B/A, hides old private state and ignores late results',async()=>{
-  linked=true;await draw();await chooseSource();await prepare();
-  const first=calls.find(request=>request.type==='prepare')!;if(!('handle'in first))throw new Error('Missing handle');
-  let finish: ((value:DesktopAuthoringReply)=>void)|undefined;
-  authoring=async request=>request.type==='resume'?new Promise(resolve=>{finish=resolve;}):defaultAuthoring(request);
-  const button=[...document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='重新核验并继续')!;
-  await act(async()=>button.click());
+it('never sends the previous account’s pending preparation after switching accounts',async()=>{
+  await draw();await chooseSource();await click('确认');
+  expect(dialog('准备配方')?.textContent).toContain('复制关联命令');
   await act(async()=>{status=signedIn(accountB);emit({type:'account',value:status});});
-  expect(text()).not.toContain('账号甲');expect(text()).not.toContain('等待本人在飞书操作');expect(calls).toContainEqual({type:'detach',handle:first.handle});
-  await act(async()=>finish?.({kind:'operation',operation:{...operations[0]!,state:'completed',receipt:{operationId,status:'accepted',stateRevision:3,draftId,revision:1}}}));
-  expect(text()).not.toContain('同一份私人草稿');
-  await click('创作中心');await click('分享群聊配方');await act(async()=>document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="选择已绑定群聊"] button')!.click());
-  expect(text()).toContain('账号乙');expect(text()).not.toContain('等待本人在飞书操作');
-  await act(async()=>{status=signedIn();emit({type:'account',value:status});});
-  await click('创作中心');await click('分享群聊配方');await act(async()=>document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="选择已绑定群聊"] button')!.click());
-  expect(calls.filter(request=>request.type==='open')).toHaveLength(3);
-  const openSessions=[...sessions.keys()];expect(openSessions).not.toContain(first.handle);expect(text()).toContain('账号甲');
+  expect(dialog('准备配方')).toBeUndefined();
+  await click('创作中心');await click('准备配方');expect(calls.filter(r=>r.type==='beginHandoff')).toHaveLength(0);
+  await click('确认');expect(calls.filter(r=>r.type==='open').at(-1)).toMatchObject({accountId:accountB});
 });
 
-it('closes device A, uses only device B groups, and rechecks a fresh handle on A/B/A including a late open',async()=>{
-  linked=true;await draw();await chooseSource();
-  const first=[...sessions.keys()][0]!;
+it('does not adopt a late open or send a card after the source device switches',async()=>{
+  linked=true;
+  let finish:(()=>void)|undefined;
+  authoring=async r=>{const v=await defaultAuthoring(r);if(r.type==='open')return new Promise(resolve=>{finish=()=>resolve(v);});return v;};
+  await draw();await chooseSource();await click('确认');
+  const original=[...sessions.keys()][0]!;
   await act(async()=>emit({type:'devices',value:devicesState({id:B})}));
-  expect(calls).toContainEqual({type:'detach',handle:first});expect(text()).not.toContain('群聊 A');expect(text()).not.toContain('Bot A');
-  await act(async()=>document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="选择已绑定群聊"] button')!.click());
-  expect(calls.filter(request=>request.type==='open').at(-1)).toMatchObject({viewId:B,botId:'cli_author_b'});
-  await act(async()=>emit({type:'devices',value:devicesState({id:A})}));
-  expect(text()).not.toContain('Bot B');await act(async()=>document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="选择已绑定群聊"] button')!.click());
-  expect(calls.filter(request=>request.type==='open')).toHaveLength(3);expect([...sessions.keys()]).not.toContain(first);
+  await act(async()=>finish?.());
+  expect(calls).toContainEqual({type:'detach',handle:original});expect(calls.some(r=>r.type==='beginHandoff')).toBe(false);
+  expect(dialog('准备配方')?.textContent).not.toContain('Bot A');expect(dialog('准备配方')?.textContent).toContain('Bot B');
+});
+
+it('expires an unverified challenge and requires a new one before sending',async()=>{
+  vi.useFakeTimers();await draw();await chooseSource();await click('确认');
+  await act(async()=>vi.advanceTimersByTimeAsync(300000));expect(dialog('准备配方')?.textContent).toContain('短码已到期');
+  const inspect=Array.from(dialog('准备配方')!.querySelectorAll('button')).find(b=>b.textContent==='我已发送，核对收件人')!;
+  expect(inspect.disabled).toBe(true);await click('重新获取短码');expect(inspect.disabled).toBe(false);
+  expect(calls.some(r=>r.type==='beginHandoff')).toBe(false);
 });
 
 it('keeps the same private draft and dirty text when Feishu saves a newer revision, then sends the current revision when reopened',async()=>{
@@ -268,37 +270,6 @@ it('keeps the same private draft and dirty text when Feishu saves a newer revisi
   await click('保留当前输入，使用此修订继续编辑');expect(input.value).toBe('尚未保存的本地输入');
   await click('发送继续编辑卡片');expect(calls.filter(request=>request.type==='edit').at(-1)).toMatchObject({draftId,baseRevision:2});
   await click('暂停聊天编辑');expect(calls.some(request=>request.type==='close')).toBe(true);expect(cloudCalls.some(request=>request.type==='deleteDraft')).toBe(false);
-});
-
-it('closes a late open from an abandoned device instead of adopting its handle',async()=>{
-  linked=true;await draw();await click('社区');await click('创作中心');await click('分享群聊配方');await act(async()=>document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());
-  let finish:((value:DesktopAuthoringReply)=>void)|undefined;
-  authoring=async request=>{
-    const result=await defaultAuthoring(request);
-    if(request.type==='open')return new Promise(resolve=>{finish=()=>resolve(result);});
-    return result;
-  };
-  await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="选择已绑定群聊"] button')!.click());expect(text()).toContain('正在核验');
-  const old=[...sessions.keys()][0]!;
-  await act(async()=>emit({type:'devices',value:devicesState({id:B})}));
-  await act(async()=>finish?.({kind:'closed'}));
-  expect(calls).toContainEqual({type:'close',handle:old});expect(text()).not.toContain('账号甲');expect(text()).not.toContain('Bot A');
-});
-
-it('reports administrator failure, retries with fresh validation and never creates an operation on failure',async()=>{
-  authoring=async request=>{if(request.type==='open')throw new Error('你不是这个 Bot 的当前管理员。');return defaultAuthoring(request);};
-  await draw();await chooseSource();expect(text()).toContain('不是这个 Bot 的当前管理员');expect(calls.some(request=>request.type==='prepare')).toBe(false);
-  authoring=defaultAuthoring;await click('重新核验');expect(text()).toContain('关联本人飞书私聊');
-  expect(calls.filter(request=>request.type==='open')).toHaveLength(2);
-});
-
-it('expires the first-link challenge visibly and requires a new challenge before recipient confirmation',async()=>{
-  vi.useFakeTimers();await draw();await chooseSource();await click('关联我的飞书私聊');
-  await act(async()=>vi.advanceTimersByTimeAsync(300000));
-  expect(text()).toContain('关联短码已到期');
-  const inspect=[...document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='我已发送，核对收件人')!;
-  expect(inspect.disabled).toBe(true);expect(calls.some(request=>request.type==='confirmLink')).toBe(false);
-  await click('重新获取短码');expect(inspect.disabled).toBe(false);
 });
 
 it('keeps an old-revision editing rejection visible and leaves the saved draft unchanged',async()=>{
@@ -339,8 +310,10 @@ it('opens the actual group Share tab with the current Bot and group fixed, and s
   expect(document.querySelector('nav[aria-label="群设置"] button[aria-current]')?.textContent).toBe('分享');
   expect(text()).toContain('原作者作品');expect(text()).toContain('这是其他作者的作品');expect(text()).not.toContain('管理此版本');
   expect(document.querySelector('.authoring-source-list')).toBeNull();expect(document.querySelector('[role="dialog"]')).toBeNull();
-  expect(calls.find(request=>request.type==='open')).toMatchObject({viewId:A,botId:botA});
-  await click('读取并核对来源');expect(calls.find(request=>request.type==='reviewSource')).toMatchObject({groupId:groupA});
+  await click('从本群准备配方');
+  expect(dialog('准备配方')?.querySelector('select')).toBeNull();expect(dialog('准备配方')?.textContent).toContain('Bot A');
+  await click('确认');expect(calls.find(r=>r.type==='beginHandoff')).toMatchObject({groupId:groupA});
+  await click('关闭');
   expect(cloudCalls.find(request=>request.type==='shareLink')).toMatchObject({recipeId:A,versionId:B});
   await click('分享链接');expect(text()).toContain('已复制');expect(navigator.clipboard.writeText).toHaveBeenCalledWith('https://community.example/recipes/'+A+'/versions/'+B);
 });
@@ -463,9 +436,9 @@ it('retains dirty input through a failed chat refresh and a successful retry unt
 });
 
 it.each(['route','account'] as const)('ignores an abandoned %s refresh and its original onSaved callback after returning',async(kind)=>{
-  const callbacks:Array<Parameters<typeof authoringUi.RecipeAuthoringPage>[0]['onSaved']>=[];
-  const original=authoringUi.RecipeAuthoringPage;
-  vi.spyOn(authoringUi,'RecipeAuthoringPage').mockImplementation(props=>{callbacks.push(props.onSaved);return original(props);});
+  const callbacks:Array<Parameters<typeof authoringUi.LegacyDraftChat>[0]['onSaved']>=[];
+  const original=authoringUi.LegacyDraftChat;
+  vi.spyOn(authoringUi,'LegacyDraftChat').mockImplementation(props=>{callbacks.push(props.onSaved);return original(props);});
   await openDraftChat();const oldCallback=callbacks[0]!;
   let reject:((error:Error)=>void)|undefined;const prior=cloud;
   cloud=async request=>request.type==='draft'?new Promise((_,fail)=>{reject=fail;}):prior(request);
@@ -510,6 +483,7 @@ it('opens the exact published version from private group history and keeps uncer
   await act(async()=>document.querySelector<HTMLButtonElement>('.group-directory-identity')!.click());
   await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="设置 群聊 A 中的 Bot A"]')!.click());
   await click('分享');
+  await click('本群分享历史');
   expect(text()).toContain('私有历史草稿');
   expect(text()).toContain('保存结果待核实');
   expect(cloudCalls.some(r=>r.type==='detail'||r.type==='draft'||r.type==='publishDraft')).toBe(false);
@@ -520,19 +494,6 @@ it('opens the exact published version from private group history and keeps uncer
   expect(text()).toContain('历史版本角色');
   expect(cloudCalls.find(r=>r.type==='detail')).toMatchObject({recipeId:A,versionId:B,accountId:accountA});
   expect(cloudCalls.some(r=>r.type==='publishDraft')).toBe(false);
-});
-
-it('shows a paused chat context as distinct from an expired request and keeps the source selection',async()=>{
-  linked=true;await draw();await chooseSource();await prepare();
-  operations=[{...operations[0]!,contextPaused:true}];
-  vi.useFakeTimers();
-  await click('重新核验并继续');
-  expect(text()).toContain('聊天编辑已暂停，原请求仍保留');
-  expect(text()).not.toContain('请求已到期');
-  operations=[{...operations[0]!,contextPaused:false}];
-  await click('重新核验并继续');
-  expect(text()).toContain('等待本人在飞书操作');
-  expect(calls.filter(call=>call.type==='resend'||call.type==='cancel')).toEqual([]);
 });
 
 it('refreshes a detached draft detail only for its account and draft without opening another chat lease',async()=>{
@@ -548,87 +509,22 @@ it('refreshes a detached draft detail only for its account and draft without ope
   expect(calls.filter(r=>r.type==='open')).toHaveLength(0);
 });
 
-it('selects actual rich skill files and complete items before sending a source-attested private draft',async()=>{
-  const {readFileSync}=await import('node:fs');const {resolve}=await import('node:path');
-  const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
+it('continues a rich draft at its verified source and keeps publication information editable when that source is unavailable',async()=>{
   const content=JSON.parse(readFileSync(resolve(process.cwd(),'../protocol/test/fixtures/recipe-rich-v2.content.json'),'utf8'));
   content.parts=[];content.memories=[];delete content.finalLogo;
-  const canonical=canonicalizeRichRecipeContent(content).content;
-  linked=true;const normal=authoring;
-  authoring=async request=>{
-    if(request.type==='richSourceOptions')return {kind:'richSourceOptions',skills:[{name:'helper',files:['SKILL.md','reference.md']}]};
-    if(request.type==='richInventory')return {kind:'richInventory',groupId:request.groupId,inventory:{content:canonical,reviewToken:evidence,unavailable:[],versions:[]}};
-    if(request.type==='richPrepare'){const session=sessionFor(request);operations=[{...op(session),format:'rich-v2'}];return {kind:'operation',operation:operations[0]!};}
-    return normal(request);
-  };
-  await draw();await chooseSource();await click('读取可分享技能');
-  const skill=[...document.querySelectorAll('label')].find(label=>label.textContent==='helper')?.querySelector<HTMLInputElement>('input');
-  expect(skill).not.toBeNull();await act(async()=>skill!.click());
-  const reference=[...document.querySelectorAll('label')].find(label=>label.textContent==='reference.md')?.querySelector<HTMLInputElement>('input');
-  await act(async()=>reference!.click());await click('重新读取来源配置');
-  const inventory=calls.filter(request=>request.type==='richInventory').at(-1);expect(inventory).toMatchObject({options:{skills:[{skill:'helper',files:['SKILL.md','reference.md']}],includeBotMemories:false}});
-  const attest=[...document.querySelectorAll('label')].find(label=>label.textContent?.includes('我已核对来源和全部所选内容'))?.querySelector<HTMLInputElement>('input');
-  expect(attest).not.toBeNull();await act(async()=>attest!.click());await click('确认让 Bot 准备私人草稿');
-  const prepare=calls.find(request=>request.type==='richPrepare');expect(prepare).toMatchObject({selection:{reviewToken:evidence,sourceAttested:true,options:{includeBotMemories:false}}});
-  if(prepare?.type!=='richPrepare')throw new Error('Missing rich preparation');
-  expect(prepare.selection.selected).toContain(canonical.role!.itemId);
-  expect(calls.some(request=>request.type==='accept')).toBe(false);
-  expect(text()).toContain('等待本人在飞书操作');
-});
-
-it('edits rich public metadata through native attested chat and preserves newer local input when a receipt arrives',async()=>{
-  const {readFileSync}=await import('node:fs');const {resolve}=await import('node:path');const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
-  const content=JSON.parse(readFileSync(resolve(process.cwd(),'../protocol/test/fixtures/recipe-rich-v2.content.json'),'utf8'));content.parts=[];content.memories=[];delete content.finalLogo;
-  for(const field of ['name','summary','overview','version'] as const)content.public[field].value=draft.public[field];
+  for(const field of ['name','summary','overview','version'])content.public[field].value=Reflect.get(draft.public,field);
   const doc=canonicalizeRichRecipeContent(content);
-  draft={...draft,config:undefined,sourceIntentId:operationId,format:'rich-v2',rich:{content:doc.content,texts:{},canonical:Buffer.from(doc.canonicalUTF8).toString('base64url')}};
-  linked=true;const normal=authoring;
-  authoring=async request=>{if(request.type==='richEdit'){const session=sessionFor(request);operations=[{...op(session),format:'rich-v2',purpose:'editDraft',draftId,baseRevision:request.baseRevision}];return {kind:'operation',operation:operations[0]!};}return normal(request);};
-  await draw();await click('社区');await click('创作中心');await click('查看草稿');await click('编辑发布信息');await fill('配方名称','本次提交的名称');await click('核对并保存修改');
-  await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="选择 Bot"] button')!.click());await click('确认编辑 Bot');await click('发送继续编辑卡片');
-  const sent=calls.find(request=>request.type==='richEdit');expect(sent).toMatchObject({draftId,baseRevision:1,selected:[doc.content.public.name.itemId],changes:[{op:'setPublicText',field:'name',itemId:doc.content.public.name.itemId,value:'本次提交的名称'}]});
-  await fill('配方名称','收到回执前的新输入');content.public.name.value='本次提交的名称';const changed=canonicalizeRichRecipeContent(content);
-  draft={...draft,revision:2,public:{...draft.public,name:'本次提交的名称'},rich:{content:changed.content,texts:{},canonical:Buffer.from(changed.canonicalUTF8).toString('base64url')}};
-  await act(async()=>emit({type:'authoringSaved',value:{accountId:accountA,draftId,revision:2}}));
-  expect(document.querySelector<HTMLInputElement>('[aria-label="配方名称"]')?.value).toBe('收到回执前的新输入');expect(text()).toContain('云端已有新修订');
-  await click('采用已保存版本');expect(document.querySelector<HTMLInputElement>('[aria-label="配方名称"]')?.value).toBe('本次提交的名称');
-  const publish=[...document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='预览发布');expect(publish?.disabled).toBe(false);
-});
-
-it('discards delayed inventory across memory ABA and never selects legacy setup metadata',async()=>{
-  const {readFileSync}=await import('node:fs');const {resolve}=await import('node:path');
-  const content=JSON.parse(readFileSync(resolve(process.cwd(),'../protocol/test/fixtures/recipe-rich-v2.content.json'),'utf8'));
-  content.parts=[];content.skills=[];content.files=[];content.memories=[];delete content.finalLogo;
-  content.setup=[{itemId:'80000000-0000-4000-8000-000000000001',originId:'80000000-0000-4000-8000-000000000002',kind:'tool',title:'确认工具',instructions:'SETUP_SENTINEL',required:true,action:{kind:'manual'}}];
-  const normal=authoring,waiting:{request:Extract<DesktopAuthoringRequest,{type:'richInventory'}>;resolve:(v:DesktopAuthoringReply)=>void}[]=[];
-  linked=true;
-  authoring=async request=>{
-    if(request.type==='richInventory')return new Promise<DesktopAuthoringReply>(resolve=>waiting.push({request,resolve}));
-    if(request.type==='richPrepare')return {kind:'operation',operation:{...op(sessionFor(request)),format:'rich-v2'}};
-    return normal(request);
-  };
-  await draw();await chooseSource();expect(waiting).toHaveLength(1);
-  const memory=()=>[...document.querySelectorAll('label')].find(l=>l.textContent==='包含可分享的 Bot 记忆')!.querySelector<HTMLInputElement>('input')!;
-  await act(async()=>memory().click());await act(async()=>memory().click());
-  expect(waiting).toHaveLength(3);
-  const memoryItem={itemId:'90000000-0000-4000-8000-000000000001',originId:'90000000-0000-4000-8000-000000000002',text:{kind:'inline',value:'EXCLUDED_MEMORY_SENTINEL'}};
-  const deliver=(index:number)=>waiting[index]!.resolve({kind:'richInventory',groupId:waiting[index]!.request.groupId,inventory:{content:{...content,memories:waiting[index]!.request.options.includeBotMemories?[memoryItem]:[],public:{...content.public,name:{...content.public.name,value:'READ_'+index}}},reviewToken:String(index).repeat(64),unavailable:[],versions:[]}});
-  await act(async()=>deliver(2));
-  await click('重新读取来源配置');
-  await act(async()=>emit({type:'devices',value:devicesState({id:B})}));
-  await act(async()=>document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="选择已绑定群聊"] button')!.click());
-  await act(async()=>emit({type:'devices',value:devicesState({id:A})}));
-  await act(async()=>document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="选择已绑定群聊"] button')!.click());
-  expect(waiting).toHaveLength(6);
-  await act(async()=>deliver(5));
-  for(const index of [0,1,3,4])await act(async()=>deliver(index));
-  expect(text()).not.toContain('EXCLUDED_MEMORY_SENTINEL');
-  expect(text()).toContain('记忆不包含');
-  const step=content.setup[0];
-  const checkbox=[...document.querySelectorAll('label')].find(l=>l.textContent==='准备步骤 · '+step.title)?.querySelector<HTMLInputElement>('input');
-  expect(checkbox).toBeUndefined();expect(text()).not.toContain('SETUP_SENTINEL');
-  const attest=[...document.querySelectorAll('label')].find(l=>l.textContent?.includes('我已核对来源和全部所选内容'))!.querySelector<HTMLInputElement>('input')!;
-  await act(async()=>attest.click());await click('确认让 Bot 准备私人草稿');
-  const prepared=calls.find(r=>r.type==='richPrepare');expect(prepared).toMatchObject({selection:{reviewToken:'5'.repeat(64),options:{includeBotMemories:false}}});
-  if(prepared?.type!=='richPrepare')throw new Error('Missing preparation');expect(prepared.selection.selected).not.toContain(step.itemId);expect(prepared.selection.selected).not.toContain(memoryItem.itemId);
+  draft=recipeRichDraftSchema.parse({draftId,recipeId:null,revision:1,public:draft.public,format:'rich-v2',sourceIntentId:operationId,
+    rich:{content:doc.content,texts:{},canonical:Buffer.from(doc.canonicalUTF8).toString('base64url')}});
+  linked=true;let missing=true;
+  authoring=async r=>{if(r.type==='openDraftSource'&&missing)throw new Error('原 Bot 或群绑定已变化');return defaultAuthoring(r);};
+  await draw();await click('社区');await click('创作中心');await click('查看草稿');await click('在飞书私聊中修改');
+  expect(dialog('在飞书私聊中修改')?.textContent).toContain('原 Bot 或群绑定已变化');
+  expect(dialog('在飞书私聊中修改')?.querySelector('select')).toBeNull();
+  await click('关闭');expect(text()).toContain('编辑发布信息');
+  missing=false;await click('在飞书私聊中修改');
+  expect(calls.filter(r=>r.type==='beginDraftHandoff')).toHaveLength(1);
+  expect(calls.find(r=>r.type==='openDraftSource')).toMatchObject({accountId:accountA,viewId:A,draftId,baseRevision:1});
+  expect(dialog('在飞书私聊中修改')?.textContent).toContain('群聊 A');
+  expect(calls.some(r=>['open','richEdit','richInventory','saveDraft','saveRichMetadata'].includes(r.type))).toBe(false);
 });

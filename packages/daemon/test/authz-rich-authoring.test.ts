@@ -9,6 +9,10 @@ const session = randomUUID(), operationId = randomUUID(), draftId = randomUUID()
 const digest = 'a'.repeat(64), binary = Buffer.alloc(32, 1).toString('base64url');
 const options = { skills: [], includeBotMemories: false, includeTasks: false };
 const payloads = [
+  {type:'beginHandoff',groupId,groupName:'产品群',retryId:operationId},
+  {type:'beginDraftHandoff',groupId,groupName:'产品群',retryId:operationId,identity:digest,draftId,baseRevision:1,canonical:'e30',source:{sourceIntentId:operationId,canonical:'e30'}},
+  {type:'handoffStatus',retryId:operationId},{type:'cancelHandoff',retryId:operationId},
+  {type:'answerHandoff',request:{retryId:operationId,generation:1,ref:operationId,lease:digest,versions:[]},attestations:[]},
   { type: 'richSourceOptions', groupId },
   { type: 'richInventory', groupId, options },
   { type: 'richPrepare', groupId, selection: { options, selected: [], reviewToken: digest, sourceAttested: true,

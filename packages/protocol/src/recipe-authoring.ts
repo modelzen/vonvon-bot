@@ -17,6 +17,15 @@ const target = {botId: agentIdSchema};
 const session = {...target, session: uuid};
 const operation = {...session, operationId: uuid};
 
+export const authoringHandoffSchema = z.object({
+  retryId:uuid, groupId:groupIdSchema, draftId:uuid.optional(),
+  state:z.enum(['selecting','awaitingAttestations','prepared','cancelled','expired','needsReview','deliveryUnknown']),
+  operationId:uuid.optional(),
+}).strict();
+export type AuthoringHandoff = z.infer<typeof authoringHandoffSchema>;
+const handoffAttestation = z.object({retryId:uuid,ref:uuid,generation:positive,lease:digest,versions:uuid.array().max(64),items:z.array(z.object({versionId:uuid,itemIds:uuid.array().min(1).max(512)}).strict()).max(64).optional()}).strict();
+export type HandoffAttestation = z.infer<typeof handoffAttestation>;
+const editSource = z.object({sourceIntentId:uuid,canonical:z.string().min(1).max(1401000)}).strict();
 export const authoringChangeSchema = z.discriminatedUnion('op', [
   z.object({op: z.literal('setPublicText'), field: publicField, value: z.string().max(32768)}).strict(),
   z.object({op: z.literal('setDraftRole'), value: z.string().max(16384)}).strict(),
@@ -55,6 +64,12 @@ const reconciliation = z.object({
 export type AuthoringReconciliation = z.infer<typeof reconciliation>;
 const recipient = z.object({openId: z.string().max(210), chatId: groupIdSchema, tenantKey: z.string().max(200)}).strict();
 export const recipeAuthoringRequestSchema = z.discriminatedUnion('type', [
+  z.object({type:z.literal('beginHandoff'),...session,retryId:uuid,groupId:groupIdSchema,groupName:z.string().min(1).max(512),sourceVersionId:uuid.optional()}).strict(),
+  z.object({type:z.literal('beginDraftHandoff'),...session,retryId:uuid,groupId:groupIdSchema,groupName:z.string().min(1).max(512),identity:digest,
+    draftId:uuid,baseRevision:positive,canonical:z.string().min(1).max(1401000),source:editSource}).strict(),
+  z.object({type:z.literal('handoffStatus'),...session,retryId:uuid}).strict(),
+  z.object({type:z.literal('cancelHandoff'),...session,retryId:uuid}).strict(),
+  z.object({type:z.literal('answerHandoff'),...session,request:handoffAttestation,unavailable:z.literal(true).optional(),attestations:richSourceAttestationSchema.array().max(64)}).strict(),
   z.object({type:z.literal('richSourceOptions'),...session,groupId:groupIdSchema}).strict(),
   z.object({type:z.literal('richInventory'),...session,groupId:groupIdSchema,options:richInventoryOptionsSchema}).strict(),
   z.object({type:z.literal('richPrepare'),...session,groupId:groupIdSchema,selection:richPreparationSchema,attestations:richSourceAttestationSchema.array().max(64)}).strict(),
@@ -92,6 +107,7 @@ export const recipeAuthoringRequestSchema = z.discriminatedUnion('type', [
 ]);
 export type RecipeAuthoringRequest = z.infer<typeof recipeAuthoringRequestSchema>;
 export const recipeAuthoringReplySchema = z.discriminatedUnion('kind', [
+  z.object({kind:z.literal('handoff'),handoff:authoringHandoffSchema}).strict(),
   richSourceOptionsSchema,
   z.object({kind:z.literal('richInventory'),groupId:groupIdSchema,inventory:richLocalInventorySchema}).strict(),
   z.object({kind:z.literal('richMember'),operationId:uuid,index:z.number().int().min(0).max(64),reviewDigest:digest,bytes:z.string().max(2796203)}).strict(),
@@ -100,7 +116,7 @@ export const recipeAuthoringReplySchema = z.discriminatedUnion('kind', [
   z.object({kind:z.literal('richCandidate'),operationId:uuid,reviewDigest:digest,request:richFreezeInputSchema}).strict(),
   z.object({kind: z.literal('session'), session: uuid, linked: z.boolean(), leaseMs: positive}).strict(),
   z.object({kind: z.literal('closed')}).strict(),
-  z.object({kind: z.literal('workflow'), activity:millis, ageMs:millis, field:fieldRequest.optional(),
+  z.object({kind: z.literal('workflow'), activity:millis, ageMs:millis, field:fieldRequest.optional(),handoff:handoffAttestation.optional(),
     pausedContexts:z.array(uuid).max(540)}).strict(),
   z.object({kind: z.literal('fieldAnswered')}).strict(),
   z.object({kind: z.literal('challenge'), challengeId: uuid, code: z.string().max(32), expiresAt: millis}).strict(),

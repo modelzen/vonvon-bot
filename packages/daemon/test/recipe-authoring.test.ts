@@ -52,9 +52,9 @@ const results = new Map<string,{draftId:string;revision:number}>();
 const proposeRich=vi.fn();
 const propose = vi.fn<DraftInstructionParser['propose']>();
 const readDraftField = vi.fn<ReadDraftField>();
-function restart() {
+function restart(parser: ConstructorParameters<typeof AuthoringService>[0]['parser'] | null = {propose,proposeRich}) {
   service?.close();
-  service = new AuthoringService({bot,cfg,channel,parser:{propose,proposeRich},readDraftField,now:()=>clock,origin:accountApi ?? origin,loopback:true,
+  service = new AuthoringService({bot,cfg,channel,parser:parser??undefined,readDraftField,now:()=>clock,origin:accountApi ?? origin,loopback:true,
     fetch: async (url,options) => {
       const {pathname} = new URL(String(url)), action = pathname.split('/').pop()!, body = JSON.parse(String(options!.body));
       expect(new Headers(options?.headers).has('authorization')).toBe(false);
@@ -908,7 +908,7 @@ it('saves only the private-chat-reviewed rich source and continues against its s
   await rpc('deliver',{operationId:op.operationId});
   expect((await status(op.operationId)).state).toBe('candidate');
   expect([...cards.values()].join('')).not.toContain(sourceRole);
-  proposeRich.mockResolvedValueOnce({kind:'proposal',commands:[{action:'edit',target:'T3',valueJson:JSON.stringify('使用前请运行 setup 技能，先在群里确认周报格式。')}]});
+  proposeRich.mockResolvedValueOnce({kind:'proposal',commands:[{action:'setPublicText',target:'T3',text:'使用前请运行 setup 技能，先在群里确认周报格式。'}]});
   await orch.onMessage(msg('把概览改为：使用前请运行 setup 技能，先在群里确认周报格式。'));
   const post=await status(op.operationId);
   expect(post.state).toBe('candidate');
@@ -946,7 +946,7 @@ it('saves only the private-chat-reviewed rich source and continues against its s
   if(!production)results.set(op.operationId,{draftId:destinationDraftId,revision:1});
   await advanceRich(binding,accepted);
   expect((await status(op.operationId)).receipt).toMatchObject({draftId:destinationDraftId,revision:1});
-  proposeRich.mockResolvedValueOnce({kind:'proposal',commands:[{action:'edit',target:'T1',valueJson:JSON.stringify('新的周报')}]});
+  proposeRich.mockResolvedValueOnce({kind:'proposal',commands:[{action:'setPublicText',target:'T1',text:'新的周报'}]});
   await orch.onMessage(msg('把名称改成新的周报'));
   const all=kind(await rpc('status'),'status').operations;
   if(production){
@@ -989,8 +989,296 @@ it('saves only the private-chat-reviewed rich source and continues against its s
   expect(all.find(o=>o.purpose==='editDraft')).toMatchObject({format:'rich-v2',draftId:destinationDraftId,baseRevision:1,state:'pendingMain'});
 });
 
+async function richChatContext(fields:('name'|'summary'|'overview'|'version')[]=['name'],completed=false){
+  const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  await link();
+  const field=(value:string)=>({itemId:randomUUID(),originId:randomUUID(),value});
+  const content={format:'rich-v2' as const,schemaVersion:2 as const,
+    public:{name:field('原名称'),summary:field('原简介'),overview:field('原概览'),version:field('1')},
+    settings:[],skills:[],files:[],tasks:[],memories:[],rules:[],setup:[],parts:[]};
+  const canonical=Buffer.from(canonicalizeRichRecipeContent(content).canonicalUTF8).toString('base64url');
+  const draftId=randomUUID(),selected=fields.map(f=>content.public[f].itemId);
+  const op=kind(await rpc('richEdit',{draftId,baseRevision:2,canonical,selected}),'operation').operation;
+  await rpc('richAdvance',{operationId:op.operationId,destinationDraftId:draftId,authorization:{...await auth(op,'dispatch'),format:'rich-v2'}});
+  if(completed){
+    // Model the Main process's verified saved snapshot without a second cloud implementation in this fixture.
+    await new AuthoringJournal(root,()=>clock).run(db=>{db.operations[op.operationId]!.richSaved={canonical,selected};});
+    await rpc('settle',{operationId:op.operationId,receipt:{operationId:op.operationId,status:'accepted',stateRevision:3,draftId,revision:3}});
+  }
+  return {op,content,draftId};
+}
+const lastCard=()=>[...cards.values()].at(-1)!;
+const replies=()=>JSON.stringify(textSend.mock.calls);
+
+it.each([false,true])('handles explicit rich public commands without a Provider, completed=%s',async(completed)=>{
+  await orch.shutdown();restart(null);await open();orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});
+  const {op,content}=await richChatContext(['name'],completed);
+  expect(await service.onMessage(msg('/recipe name 确切的新名称'))).toBe(true);
+  expect(proposeRich).not.toHaveBeenCalled();expect(propose).not.toHaveBeenCalled();
+  const all=kind(await rpc('status'),'status').operations;
+  const candidate=completed?all.find(o=>o.operationId!==op.operationId)!:all[0]!;
+  expect(candidate.state).toBe(completed?'pendingMain':'candidate');
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const request=await new AuthoringJournal(root,()=>clock).run(db=>db.operations[candidate.operationId]!.rich?.request);
+  expect(request&&'payload'in request&&request.payload.changes).toEqual([
+    {op:'setPublicText',field:'name',itemId:content.public.name.itemId,value:'确切的新名称'},
+  ]);
+  expect(cloud.map(c=>c.action)).toEqual(['dispatch']);
+});
+
+it.each([false,true])('rejects an unselected rich command without model fallback, completed=%s',async(completed)=>{
+  const {op}=await richChatContext(['name'],completed);
+  proposeRich.mockImplementation(()=>{throw new Error('must never call the Provider');});
+  const message=msg('/recipe summary 不应改动的简介');
+  expect(await service.onMessage(message)).toBe(true);expect(await service.onMessage(message)).toBe(true);
+  expect(proposeRich).not.toHaveBeenCalled();expect(propose).not.toHaveBeenCalled();
+  expect(replies()).toMatch(/未选择|请先选择/);
+  const operations=kind(await rpc('status'),'status').operations;
+  expect(operations).toHaveLength(1);expect(operations[0]).toMatchObject({operationId:op.operationId,state:completed?'completed':'waiting'});
+  expect(cloud.map(c=>c.action)).toEqual(['dispatch']);
+});
+
+it.each(['name','summary','overview','version'] as const)('maps explicit rich %s to the selected item and requires the original author confirmation',async(field)=>{
+  const {op,content}=await richChatContext([field]);
+  proposeRich.mockRejectedValue(new Error('must never call the Provider'));
+  const instruction=msg('/recipe '+field+' 明确新值');
+  await service.onMessage(instruction);await service.onMessage(instruction);
+  expect(proposeRich).not.toHaveBeenCalled();expect(propose).not.toHaveBeenCalled();
+  const candidate=kind(await rpc('richInspect',{operationId:op.operationId,preview:true}),'richCandidate');
+  expect('payload'in candidate.request&&candidate.request.payload.changes).toEqual([
+    {op:'setPublicText',field,itemId:content.public[field].itemId,value:'明确新值'},
+  ]);
+  const confirmation=ref();await act(confirmation,{by:stranger});
+  expect((await status(op.operationId)).state).toBe('candidate');
+  await act(confirmation);expect((await status(op.operationId)).state).toBe('pendingCloud');
+  expect(kind(await rpc('richInspect',{operationId:op.operationId}),'richCandidate').request).toEqual(candidate.request);
+  expect(cloud.map(c=>c.action)).toEqual(['dispatch']);
+});
+
+it.each(['/recipe name '+ '长'.repeat(61),'/recipe name password=PRIVATE_SENTINEL','/recipe name /Users/private/file'])('validates explicit rich values without model fallback: %s',async(command)=>{
+  const {op}=await richChatContext();
+  proposeRich.mockRejectedValue(new Error('must never call the Provider'));
+  await service.onMessage(msg(command));
+  expect(proposeRich).not.toHaveBeenCalled();expect((await status(op.operationId)).state).toBe('waiting');
+  expect(replies()).toMatch(/校验|长度|敏感/);expect(replies()).not.toContain('PRIVATE_SENTINEL');
+  expect(cloud.map(c=>c.action)).toEqual(['dispatch']);
+});
+
+it('describes only the selected fields in the rich waiting card',async()=>{
+  const {content}=await richChatContext(['name']);
+  expect(lastCard()).toContain('名称');expect(lastCard()).not.toContain('概览');expect(lastCard()).not.toContain('setup');
+  expect(lastCard()).not.toContain(content.public.name.itemId);expect(lastCard()).not.toContain('原名称');
+});
+
+it.each(['busy','timeout','malformed'] as const)('keeps rich %s failures retryable and withdraws the old confirmation card',async(failure)=>{
+  const {op}=await richChatContext();
+  proposeRich.mockResolvedValueOnce({kind:'proposal',commands:[{action:'setPublicText',target:'T1',text:'先前候选'}]});
+  await service.onMessage(msg('把名称改成先前候选'));
+  expect((await status(op.operationId)).state).toBe('candidate');
+  const old=ref(),beforeCloud=cloud.length;
+  const {DraftProviderBusy}=await import('../src/recipe/draft-instruction');
+  let withdrawnBeforeParsing=false;
+  proposeRich.mockImplementationOnce(async()=>{
+    withdrawnBeforeParsing=!lastCard().includes('保存到草稿');
+    if(failure==='busy')throw new DraftProviderBusy('RAW PROVIDER SECRET');
+    if(failure==='timeout')throw new DOMException('RAW PROVIDER SECRET','TimeoutError');
+    return {malformed:'RAW PROVIDER SECRET'};
+  });
+  const instruction=msg('把名称改成另一候选');
+  expect(await service.onMessage(instruction)).toBe(true);expect(await service.onMessage(instruction)).toBe(true);
+  expect(withdrawnBeforeParsing).toBe(true);
+  expect(proposeRich).toHaveBeenCalledTimes(2);expect(propose).not.toHaveBeenCalled();
+  expect(replies()).toMatch(/重试|重新发送/);expect(replies()).not.toContain('RAW PROVIDER SECRET');expect(replies()).not.toContain('此处仅编辑私人草稿');
+  expect(replies()).toContain(failure==='busy'?'暂时繁忙':failure==='timeout'?'解析超时':'无法解析');
+  expect((await status(op.operationId)).state).toBe('waiting');expect((await status(op.operationId)).payloadDigest).toBeUndefined();
+  expect(lastCard()).not.toContain('保存到草稿');await act(old);expect((await status(op.operationId)).state).toBe('waiting');
+  expect(cloud).toHaveLength(beforeCloud);
+  proposeRich.mockResolvedValueOnce({kind:'proposal',commands:[{action:'setPublicText',target:'T1',text:'重试候选'}]});
+  await service.onMessage(msg('把名称改成重试候选'));
+  expect(proposeRich).toHaveBeenCalledTimes(3);expect((await status(op.operationId)).state).toBe('candidate');
+});
+
+it('keeps failed rich continuation messages idempotent against the saved revision',async()=>{
+  const {op}=await richChatContext(['name'],true);
+  proposeRich.mockRejectedValueOnce(new Error('RAW PROVIDER SECRET'));
+  const instruction=msg('把名称改成尚未生成');
+  await service.onMessage(instruction);await service.onMessage(instruction);
+  expect(proposeRich).toHaveBeenCalledTimes(1);expect(propose).not.toHaveBeenCalled();
+  expect(replies()).toMatch(/重试|重新发送/);expect(replies()).not.toContain('RAW PROVIDER SECRET');expect(replies()).not.toContain('此处仅编辑私人草稿');
+  expect(kind(await rpc('status'),'status').operations).toEqual([expect.objectContaining({operationId:op.operationId,state:'completed'})]);
+  proposeRich.mockResolvedValueOnce({kind:'proposal',commands:[{action:'setPublicText',target:'T1',text:'可以重试'}]});
+  await service.onMessage(msg('把名称改成可以重试'));
+  expect(proposeRich).toHaveBeenCalledTimes(2);
+  expect(kind(await rpc('status'),'status').operations).toContainEqual(expect.objectContaining({purpose:'editDraft',baseRevision:3,state:'pendingMain'}));
+});
+
+it('reports an elapsed rich parser deadline safely without saving or falling through',async()=>{
+  const {op}=await richChatContext();
+  clock+=44_990;
+  proposeRich.mockImplementationOnce(async(_input:unknown,signal:AbortSignal)=>new Promise((_resolve,reject)=>{
+    if(signal.aborted)reject(signal.reason);
+    else signal.addEventListener('abort',()=>reject(signal.reason),{once:true});
+  }));
+  expect(await service.onMessage(msg('把名称改成尚未完成'))).toBe(true);
+  expect(proposeRich).toHaveBeenCalledTimes(1);expect(propose).not.toHaveBeenCalled();
+  expect(replies()).toContain('解析超时');expect(replies()).toContain('重新发送');
+  expect((await status(op.operationId)).state).toBe('waiting');expect(cloud.map(c=>c.action)).toEqual(['dispatch']);
+});
+
+it('does not report changed rich authorization as a Provider error',async()=>{
+  await richChatContext();
+  proposeRich.mockImplementationOnce(async()=>{
+    await service.adminRemoved(owner);
+    return {kind:'proposal',commands:[{action:'setPublicText',target:'T1',text:'不应保存'}]};
+  });
+  expect(await service.onMessage(msg('把名称改成不应保存'))).toBe(true);
+  expect(replies()).not.toContain('Provider');expect(replies()).not.toContain('重新发送');
+  expect(cloud.map(c=>c.action)).toEqual(['dispatch']);
+});
+
 it('does not interpret the retired setup slash command as an editable product field',async()=>{
   const {parseChanges}=await import('../src/recipe/authoring-wire');
   expect(await parseChanges('/recipe setup {\"steps\":[]}',{signal:new AbortController().signal,parser:{propose}})).toEqual({kind:'unavailable'});
   expect(propose).not.toHaveBeenCalled();
+});
+
+function privateChoice(label:string){
+  const m=[...messages.values()].at(-1)!;
+  const body=JSON.parse(cards.get(m.card_id)!) as {body:{elements:{text?:{content:string};behaviors?:{value:Record<string,unknown>}[]}[]}};
+  const button=body.body.elements.find(e=>e.behaviors&&e.text?.content.includes(label));
+  if(!button)throw new Error('卡片没有 '+label+' '+JSON.stringify(body));
+  return {messageId:m.message_id,value:button.behaviors![0]!.value};
+}
+async function tap(button:ReturnType<typeof privateChoice>,by=owner,chat=chatId,org=tenant){
+  await orch.dispatcher.handle({operator:{openId:by},raw:{operator:{open_id:by,tenant_key:org}},
+    chatId:chat,messageId:button.messageId,action:{tag:'button',value:button.value}});
+}
+const beginInput=()=>({retryId:randomUUID(),groupId,groupName:'周报群'});
+
+it('binds the proactive private selection, attestation and exact final confirmation to one physical card',async()=>{
+  const arg=beginInput();
+  await expect(rpc('beginHandoff',arg)).rejects.toThrow();
+  await link();
+  const begin=()=>rpc('beginHandoff',arg);
+  await Promise.all([begin(),begin()]);
+  expect(messages.size).toBe(1);expect(cards.size).toBe(1);expect(cloud).toHaveLength(0);
+  const role=privateChoice('群角色'),oldFinish=privateChoice('确认所选来源');
+  await tap(role,stranger);await tap(role,owner,'oc_other');await tap(role,owner,chatId,'otherTenant');
+  await tap({...role,messageId:'om_unrelated'});await tap({...role,value:{...role.value,index:5}});
+  expect(privateChoice('☐ 群角色')).toEqual(role);
+  await tap(role);
+  expect(privateChoice('☑ 群角色').value.ref).not.toBe(role.value.ref);
+  await tap(oldFinish);
+  expect(kind(await rpc('workflow'),'workflow').handoff).toBeUndefined();
+  await tap(privateChoice('确认所选来源'));
+  const request=kind(await rpc('workflow'),'workflow').handoff!;
+  expect(request).toMatchObject({retryId:arg.retryId,versions:[]});
+  await expect(rpc('answerHandoff',{request:{...request,generation:request.generation+1},attestations:[]})).rejects.toThrow();
+  await expect(rpc('answerHandoff',{request,attestations:[{versionId:randomUUID(),authorId:account,items:[],access:'direct'}]})).rejects.toThrow();
+  const handoff=kind(await rpc('answerHandoff',{request,attestations:[]}),'handoff').handoff;
+  expect(handoff.state).toBe('prepared');
+  expect(kind(await begin(),'handoff').handoff.operationId).toBe(handoff.operationId);
+  const op=await status(handoff.operationId!);
+  expect(op.state).toBe('pendingMain');
+  const draftId=randomUUID();
+  await rpc('richAdvance',{operationId:op.operationId,destinationDraftId:draftId,authorization:{...await auth(op,'dispatch'),format:'rich-v2'}});
+  expect(messages.size).toBe(1);expect(cards.size).toBe(1);
+  expect([...cards.values()][0]).toContain(sourceRole);expect([...cards.values()][0]).not.toContain(hiddenMemory);
+  expect((await status(op.operationId)).state).toBe('candidate');
+  await tap(oldFinish);await act(ref(),{by:stranger});
+  expect((await status(op.operationId)).state).toBe('candidate');
+  await act(ref());
+  expect((await status(op.operationId)).state).toBe('pendingCloud');
+});
+
+it('resumes an uncertain private send and invalidates old callbacks across daemon sessions without replacing the message',async()=>{
+  await link();
+  const arg=beginInput();loseSend=true;
+  expect(kind(await rpc('beginHandoff',arg),'handoff').handoff.state).toBe('deliveryUnknown');
+  const stale=privateChoice('确认所选来源');
+  restart();await open();
+  loseSend=false;
+  await rpc('beginHandoff',arg);
+  expect(messages.size).toBe(1);expect(cards.size).toBe(1);
+  expect(privateChoice('确认所选来源').value.ref).not.toBe(stale.value.ref);
+  await service.onAction({operator:{openId:owner},raw:{operator:{open_id:owner,tenant_key:tenant}},chatId,messageId:stale.messageId,action:{tag:'button',value:stale.value}});
+  expect(kind(await rpc('workflow'),'workflow').handoff).toBeUndefined();
+  expect(kind(await rpc('cancelHandoff',{retryId:arg.retryId}),'handoff').handoff.state).toBe('cancelled');
+});
+
+it('rejects a source revision changed during cloud attestation and expires a new selection after its deadline',async()=>{
+  await link();const arg=beginInput();await rpc('beginHandoff',arg);
+  await tap(privateChoice('确认所选来源'));
+  const request=kind(await rpc('workflow'),'workflow').handoff!;
+  await mutateProjectByChatId(groupId,p=>{p.supplement='已变更的群角色';});
+  await expect(rpc('answerHandoff',{request,attestations:[]})).rejects.toThrow();
+  expect(kind(await rpc('handoffStatus',{retryId:arg.retryId}),'handoff').handoff.state).toBe('needsReview');
+  expect(kind(await rpc('status'),'status').operations).toHaveLength(0);
+  const next=beginInput();await rpc('beginHandoff',next);
+  clock+=31*60_000;await open();
+  expect(kind(await rpc('handoffStatus',{retryId:next.retryId}),'handoff').handoff.state).toBe('expired');
+});
+
+it('discovers filenames without reading unselected file contents and requires the explicit SKILL.md parent',async()=>{
+  const dir=join(root,'.agents','skills','Weekly');
+  await mkdir(dir,{recursive:true});await writeFile(join(dir,'SKILL.md'),'按群周报执行。');
+  await writeFile(join(dir,'private.md'),'token=ghp_'+'A'.repeat(40));
+  await link();
+  const arg=beginInput();await rpc('beginHandoff',arg);
+  await tap(privateChoice('选择技能和文件'));await tap(privateChoice('Weekly'));
+  const info=privateChoice('☐ SKILL.md');
+  await tap(privateChoice('☐ private.md'));expect(privateChoice('☐ SKILL.md')).toEqual(info);
+  await tap(info);
+  expect(privateChoice('☑ SKILL.md')).toBeTruthy();
+  expect(privateChoice('☐ private.md')).toBeTruthy();
+  await tap(privateChoice('确认所选来源'));
+  const request=kind(await rpc('workflow'),'workflow').handoff!;
+  const h=kind(await rpc('answerHandoff',{request,attestations:[]}),'handoff').handoff;
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const frozen=await new AuthoringJournal(root,()=>clock).run(db=>db.operations[h.operationId!]!.rich!.request!);
+  if(!('content'in frozen))throw new Error('missing preparation');
+  expect(frozen.content.skills.map(s=>s.name)).toEqual(['Weekly']);
+  expect(frozen.content.files.map(f=>f.name)).toEqual(['SKILL.md']);
+});
+
+it('requires private draft targets, caps selected items, and preserves the saved candidate snapshot for confirmation',async()=>{
+  await link();
+  const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
+  const field=(value:string)=>({itemId:randomUUID(),originId:randomUUID(),value});
+  const draftId=randomUUID(),sourceIntentId=randomUUID();
+  const content={format:'rich-v2' as const,schemaVersion:2 as const,public:{name:field('周报'),summary:field(''),overview:field(''),version:field('1')},
+    settings:[],files:[],skills:[],tasks:[],memories:[],rules:[],setup:[],parts:[]};
+  const removed={itemId:randomUUID(),originId:randomUUID(),purpose:'work' as const,text:{kind:'inline' as const,value:'保留原始工作规则。'}};
+  const canonical=(c:Parameters<typeof canonicalizeRichRecipeContent>[0])=>Buffer.from(canonicalizeRichRecipeContent(c).canonicalUTF8).toString('base64url');
+  const source={sourceIntentId,canonical:canonical({...content,rules:[removed]})};
+  const identity=kind(await rpc('groupSourceIdentity',{groupId}),'groupSourceIdentity').identity;
+  const arg={...beginInput(),draftId,baseRevision:4,identity,canonical:canonical(content),source};
+  await expect(rpc('beginDraftHandoff',{...arg,identity:'0'.repeat(64)})).rejects.toThrow();
+  await rpc('beginDraftHandoff',arg);
+  await tap(privateChoice('确认本次修改范围'));
+  expect(kind(await rpc('status'),'status').operations).toHaveLength(0);
+  await tap(privateChoice('☐ 名称'));
+  await tap(privateChoice('从原始草稿恢复内容'));await tap(privateChoice('原始工作规则'));
+  await tap(privateChoice('确认本次修改范围'));
+  const id=kind(await rpc('handoffStatus',{retryId:arg.retryId}),'handoff').handoff.operationId!;
+  const op=await status(id);
+  await rpc('richAdvance',{operationId:id,destinationDraftId:draftId,authorization:{...await auth(op,'dispatch'),format:'rich-v2'}});
+  expect([...cards.values()][0]).toContain(removed.text.value);
+  const candidate=kind(await rpc('richInspect',{operationId:id,preview:true}),'richCandidate').request;
+  expect(candidate).toMatchObject({candidates:[source],payload:{changes:[{op:'includeCandidate',value:{kind:'rule',source:{sourceIntentId,candidateId:removed.itemId,expectedRevision:4}}}]}});
+  const prior=ref();await mutateProjectByChatId(groupId,p=>{p.bindingIncarnation=randomUUID();});
+  await removeProject('PRIVATE-GROUP-SENTINEL');
+  await addProject({chatId:groupId,name:'PRIVATE-GROUP-SENTINEL',createdAt:clock,cwd:root,blank:false});
+  await act(prior);
+  expect((await status(id)).state).toBe('candidate');
+});
+
+it('stops a permanently unavailable authenticated source without creating a cloud operation',async()=>{
+  await link();const arg=beginInput();await rpc('beginHandoff',arg);
+  await tap(privateChoice('确认所选来源'));
+  const request=kind(await rpc('workflow'),'workflow').handoff!;
+  const reply=kind(await rpc('answerHandoff',{request,unavailable:true,attestations:[]}),'handoff');
+  expect(reply.handoff.state).toBe('needsReview');
+  expect(kind(await rpc('status'),'status').operations).toHaveLength(0);
 });
