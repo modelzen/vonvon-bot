@@ -65,8 +65,8 @@ it('freezes every preview page once, binds access outside canonical, and serves 
   expect(stored.pages[1]!.join('')).toBe(f.draft.config.role);
   expect(creatorSnapshotDigest({...answer.snapshot,public:{...answer.snapshot.public,access:'direct'}})).not.toBe(digest);
   f.cloud.mockClear();
-  await executor.run(f.context,f.set({kind:'read',read:{kind:'page',work,snapshotDigest:digest,section:1,page:2}},'read'));
-  expect(f.cloud).not.toHaveBeenCalled();expect(f.answers.at(-1)).toMatchObject({kind:'page',text:stored.pages[1]![2]});
+  await executor.run(f.context,f.set({kind:'read',read:{kind:'page',work,snapshotDigest:digest,section:1,page:1}},'read'));
+  expect(f.cloud).not.toHaveBeenCalled();expect(f.answers.at(-1)).toMatchObject({kind:'page',text:stored.pages[1]![1]});
   await executor.run(f.context,f.set({kind:'read',read:{kind:'page',work,snapshotDigest:digest,section:1,page:999}},'read'));
   expect(f.answers.at(-1)).toEqual({kind:'rejected',reason:'unavailable'});
 });
@@ -168,6 +168,7 @@ it('rejects changed original bytes and never stores or broadcasts code plaintext
 
 it('verifies rich bytes and every part, retains the exact parent, and refuses memory or substituted part content',async()=>{
   const f=fixture(),text='完整文件正文\n'.repeat(5000),partId=randomUUID(),manifestId=randomUUID();
+  const extraTexts=new Map<string,string>();
   const work={draftId:f.draftId,source:{preparationId:f.preparationId,groupId:f.groupId,identity:f.identity}};
   f.authoring.history.remember(f.association,f.preparationId,f.identity,f.groupId);
   const publicText=(value:string)=>({itemId:randomUUID(),originId:randomUUID(),value});
@@ -191,6 +192,7 @@ it('verifies rich bytes and every part, retains the exact parent, and refuses me
       manifest,sourceManifest:manifest,logicalBytes:document.logicalBytes,retainedCandidateBytes:0});
     if(path.endsWith('/objects/'+manifestId))return new Response(document.canonical);
     if(path.endsWith('/objects/'+partId))return new Response(corrupt?'substitution':text);
+    for(const [id,body] of extraTexts)if(path.endsWith('/objects/'+id))return new Response(body);
     if(path.includes('/creator-context?'))return Response.json({format:'rich-v2',draftId:f.draftId,revision:3,sourceIntentId:f.preparationId,parent:{recipeId:f.recipeId,versionId:f.versionId}});
     throw Error(path);
   });
@@ -211,6 +213,21 @@ it('verifies rich bytes and every part, retains the exact parent, and refuses me
   for(const internal of ['itemId','originId','objectId','sha256',file.itemId,partId,creatorSha(text)])expect(readable).not.toContain(internal);
   expect(readable).toContain('安装后暂停');
   expect(readable).not.toContain('准备步骤');
+  const extraFiles=Array.from({length:7},(_,index)=>{
+    const objectId=randomUUID(),body=`第 ${index+1} 份参考文件\r\n\n正文保留尾随空格。  \n`;
+    extraTexts.set(objectId,body);
+    return {itemId:randomUUID(),originId:randomUUID(),name:`references/文档-${index+1}.md`,use:'reference',text:{kind:'part',objectId}};
+  });
+  document=canonicalizeRichRecipeContent({...content,skills:content.skills.map(skill=>({...skill,fileIds:[file.itemId,...extraFiles.map(extra=>extra.itemId)]})),
+    files:[file,...extraFiles],parts:[...content.parts,...[...extraTexts].map(([objectId,body])=>({
+    objectId,kind:'text',sha256:creatorSha(body),bytes:Buffer.byteLength(body),mediaType:'text/plain;charset=utf-8',
+  }))]});
+  await f.build().run(f.context,f.set({kind:'read',read:{kind:'draft',work}},'read'));
+  const many=f.answers.at(-1);if(many?.kind!=='snapshot')throw Error('snapshot');
+  expect(many.snapshot.sections).toHaveLength(11);
+  const combined=f.journal.snapshot(creatorSnapshotDigest(many.snapshot))!.pages.at(-1)!.join('');
+  expect(combined).toContain('SKILL.md\n'+text);
+  extraFiles.forEach(extra=>expect(combined).toContain(extra.name+'\n'+extraTexts.get(extra.text.objectId)));
   corrupt=true;
   await f.build().run(f.context,f.set({kind:'read',read:{kind:'draft',work}},'read'));
   expect(f.answers.at(-1)).toEqual({kind:'rejected',reason:'unavailable'});

@@ -13,6 +13,7 @@ import {richCommunity} from './community-rich.js';
 import {richAuthoringCloud} from './recipe-authoring-rich-cloud.js';
 import {authoringCloud} from './recipe-authoring-cloud.js';
 import {AuthoringJournal} from './recipe-authoring-journal.js';
+import {richCreatorPreview,legacyCreatorPreview} from './recipe-creator-preview.js';
 
 export interface CreatorContext {
   association:CreatorAssociation;
@@ -120,15 +121,12 @@ export class RecipeCreatorExecutor {
       draft.public.access==='coded'?'凭分享码获取':'直接获取','草稿修订 '+draft.revision,
       work.source?'来源群的本地配置':'本人账号的旧格式作品',...(parent?['基于已选的历史版本创作']:[])].join('\n')}];
     if(draft.format==='rich-v2'){
-      for(const key of ['role','settings','rules','skills','files','tasks','setup','parts','finalLogo'] as const){
-        sections.push({title:key,text:JSON.stringify(draft.rich.content[key]??null,null,2)});
-      }
       for(const part of parts)if(part.kind==='text'){
         const text=draft.rich.texts[part.objectId];
         if(text===undefined||Buffer.byteLength(text)!==part.bytes||creatorSha(text)!==part.sha256)throw invalid();
-        sections.push({title:part.objectId,text});
       }
-    }else sections.push({title:'角色与准备',text:JSON.stringify(draft.config,null,2)});
+      sections.push(...richCreatorPreview(draft.rich.content,draft.rich.texts));
+    }else sections.push(...legacyCreatorPreview(draft.config));
     // Text parts share one bounded section, preserving every byte without exceeding the protocol section limit.
     const collapsed=sections.length<=16?sections:[...sections.slice(0,10),{title:'全部文件正文',text:sections.slice(10).map(s=>s.title+'\n'+s.text).join('\n\n')}];
     const rendered=collapsed.map(section=>pages(section.text));
