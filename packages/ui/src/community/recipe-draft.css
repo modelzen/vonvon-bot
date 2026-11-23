@@ -1,0 +1,6 @@
+.recipe-draft-page { gap:24px; }
+.recipe-draft-page .recipe-draft-heading { border-bottom:0; padding:8px 0 0; align-items:center; }
+.recipe-draft-heading .community-actions { padding-top:0; }
+.recipe-draft-footer { border-top:1px solid var(--color-border); margin-top:24px; padding-top:16px; }
+.recipe-draft-footer button { color:var(--color-text-secondary); }
+@media(max-width:680px) { .recipe-draft-heading .community-actions { justify-content:flex-start; } }

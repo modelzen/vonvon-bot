@@ -54,6 +54,13 @@ afterEach(async () => {
 });
 
 describe('desktop daemon dependencies', () => {
+  it('Preview ignores a prior service registration and refuses managed startup before spawning', async () => {
+    const preview = createDaemonDependencies({ root: '/owned/preview', home: '/owned/home', resources: '/owned/resources', executable: '/owned/Electron', packaged: true, allowRegisteredService: false });
+    await expect(preview.readRegistration()).resolves.toEqual({ kind: 'absent' });
+    await expect(preview.startManaged(0)).rejects.toThrow('预览版不启动登录服务');
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it('runs the bundled daemon without a service registration on Windows', async () => {
     const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
     Object.defineProperty(process, 'platform', { ...original, value: 'win32' });

@@ -60,6 +60,51 @@ function axiosError(status: number, data: unknown): Error {
 const input = (directory: string): BindGroupInput => ({ chatId: 'oc_a', projectName: 'First', directory, backend: 'codex-appserver', kind: 'multi' });
 
 describe('desktop group commands in the owning bot', () => {
+  it('reads only exact membership and group metadata through real SDK serialization and IPC', async () => {
+    const fake = fakeLark(request => request.path.endsWith('/members/is_in_chat')
+      ? {code: 0, data: {is_in_chat: true}}
+      : request.path === '/open-apis/im/v1/chats/oc_exact'
+        ? {code: 0, data: {name: '飞书物理群🦉', description: 'private description', announcement: 'private announcement'}} : undefined);
+    const execute = createGroupExecutor({rawClient: fake.client} as unknown as LarkChannel);
+    let receive = (_raw: unknown): void => {};
+    const respond = createAdminIpcResponder(async op => {
+      if (op.kind !== 'groupIdentity') throw new Error('unexpected op');
+      return execute(op);
+    }, message => receive(message));
+    const caller = createAdminIpcCaller(respond); receive = caller.onMessage;
+    expect(await caller.call({kind: 'groupIdentity', chatId: 'oc_exact', identity: bot})).toEqual({kind: 'groupIdentity', agentId: bot.appId, groupId: 'oc_exact', name: '飞书物理群🦉'});
+    expect(fake.requests.map(request => [request.method, request.path])).toEqual([
+      ['POST', '/open-apis/auth/v3/tenant_access_token/internal'],
+      ['GET', '/open-apis/im/v1/chats/oc_exact/members/is_in_chat'],
+      ['GET', '/open-apis/im/v1/chats/oc_exact'],
+    ]);
+  });
+  it.each(['stale', 'nonMember', 'emptyName'] as const)('refuses %s exact group identity evidence', async failure => {
+    const fake = fakeLark(request => request.path.endsWith('/members/is_in_chat')
+      ? {code: 0, data: {is_in_chat: failure !== 'nonMember'}}
+      : request.path === '/open-apis/im/v1/chats/oc_exact' ? {code: 0, data: {name: ' '}} : undefined);
+    const execute = createGroupExecutor({rawClient: fake.client} as unknown as LarkChannel);
+    await expect(execute({kind: 'groupIdentity', chatId: 'oc_exact', identity: failure === 'stale' ? {...bot, registrationId: 'changed'} : bot})).rejects.toThrow();
+    const metadata = fake.requests.filter(request => request.path === '/open-apis/im/v1/chats/oc_exact');
+    expect(metadata).toHaveLength(failure === 'emptyName' ? 1 : 0);
+  });
+
+  it('checks only the Bot membership when the members list is unavailable', async () => {
+    const fixture = channelFixture();
+    fixture.members.mockRejectedValue(new Error('member list scope unavailable'));
+    const execute = createGroupExecutor(fixture.channel);
+    expect(await execute({kind: 'groupMembership', chatId: 'oc_membership_only', identity: bot})).toEqual({inChat: true});
+    expect(fixture.membership).toHaveBeenCalledWith({path: {chat_id: 'oc_membership_only'}});
+    expect(fixture.members).not.toHaveBeenCalled(); expect(fixture.list).not.toHaveBeenCalled();
+  });
+  it('refuses a stale runtime identity or a non-member without reading the member list', async () => {
+    const fixture = channelFixture(), execute = createGroupExecutor(fixture.channel);
+    await expect(execute({kind: 'groupMembership', chatId: 'oc_minimum', identity: {...bot, registrationId: 'changed'}})).rejects.toThrow('身份已改变');
+    expect(fixture.membership).not.toHaveBeenCalled();
+    fixture.membership.mockResolvedValueOnce({code: 0, data: {is_in_chat: false}});
+    await expect(execute({kind: 'groupMembership', chatId: 'oc_minimum', identity: bot})).rejects.toThrow('不在此群');
+    expect(fixture.members).not.toHaveBeenCalled();
+  });
   it('binds a default empty workspace and keeps pending state for stale or non-member requests', async () => {
     const fixture = channelFixture();
     const execute = createGroupExecutor(fixture.channel);
@@ -282,11 +327,12 @@ describe('desktop group commands in the owning bot', () => {
       mode: 'full' as const, network: true, enabled: false, future: { keep: true } };
     await addProject(legacy);
     const bytes = await readFile(paths.projectsFile, 'utf8');
+    const savedLegacy = (await listProjects()).find(row => row.chatId === legacy.chatId);
     const value = { name: legacy.name, chatId: legacy.chatId, existingPath: paths.appDir, kind: legacy.kind, backend: legacy.backend, noMention: false };
-    expect(await joinExistingGroup(fixture.channel, value)).toEqual(legacy);
+    expect(await joinExistingGroup(fixture.channel, value)).toEqual(savedLegacy);
     const execute = createGroupExecutor(fixture.channel);
     const web = { ...input(paths.appDir), projectName: legacy.name, chatId: legacy.chatId, backend: legacy.backend, kind: legacy.kind };
-    expect(await execute({ kind: 'bindGroup', input: web })).toEqual(legacy);
+    expect(await execute({ kind: 'bindGroup', input: web })).toEqual(savedLegacy);
     fixture.membership.mockResolvedValueOnce({ code: 0, data: { is_in_chat: false } });
     await expect(execute({ kind: 'bindGroup', input: web })).rejects.toThrow('不在此群');
     fixture.membership.mockRejectedValueOnce(new Error('offline'));
@@ -296,7 +342,7 @@ describe('desktop group commands in the owning bot', () => {
     const smartLegacy = { ...legacy, name: 'Smart legacy', chatId: 'oc_smart_legacy', smart: true };
     await addProject(smartLegacy);
     // A hand-written 智能 row binds again as 智能 (s25c); 单会话 is another 会话方式.
-    expect(await joinExistingGroup(fixture.channel, { ...value, name: 'Smart legacy', chatId: 'oc_smart_legacy', kind: 'smart' })).toEqual(smartLegacy);
+    expect(await joinExistingGroup(fixture.channel, { ...value, name: 'Smart legacy', chatId: 'oc_smart_legacy', kind: 'smart' })).toEqual((await listProjects()).find(row => row.chatId === smartLegacy.chatId));
     await expect(joinExistingGroup(fixture.channel, { ...value, name: 'Smart legacy', chatId: 'oc_smart_legacy' })).rejects.toThrow('不可修改');
     expect(fixture.message).not.toHaveBeenCalled();
   });

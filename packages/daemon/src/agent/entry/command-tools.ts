@@ -6,6 +6,7 @@ import type { ScheduleCommands } from '../../admin/schedule-commands';
 import type { FeishuReader, FeishuReadReply } from '../../feishu-read/reader';
 import type { RoutedApi, RoutedRead } from '../../admin/feishu-route';
 import type { PermissionMode } from '../types';
+import { feedbackTool } from './feedback-tool';
 import { createFeishuTools } from './feishu-tools';
 import { createMemoryTools } from './memory-tools';
 import { createScheduleTools } from './schedule-tools';
@@ -14,6 +15,7 @@ import { sessionInfoTool, ToolRefusal, type AgentTool } from './tools';
 /** A private chat's Agent changes settings through the `vonvon` command line (dm-agent 5): no settings tools here. */
 export function createCommandTools(deps: {
   appId: string;
+  feedback?: boolean;
   groups(cursor?: string): Promise<JoinedGroups>;
   members(chatId: string, cursor?: string): Promise<FeishuMembers>;
   /** 给了就多注册飞书读取工具（dm-agent 第 7 节）；feishu_members 不用它，一直有 */
@@ -40,5 +42,5 @@ export function createCommandTools(deps: {
       if (!ctx.admin || ctx.place.kind !== 'p2p') throw denied();
       return result;
     },
-  }, ...createFeishuTools(deps), ...(deps.memory ? createMemoryTools(deps.memory) : []), ...(deps.schedule ? createScheduleTools({ commands: deps.schedule }) : [])];
+  }, ...(deps.feedback ? [feedbackTool] : []), ...createFeishuTools(deps), ...(deps.memory ? createMemoryTools(deps.memory) : []), ...(deps.schedule ? createScheduleTools({ commands: deps.schedule }) : [])];
 }
