@@ -1,8 +1,9 @@
 import { randomUUID, createHash, generateKeyPairSync } from 'node:crypto';
-import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, expect, vi } from 'vitest';
+import { richRuntimeReplies as legacyReplies } from '../../protocol/test/fixtures/recipe-runtime-pre-memory-policy';
 import {
   canonicalizeRichRecipeContent,
   recipeInstallRequestSchema,
@@ -11,6 +12,7 @@ import {
 } from '@vonvon/protocol';
 const root = await mkdtemp(join(tmpdir(), 'recipe-runtime-'));
 vi.stubEnv('VONVON_HOME', root);
+const {MemoryStore,botMemoryLocation}=await import('../src/bot/memory-store');
 const { RecipeInstaller } = await import('../src/recipe/installer');
 const { addProject, getProjectByChatId, mutateProjectByChatId } = await import('../src/project/registry');
 const { applyRich } = await import('../src/recipe/rich-runtime');
@@ -24,6 +26,10 @@ const digest = (b: Uint8Array | string) => createHash('sha256').update(b).digest
   identity = () => ({ itemId: randomUUID(), originId: randomUUID() });
 const text = (value: string) => ({ kind: 'inline' as const, value });
 const v = (value: string) => ({ ...identity(), value });
+function checkLegacyReply(reply:RecipeInstallReply) {
+  expect(legacyReplies.some(schema=>schema.safeParse(reply).success)).toBe(true);
+  return reply;
+}
 test('a redeemed install drains existing work and commits only the selected slot; a restart reuses its result and updates preserve local changes', async () => {
   const botId = 'cli_rich_fixture',
     groupId = 'oc_rich_fixture',
@@ -35,6 +41,12 @@ test('a redeemed install drains existing work and commits only the selected slot
   const dir = botPaths(botId),
     loc = { dataRoot: root, file: dir.projectsFile };
   await mkdir(dir.dir, { recursive: true });
+  const nativeMemory=new MemoryStore(botMemoryLocation(dir.dir));
+  await nativeMemory.add({text:'NATIVE_MEMORY_REMAINS_AFTER_INSTALL',branch:'合作方式',trust:'trusted',
+    source:{via:'ui',botId,actorRole:'desktop'},actor:{role:'desktop'}});
+  const memoryBytes=async()=>Object.fromEntries(await Promise.all((await readdir(nativeMemory.location.dir)).sort().map(async name=>
+    [name,(await readFile(join(nativeMemory.location.dir,name))).toString('base64')])));
+  const originalMemory=await memoryBytes();
   await writeFile(join(root, 'bots.json'), JSON.stringify({ version: 1, bots: [bot] }));
   for (const id of [groupId, 'oc_neighbor'])
     await addProject({ chatId: id, name: id, cwd: root, blank: false, createdAt: 1 }, loc);
@@ -169,17 +181,21 @@ test('a redeemed install drains existing work and commits only the selected slot
       bytes: encoded.canonicalUTF8,
     };
   };
-  async function prepare(choices?: Record<string, string>,authority?:'exactVersion'|'directUpdate',actorAccount=accountId) {
-    const { request, bytes } = await preview();Object.assign(request,{...(authority?{authority}:{})});request.preview.accountId=actorAccount;
+  async function prepare(choices?: Record<string, string>,authority?:'exactVersion'|'directUpdate',actorAccount=accountId,memoryPolicy?:'exclude') {
+    const policy=memoryPolicy?{memoryPolicy}:{};
+    const { request, bytes } = await preview();Object.assign(request,{...(authority?{authority}:{}),...policy});request.preview.accountId=actorAccount;
     const first = await installer().request(recipeInstallRequestSchema.parse(request));
+    checkLegacyReply(first);
     if (first.kind !== 'richReview') throw Error('missing review');
     const next = await installer().request(
       recipeInstallRequestSchema.parse({ ...request, reviewToken: first.reviewToken, choices }),
     );
+    checkLegacyReply(next);
     if (next.kind !== 'richPrepared') throw Error('missing plan');
     const issuing = await installer().request(
-      recipeInstallRequestSchema.parse({ type: 'richIssuing', botId, operationId: next.operationId }),
+      recipeInstallRequestSchema.parse({ type: 'richIssuing', botId, operationId: next.operationId,...policy }),
     );
+    checkLegacyReply(issuing);
     expect(issuing).toMatchObject({ issuerState: 'issuing' });
     const auth = {
       ...next.intent,
@@ -195,6 +211,7 @@ test('a redeemed install drains existing work and commits only the selected slot
       kind: next.intent.purpose,
       commit: recipeInstallRequestSchema.parse({
         type: 'richCommit',
+        ...policy,
         botId,
         operationId: next.operationId,
         authorization: auth,
@@ -225,6 +242,8 @@ test('a redeemed install drains existing work and commits only the selected slot
   release();
   await expect(run).rejects.toThrow('receipt disconnected');
   expect((await group())?.supplement).toBe('first');
+  expect((await group())?.richRecipe?.resolved.some(item=>item.kind==='memories')).toBe(false);
+  expect(await memoryBytes()).toEqual(originalMemory);
   expect((await getProjectByChatId('oc_neighbor', dir.projectsFile))?.richRecipe).toBeUndefined();
   await expect(installer().request(one.commit)).resolves.toMatchObject({
     kind: 'richStatus',
@@ -280,20 +299,30 @@ test('a redeemed install drains existing work and commits only the selected slot
     groupId,
     (p) => {
       p.supplement = 'local';
+      const memory=content.memories[0]!;
+      p.richRecipe!.resolved.push({kind:'memories',itemId:memory.itemId,originId:memory.originId,value:{text:'OLD_INSTALLED_LOCAL_MEMORY'}});
     },
     undefined,
     loc,
   );
   content.role!.text = text('changed upstream');
+  content.memories[0]!.text=text('UPSTREAM_LEGACY_MEMORY');
   content.tasks[0]!.instruction = text('changed schedule');
   const two = await prepare({ [role.itemId]: 'local' });
   expect(two.kind).toBe('updateDirectRichRecipe');
   await expect(installer().request(two.commit)).resolves.toMatchObject({ status: 'applied' });
   expect((await group())?.supplement).toBe('local');
+  expect((await group())?.richRecipe?.resolved.some(item=>item.kind==='memories')).toBe(false);
+  expect(await memoryBytes()).toEqual(originalMemory);
   expect(store.all()[0]).toMatchObject({ id: taskId, state: 'paused', instruction: 'changed schedule' });
   expect((await setup({ kind: 'read' })).steps).toEqual([]);
   expect((await group())?.richRecipe?.setup).toEqual({});
   const exactFromOtherAccount=await prepare(undefined,'exactVersion',randomUUID());expect(exactFromOtherAccount.kind).toBe('installRichRecipe');await expect(installer().request(exactFromOtherAccount.commit)).resolves.toMatchObject({status:'applied'});expect((await group())?.supplement).toBe('local');
+  const guarded=await prepare(undefined,'exactVersion',accountId,'exclude');
+  const applied=await installer().request(guarded.commit);
+  expect(checkLegacyReply(applied)).toMatchObject({kind:'richStatus',status:'applied',settled:true});
+  expect((await group())?.richRecipe?.resolved.some(item=>item.kind==='memories')).toBe(false);
+  expect(await memoryBytes()).toEqual(originalMemory);
   expect(JSON.parse(await readFile(join(root, 'bots.json'), 'utf8')).allocations.format).toBe('bot-allocations-v2');
   expect(JSON.parse(await readFile(join(root, 'bots.before-recipe-v2.json'), 'utf8')).recipeRegistryFormat).toBeUndefined();
 });

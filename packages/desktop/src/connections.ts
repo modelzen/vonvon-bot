@@ -7,9 +7,9 @@ import {
   type DevicesState, type LinkPreview, type PairingLink, type RemoveDeviceResult, type RouteFailure, type ServerInfo, type ViewId,
 } from '@vonvon/protocol';
 import { MAX_DEVICES, RegistryError, type DeviceRegistry, type SecretBox, type StoredDevice, type StoredProblem } from './device-registry.js';
-import { RemoteConnectError, type RemoteConnector, type RemoteLink } from './remote-transport.js';
+import { RemoteConnectError, type RemoteConnectCode, type RemoteConnector, type RemoteLink } from './remote-transport.js';
 
-/** devices-ui-1a 4.4: the desktop's devices, one current at a time, and the connection to it. */
+/** The desktop's paired devices, selected view, and independently retained source peers. */
 export type DeviceLogEvent = 'device-opened' | 'device-closed' | 'device-failed' | 'device-added' | 'device-removed'
   | 'device-route-failed' | 'device-add-failed';
 export interface DeviceConnectionsDeps {
@@ -31,6 +31,23 @@ export interface DeviceConnectionsDeps {
 }
 export type ViewMode = 'full' | 'maintenance';
 export interface ViewSession { id: string; client: VonvonClient; serverInfo: ServerInfo; mode: ViewMode }
+/** One reference to an independently owned remote source peer. Check before every source RPC. A maintenance peer
+ * is available for diagnostics only: check() throws `maintenance`. A closed or released lease never revives. */
+export interface RetainedSourceLease extends Readonly<ViewSession> {
+  /** Aborts when this reference is released/cancelled or its peer loses authority. */
+  readonly signal: AbortSignal;
+  check(): void;
+  /** Idempotent. The last reference closes the peer, including a pending connection attempt. */
+  release(): void;
+}
+export type SourceConnectionErrorCode = RemoteConnectCode | 'disposed' | 'removed' | 'released' | 'identity_changed'
+  | 'key_unreadable' | 'revoked' | 'maintenance';
+export class SourceConnectionError extends Error {
+  constructor(readonly code: SourceConnectionErrorCode) {
+    super(`source connection: ${code}`);
+    this.name = 'SourceConnectionError';
+  }
+}
 export type ViewChange =
   | { kind: 'local' }
   | { kind: 'remote'; session: ViewSession; cause: 'opened' | 'reopened' | 'restarted' }
@@ -43,6 +60,11 @@ export interface DeviceConnections {
   onView(listener: (change: ViewChange) => void): () => void;
   view(): ViewChange;
   pairedPublicKey?(id: string): string | undefined;
+  /** Explicitly retain one paired remote source, independently of the selected view. Concurrent references share
+   * a source peer. Cancellation affects only that reference. Removal, disposal, revocation, identity changes and
+   * disconnect invalidate every reference. There is no automatic reconnect. Local authority belongs to Main.
+   * Registry changes made outside this manager are detected by check(), retainSource(), and connection completion. */
+  retainSource(id: string, options?: { signal?: AbortSignal }): Promise<RetainedSourceLease>;
   /** Returns once switched, without waiting for the connection. */
   switchTo(id: ViewId): Promise<void>;
   retry(): void;
@@ -81,6 +103,14 @@ type Failure = NonNullable<ActiveDeviceState['failure']>;
 type Notice = NonNullable<ActiveDeviceState['notice']>;
 type Cause = Extract<ViewChange, { kind: 'remote' }>['cause'];
 interface Session { id: string; link: RemoteLink; info: ServerInfo; mode: ViewMode; pid?: number; startedAt?: number; view: ViewSession; cause: Cause }
+interface SourceReference { abort: AbortController; detach(): void }
+interface SourcePeer {
+  device: StoredDevice;
+  abort: AbortController;
+  references: Set<SourceReference>;
+  opened: Promise<ViewSession>;
+  state: { kind: 'connecting' } | { kind: 'ready'; link: RemoteLink } | { kind: 'closed'; error: SourceConnectionError };
+}
 type Timer = ReturnType<typeof setTimeout>;
 const TERMINAL: Partial<Record<string, StoredProblem | 'key_unreadable'>> = {
   client_revoked: 'revoked', unknown_client: 'unknown_client', identity_changed: 'identity_changed', key_unreadable: 'key_unreadable',
@@ -148,7 +178,7 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
   let lastMode: ViewMode | undefined;
   let lastInfo: ServerInfo | undefined;
   /** Terminal problems in memory, written at once; the registry follows asynchronously. */
-  const problems = new Map<string, StoredProblem>();
+  const problems = new Map<string, { code: StoredProblem; device: StoredDevice }>();
   const lastIdentity = new Map<string, { pid?: number; startedAt?: number; version: string }>();
   const lastFailure = new Map<string, string>();
   let pairing: { abort: AbortController; stage: 'connecting' | 'pairing' | 'checking'; route?: DeviceRoute } | undefined;
@@ -160,6 +190,8 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
   const viewListeners = new Set<(change: ViewChange) => void>();
   /** Opens, adds and problem writes still running: dispose waits for them, two seconds at most. */
   const inflight = new Set<Promise<unknown>>();
+  const sources = new Map<string, SourcePeer>();
+  const sourceChanges = new Map<string, 'removed' | 'identity_changed'>();
 
   const track = <T>(work: Promise<T>): Promise<T> => {
     inflight.add(work);
@@ -175,7 +207,11 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     const settle = (): void => { timers.clearTimeout(timer); deadlines.delete(timer); };
     work.then(value => { settle(); resolve(value); }, error => { settle(); reject(error); });
   });
-  const problemOf = (id: string): StoredProblem | undefined => problems.get(id) ?? registry.get(id)?.problem?.code;
+  const problemOf = (id: string): StoredProblem | undefined => {
+    const device = registry.get(id);
+    const remembered = problems.get(id);
+    return device && remembered && sameSourceIdentity(device, remembered.device) ? remembered.code : device?.problem?.code;
+  };
   const keyUnreadable = (device: StoredDevice): boolean => {
     try { registry.openKey(device); return false; } catch { return true; }
   };
@@ -260,10 +296,14 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     if (expected) timers.clearTimeout(expected.timer);
     expected = undefined;
   }
-  function persistProblem(id: string, problem: StoredProblem): void {
-    problems.set(id, problem);
+  function persistProblem(id: string, problem: StoredProblem, identity = registry.get(id)): void {
+    const current = registry.get(id);
+    if (!identity || !current || !sameSourceIdentity(identity, current)) return;
+    const snapshot = { ...identity, clientKey: { ...identity.clientKey } };
+    problems.set(id, { code: problem, device: snapshot });
+    invalidateSourceDevice(id, new SourceConnectionError(problem));
     const at = now();
-    void track(registry.update(id, device => ({ ...device, problem: { code: problem, at } }))
+    void track(registry.update(id, device => sameSourceIdentity(snapshot, device) ? { ...device, problem: { code: problem, at } } : device)
       .catch(() => log('device-failed', { id: short(id), code: 'problem_not_saved' })));
   }
   function schedule(myGen: number, delay: number): void {
@@ -292,6 +332,159 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     for (const decisive of ['client_revoked', 'unknown_client']) if (attempts.some(entry => entry.code === decisive)) return decisive;
     if (attempts.length > 0 && attempts.every(entry => entry.code === 'device_identity_changed')) return 'identity_changed';
     return attempts.find(entry => entry.code !== 'device_identity_changed')?.code ?? 'closed';
+  }
+
+  function sameSourceIdentity(a: StoredDevice, b: StoredDevice): boolean {
+    return a.deviceId === b.deviceId && a.pk === b.pk && a.clientId === b.clientId
+      && a.clientKey.publicKey === b.clientKey.publicKey && a.clientKey.secretKeySealed === b.clientKey.secretKeySealed;
+  }
+  function sourceIdentityError(peer: SourcePeer): SourceConnectionError | undefined {
+    if (peer.state.kind === 'closed') return peer.state.error;
+    if (disposed) return new SourceConnectionError('disposed');
+    const id = peer.device.deviceId;
+    const current = registry.get(id);
+    if (!current) return new SourceConnectionError('removed');
+    const changing = sourceChanges.get(id);
+    if (changing) return new SourceConnectionError(changing);
+    if (!sameSourceIdentity(peer.device, current)) return new SourceConnectionError('identity_changed');
+    const problem = problemOf(id);
+    if (problem) return new SourceConnectionError(problem);
+    return undefined;
+  }
+  function invalidateSource(peer: SourcePeer, error: SourceConnectionError): void {
+    if (peer.state.kind === 'closed') return;
+    const previous = peer.state;
+    peer.state = { kind: 'closed', error };
+    if (sources.get(peer.device.deviceId) === peer) sources.delete(peer.device.deviceId);
+    peer.abort.abort(error);
+    if (previous.kind === 'ready') previous.link.close();
+    for (const reference of peer.references) {
+      reference.detach();
+      reference.abort.abort(error);
+    }
+    peer.references.clear();
+  }
+  function invalidateSourceDevice(id: string, error: SourceConnectionError): void {
+    const peer = sources.get(id);
+    if (peer) invalidateSource(peer, error);
+  }
+  function checkSourceIdentity(peer: SourcePeer): void {
+    const error = sourceIdentityError(peer);
+    if (error) { invalidateSource(peer, error); throw error; }
+  }
+  async function openSource(peer: SourcePeer): Promise<ViewSession> {
+    checkSourceIdentity(peer);
+    let key;
+    try { key = registry.openKey(peer.device); }
+    catch { throw new SourceConnectionError('key_unreadable'); }
+    let firstFailure: RemoteConnectCode | undefined;
+    let otherIdentity = false;
+    for (const route of routeOrder(peer.device)) {
+      checkSourceIdentity(peer);
+      const started = now();
+      let link: RemoteLink;
+      try {
+        link = await connector.connect({
+          route, device: { id: peer.device.deviceId, pk: peer.device.pk }, clientKey: key, signal: peer.abort.signal,
+        });
+      } catch (error) {
+        checkSourceIdentity(peer);
+        const failed = error instanceof RemoteConnectError ? error : new RemoteConnectError('closed', 'socket');
+        routeFailure(peer.device.deviceId, route, failed, started, true);
+        if (failed.code === 'client_revoked' || failed.code === 'unknown_client') {
+          persistProblem(peer.device.deviceId, failed.code === 'client_revoked' ? 'revoked' : 'unknown_client', peer.device);
+          throw new SourceConnectionError(failed.code === 'client_revoked' ? 'revoked' : 'unknown_client');
+        }
+        if (failed.code === 'aborted') throw new SourceConnectionError('aborted');
+        if (failed.code === 'device_identity_changed') otherIdentity = true;
+        else firstFailure ??= failed.code;
+        continue;
+      }
+      const stale = sourceIdentityError(peer);
+      if (stale) { link.close(); throw stale; }
+      if (link.serverInfo.machineId !== peer.device.deviceId) {
+        link.close(); throw new SourceConnectionError('identity_changed');
+      }
+      const view: ViewSession = {
+        id: peer.device.deviceId, client: link.client, serverInfo: link.serverInfo,
+        mode: link.serverInfo.protocolVersion === deps.client.protocolVersion ? 'full' : 'maintenance',
+      };
+      peer.state = { kind: 'ready', link };
+      void link.closed.then(closed => {
+        if (peer.state.kind === 'closed') return;
+        const stale = sourceIdentityError(peer);
+        if (stale) { invalidateSource(peer, stale); return; }
+        if (closed.code === 'client_revoked' || closed.code === 'unknown_client') {
+          persistProblem(peer.device.deviceId, closed.code === 'client_revoked' ? 'revoked' : 'unknown_client', peer.device);
+        } else invalidateSource(peer, new SourceConnectionError(closed.code));
+      });
+      return view;
+    }
+    throw new SourceConnectionError(firstFailure ?? (otherIdentity ? 'identity_changed' : 'closed'));
+  }
+  async function retainSource(id: string, options: { signal?: AbortSignal } = {}): Promise<RetainedSourceLease> {
+    if (disposed) throw new DeviceConnectionsError('disposed');
+    if (id === LOCAL_VIEW) throw new DeviceConnectionsError('local_device');
+    const device = registry.get(id);
+    if (!device) throw new DeviceConnectionsError('unknown_device');
+    if (options.signal?.aborted) throw new SourceConnectionError('aborted');
+    const changing = sourceChanges.get(id);
+    if (changing) throw new SourceConnectionError(changing);
+    const problem = problemOf(id);
+    if (problem) { invalidateSourceDevice(id, new SourceConnectionError(problem)); throw new SourceConnectionError(problem); }
+    let peer = sources.get(id);
+    if (peer) {
+      const stale = sourceIdentityError(peer);
+      if (stale) { invalidateSource(peer, stale); peer = undefined; }
+    }
+    if (!peer) {
+      const opening: SourcePeer = {
+        device: { ...device, clientKey: { ...device.clientKey } },
+        abort: new AbortController(), references: new Set(), state: { kind: 'connecting' },
+        opened: Promise.resolve().then(() => openSource(opening)),
+      };
+      peer = opening;
+      sources.set(id, peer);
+      void track(peer.opened).catch(error => {
+        invalidateSource(opening, error instanceof SourceConnectionError ? error : new SourceConnectionError('closed'));
+      });
+    }
+    const retained = peer;
+    const abort = new AbortController();
+    const cancel = (): void => release('aborted');
+    const reference: SourceReference = { abort, detach: () => options.signal?.removeEventListener('abort', cancel) };
+    const release = (code: 'aborted' | 'released'): void => {
+      if (abort.signal.aborted) return;
+      reference.detach();
+      retained.references.delete(reference);
+      abort.abort(new SourceConnectionError(code));
+      if (retained.references.size === 0) invalidateSource(retained, new SourceConnectionError(code));
+    };
+    retained.references.add(reference);
+    options.signal?.addEventListener('abort', cancel, { once: true });
+    let stopWaiting: (() => void) | undefined;
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      const onAbort = (): void => reject(abort.signal.reason);
+      abort.signal.addEventListener('abort', onAbort, { once: true });
+      stopWaiting = () => abort.signal.removeEventListener('abort', onAbort);
+    });
+    try {
+      const view = await Promise.race([retained.opened, cancelled]);
+      if (abort.signal.aborted) throw abort.signal.reason;
+      checkSourceIdentity(retained);
+      return {
+        ...view, signal: abort.signal,
+        check() {
+          if (abort.signal.aborted) throw abort.signal.reason;
+          checkSourceIdentity(retained);
+          if (view.mode !== 'full') throw new SourceConnectionError('maintenance');
+        },
+        release: () => release('released'),
+      };
+    } catch (error) {
+      release('released');
+      throw error;
+    } finally { stopWaiting?.(); }
   }
 
   /** One attempt at the current device, up to `ready` or a failure. `connecting` stays set until it ends, so wake() does
@@ -608,6 +801,8 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
         lastKnown: { version: info.version, protocolVersion: info.protocolVersion, ...(info.platform ? { platform: info.platform } : {}),
           ...(info.deviceName ? { deviceName: info.deviceName } : {}), at },
       };
+      sourceChanges.set(stored.deviceId, 'identity_changed');
+      invalidateSourceDevice(stored.deviceId, new SourceConnectionError('identity_changed'));
       await registry.put(stored);
       // Cancelled while it was saved (Codex 审查 236-3): put back what was there; below takes the key back off its list.
       if (abort.signal.aborted) {
@@ -619,6 +814,8 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
       await withTimeout(linked.client.device({ type: 'revokeClient', clientId }), REVOKE_TIMEOUT_MS).catch(() => undefined);
       linked.close();
       return failed(abort.signal.aborted ? 'aborted' : 'registry_write_failed');
+    } finally {
+      if (sourceChanges.get(link.device.id) === 'identity_changed') sourceChanges.delete(link.device.id);
     }
     linked.close();
     const id = link.device.id;
@@ -709,23 +906,27 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     if (id === LOCAL_VIEW) throw new DeviceConnectionsError('local_device');
     const device = registry.get(id);
     if (!device) throw new DeviceConnectionsError('unknown_device');
-    let revokedRemotely = false;
-    const current = session;
-    if (viewId === id && phase === 'ready' && current?.mode === 'full') {
-      removing = id;
-      try { revokedRemotely = await revokeSelf(current, device.clientId); }
-      catch { revokedRemotely = false; }
-    }
+    sourceChanges.set(id, 'removed');
+    invalidateSourceDevice(id, new SourceConnectionError('removed'));
     try {
-      if (viewId === id && !disposed) await switchTo(LOCAL_VIEW);
-    } finally { removing = undefined; }
-    await registry.remove(id);
-    problems.delete(id);
-    lastIdentity.delete(id);
-    lastFailure.delete(id);
-    log('device-removed', { id: short(id), revoked: revokedRemotely ? 1 : 0 });
-    emitState();
-    return { revokedRemotely };
+      let revokedRemotely = false;
+      const current = session;
+      if (viewId === id && phase === 'ready' && current?.mode === 'full') {
+        removing = id;
+        try { revokedRemotely = await revokeSelf(current, device.clientId); }
+        catch { revokedRemotely = false; }
+      }
+      try {
+        if (viewId === id && !disposed) await switchTo(LOCAL_VIEW);
+      } finally { removing = undefined; }
+      await registry.remove(id);
+      problems.delete(id);
+      lastIdentity.delete(id);
+      lastFailure.delete(id);
+      log('device-removed', { id: short(id), revoked: revokedRemotely ? 1 : 0 });
+      emitState();
+      return { revokedRemotely };
+    } finally { sourceChanges.delete(id); }
   }
 
   return {
@@ -734,6 +935,7 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     onView(listener) { viewListeners.add(listener); return () => { viewListeners.delete(listener); }; },
     view: () => currentView,
     pairedPublicKey: id => registry.get(id)?.pk,
+    retainSource,
     switchTo,
     retry,
     wake,
@@ -771,6 +973,7 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     dispose() {
       disposal ??= (async () => {
         disposed = true;
+        for (const peer of sources.values()) invalidateSource(peer, new SourceConnectionError('disposed'));
         gen++;
         connecting?.abort();
         connecting = undefined;
