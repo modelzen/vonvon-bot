@@ -56,3 +56,11 @@ export async function restoreRecipeSelection(manifest: Buffer, publicFields: Rec
   if (!Buffer.from(selection.graph.canonicalUTF8).equals(manifest)) throw new Error('Invalid effective document snapshot');
   return selection;
 }
+export function recipeSelectionMetadata(manifest: Buffer, publicFields: RecipeRichContent['public']): CanonicalRichRecipeContent {
+  const parsed = decodeRichRecipeContent(manifest);
+  const content = parsed.content;
+  if (content.files.some(file=>file.text.kind!=='part') || parsed.referencedParts.some(part=>part.kind!=='text'||part.objectId!==documentId(part.sha256))) throw new Error('Invalid effective document reference');
+  const expected = canonicalizeRichRecipeContent({format:'rich-v2',schemaVersion:2,public:publicFields,settings:[],rules:[],tasks:[],memories:[],setup:[],skills:content.skills,files:content.files,parts:content.parts});
+  if (!Buffer.from(expected.canonicalUTF8).equals(manifest)) throw new Error('Invalid effective document snapshot');
+  return parsed;
+}

@@ -1,6 +1,6 @@
 import {z} from 'zod';
 import {recipeBinary32Schema} from './recipe-install.js';
-import {recipeRichAuthoringPayloadSchema,recipeRichContentSchema,recipeRichOriginEdgeSchema,recipeRichPartDescriptorSchema,type RecipeRichContent,type RecipeRichAuthoringPayload,type RecipeRichPartDescriptor,type RecipeRichOriginEdge} from './recipe-rich.js';
+import {RECIPE_RICH_LIMITS,recipeRichAuthoringPayloadSchema,recipeRichContentSchema,recipeRichOriginEdgeSchema,recipeRichPartDescriptorSchema,type RecipeRichContent,type RecipeRichAuthoringPayload,type RecipeRichPartDescriptor,type RecipeRichOriginEdge} from './recipe-rich.js';
 
 const uuid=z.string().uuid(),sha=z.string().regex(/^[0-9a-f]{64}$/),encoded=z.string().min(1).max(1401000).regex(/^[A-Za-z0-9_-]+$/);
 const access=z.enum(['direct','coded']);
@@ -30,7 +30,8 @@ export const richFreezeInputSchema:z.ZodType<RichFreezeInput>=z.union([
 ]);
 export type RichFrozenResponse=z.infer<typeof richFrozenResponseSchema>;
 
-export const richSourceOptionsSchema=z.object({kind:z.literal('richSourceOptions'),skills:z.array(z.object({name:z.string().min(1).max(80),files:z.array(z.string().min(1).max(240)).max(64)}).strict()).max(128)}).strict();
+export const RECIPE_SOURCE_SKILL_OPTIONS_LIMIT=128+RECIPE_RICH_LIMITS.skills;
+export const richSourceOptionsSchema=z.object({kind:z.literal('richSourceOptions'),skills:z.array(z.object({name:z.string().min(1).max(80),files:z.array(z.string().min(1).max(240)).max(64)}).strict()).max(RECIPE_SOURCE_SKILL_OPTIONS_LIMIT)}).strict();
 export const richInventoryOptionsSchema=z.object({skills:z.array(z.object({skill:z.string().min(1).max(80),files:z.array(z.string().min(1).max(240)).min(1).max(64)}).strict()).max(16),
   includeBotMemories:z.boolean(),includeTasks:z.boolean()}).strict();
 export const richPreparationSchema=z.object({options:richInventoryOptionsSchema,selected:z.array(uuid).max(512),reviewToken:sha,sourceAttested:z.literal(true),logo:z.string().min(1).max(2796203).regex(/^[A-Za-z0-9_-]+$/).optional(),
