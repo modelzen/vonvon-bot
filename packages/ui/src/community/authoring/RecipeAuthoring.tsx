@@ -214,7 +214,6 @@ function SourcePicker(
       <PrivateFlow
         {...props}
         target={target}
-        resume={Boolean(matching) || Boolean(draft && stored)}
         agent={snapshot?.agents.find((b) => 'source' in target && b.id === target.source.botId)}
         onRestart={() => {
           localStorage.removeItem(scope);
@@ -346,7 +345,6 @@ function SourcePicker(
 
 function PrivateFlow({
   target,
-  resume,
   shell,
   scope,
   title,
@@ -360,7 +358,6 @@ function PrivateFlow({
   onSaved,
 }: Props & {
   target: Target;
-  resume: boolean;
   shell: RecipeAuthoringShell;
   scope: string;
   title: string;
@@ -377,6 +374,7 @@ function PrivateFlow({
   const [handoff, setHandoff] = useState<AuthoringHandoff>();
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const [unavailable,setUnavailable]=useState(false);
   const [busy, setBusy] = useState(false),
     [attempt, reconnect] = useState(0);
   const generation = useRef(0);
@@ -393,7 +391,7 @@ function PrivateFlow({
     : undefined;
   const accepted = operation?.receipt?.status === 'accepted' ? operation.receipt : undefined;
   const done =
-    accepted ||
+    unavailable || accepted ||
     operation?.state === 'cancelled' ||
     operation?.state === 'expired' ||
     (handoff && ['cancelled', 'expired', 'needsReview'].includes(handoff.state));
@@ -450,6 +448,37 @@ function PrivateFlow({
           };
     adopt(await request(s, input), id);
   }
+  async function restore(s?:Session) {
+    const id=retry.current??storedHandoff(scope)?.retryId;
+    if(!id)throw new Error('本次准备的记录不可用，请重新核对。');
+    retry.current=id;
+    const epoch=generation.current,previous=owner.current;
+    const reply=await shell.request({type:'restoreHandoff',accountId,viewId,retryId:id,...(s&&{handle:s.handle}),
+      target:'source' in target?{kind:'source',...target.source,...(parent&&{parent})}:
+        {kind:'draft',draftId:target.draft.draftId,baseRevision:target.draft.revision}});
+    if(epoch!==generation.current||owner.current!==previous){
+      if((reply.kind==='handoffRestored'||reply.kind==='handoffLinkRequired')&&reply.session.handle!==owner.current?.handle)
+        detach(shell,reply.session.handle);
+      return;
+    }
+    if(reply.kind==='handoffUnavailable'){
+      if(reply.retryId!==id)throw new Error('请求来源已变化，请重新核对。');
+      setUnavailable(true);
+      setError(undefined);
+      return;
+    }
+    if(reply.kind!=='handoffRestored'&&reply.kind!=='handoffLinkRequired')throw new Error('来源暂不可用。');
+    const next=reply.session;
+    if(next.target.accountId!==accountId||next.target.viewId!==viewId||botId&&next.target.botId!==botId)throw new Error('请求来源已变化，请重新核对。');
+    const restored=reply.kind==='handoffRestored'?adopt({kind:'handoff',handoff:reply.handoff},id):undefined;
+    owner.current=next;
+    setSession(next);
+    setUnavailable(false);
+    setError(undefined);
+    if(reply.kind==='handoffLinkRequired')await newLink(next);
+    else if(!draftId&&restored?.state==='cancelled')onRestart();
+    return next;
+  }
   async function newLink(s: Session) {
     setLink(undefined);
     setNotice(undefined);
@@ -470,8 +499,16 @@ function PrivateFlow({
     setLink(undefined);
     setNotice(undefined);
     setError(undefined);
+    setUnavailable(false);
     setBusy(true);
     void (async () => {
+      const record=storedHandoff(scope);
+      if(record){
+        retry.current=record.retryId;
+        const restored=await restore();
+        handle=restored?.handle;
+        return;
+      }
       const next = await shell.request(
         draftId && revision
           ? {type: 'openDraftSource', accountId, viewId, draftId, baseRevision: revision}
@@ -489,12 +526,7 @@ function PrivateFlow({
         await newLink(next);
         return;
       }
-      const record = storedHandoff(scope);
-      if (record && (resume || attempt)) {
-        retry.current = record.retryId;
-        const restored = await progressFor(next, record.retryId);
-        if (active && !draftId && restored?.state === 'cancelled') onRestart();
-      } else await begin(next);
+      await begin(next);
     })()
       .catch((reason) => {
         if (active) setError(message(reason));
@@ -504,7 +536,10 @@ function PrivateFlow({
       });
     return () => {
       active = false;
+      generation.current++;
+      const current=owner.current;
       owner.current = undefined;
+      if(current&&current.handle!==handle)detach(shell,current.handle);
       if (handle) detach(shell, handle);
     };
   }, [accountId, viewId, draftId, revision, botId, groupId, shell, attempt]);
@@ -512,16 +547,16 @@ function PrivateFlow({
     const s = owner.current;
     if (!s || busy || locked.current) return;
     locked.current = true;
-    generation.current++;
+    const epoch=++generation.current;
     setBusy(true);
     setError(undefined);
     setNotice(undefined);
     try {
       await action(s);
     } catch (reason) {
-      if (owner.current === s) setError(message(reason));
+      if (epoch===generation.current) setError(message(reason));
     } finally {
-      if (owner.current === s) {
+      if (epoch===generation.current) {
         locked.current = false;
         setBusy(false);
       }
@@ -593,7 +628,9 @@ function PrivateFlow({
       onBack={onBack}
       footer={
         <>
-          {accepted ? (
+          {unavailable ? (
+            <><Button onClick={onBack}>查看创作中心</Button><Button onClick={onRestart}>重新准备</Button></>
+          ) : accepted ? (
             <GlowButton
               variant="dark"
               onClick={() => {
@@ -624,7 +661,8 @@ function PrivateFlow({
                         setChallenge(undefined);
                         setLink(value);
                         setSession({...s, linked: true});
-                        await begin(s);
+                        if(retry.current??storedHandoff(scope)?.retryId)await restore(s);
+                        else await begin(s);
                       }
                     })
                   }
@@ -690,7 +728,8 @@ function PrivateFlow({
         </>
       }
     >
-      {status && (
+      {unavailable&&<p role="status">无法找回这次准备。请先到创作中心确认是否已有草稿，再重新准备。</p>}
+      {!unavailable&&status && (
         <p role="status">
           <strong>{status}</strong>
         </p>
@@ -705,7 +744,7 @@ function PrivateFlow({
           {botName} · {target.groupName}
         </p>
       )}
-      {!status && !challenge && !error && <p role="status">正在核验来源与本人私聊…</p>}
+      {!unavailable && !status && !challenge && !error && <p role="status">正在核验来源与本人私聊…</p>}
       {challenge && (
         <>
           <p>用管理员身份在「{botName}」的本人私聊发送这条命令。</p>
@@ -737,8 +776,8 @@ function PrivateFlow({
       )}
       {notice && <p role="status">{notice}</p>}
       {error && <p role="alert">{error}</p>}
-      {operation?.syncMessage && <p>{operation.syncMessage}</p>}
-      {operation?.contextPaused && (
+      {!unavailable && operation?.syncMessage && <p>{operation.syncMessage}</p>}
+      {!unavailable && operation?.contextPaused && (
         <Button
           disabled={busy}
           onClick={() =>
@@ -755,7 +794,7 @@ function PrivateFlow({
         <Button
           disabled={busy}
           onClick={() => {
-            if (session && retry.current) void act(begin);
+            if (session && retry.current) void act(async s=>{await restore(s);});
             else reconnect((n) => n + 1);
           }}
         >

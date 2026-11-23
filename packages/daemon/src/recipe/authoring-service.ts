@@ -279,6 +279,10 @@ export class AuthoringService {
           const link=await this.allowed(p);this.interact(p);
           return {kind:'handoff',handoff:await this.handoffs.begin(p,link,req)};
         }
+        case 'restoreHandoff':{
+          const link=await this.allowed(p);this.interact(p);
+          return this.handoffs.restore(p,link,req);
+        }
         case 'handoffStatus':
         case 'cancelHandoff':{
           const link=await this.allowed(p);

@@ -3,8 +3,8 @@ import {mkdtempSync,rmSync,unlinkSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {afterEach,expect,it,vi} from 'vitest';
-import {agentIdSchema,canonicalizeRichRecipeContent,groupIdSchema,type AccountStatus,type AuthoringOperation,
-  type HandoffAttestation,type RecipeAuthoringReply,type RecipeAuthoringRequest} from '@vonvon/protocol';
+import {agentIdSchema,canonicalizeRichRecipeContent,groupIdSchema,type AccountStatus,type AuthoringOperation,type AuthoringReceipt,
+  desktopAuthoringRequestSchema,type HandoffAttestation,type RecipeAuthoringReply,type RecipeAuthoringRequest} from '@vonvon/protocol';
 import type {VonvonClient} from '@vonvon/client/browser';
 import {RecipeAuthoringController} from '../src/recipe-authoring';
 import {AuthoringJournal} from '../src/recipe-authoring-journal';
@@ -26,7 +26,7 @@ function fixture(path?:string) {
   const botId=agentIdSchema.parse('cli_original'),groupId=groupIdSchema.parse('oc_original');
   const binding={accountId,viewId:'local' as const,deviceId,deviceKey,botId};
   const draft=manifest('目前的内容'),original=manifest('来源内容');
-  const remote={sourceIntentId,deviceKey,identity,linked:true,operations:[] as AuthoringOperation[],pending:undefined as HandoffAttestation|undefined};
+  const remote={sourceIntentId,deviceKey,identity,linked:true,missing:false,statusFailures:0,cloudReceipt:undefined as AuthoringReceipt|undefined,operations:[] as AuthoringOperation[],pending:undefined as HandoffAttestation|undefined};
   const op:AuthoringOperation={operationId:sourceIntentId,format:'rich-v2',groupId,purpose:'prepareDraft',targetPublicKey:deviceKey,
     nonceCommitment:deviceKey,createdAt:Date.now(),deliveryUnknown:false,state:'completed',
     receipt:{operationId:sourceIntentId,status:'accepted',stateRevision:3,draftId,revision:1}};
@@ -37,9 +37,19 @@ function fixture(path?:string) {
       case 'open':return {kind:'session',session:randomUUID(),leaseMs:45000,linked:remote.linked};
       case 'close':return {kind:'closed'};
       case 'workflow':return {kind:'workflow',activity:0,ageMs:0,pausedContexts:[],handoff:remote.pending};
-      case 'status':return {kind:'status',operations:remote.operations,linked:remote.linked,reconciliation:[]};
+      case 'status':if(remote.statusFailures-->0)throw Error('transient status failure');return {kind:'status',operations:remote.operations,linked:remote.linked,reconciliation:[]};
       case 'operationSourceIdentity':return {kind:'operationSourceIdentity',operationId:sourceIntentId,groupId,identity};
       case 'groupSourceIdentity':return {kind:'groupSourceIdentity',groupId,identity:remote.identity};
+      case 'restoreHandoff':
+        if(remote.missing)return {kind:'handoffUnavailable',retryId:input.retryId,reason:'notFound'};
+        return {kind:'handoff',handoff:{retryId:input.retryId,groupId,...(input.expected.kind==='draft'&&{draftId:input.expected.draftId}),
+          ...(remote.operations[0]?{state:'prepared',operationId:remote.operations[0].operationId}:{state:'selecting'})}};
+      case 'settle':{
+        const operation=remote.operations.find(op=>op.operationId===input.operationId);
+        if(!operation)throw Error('missing original operation');
+        operation.state=input.receipt.status==='accepted'?'completed':input.receipt.status;operation.receipt=input.receipt;
+        return {kind:'operation',operation};
+      }
       case 'beginHandoff':case 'beginDraftHandoff':case 'answerHandoff':
         if(input.type==='beginHandoff' && input.retryId!==retryId)throw Error('active handoff');
         return {kind:'handoff',handoff:{groupId,retryId,draftId:input.type==='beginDraftHandoff'?draftId:undefined,state:'selecting'}};
@@ -55,6 +65,8 @@ function fixture(path?:string) {
   const request=vi.fn(async(id:string,path:string)=>{
     expect(id).toBe(accountId);
     if(path==='/v1/me')return Response.json({accountId});
+    if(path.startsWith('/v2/authoring/')&&path.endsWith('/recovery'))
+      return remote.cloudReceipt?Response.json({format:'rich-v2',...remote.cloudReceipt}):new Response('{}',{status:503});
     if(path==='/v2/drafts/'+draftId)return Response.json({format:'rich-v2',draftId,sourceIntentId:remote.sourceIntentId,
       revision:2,manifest:draft.metadata,sourceManifest:original.metadata});
     for(const item of [draft,original])if(path==='/v2/drafts/'+draftId+'/objects/'+item.metadata.objectId)return new Response(item.canonical);
@@ -184,4 +196,55 @@ it.each([403,404,503])('settles an unavailable attestation and retains transient
     await vi.waitFor(()=>expect(f.calls.filter(r=>r.type==='answerHandoff')).toHaveLength(1));
     expect(f.calls.find(r=>r.type==='answerHandoff')).toMatchObject({request:f.remote.pending,attestations:[],unavailable:true});
   }
+});
+
+
+it.each([false,true])('restores the exact edit receipt after its original revision advances (revoked %s)',async revoked=>{
+  const f=fixture(),{journal,controller}=f.build();
+  journal.history.remember(f.binding,f.sourceIntentId,f.identity,f.groupId);
+  const session=await controller.request(f.openDraft);
+  if(session.kind!=='session')throw Error('session');
+  const edit:AuthoringOperation={...f.op,groupId:undefined,operationId:randomUUID(),purpose:'editDraft',draftId:f.draftId,baseRevision:2,state:'pendingCloud',receipt:undefined};
+  f.remote.operations=[edit];
+  await controller.request({type:'status',handle:session.handle});
+  f.remote.cloudReceipt={operationId:edit.operationId,status:'accepted',stateRevision:3,draftId:f.draftId,revision:3};
+  const normal=f.request.getMockImplementation()!;
+  f.request.mockImplementation((id,path)=>path==='/v2/drafts/'+f.draftId
+    ?Promise.resolve(Response.json({format:'rich-v2',draftId:f.draftId,sourceIntentId:f.sourceIntentId,revision:3,manifest:f.draft.metadata,sourceManifest:f.original.metadata}))
+    :normal(id,path));
+  if(revoked){
+    await controller.request({type:'close',handle:session.handle});
+    await expect(controller.request({type:'status',handle:session.handle})).rejects.toThrow('账号或设备连接已改变');
+  }
+  const before=f.request.mock.calls.length;
+  const restored=await controller.request(desktopAuthoringRequestSchema.parse({type:'restoreHandoff',accountId:f.binding.accountId,viewId:'local',
+    handle:session.handle,retryId:f.retryId,target:{kind:'draft',draftId:f.draftId,baseRevision:2}}));
+  expect(restored).toMatchObject({kind:'handoffRestored',handoff:{retryId:f.retryId,operationId:edit.operationId},
+    session:{operations:[expect.objectContaining({operationId:edit.operationId,receipt:expect.objectContaining({draftId:f.draftId,revision:3})})]}});
+  expect(f.calls.filter(r=>r.type==='beginDraftHandoff')).toHaveLength(0);
+  expect(f.request.mock.calls.slice(before).some(([,path])=>path.includes('/objects/'))).toBe(false);
+  if(!revoked)expect(f.request.mock.calls.slice(before).some(([,path])=>path==='/v2/drafts/'+f.draftId)).toBe(false);
+  await expect(controller.request(f.openDraft)).rejects.toThrow('无法核验');
+  if(restored.kind!=='handoffRestored')throw Error('restored');
+  if(revoked)expect(restored.session.handle).not.toBe(session.handle);
+  else expect(restored.session.handle).toBe(session.handle);
+  await expect(controller.request({type:'beginDraftHandoff',handle:restored.session.handle,retryId:randomUUID(),draftId:f.draftId,baseRevision:2})).rejects.toThrow('选择已改变');
+});
+
+
+it('preserves a valid old handle after a transient restore read and revokes an actual device-key mismatch',async()=>{
+  const f=fixture(),{controller}=f.build();
+  const opened=await controller.request({type:'open',accountId:f.binding.accountId,viewId:'local',botId:f.binding.botId,groupId:f.groupId});
+  if(opened.kind!=='session')throw Error('session');
+  await controller.request({type:'beginHandoff',handle:opened.handle,groupId:f.groupId,retryId:f.retryId});
+  const restore=desktopAuthoringRequestSchema.parse({type:'restoreHandoff',accountId:f.binding.accountId,viewId:'local',handle:opened.handle,
+    retryId:f.retryId,target:{kind:'source',botId:f.binding.botId,groupId:f.groupId}});
+  f.remote.statusFailures=1;
+  await expect(controller.request(restore)).rejects.toThrow('transient status failure');
+  await expect(controller.request({type:'status',handle:opened.handle})).resolves.toMatchObject({kind:'session',handle:opened.handle});
+  expect(f.calls.filter(r=>r.type==='open')).toHaveLength(1);
+  f.remote.deviceKey=Buffer.alloc(32,9).toString('base64url');
+  await expect(controller.request(restore)).rejects.toThrow();
+  await expect(controller.request({type:'status',handle:opened.handle})).rejects.toThrow();
+  expect(f.calls.filter(r=>r.type==='beginHandoff')).toHaveLength(1);
 });

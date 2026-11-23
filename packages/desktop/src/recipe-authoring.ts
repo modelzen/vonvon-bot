@@ -29,6 +29,9 @@ import { authoringCloud, AuthoringError, invalidAuthoring, dispatchDigest } from
 import { AuthoringJournal } from './recipe-authoring-journal.js';
 
 type Open = Extract<DesktopAuthoringRequest, { type: 'open' }>;
+type Restore = Extract<DesktopAuthoringRequest, {type:'restoreHandoff'}>;
+type Intent = {kind:'initial'} | {kind:'restore';retryId:string};
+type SessionReply = Extract<DesktopAuthoringReply,{kind:'session'}>;
 type DraftSourceOpen = Extract<DesktopAuthoringRequest, {type:'openDraftSource'}>;
 type DraftSource = Pick<DraftSourceOpen, 'draftId' | 'baseRevision'> & {
   operationId:string; deviceId:string; deviceKey:string; groupId?:GroupId; identity?:string;
@@ -36,6 +39,7 @@ type DraftSource = Pick<DraftSourceOpen, 'draftId' | 'baseRevision'> & {
 type HandoffScope = {retryId:string;groupId:GroupId;draftId?:string};
 type Handle = {
   id: string;
+  intent: Intent;
   open: Open;
   lease: RecipeDeviceLease;
   signal: AbortSignal;
@@ -69,7 +73,7 @@ type Handle = {
   busy: boolean;
   removeAbort?: () => void;
 };
-type Action = Exclude<DesktopAuthoringRequest, Open | DraftSourceOpen>;
+type Action = Exclude<DesktopAuthoringRequest, Open | DraftSourceOpen | Restore>;
 type SessionRequest = Exclude<RecipeAuthoringRequest, { type: 'open' }>;
 type ScopedRequest<T = SessionRequest> = T extends SessionRequest ? Omit<T, 'session' | 'botId'> : never;
 const changed = () => new AuthoringError('账号或设备连接已改变，请重新打开原来的配方操作。');
@@ -135,8 +139,10 @@ export class RecipeAuthoringController {
     if (
       (h.deviceId && (h.deviceId !== id || h.deviceKey !== key)) ||
       (h.open.viewId !== 'local' && (h.open.viewId !== id || h.lease.pairedKey !== key))
-    )
+    ) {
+      this.revoke(h);
       throw changed();
+    }
     h.deviceId = id;
     h.deviceKey = key;
   }
@@ -214,18 +220,22 @@ export class RecipeAuthoringController {
     const meta = await richAuthoringCloud(this.account,accountId,signal,check).draftMetadata(draftId,baseRevision)
       .catch(() => {check();throw new AuthoringError('无法核验当前账号的这份草稿，请刷新草稿后重试。');});
     check();
-    const saved = this.journal.history.locator(accountId,meta.sourceIntentId);
-    const prior = this.journal.preparation(accountId,meta.sourceIntentId);
+    const original=this.draftSource(input,meta.sourceIntentId);
+    return this.open({type:'open',accountId,viewId,botId:original.botId},original.source);
+  }
+  private draftSource({accountId,viewId,draftId,baseRevision}:DraftSourceOpen,sourceIntentId:string) {
+    const saved = this.journal.history.locator(accountId,sourceIntentId);
+    const prior = this.journal.preparation(accountId,sourceIntentId);
     const target = saved ?? prior;
     if (!target) throw new AuthoringError('这台 App 没有这份草稿的来源记录，仍可编辑发布信息。');
     if (prior && saved && (saved.deviceId !== prior.deviceId || saved.deviceKey !== prior.deviceKey ||
       saved.botId !== prior.botId || saved.groupId && prior.groupId !== saved.groupId)) throw invalidAuthoring();
     if ((viewId !== 'local' && viewId !== target.deviceId) || (prior && prior.viewId !== viewId))
       throw new AuthoringError('请先在设备菜单切换到创建这份草稿的来源设备。');
-    return this.open({type:'open',accountId,viewId,botId:target.botId}, {
-      draftId, baseRevision, operationId:meta.sourceIntentId, deviceId:target.deviceId, deviceKey:target.deviceKey,
+    return {botId:target.botId,source:{
+      draftId, baseRevision, operationId:sourceIntentId, deviceId:target.deviceId, deviceKey:target.deviceKey,
       groupId:saved?.groupId ?? prior?.groupId, identity:saved?.identity,
-    });
+    }};
   }
   private async verifyDraftSource(h: Handle, source: DraftSource) {
     if (source.deviceId !== h.deviceId || source.deviceKey !== h.deviceKey)
@@ -258,7 +268,7 @@ export class RecipeAuthoringController {
     try {
       this.invalidateStale();
       for (const prior of this.handles.values()) {
-        if (prior.attached || !prior.handoff || prior.open.accountId !== input.accountId || prior.open.viewId !== input.viewId ||
+        if (prior.attached || prior.intent.kind==='restore' || !prior.handoff || prior.open.accountId !== input.accountId || prior.open.viewId !== input.viewId ||
           prior.open.botId !== input.botId || prior.open.groupId !== input.groupId || prior.draftSource?.draftId !== source?.draftId ||
           prior.draftSource?.baseRevision !== source?.baseRevision) continue;
         await prior.tail;
@@ -276,7 +286,7 @@ export class RecipeAuthoringController {
       this.opening.delete(target);
     }
   }
-  private async openTarget(input: Open, source?: DraftSource): Promise<DesktopAuthoringReply> {
+  private async openTarget(input: Open, source?: DraftSource, intent:Intent={kind:'initial'}): Promise<SessionReply> {
     const signal = this.account.lease?.(input.accountId),
       actor = this.account.status();
     if (!signal || actor.kind !== 'signedIn' || actor.accountId !== input.accountId) throw changed();
@@ -286,6 +296,7 @@ export class RecipeAuthoringController {
     if (this.handles.size >= 16) throw new AuthoringError('请先关闭其他 Bot 的草稿会话。');
     const h: Handle = {
       id: randomUUID(),
+      intent,
       open: input,
       lease: this.capture(input.viewId),
       signal,
@@ -342,8 +353,8 @@ export class RecipeAuthoringController {
       this.check(h);
       if (source) await this.verifyDraftSource(h,source);
       if (input.groupId) h.groupIdentity = await this.groupIdentity(h, input.groupId);
-      await this.workflow(h);
-      const result = await this.refresh(h);
+      if(intent.kind==='initial')await this.workflow(h);
+      const result = intent.kind==='initial'?await this.refresh(h):this.sessionView(h,session.linked,[]);
       this.check(h);
       h.timer = setInterval(() => {void this.tick(h);}, Math.max(100,Math.min(3_000,Math.floor(session.leaseMs/3))));
       h.timer.unref();
@@ -458,9 +469,10 @@ export class RecipeAuthoringController {
   private async checkGroup(h: Handle) {
     const groupId = h.draftSource?.groupId ?? h.open.groupId;
     if (!groupId) return;
-    try {
-      if ((h.draftSource?.identity ?? h.groupIdentity) !== await this.groupIdentity(h,groupId)) throw recheck();
-    } catch (error) { this.revoke(h); throw error; }
+    if (!h.groups.has(groupId) || (h.draftSource?.identity ?? h.groupIdentity) !== await this.groupIdentity(h,groupId)) {
+      this.revoke(h);
+      throw recheck();
+    }
   }
   private async rememberSource(h: Handle, op: AuthoringOperation) {
     if (op.purpose !== 'prepareDraft' || !op.groupId) return;
@@ -546,7 +558,7 @@ export class RecipeAuthoringController {
       throw invalidAuthoring();
     return { ...summary, receipt, ...expiryNotice(receipt), state:receipt.status === 'accepted' ? 'completed' : receipt.status };
   }
-  private async refresh(h: Handle): Promise<DesktopAuthoringReply> {
+  private async refresh(h: Handle): Promise<SessionReply> {
     await this.checkGroup(h);
     const status = await this.status(h);
     const revoked = [];
@@ -569,15 +581,14 @@ export class RecipeAuthoringController {
       }
     }
     this.check(h);
+    return this.sessionView(h,status.linked,[...h.operations.values()].map(op =>
+      this.display(h, op, terminal(op) ? undefined : h.retry.get(op.operationId)?.message),
+    ).concat(revoked).filter(op => this.visible(h,op)));
+  }
+  private sessionView(h:Handle,linked:boolean,operations:DesktopAuthoringOperation[]):SessionReply {
     return {
-      kind: 'session',
-      handle: h.id,
-      target: h.target,
-      linked: status.linked,
-      ...(h.draftSource?.groupId && {sourceGroup:{groupId:h.draftSource.groupId,groupName:h.groups.get(h.draftSource.groupId)!}}),
-      operations: [...h.operations.values()].map(op =>
-        this.display(h, op, terminal(op) ? undefined : h.retry.get(op.operationId)?.message),
-      ).concat(revoked).filter(op => this.visible(h,op)),
+      kind:'session',handle:h.id,target:h.target,linked,operations,
+      ...(h.draftSource?.groupId&&{sourceGroup:{groupId:h.draftSource.groupId,groupName:h.groups.get(h.draftSource.groupId)!}}),
     };
   }
   private async operation(h: Handle, request: ScopedRequest & { operationId: string }) {
@@ -779,6 +790,7 @@ export class RecipeAuthoringController {
   }
   private async action(h: Handle, r: Exclude<Action, { type: 'close' | 'detach' }>): Promise<DesktopAuthoringReply> {
     await this.present(h, r.type !== 'status');
+    if(h.intent.kind==='restore'&&(r.type==='beginHandoff'||r.type==='beginDraftHandoff'))throw recheck();
     if (h.draftSource && !['beginLink','inspectLink','confirmLink','beginDraftHandoff','handoffStatus','cancelHandoff',
       'status','cancel','resume','resend'].includes(r.type)) throw recheck();
     if (h.open.groupId && r.type !== 'status' && r.type !== 'sourceHistory') {
@@ -945,8 +957,95 @@ export class RecipeAuthoringController {
       }
     }
   }
+  private async restoreHandoff(r:Restore):Promise<DesktopAuthoringReply> {
+    const actor=this.account.status();
+    if(actor.kind!=='signedIn'||actor.accountId!==r.accountId||!this.account.lease?.(r.accountId))throw changed();
+    this.invalidateStale();
+    const previous=r.handle?this.handles.get(r.handle):undefined;
+    if(previous){
+      if(previous.open.accountId!==r.accountId||previous.open.viewId!==r.viewId||
+        (r.target.kind==='source'?(previous.open.botId!==r.target.botId||previous.open.groupId!==r.target.groupId||!!previous.draftSource):
+          previous.draftSource?.draftId!==r.target.draftId||previous.draftSource.baseRevision!==r.target.baseRevision)||
+        previous.handoff&&previous.handoff.retryId!==r.retryId||previous.intent.kind==='restore'&&previous.intent.retryId!==r.retryId)throw recheck();
+      return this.enqueue(previous,()=>this.restoreExisting(previous,r));
+    }
+    let source:DraftSource|undefined;
+    let open:Open;
+    if(r.target.kind==='draft'){
+      const signal=this.account.lease?.(r.accountId);
+      if(!signal)throw changed();
+      const check=()=>{if(signal.aborted||signal!==this.account.lease?.(r.accountId))throw changed();};
+      const locator=await richAuthoringCloud(this.account,r.accountId,signal,check).draftSourceLocator(r.target.draftId);
+      const original=this.draftSource({type:'openDraftSource',accountId:r.accountId,viewId:r.viewId,...r.target},locator.sourceIntentId);
+      source=original.source;
+      open={type:'open',accountId:r.accountId,viewId:r.viewId,botId:original.botId};
+    }else open={type:'open',accountId:r.accountId,viewId:r.viewId,botId:r.target.botId,groupId:r.target.groupId};
+    const key=open.viewId+'/'+open.botId;
+    if(this.opening.has(key))throw new AuthoringError('正在连接这个 Bot，请稍后继续。');
+    this.opening.add(key);
+    let h:Handle|undefined;
+    try {
+      const session=await this.openTarget(open,source,{kind:'restore',retryId:r.retryId});
+      const opened=this.handles.get(session.handle);
+      if(!opened)throw changed();
+      h=opened;
+      const result=await this.enqueue(opened,()=>this.restoreExisting(opened,r));
+      if(result.kind==='handoffUnavailable')this.revoke(h);
+      return result;
+    }catch(error){if(h)this.revoke(h);throw error;}
+    finally {this.opening.delete(key);}
+  }
+  private async restoreExisting(h:Handle,r:Restore):Promise<DesktopAuthoringReply>{
+    await this.identity(h);
+    await this.names(h);
+    await this.checkGroup(h);
+    const status=await this.status(h);
+    h.intent={kind:'restore',retryId:r.retryId};
+    if(!status.linked)return {kind:'handoffLinkRequired',session:await this.refresh(h)};
+    const target=r.target;
+    const groupId=target.kind==='source'?target.groupId:h.draftSource?.groupId;
+    if(!groupId)throw recheck();
+    const expected:Extract<ScopedRequest,{type:'restoreHandoff'}>['expected']=target.kind==='draft'
+      ?{kind:'draft',groupId,draftId:target.draftId,baseRevision:target.baseRevision}
+      :{kind:'source',groupId,sourceVersionId:target.parent?.versionId,
+        ...(target.parent&&{inherited:await inheritedPublication(this.account,r.accountId,target.parent.recipeId,target.parent.versionId,()=>this.check(h))})};
+    const reply=await this.daemon(h,{type:'restoreHandoff',retryId:r.retryId,expected});
+    if(reply.kind==='handoffUnavailable'){
+      if(reply.retryId!==r.retryId)throw invalidAuthoring();
+      return reply;
+    }
+    const scope={retryId:r.retryId,groupId,...(target.kind==='draft'&&{draftId:target.draftId})};
+    const restored=this.verifyHandoff(scope,expectKind(reply,'handoff')).handoff;
+    h.handoff=scope;
+    if(restored.operationId)h.retry.delete(restored.operationId);
+    const session=await this.refresh(h);
+    if(restored.operationId){
+      const op=session.operations.find(op=>op.operationId===restored.operationId);
+      if(!op||op.format!=='rich-v2'||op.purpose!==(target.kind==='draft'?'editDraft':'prepareDraft')||
+        (target.kind==='draft'?(op.draftId!==target.draftId||op.baseRevision!==target.baseRevision):op.groupId!==target.groupId)||
+        op.receipt?.status==='accepted'&&(op.receipt.operationId!==op.operationId||
+          (target.kind==='draft'?(op.receipt.draftId!==target.draftId||op.receipt.revision!==target.baseRevision+1):op.receipt.revision!==1)))throw invalidAuthoring();
+    }
+    return {kind:'handoffRestored',session,handoff:restored};
+  }
+  private async enqueue(h:Handle,action:()=>Promise<DesktopAuthoringReply>){
+    this.check(h);
+    if(h.queued>=8)throw new AuthoringError('正在核对上一次操作，请稍后继续。');
+    h.queued++;h.busy=true;
+    const run=h.tail.then(async()=>{
+      this.check(h);
+      if(!h.attached)throw changed();
+      const reply=await action();
+      this.check(h);
+      return desktopAuthoringReplySchema.parse(reply);
+    });
+    h.tail=run.then(()=>{},()=>{});
+    try{return await run;}
+    finally {h.queued--;h.busy=h.queued>0;}
+  }
   async request(raw: DesktopAuthoringRequest) {
     const r = desktopAuthoringRequestSchema.parse(raw);
+    if (r.type === 'restoreHandoff') return desktopAuthoringReplySchema.parse(await this.restoreHandoff(r));
     if (r.type === 'openDraftSource') return desktopAuthoringReplySchema.parse(await this.openDraftSource(r));
     if (r.type === 'open') return desktopAuthoringReplySchema.parse(await this.open(r));
     const h = this.handles.get(r.handle);
@@ -961,29 +1060,11 @@ export class RecipeAuthoringController {
       this.revoke(h);
       return { kind: 'closed' as const };
     }
-    this.check(h);
-    if (h.queued >= 8) throw new AuthoringError('正在核对上一次操作，请稍后继续。');
     if(r.type==='cancel'&&h.transfer?.operationId===r.operationId)h.transfer.cancel.abort();
-    h.queued++;
-    h.busy = true;
-    const run = h.tail.then(async () => {
-      this.check(h);
-      if (!h.attached) throw changed();
+    return this.enqueue(h,async()=>{
       await this.workflow(h);
-      if (!h.attached) throw changed();
-      const reply = await this.action(h, r);
-      this.check(h);
-      return desktopAuthoringReplySchema.parse(reply);
+      if(!h.attached)throw changed();
+      return this.action(h,r);
     });
-    h.tail = run.then(
-      () => {},
-      () => {},
-    );
-    try {
-      return await run;
-    } finally {
-      h.queued--;
-      h.busy = h.queued > 0;
-    }
   }
 }

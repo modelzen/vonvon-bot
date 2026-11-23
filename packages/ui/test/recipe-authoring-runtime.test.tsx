@@ -102,6 +102,19 @@ async function defaultAuthoring(request: DesktopAuthoringRequest):Promise<Deskto
     const next = desktopAuthoringReplySchema.parse({kind:'session',handle,target:{accountId:request.accountId,accountName:request.accountId===accountA?'账号甲':'账号乙',viewId:request.viewId,botId,botName:botId===botA?'Bot A':'Bot B'},linked,operations:operations.filter(item=>item.target.accountId===request.accountId&&item.target.viewId===request.viewId&&item.target.botId===botId),...(request.type==='openDraftSource'&&{sourceGroup:{groupId:groupA,groupName:'群聊 A'}})});
     if (next.kind!=='session') throw new Error('Expected session fixture'); sessions.set(handle,next);return next;
   }
+  if(request.type==='restoreHandoff'){
+    let session=request.handle?sessions.get(request.handle):undefined;
+    if(!session){
+      const opened=await defaultAuthoring(request.target.kind==='source'
+        ?{type:'open',accountId:request.accountId,viewId:request.viewId,botId:request.target.botId,groupId:request.target.groupId}
+        :{type:'openDraftSource',accountId:request.accountId,viewId:request.viewId,draftId:request.target.draftId,baseRevision:request.target.baseRevision});
+      if(opened.kind!=='session')throw new Error('Expected recovery session');
+      session=opened;
+    }
+    if(!linked)return {kind:'handoffLinkRequired',session};
+    if(!currentHandoff||currentHandoff.retryId!==request.retryId)return {kind:'handoffUnavailable',retryId:request.retryId,reason:'notFound'};
+    return {kind:'handoffRestored',session:{...session,linked,operations},handoff:currentHandoff};
+  }
   const session = sessionFor(request);
   switch(request.type) {
     case 'detach': case 'close': sessions.delete(request.handle);return {kind:'closed'};
@@ -219,7 +232,7 @@ it('retires a historical cancelled preparation after checking it and lets the ne
   currentHandoff={...currentHandoff!,state:'cancelled'};
   await act(async()=>root.unmount());root=createRoot(document.getElementById('root')!);
   await draw();await click('社区');await click('创作中心');await click('准备配方');
-  expect(calls.filter(r=>r.type==='handoffStatus').at(-1)).toMatchObject({retryId});
+  expect(calls.filter(r=>r.type==='restoreHandoff').at(-1)).toMatchObject({retryId});
   expect(dialog('准备配方')?.querySelectorAll('select')).toHaveLength(2);
   expect(dialog('准备配方')?.textContent).not.toContain('已取消本次准备');
   expect(calls.filter(r=>r.type==='beginHandoff')).toHaveLength(1);
@@ -234,7 +247,7 @@ it.each(['selecting','deliveryUnknown','prepared'] as const)('restores a %s prep
   currentHandoff={...currentHandoff!,state};
   await click('关闭');await click('准备配方');
   expect(dialog('准备配方')?.querySelector('select')).toBeNull();
-  expect(calls.filter(r=>r.type==='handoffStatus').at(-1)).toMatchObject({retryId});
+  expect(calls.filter(r=>r.type==='restoreHandoff').at(-1)).toMatchObject({retryId});
   expect(calls.filter(r=>r.type==='beginHandoff')).toHaveLength(1);
 });
 
@@ -247,7 +260,7 @@ it('retains the retry identity across uncertain delivery and reopens only the ac
   const initial=calls.find(r=>r.type==='beginHandoff')!;
   await click('关闭');await click('准备配方');
   expect(calls.filter(r=>r.type==='beginHandoff')).toHaveLength(1);
-  expect(calls.filter(r=>r.type==='handoffStatus').at(-1)).toMatchObject({retryId:initial.retryId});
+  expect(calls.filter(r=>r.type==='restoreHandoff').at(-1)).toMatchObject({retryId:initial.retryId});
   expect(dialog('准备配方')?.textContent).toContain('请在 Bot 私聊里选择内容');
   const session=[...sessions.values()][0]!;
   operations=[{...op(session,'completed'),receipt:{status:'accepted',operationId,draftId,revision:1,stateRevision:3}}];
@@ -262,9 +275,10 @@ it('revalidates the original retry after a disconnected session, without dispatc
   linked=true;await draw();await chooseSource();await click('确认');
   const retryId=currentHandoff!.retryId;
   await click('关闭');
-  authoring=async r=>{if(r.type==='handoffStatus')throw new Error('请重新核验本人私聊。');return defaultAuthoring(r);};
+  let fail=true;authoring=async r=>{if(r.type==='restoreHandoff'&&fail){fail=false;throw new Error('请重新核验本人私聊。');}return defaultAuthoring(r);};
   await click('准备配方');expect(dialog('准备配方')?.textContent).toContain('重新核验本人私聊');
-  await click('重试本次准备');expect(calls.filter(r=>r.type==='beginHandoff').map(r=>r.retryId)).toEqual([retryId,retryId]);
+  await click('重试本次准备');expect(calls.filter(r=>r.type==='beginHandoff').map(r=>r.retryId)).toEqual([retryId]);
+  expect(calls.filter(r=>r.type==='restoreHandoff').at(-1)).toMatchObject({retryId});
 });
 
 it.each(['stopped','unbound'] as const)('gives a %s Bot one actionable destination without opening a private session',async(kind)=>{
@@ -573,4 +587,113 @@ it('continues a rich draft at its verified source and keeps publication informat
   expect(calls.find(r=>r.type==='openDraftSource')).toMatchObject({accountId:accountA,viewId:A,draftId,baseRevision:1});
   expect(dialog('在飞书私聊中修改')?.textContent).toContain('群聊 A');
   expect(calls.some(r=>['open','richEdit','richInventory','saveDraft','saveRichMetadata'].includes(r.type))).toBe(false);
+});
+
+
+it.each(['selecting','prepared'] as const)('restores a truly deleted %s handle and keeps one private card and original draft',async state=>{
+  vi.useFakeTimers();linked=true;let cardsSent=0;
+  authoring=async request=>{if(request.type==='beginHandoff')cardsSent++;return defaultAuthoring(request);};
+  await draw();await chooseSource();await click('确认');
+  const initial=calls.find(r=>r.type==='beginHandoff')!;
+  const original=sessions.get(initial.handle)!;
+  if(state==='prepared'){
+    operations=[op(original,'candidate')];currentHandoff={...currentHandoff!,state:'prepared',operationId};
+    await act(async()=>vi.advanceTimersByTimeAsync(2000));
+  }
+  sessions.clear();
+  await act(async()=>vi.advanceTimersByTimeAsync(state==='prepared'?4000:2000));
+  expect(dialog('准备配方')?.textContent).toContain('操作已关闭');
+  const before=calls.length;
+  await click('重试本次准备');
+  expect(calls.slice(before).find(r=>r.type==='restoreHandoff')).toMatchObject({accountId:accountA,viewId:A,handle:initial.handle,
+    retryId:initial.retryId,target:{kind:'source',botId:botA,groupId:groupA}});
+  const resumed=[...sessions.values()].at(-1)!;
+  expect(resumed.handle).not.toBe(initial.handle);
+  expect(resumed.target).toEqual(original.target);
+  expect(calls.filter(r=>r.type==='beginHandoff')).toHaveLength(1);
+  expect(dialog('准备配方')?.textContent).toContain(state==='prepared'?'等待本人在飞书确认候选':'请在 Bot 私聊里选择内容');
+  operations=[{...op(original,'completed'),receipt:{status:'accepted',operationId,draftId,revision:1,stateRevision:3}}];
+  currentHandoff={...currentHandoff!,state:'prepared',operationId};
+  await act(async()=>vi.advanceTimersByTimeAsync(2000));
+  expect(dialog('准备配方')?.textContent).toContain('私人草稿已保存');
+  await click('查看草稿');
+  expect(cloudCalls.filter(r=>r.type==='draft')).toEqual([{type:'draft',accountId:accountA,draftId}]);
+  expect(cardsSent).toBe(1);
+});
+
+it('retains an unavailable recovery pointer until an explicit new preparation',async()=>{
+  linked=true;await draw();await chooseSource();await click('确认');
+  const initial=calls.find(r=>r.type==='beginHandoff')!;
+  const key=Object.keys(localStorage).find(key=>key.startsWith('recipe-private-handoff:'))!;
+  const stored=localStorage.getItem(key);
+  await click('关闭');currentHandoff=undefined;
+  for(let i=0;i<2;i++){
+    await click('准备配方');
+    expect(dialog('准备配方')?.textContent).toContain('确认是否已有草稿');
+    expect(localStorage.getItem(key)).toBe(stored);
+    expect(calls.filter(r=>r.type==='beginHandoff')).toHaveLength(1);
+    if(i===0)await click('查看创作中心');
+  }
+  expect(calls.filter(r=>r.type==='restoreHandoff').map(r=>r.retryId)).toEqual([initial.retryId,initial.retryId]);
+  await click('重新准备');
+  expect(dialog('准备配方')?.querySelectorAll('select')).toHaveLength(2);
+  expect(localStorage.getItem(key)).toBeNull();
+  expect(calls.filter(r=>r.type==='beginHandoff')).toHaveLength(1);
+  await click('确认');
+  const begins=calls.filter(r=>r.type==='beginHandoff');
+  expect(begins).toHaveLength(2);expect(begins[1]!.retryId).not.toBe(initial.retryId);
+});
+
+it('restores the retained preparation after private-link confirmation instead of beginning again',async()=>{
+  linked=true;await draw();await chooseSource();await click('确认');
+  const initial=calls.find(r=>r.type==='beginHandoff')!;
+  await click('关闭');linked=false;
+  await click('准备配方');recipient=true;
+  await click('我已发送，核对收件人');await click('确认是我的私聊');
+  expect(calls.filter(r=>r.type==='restoreHandoff').map(r=>r.retryId)).toEqual([initial.retryId,initial.retryId]);
+  expect(calls.filter(r=>r.type==='beginHandoff')).toHaveLength(1);
+  expect(dialog('准备配方')?.textContent).toContain('请在 Bot 私聊里选择内容');
+});
+
+it('keeps a usable handle and polling after a transient restore error',async()=>{
+  vi.useFakeTimers();linked=true;await draw();await chooseSource();await click('确认');
+  const initial=calls.find(r=>r.type==='beginHandoff')!;
+  let fail=true;
+  authoring=async request=>{
+    if(request.type==='handoffStatus'&&fail)throw new Error('临时读取失败');
+    if(request.type==='restoreHandoff'&&fail){fail=false;throw new Error('临时恢复失败');}
+    return defaultAuthoring(request);
+  };
+  await act(async()=>vi.advanceTimersByTimeAsync(2000));await click('重试本次准备');
+  expect(dialog('准备配方')?.textContent).toContain('临时恢复失败');
+  expect(sessions.has(initial.handle)).toBe(true);
+  expect(calls.filter(r=>r.type==='detach')).toHaveLength(0);
+  await act(async()=>vi.advanceTimersByTimeAsync(4000));
+  expect(dialog('准备配方')?.textContent).not.toContain('临时恢复失败');
+  expect(calls.filter(r=>r.type==='handoffStatus').at(-1)).toMatchObject({handle:initial.handle});
+});
+
+it.each(['close','device','account'] as const)('detaches a late restored handle after %s without changing the next flow',async change=>{
+  vi.useFakeTimers();linked=true;await draw();await chooseSource();await click('确认');
+  sessions.clear();await act(async()=>vi.advanceTimersByTimeAsync(2000));
+  let finish:(()=>void)|undefined,lateHandle:string|undefined;
+  authoring=async request=>{
+    const value=await defaultAuthoring(request);
+    if(request.type==='restoreHandoff'&&value.kind==='handoffRestored'){
+      lateHandle=value.session.handle;
+      return new Promise(resolve=>{finish=()=>resolve(value);});
+    }
+    return value;
+  };
+  const button=[...document.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent==='重试本次准备')!;
+  await act(async()=>{button.click();});
+  expect(finish).toBeDefined();
+  if(change==='close')await click('关闭');
+  if(change==='device')await act(async()=>emit({type:'devices',value:devicesState({id:B})}));
+  if(change==='account')await act(async()=>{status=signedIn(accountB);emit({type:'account',value:status});});
+  const currentText=dialog('准备配方')?.textContent;
+  await act(async()=>{finish!();});
+  expect(calls).toContainEqual({type:'detach',handle:lateHandle});
+  expect(dialog('准备配方')?.textContent).toBe(currentText);
+  expect(sessions.has(lateHandle!)).toBe(false);
 });

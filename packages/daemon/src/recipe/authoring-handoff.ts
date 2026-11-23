@@ -9,6 +9,7 @@ import {candidateChanges,contentItems,emptySelection,handoffCard,selectedSource,
 import {wireDigest} from './authoring-rich-snapshot';
 
 type Begin=Extract<RecipeAuthoringRequest,{type:'beginHandoff'|'beginDraftHandoff'}>;
+type Restore=Extract<RecipeAuthoringRequest,{type:'restoreHandoff'}>;
 type Answer=Extract<RecipeAuthoringRequest,{type:'answerHandoff'}>;
 type Presence={session:string;account:string;scope:string};
 type Target={rich:RichLocalDraft;sourceIdentity:string;draftId?:string;baseRevision?:number;instructionId:string;
@@ -109,6 +110,39 @@ export class PrivateHandoffs {
         ref:randomUUID(),generation:1,sendUuid:randomUUID(),session:p.session,retryId:r.retryId,expiresAt:this.now()+30*60_000,selection:emptySelection(),phase:{state:'selecting'},
         ...(edit&&{edit,draftId:edit.draftId}),...(r.type==='beginHandoff'&&r.sourceVersionId&&{sourceVersionId:r.sourceVersionId,inherited:structuredClone(r.inherited)})} satisfies PrivateHandoff;
     });
+    return this.resumeExisting(p,link,h);
+  }
+  async restore(p:Presence,link:Link,r:Restore):Promise<Extract<RecipeAuthoringReply,{kind:'handoff'|'handoffUnavailable'}>>{
+    const h=await this.ledger.run(db=>{
+      this.live(p);
+      const row=db.handoffs?.[r.retryId];
+      if(!row)return;
+      const expected=r.expected;
+      if(!bound(row,p,link)||row.groupId!==expected.groupId||row.draftId!==(expected.kind==='draft'?expected.draftId:undefined))throw changed();
+      if(expected.kind==='source'){
+        if(row.sourceVersionId!==expected.sourceVersionId||wireDigest(row.inherited??null)!==wireDigest(expected.inherited??null))throw changed();
+      }else if(row.edit&&row.edit.baseRevision!==expected.baseRevision)throw changed();
+      if(row.phase.state==='prepared'){
+        const op=db.operations[row.phase.operationId];
+        if(!op||op.accountId!==p.account||op.scope!==p.scope||op.bot!==link.bot||op.binding!==link.binding||!sameRecipient(op.recipient,link.recipient)||
+          op.revoked||op.view.format!=='rich-v2'||op.instructionId!==row.retryId||
+          op.originalGroup?.groupId!==row.groupId||op.originalGroup.identity!==row.identity||
+          op.view.purpose!==(expected.kind==='draft'?'editDraft':'prepareDraft')||
+          (expected.kind==='draft'?(op.view.draftId!==expected.draftId||op.view.baseRevision!==expected.baseRevision):op.view.groupId!==row.groupId))throw changed();
+      }
+      return row;
+    });
+    if(!h)return {kind:'handoffUnavailable',retryId:r.retryId,reason:'notFound'};
+    try{
+      await this.identity(p,h);
+      return {kind:'handoff',handoff:await this.resumeExisting(p,link,h)};
+    }catch(error){
+      if(!await this.ledger.run(db=>Boolean(db.handoffs?.[r.retryId])))return {kind:'handoffUnavailable',retryId:r.retryId,reason:'notFound'};
+      throw error;
+    }
+  }
+  private async resumeExisting(p:Presence,link:Link,h:PrivateHandoff){
+    h=await this.transaction(p,link,h.retryId,row=>{if(row.ref!==h.ref)throw changed();return row;});
     if(!active(h))return publicView(h);
     if(h.session!==p.session){
       if(!h.messageId&&h.sentAt!==undefined){h=await this.send(p,link,h);if(!h.messageId)return publicView(h);}

@@ -11,6 +11,7 @@ const options = { skills: [], includeBotMemories: false, includeTasks: false };
 const payloads = [
   {type:'beginHandoff',groupId,groupName:'产品群',retryId:operationId},
   {type:'beginDraftHandoff',groupId,groupName:'产品群',retryId:operationId,identity:digest,draftId,baseRevision:1,canonical:'e30',source:{sourceIntentId:operationId,canonical:'e30'}},
+  {type:'restoreHandoff',retryId:operationId,expected:{kind:'source',groupId}},
   {type:'handoffStatus',retryId:operationId},{type:'cancelHandoff',retryId:operationId},
   {type:'answerHandoff',request:{retryId:operationId,generation:1,ref:operationId,lease:digest,versions:[]},attestations:[]},
   { type: 'richSourceOptions', groupId },
