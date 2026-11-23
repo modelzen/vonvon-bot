@@ -14,6 +14,7 @@ import {RecipeUseController, type RecipeDeviceLease} from './recipe-use.js';
 import {RecipeAuthoringController} from './recipe-authoring.js';
 import {AuthoringJournal} from './recipe-authoring-journal.js';
 import {AuthoringError} from './recipe-authoring-cloud.js';
+import {MetadataJournal} from './community-metadata-journal.js';
 import {RecipeJournal} from './recipe-use-journal.js';
 import {RecipeUseError, changed} from './recipe-use-cloud.js';
 import type { NativeAccount } from './account-session.js';
@@ -434,6 +435,7 @@ export function installBridge(
         (selected.kind==='local' && localDown())) throw changed();
     }};
   };
+  const metadataJournal = new MetadataJournal(recipeJournalPath && recipeJournalPath+'.metadata');
   const recipes = new RecipeUseController(account, captureRecipeDevice, new RecipeJournal(recipeJournalPath));
   const authoring = new RecipeAuthoringController(account, captureRecipeDevice, new AuthoringJournal(authoringJournalPath), value => send({type:'authoringSaved',value}));
   const noArg = (_: unknown): undefined => undefined;
@@ -564,7 +566,7 @@ export function installBridge(
     register(desktopChannels.recipeSource,1,value=>desktopRecipeSourceRequestSchema.parse(value),value=>recipes.source(value));
     register(desktopChannels.recipeAuthoring, 1, value => desktopAuthoringRequestSchema.parse(value), value => authoring.request(value));
     register(desktopChannels.recipeUse,1,value=>recipeUseRequestSchema.parse(value),value=>recipes.request(value));
-    register(desktopChannels.community, 1, value => communityRequestSchema.parse(value), value => communityRequest(account, value));
+    register(desktopChannels.community, 1, value => communityRequestSchema.parse(value), value => communityRequest(account, value, metadataJournal));
     register(desktopChannels.accountStatus, 0, noArg, async () => accountStatusSchema.parse(account.status()));
     register(desktopChannels.accountLogin, 0, noArg, async () => accountStatusSchema.parse(await account.login()));
     register(desktopChannels.accountCancel, 0, noArg, async () => accountStatusSchema.parse(await account.cancelLogin()));

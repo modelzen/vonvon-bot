@@ -43,6 +43,7 @@ export function cardDisplayPresentationDefaults(cfg:Partial<AppConfig>):ProjectP
 
 /** A project = a Feishu group bound to a fixed working directory. */
 export interface Project {
+  feedback?: import('../feedback/config').GroupFeedbackConfig;
   bindingIncarnation?: string;
   projectSettingsRevision?: number;
   richRecipe?: import('../recipe/rich-state').RichRecipeState;
@@ -595,9 +596,9 @@ export async function getProjectByChatId(chatId: string, file?: string): Promise
 }
 
 /** {@link getProjectByChatId} read synchronously, for the scheduled-task gate (bot/schedule/scheduler.ts), which decides in place. */
-export function getProjectByChatIdSync(chatId: string): Project | undefined {
+export function getProjectByChatIdSync(chatId: string, file = paths.projectsFile): Project | undefined {
   let text: string;
-  try { text = readFileSync(paths.projectsFile, 'utf8'); } catch (err) {
+  try { text = readFileSync(file, 'utf8'); } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw err;
   }
