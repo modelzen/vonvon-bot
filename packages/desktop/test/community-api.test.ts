@@ -29,6 +29,18 @@ function fixture() {
 }
 
 describe('native community boundary', () => {
+  it('loads the public profile with GET and saves only an explicitly supplied name', async () => {
+    const f = fixture();
+    const profile = {authorId: accountId, displayName: '社区作者'};
+    vi.mocked(f.account.request).mockImplementation(async () => Response.json(profile));
+    expect(await communityRequest(f.account, {type: 'profile', accountId})).toEqual(profile);
+    expect(f.account.request).toHaveBeenLastCalledWith(accountId, '/v2/me/profile', {method: 'GET', headers: {}, body: undefined});
+    await communityRequest(f.account, {type: 'saveProfile', accountId, requestId, displayName: '  社区作者  '});
+    expect(f.account.request).toHaveBeenLastCalledWith(accountId, '/v2/me/profile', {method: 'POST', headers: {'Idempotency-Key': requestId, 'Content-Type': 'application/json'}, body: JSON.stringify({displayName: '社区作者'})});
+    f.emit({kind: 'signedOut'});
+    await expect(communityRequest(f.account, {type: 'saveProfile', accountId, requestId, displayName: '社区作者'})).rejects.toThrow('账号已切换');
+    expect(f.account.request).toHaveBeenCalledTimes(2);
+  });
   it('keeps anonymous catalog requests on the public route and encodes search as query data', async () => {
     const f = fixture(); f.emit({kind: 'signedOut'});
     expect(await communityRequest(f.account, {type: 'catalog', query: '文字 & cursor=bad'})).toEqual({heroKind:'latest',hero: summary, items: [], nextCursor: null});
