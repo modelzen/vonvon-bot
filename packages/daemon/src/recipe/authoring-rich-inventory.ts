@@ -4,8 +4,6 @@ import {recipeRichContentSchema as schema,recipeRichSettingSchema,type RecipeRic
 import {groupBackendId,groupPermission} from '../config/execution';
 import type {Project} from '../project/registry';
 import {supplementOf} from '../bot/context-assembly';
-import {looksLikeSecret} from '../bot/memory-secret-shape';
-import {MemoryStore,botMemoryLocation} from '../bot/memory-store';
 import {safeEditValue} from '../../../../services/recipe-api/src/draft-model-text.mjs';
 import {readSelectedRecipeFiles,type RecipeFileSnapshot} from './rich-source-files';
 import {itemsOf,type SourceEvidence,wireDigest} from './authoring-rich-snapshot';
@@ -77,18 +75,6 @@ export async function nativeRichInventory(options:InventoryOptions){
     const parsed=schema.shape.tasks.element.safeParse({...identity('task:'+task.id),name:task.name,instruction:{kind:'inline',value:task.instruction},
       timeZone:{kind:'recommended',iana:task.timeZone},placement:task.placement.kind,spec});
     if(parsed.success&&safeEditValue(parsed.data))content.tasks.push(parsed.data);
-  }
-  if(options.includeBotMemories){
-    const memory=await new MemoryStore(botMemoryLocation(options.botRoot)).read();
-    if(!memory.verified)throw new Error('无法核对这个 Bot 的记忆。');
-    for(const item of memory.items){
-      if(item.scope.kind!=='bot'||item.state!=='active'||item.source.botId!==options.botId||!safeEditValue(item.text)||looksLikeSecret(item.text))continue;
-      if(item.source.fromItemId||item.source.importFile||['import','moved','promoted'].includes(item.source.via))continue;
-      if(item.source.chatId && item.source.chatId!==row.chatId)continue;
-      if(!item.source.chatId&&!['ui','cli'].includes(item.source.via))continue;
-      const parsed=schema.shape.memories.element.safeParse({...identity('memory:'+item.id),text:{kind:'inline',value:item.text}});
-      if(parsed.success)content.memories.push(parsed.data);
-    }
   }
   const files:Record<string,RecipeFileSnapshot>=Object.create(null);
   if(options.skills.length>16)throw new Error('所选技能过多。');

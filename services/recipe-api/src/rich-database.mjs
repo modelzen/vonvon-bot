@@ -5,7 +5,7 @@ import {ApiError,badInput} from './errors.mjs';
 import {objectKeys,uuid} from './input.mjs';
 import {richInstallMaterial} from './rich-install-proof.mjs';
 import {richMaterial} from './rich-proof.mjs';
-import {richWireBytes,applyChanges,document,freezeSnapshot,inventory,richDigest} from './rich-document.mjs';
+import {richWireBytes,applyChanges,document,writableDocument,validateRichWritePayload,freezeSnapshot,inventory,richDigest} from './rich-document.mjs';
 import {parseEditFreeze,readDocument} from './rich-http.mjs';
 const sha=b=>createHash('sha256').update(b).digest('hex');
 const calls={
@@ -45,7 +45,7 @@ export async function richExecute(client,op,args) {
     let transformed;
     try {transformed=await applyRichMetadata(base.content,ctx.accountId,requestId,body.input,body.logoDescriptor);}
     catch {throw badInput();}
-    const doc=document(transformed.content);
+    const doc=writableDocument(transformed.content);
     const evidence=body.logoDescriptor?{packageId:requestId,inputSha256:body.input.logo.inputSha256,descriptor:body.logoDescriptor}:null;
     const receipt=await call('rich_save_metadata($1,$2,$3,$4,$5,$6,$7,$8,$9)',[requestId,draftId,binding,wireHash,
       Buffer.from(doc.canonicalUTF8),body.manifestId,body.input.public.access,JSON.stringify(inventory(doc.content)),evidence]);
@@ -66,12 +66,14 @@ export async function richExecute(client,op,args) {
   const ctx=await call('rich_plan_context($1)',[id]);
   let payload,doc,records,needsLogo;
   if(ctx.purpose==='prepareDraft') {
+    writableDocument(b.content);
     const prior=b.sourceVersionId? await call('rich_update_items($1)',[uuid(b.sourceVersionId)]) : [];
     const result=freezeSnapshot(b,ctx.seed,new Map(prior.map(i=>[i.itemId,i])));doc=document(result.content);records=result.records;
     needsLogo=!!doc.content.finalLogo;
     payload={format:'rich-v2',purpose:'prepareDraft',sourceIntentId:id,content:doc.content};
   }else{
     const edit=parseEditFreeze(b,ctx.draftId,ctx.revision);
+    validateRichWritePayload(edit.payload);
     if(sha(edit.base.canonicalUTF8)!==ctx.manifest.sha256)throw new ApiError(409,'conflict');
     const cache=new Map(),originals=new Map();
     for(const candidate of edit.candidates){
@@ -89,7 +91,7 @@ export async function richExecute(client,op,args) {
     }
 
     const next=applyChanges(edit.base.content,edit.payload.changes,s=>cache.get(richDigest(s)),ctx.seed,edit.parts);
-    doc=next.doc;records=next.copies;
+    doc=writableDocument(next.doc.content);records=next.copies;
     const sets=edit.payload.changes.filter(c=>c.op==='setFinalLogo');
     if(sets.length>1 || sets.length && sets[0].objectId!==doc.content.finalLogo?.objectId)throw badInput();
     needsLogo=sets.length===1;

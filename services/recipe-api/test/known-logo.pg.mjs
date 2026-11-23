@@ -120,11 +120,11 @@ try{
         const post=()=>req(path+'/accept',null,msg),r=await post();assert.deepEqual(await post(),r);return r;
       }};
   }
-  const prep=await start(a);const privateBytes=Buffer.from('SELECTED PRIVATE MEMORY');
+  const prep=await start(a);const privateBytes=Buffer.from('SELECTED PRIVATE RULE');
   const p=await upload(a,prep.pkg,0,'text',privateBytes);
   const png=await sharp({create:{width:20,height:30,channels:3,background:'#22aa33'}}).png().toBuffer();
   const logo=await upload(a,prep.pkg,64,'finalLogo',png);
-  fixture.finalLogo={itemId:randomUUID(),originId:randomUUID(),objectId:logo.objectId};fixture.parts=[p,logo];fixture.memories=[{itemId:randomUUID(),originId:randomUUID(),text:{kind:'part',objectId:p.objectId}}];
+  fixture.finalLogo={itemId:randomUUID(),originId:randomUUID(),objectId:logo.objectId};fixture.parts=[p,logo];fixture.rules[0].text={kind:'part',objectId:p.objectId};
   const input=body(fixture),plan=await prep.freeze(input);
   assert.deepEqual(await prep.freeze(input),plan);
   const initial=JSON.parse(Buffer.from(plan.canonical,'base64url'));
@@ -140,9 +140,9 @@ try{
   const edit=await start(a,{purpose:'editDraft',draftId:draft.draftId,baseRevision:1});
   const patch={format:'rich-v2',purpose:'editDraft',draftId:draft.draftId,baseRevision:1,requestId:randomUUID(),schemaVersion:2,changes:[
     {op:'setRoleText',itemId:initial.role.itemId,value:{kind:'inline',value:'自动化验证的私有角色'}},
+    {op:'copyItem',source:{kind:'rule',itemId:initial.rules[0].itemId}},
     {op:'removeItem',kind:'rule',itemId:initial.rules[0].itemId},
-    {op:'includeCandidate',value:{kind:'rule',source:{sourceIntentId:prep.op,candidateId:initial.rules[0].itemId,expectedRevision:1}}},
-    {op:'copyItem',source:{kind:'memory',itemId:initial.memories[0].itemId}}]};
+    {op:'includeCandidate',value:{kind:'rule',source:{sourceIntentId:prep.op,candidateId:initial.rules[0].itemId,expectedRevision:1}}}]};
   const edited=await edit.freeze({format:'rich-v2',baseCanonical:plan.canonical,payload:patch}),updated=JSON.parse(Buffer.from(edited.canonical,'base64url'));
   assert.equal(updated.role.originId,initial.role.originId);assert.notEqual(updated.rules[0].originId,initial.rules[0].originId);
   assert.equal((await edit.commit(edited)).revision,2);
@@ -155,6 +155,7 @@ try{
   const v=await pub();assert.deepEqual(await pub(),v);assert.ok(v.firstCode);
   const logoSource=await start(a),sourceLogo=await upload(a,logoSource.pkg,64,'finalLogo',png);
   const directSource=structuredClone(fixture);directSource.memories=[];directSource.parts=[sourceLogo];directSource.finalLogo.objectId=sourceLogo.objectId;
+  directSource.rules[0].text={kind:'inline',value:privateBytes.toString()};
   directSource.public.name.value='known direct logo source';
   const logoSourcePlan=await logoSource.freeze(body(directSource,'direct')),logoSourceSaved=await logoSource.commit(logoSourcePlan);
   const logoRelease=await req('/v2/drafts/'+logoSourceSaved.draftId+'/publish',a,{canonical:logoSourcePlan.canonical},{key:randomUUID(),rev:1});

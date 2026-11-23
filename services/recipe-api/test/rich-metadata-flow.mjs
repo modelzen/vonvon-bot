@@ -7,6 +7,7 @@ export async function checkMetadataSaves({connectAdmin,communityRequest,accountR
   const {accountId}=await req('/v1/me',token);
   const source=structuredClone(fixture);
   delete source.finalLogo; source.parts=[]; source.memories=[];
+  source.rules.forEach(rule=>{rule.text={kind:'inline',value:'Metadata test rule'};});
   const prepare=await start(token),initial=await prepare.freeze(body(source,'direct'));
   const {draftId}=await prepare.commit(initial);
   const draftPath='/v2/drafts/'+draftId;
