@@ -11,11 +11,15 @@ import {UsagePanel} from '../src/management/UsagePanel';
 import {DiagnosticsPanel} from '../src/management/DiagnosticsPanel';
 import {AppShell} from '../src/LocalShell';
 import {SearchDialog} from '../src/SearchDialog';
+import {AccountPanel} from '../src/accounts/AccountPanel';
+import {SnapshotPendingView} from '../src/devices/DeviceConnectionView';
 
 
 // DesktopApp is called as a plain function: hooks keep their values by call order, effects run when their deps change.
 const h = vi.hoisted(() => ({state: [] as unknown[], refs: [] as Array<{current: unknown}>, effects: [] as Array<{deps?: unknown[]}>, si: 0, ri: 0, ei: 0, pending: [] as Array<() => void>,
-  listener: (_snapshot: DesktopSnapshot) => {}, client: {run: vi.fn(), watchSnapshots: (_listener: (snapshot: unknown) => void) => () => {}}}));
+  listener: (_snapshot: DesktopSnapshot) => {}, client: {run: vi.fn(), watchSnapshots: (_listener: (snapshot: unknown) => void) => () => {}},
+  accountPage: {isOpen: false, open: vi.fn(), close: vi.fn()}, navigate: vi.fn((action: () => void) => action()),
+}));
 vi.mock('react', async original => ({...await original<typeof import('react')>(),
   useState: (initial: unknown) => {const i = h.si++; if (!(i in h.state)) h.state[i] = typeof initial === 'function' ? (initial as () => unknown)() : initial; return [h.state[i], (next: unknown) => {h.state[i] = typeof next === 'function' ? (next as (old: unknown) => unknown)(h.state[i]) : next;}];},
   useRef: (initial: unknown) => {const i = h.ri++; return h.refs[i] ??= {current: initial};},
@@ -26,8 +30,9 @@ vi.mock('../src/client-context', async original => {
   const actual = await original<typeof import('../src/client-context')>();
   return {...actual, useClient: () => h.client, useShellCapabilities: () => undefined, useActiveDevice: () => actual.LOCAL_ACTIVE_DEVICE, useDevicesState: () => undefined};
 });
-vi.mock('../src/settings/DraftGuard', () => ({DraftGuardProvider: () => null, useDraftGuard: () => ({navigate: (action: () => void) => action()})}));
+vi.mock('../src/settings/DraftGuard', () => ({DraftGuardProvider: () => null, useDraftGuard: () => ({navigate: h.navigate})}));
 vi.mock('../src/desktop-update', () => ({DesktopUpdateProvider: () => null, useDesktopUpdate: () => [undefined]}));
+vi.mock('../src/accounts/account-page', () => ({useAccountPage: () => h.accountPage}));
 vi.mock('../src/new-counts', async original => ({...await original<typeof import('../src/new-counts')>(), useNewCounts: () => ({projects: {}, bots: {}, dm: {}})}));
 vi.mock('../src/pending-groups', () => ({usePendingGroups: () => []}));
 vi.mock('../src/management/SecretsPanel', async original => ({...await original<typeof import('../src/management/SecretsPanel')>(), useSecrets: () => ({read: {kind: 'loading'}, reader: {read: vi.fn()}})}));
@@ -65,6 +70,10 @@ function component(make: () => ReactNode) {
 const flush = async () => {for (let i = 0; i < 12; i++) await Promise.resolve();};
 beforeEach(() => {
   h.state = []; h.refs = []; h.effects = []; h.pending = [];
+  h.accountPage.isOpen = false;
+  h.accountPage.open.mockClear().mockImplementation(() => {h.accountPage.isOpen = true;});
+  h.accountPage.close.mockClear().mockImplementation(() => {h.accountPage.isOpen = false;});
+  h.navigate.mockReset().mockImplementation(action => action());
   vi.stubGlobal('window', {addEventListener: () => {}, removeEventListener: () => {}});
   vi.stubGlobal('HTMLDetailsElement', class {});
   vi.stubGlobal('document', {documentElement: {dataset: {}}, getElementById: () => ({parentElement: null, querySelectorAll: () => [], scrollIntoView: () => {}, matches: () => true, focus: () => {}})});
@@ -73,6 +82,29 @@ beforeEach(() => {
   render();
 });
 afterEach(() => vi.unstubAllGlobals());
+
+it('keeps account settings open when a gated device reconnects and its snapshot arrives', () => {
+  h.state = []; h.refs = []; h.effects = []; h.pending = [];
+  h.accountPage.isOpen = true;
+  expect(render().find(SnapshotPendingView)).toHaveLength(1);
+  const connected = render();
+  expect(connected.find(AppShell)[0]!.props.page).toBe('account');
+  expect(connected.find(AccountPanel)).toHaveLength(1);
+  connected.find(AppShell)[0]!.props.onNavigate('settings');
+  expect(h.accountPage.isOpen).toBe(false);
+  expect(render().find(AppShell)[0]!.props.page).toBe('settings');
+});
+
+it('waits for the existing draft guard before opening global account settings', () => {
+  let leave: (() => void) | undefined;
+  h.navigate.mockImplementation(action => {leave = action;});
+  render().find(AppShell)[0]!.props.onNavigate('account');
+  expect(h.accountPage.isOpen).toBe(false);
+  expect(h.accountPage.open).not.toHaveBeenCalled();
+  leave!();
+  expect(h.accountPage.isOpen).toBe(true);
+  expect(render().find(AccountPanel)).toHaveLength(1);
+});
 
 it('opens Codex Provider from usage rather than the tools page', () => {
   render().find(AppShell)[0]!.props.onNavigate('usage');

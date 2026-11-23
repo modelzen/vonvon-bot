@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { createLogin, detailPath, WebError } from './auth.mjs';
+import { createNativeLogin } from './native-auth.mjs';
 
 function origin(value, name, loopbackOnly = false) {
   const url = new URL(value);
@@ -14,6 +15,10 @@ function origin(value, name, loopbackOnly = false) {
 }
 
 const assets = new Map([
+  ['/auth/native', ['native.html', 'text/html; charset=utf-8']],
+  ['/auth/native/complete', ['native.html', 'text/html; charset=utf-8']],
+  ['/native.mjs', ['native.mjs', 'text/javascript; charset=utf-8']],
+  ['/native.css', ['native.css', 'text/css; charset=utf-8']],
   ['/studio', ['studio.html', 'text/html; charset=utf-8']],
   ['/studio.html', ['studio.html', 'text/html; charset=utf-8']],
   ['/studio.css', ['studio.css', 'text/css; charset=utf-8']],
@@ -53,16 +58,18 @@ export function createRecipeWeb(env = process.env) {
   const publicOrigin = origin(env.RECIPE_WEB_ORIGIN || 'http://127.0.0.1:' + port, 'RECIPE_WEB_ORIGIN');
   const apiOrigin = origin(env.RECIPE_API_ORIGIN || 'http://127.0.0.1:4317', 'RECIPE_API_ORIGIN', true);
   const supabaseOrigin = env.SUPABASE_URL ? origin(env.SUPABASE_URL, 'SUPABASE_URL') : null;
-  const login = createLogin({ publicOrigin, supabaseOrigin, publishableKey: env.SUPABASE_PUBLISHABLE_KEY,
-    providerNames: (env.RECIPE_WEB_PROVIDERS || 'github,google,apple').split(',').map(x => x.trim()) });
+  const authConfig = { publicOrigin, supabaseOrigin, publishableKey: env.SUPABASE_PUBLISHABLE_KEY,
+    providerNames: (env.RECIPE_WEB_PROVIDERS || 'github,google,apple').split(',').map(x => x.trim()) };
+  const login = createLogin(authConfig), native = createNativeLogin(authConfig);
 
   async function handle(req, res) {
     res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Referrer-Policy', req.url?.startsWith('/auth/callback') ? 'no-referrer' : 'same-origin');
+    res.setHeader('Referrer-Policy', /^\/auth\/(?:callback|native)/.test(req.url || '') ? 'no-referrer' : 'same-origin');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
     const url = new URL(req.url, publicOrigin);
     if (url.origin !== publicOrigin) throw new WebError(400, 'invalid_path');
+    if (await native.handle(req, res, url)) return;
     if (['POST', 'PATCH', 'DELETE'].includes(req.method) && req.headers.origin !== publicOrigin) throw new WebError(403, 'invalid_origin');
     if (req.method === 'GET' && url.pathname === '/auth/session') return json(res, 200, login.status(req));
     if (req.method === 'POST' && url.pathname === '/auth/start') {
@@ -112,7 +119,7 @@ export function createRecipeWeb(env = process.env) {
       { error: { code: error instanceof WebError ? error.message : 'unavailable' } });
     else res.end();
   }));
-  server.on('close', () => login.stop());
+  server.on('close', () => { login.stop(); native.stop(); });
   return server;
 }
 
