@@ -35,6 +35,19 @@ it('keeps the window frame on every page outside App', () => {
   }
 });
 
+it('keeps local account settings reachable through connection, maintenance and snapshot gates', () => {
+  const account = {status: vi.fn(async () => ({kind: 'signedOut' as const})), onStatus: vi.fn(() => () => {}), login: vi.fn(), cancelLogin: vi.fn(), logout: vi.fn()};
+  const shell = {...fakeShell(), account};
+  const states = [undefined, devicesState({id: A, phase: 'failed'}),
+    devicesState({id: A, phase: 'ready', mode: 'maintenance', serverInfo: info('0.10.0', 3)}),
+    devicesState({id: A, phase: 'ready', mode: 'full', serverInfo: info()}), devicesState({id: 'local'})];
+  for (const state of states) {
+    const html = renderToStaticMarkup(<DesktopRootView state={state} fallback={fallback} shell={shell} renderApp={() => <App/>}/>);
+    expect(html).toContain('账号设置');
+  }
+  expect(shell.devices.switchTo).not.toHaveBeenCalled();
+});
+
 it('says it is connecting, then why it cannot', () => {
   expect(render(devicesState({id: A, phase: 'connecting'})).html).toContain('正在连接「机房」…');
   const failing = render(devicesState({id: A, phase: 'connecting', attempt: 1, retryAt: Date.now() + 5_000,

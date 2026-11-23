@@ -4,7 +4,7 @@ import { log } from '../core/logger';
 import { labelScope } from '../config/scopes';
 import { feishuError, scopeDenial, type FeishuErrorBody } from '../utils/feishu-error';
 import { deniedScopeName, reportScopeDenied } from './diagnostics';
-import { extractSendCardText, isSendCard, isStreamingCard } from './card-content';
+import { extractSendCardText, isSendCard, isStreamingCard, PRIVATE_RECIPE_CODES_TITLE } from './card-content';
 import { withDeadline, type NameBook } from './names';
 import type { MessageMeta } from './recall';
 import type { ScheduledJob } from './schedule/types';
@@ -753,6 +753,7 @@ export function extractCardText(parsed: unknown): string {
   const obj = parsed as Record<string, unknown>;
   const parts: string[] = [];
   const title = textValue(obj.title);
+  if (title === PRIVATE_RECIPE_CODES_TITLE) return title;
   if (title.trim()) parts.push(title.trim());
   if (Array.isArray(obj.elements)) {
     for (const line of obj.elements) {

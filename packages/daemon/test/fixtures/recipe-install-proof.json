@@ -1,0 +1,21 @@
+{
+  "rawPrivateHex": "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+  "serverPrivateHex": "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb",
+  "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "binding": {
+    "operationId": "019a81cb-2a00-7000-8000-000000000001",
+    "accountId": "11111111-2222-4333-8444-555555555555",
+    "versionId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    "purpose": "installBoundRole",
+    "manifestSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "targetPublicKey": "hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo",
+    "nonceCommitment": "Yw3NKWbEM2aRElRIu7JbT_QSpJxzLbLIq8G4WBvXEN0",
+    "serverPublicKey": "3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08",
+    "generation": 1,
+    "deadline": 1763111100000
+  },
+  "transcriptHex": "766f6e766f6e2e7265636970652e696e7374616c6c426f756e64526f6c652e763100019a81cb2a007000800000000000000111111111222243338444555555555555aaaaaaaabbbb4ccc8dddeeeeeeeeeeee0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710ddde9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f000000010000019a819c5e60",
+  "sharedHex": "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742",
+  "derivedKeyHex": "9cd3b5d5ad18dad8c56cea6e5f79881370792b1b44d93e764f912834c0b2ab3e",
+  "proof": "TAKvUfD5YcPNZuj5ni6nfvZoUJbVAB74eS9u0H5fmdQ"
+}

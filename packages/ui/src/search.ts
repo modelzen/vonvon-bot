@@ -96,7 +96,7 @@ function expand(id: string, context: string, base: Destination, groups: readonly
   });
 }
 /** `schedules`: the tasks the running Bots answered with when search opened; each is found by name on its group's 任务 tab. */
-export function searchEntries(snapshot: DesktopSnapshot, capabilities: {externalCoreAvailable?: boolean; schedules?: readonly ScheduledTaskView[]; devices?: boolean} = {}): SearchEntry[] {
+export function searchEntries(snapshot: DesktopSnapshot | undefined, capabilities: {externalCoreAvailable?: boolean; schedules?: readonly ScheduledTaskView[]; devices?: boolean} = {}): SearchEntry[] {
   const pages: readonly {id: string; title: string; aliases: readonly string[]; page: Page; view?: CollaborationView}[] = [
     {id: 'home', title: '此刻', aliases: ['首页', '概览'], page: 'home'},
     {id: 'agents', title: 'Bot', aliases: ['机器人', '注册 Bot', '添加 Bot', '加入飞书群并设置工作目录'], page: 'collaboration', view: 'agents'},
@@ -113,11 +113,13 @@ export function searchEntries(snapshot: DesktopSnapshot, capabilities: {external
     // Only the desktop adds and switches devices; every page has 允许别的设备连接 there (found by its own entry, above). 服务器 is a
     // search word only, never on the page.
     {id: 'devices', title: '设备连接', aliases: ['设备', '多设备', ...capabilities.devices ? ['添加设备', '切换设备'] : [], '远程', '连接链接', '配对', 'Tailscale', '服务器'], page: 'devices'},
+    {id: 'account', title: '账号', aliases: ['账户', '登录', '退出登录', 'GitHub', 'Google', 'Apple'], page: 'account'},
   ];
   const entries: SearchEntry[] = pages.map(page => ({id: page.id, title: page.title, context: '页面', aliases: page.aliases, destination: {page: page.page, view: page.view, selection: page.view ? {kind: 'overview'} : undefined}, kind: 'page'}));
   for (const group of globalGroups.filter(group => group.section !== '外部 Core / CLI' || capabilities.externalCoreAvailable)) group.fields.forEach((field, index) => entries.push({
     id: `global-${group.page}-${group.section}-${index}`, title: field.title, context: group.section, aliases: field.aliases ?? [], destination: {page: group.page, section: group.section, field: field.field ?? field.title, reveal: field.reveal, guide: field.guide}, kind: 'setting',
   }));
+  if (!snapshot) return entries;
   for (const agent of snapshot.agents) {
     const base: Destination = {page: 'collaboration', view: 'agents', selection: {kind: 'agent', id: agent.id}};
     entries.push({id: agent.id, title: agent.name, context: 'Bot', aliases: [agent.id], destination: base, kind: 'item'});

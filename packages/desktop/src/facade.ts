@@ -1,6 +1,6 @@
 import type { VonvonClient } from '@vonvon/client/browser';
 import {
-  adminReplySchema, backendInstallEventPayloadSchema, collaborationReplySchema,
+  authoringPublishedSchema, type AuthoringPublished, authoringSavedSchema, type AuthoringSaved, acquisitionFailureSchema, desktopAuthoringRequestSchema, desktopAuthoringReplySchema, desktopRecipeSourceRequestSchema,desktopRecipeSourceReplySchema,recipeUseReplySchema, recipeUseRequestSchema, communityRequestSchema, communityResponseSchemas, type CommunityShell, accountStatusSchema, type AccountStatus, adminReplySchema, backendInstallEventPayloadSchema, collaborationReplySchema,
   commandResultSchema, desktopSnapshotSchema, directoryReplySchema, memoryReplySchema, contextPreviewReplySchema,
   environmentReplySchema, libraryReplySchema, logEventPayloadSchema, machineReplySchema, desktopUpdateSchema, deviceReplySchema,
   scheduleReplySchema, settingsReplySchema, viewIdSchema, devicesStateSchema, deviceEventPayloadSchema, linkPreviewSchema,
@@ -67,6 +67,10 @@ function readValue(raw: object): unknown {
 export function createDesktopFacades(transport: FacadeTransport): { client: VonvonClient; shell: DesktopShell } {
   const quitListeners = new Set<() => void>();
   const updateListeners = new Set<(value: DesktopUpdate) => void>();
+  const accountListeners = new Set<(value: AccountStatus) => void>();
+  let latestAccount: AccountStatus | undefined;
+  const authoringPublishedListeners = new Set<(value:AuthoringPublished) => void>();
+  const authoringSavedListeners = new Set<(value:AuthoringSaved) => void>();
   const stateListeners = new Set<(value: DevicesState) => void>();
   const localDeviceListeners = new Set<(value: DeviceEventPayload) => void>();
   const remoteUpdateListeners = new Set<(text: string | undefined) => void>();
@@ -117,6 +121,20 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
         case 'localDevice':
           deliverShell(localDeviceListeners, deviceEventPayloadSchema.parse(readValue(raw)));
           return;
+        case 'account':
+          latestAccount = accountStatusSchema.parse(readValue(raw));
+          deliverShell(accountListeners, latestAccount);
+          return;
+        case 'authoringPublished': {
+          const receipt=authoringPublishedSchema.parse(readValue(raw));
+          if(latestAccount?.kind==='signedIn'&&latestAccount.accountId===receipt.accountId)deliverShell(authoringPublishedListeners,receipt);
+          return;
+        }
+        case 'authoringSaved': {
+          const receipt = authoringSavedSchema.parse(readValue(raw));
+          if (latestAccount?.kind === 'signedIn' && latestAccount.accountId === receipt.accountId) deliverShell(authoringSavedListeners,receipt);
+          return;
+        }
         case 'devices':
           latestDevices = devicesStateSchema.parse(readValue(raw));
           deliverShell(stateListeners, latestDevices);
@@ -152,6 +170,7 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
   /** One page's client: each request names `view` last, and only `view`'s events reach it (devices-ui-1a 4.6). */
   function makeClient(view: ViewArgument): BoundClient {
     const snapshots = new Set<(value: DesktopSnapshot) => void>();
+    const reattachments = new Set<() => void>();
     const logs = new Set<(value: LogEventPayload) => void>();
     const installs = new Set<(value: BackendInstallEventPayload) => void>();
     const devices = new Set<(value: DeviceEventPayload) => void>();
@@ -184,7 +203,7 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
       if (clientClosed || (view !== 'current' && event.view !== view)) return;
       switch (event.type) {
         // Another connection: its revisions start over.
-        case 'reattached': connectionEpoch++; return;
+        case 'reattached': connectionEpoch++; deliver(reattachments, undefined); return;
         case 'snapshot': deliver(snapshots, event.value); return;
         case 'log': deliver(logs, event.value); return;
         case 'backendInstall': deliver(installs, event.value); return;
@@ -209,16 +228,15 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
 
     const client: VonvonClient = {
       snapshot: () => callClient(desktopChannels.snapshot, value => desktopSnapshotSchema.parse(value)),
-      watchSnapshots(listener) {
+      watchSnapshots(listener, onReattached) {
         if (clientClosed) return () => {};
         let active = true;
         let revision = -1;
-        let observedEpoch = connectionEpoch;
+        const reattach = () => {
+          revision = -1;
+          onReattached?.();
+        };
         const receiveSnapshot = (value: DesktopSnapshot): void => {
-          if (observedEpoch !== connectionEpoch) {
-            revision = -1;
-            observedEpoch = connectionEpoch;
-          }
           if (active && !clientClosed && value.revision > revision) {
             revision = value.revision;
             try { listener(value); }
@@ -226,11 +244,12 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
           }
         };
         snapshots.add(receiveSnapshot);
+        reattachments.add(reattach);
         const seedEpoch = connectionEpoch;
         void client.snapshot().then(value => { if (seedEpoch === connectionEpoch) receiveSnapshot(value); }).catch(error => {
           if (active && !clientClosed && seedEpoch === connectionEpoch) emitError(error instanceof Error ? error : new Error('Snapshot failed'));
         });
-        return () => { active = false; snapshots.delete(receiveSnapshot); };
+        return () => { active = false; snapshots.delete(receiveSnapshot); reattachments.delete(reattach); };
       },
       run: command => callClient(desktopChannels.run, value => commandResultSchema.parse(value), command),
       settings: request => callClient(desktopChannels.settings, value => settingsReplySchema.parse(value), request),
@@ -273,7 +292,7 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
           clientClosed = true;
           for (const reject of pending) reject(new Error('Daemon connection closed'));
           pending.clear();
-          snapshots.clear(); logs.clear(); installs.clear(); devices.clear(); errors.clear();
+          snapshots.clear(); reattachments.clear(); logs.clear(); installs.clear(); devices.clear(); errors.clear();
           retainedErrors.length = 0;
           readResult(await transport.invoke(desktopChannels.close, view), parseVoid);
         })();
@@ -326,7 +345,7 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
   };
 
   const shell: DesktopShell = {
-    openExternal: url => callShell(desktopChannels.external, url),
+    openExternal: (url, kind) => callShell(desktopChannels.external, kind ? {url, kind} : url),
     chooseExecutablePath: () => transport.invoke(desktopChannels.chooseExecutablePath)
       .then(value => readResult(value, parseExecutablePath), error => {
         throw error instanceof Error ? new Error(error.message) : new Error('桌面端操作没有成功，请重试。');
@@ -372,6 +391,45 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
       return () => { quitListeners.delete(listener); };
     },
     devices,
+    recipeSource: {request:raw=>callShellFor(desktopChannels.recipeSource,value=>desktopRecipeSourceReplySchema.parse(value),desktopRecipeSourceRequestSchema.parse(raw))},
+    recipeAuthoring: {
+      onPublished(listener) {authoringPublishedListeners.add(listener);return ()=>{authoringPublishedListeners.delete(listener);};},
+      onSaved(listener) {authoringSavedListeners.add(listener); return () => { authoringSavedListeners.delete(listener); };},
+      request: raw => callShellFor(desktopChannels.recipeAuthoring, value => desktopAuthoringReplySchema.parse(value), desktopAuthoringRequestSchema.parse(raw)),
+    },
+    recipeUse: {
+      request: raw => callShellFor(desktopChannels.recipeUse, value=>recipeUseReplySchema.parse(value),recipeUseRequestSchema.parse(raw)),
+    },
+    community: {
+      request: ((raw: Parameters<CommunityShell['request']>[0]) => {
+        const request = communityRequestSchema.parse(raw);
+        if (request.type !== 'acquire') return callShellFor(desktopChannels.community, value => communityResponseSchemas[request.type].parse(value), request);
+        return (async () => {
+          try {
+            const result = await transport.invoke(desktopChannels.community, request);
+            if (result && typeof result === 'object' && 'ok' in result && result.ok === false && 'error' in result && result.error && typeof result.error === 'object') {
+              const error = result.error;
+              const parsed = acquisitionFailureSchema.safeParse({code: 'code' in error ? error.code : 'unavailable', ...('retryAfter' in error ? {retryAfter: error.retryAfter} : {})});
+              return {ok: false as const, error: parsed.success ? parsed.data : {code: 'unavailable' as const}};
+            }
+            return {ok: true as const, value: readResult(result, value => communityResponseSchemas.acquire.parse(value))};
+          } catch {return {ok: false as const, error: {code: 'unavailable' as const}};}
+        })();
+      }) as CommunityShell['request'],
+    },
+    account: {
+      status: () => callShellFor(desktopChannels.accountStatus, value => accountStatusSchema.parse(value)),
+      login: () => callShellFor(desktopChannels.accountLogin, value => accountStatusSchema.parse(value)),
+      cancelLogin: () => callShellFor(desktopChannels.accountCancel, value => accountStatusSchema.parse(value)),
+      logout: () => callShellFor(desktopChannels.accountLogout, value => accountStatusSchema.parse(value)),
+      onStatus(listener) {
+        accountListeners.add(listener);
+        if (latestAccount) {
+          try { listener(latestAccount); } catch (error) { shellFailure(error); }
+        }
+        return () => { accountListeners.delete(listener); };
+      },
+    },
     onRemoteUpdate(listener) {
       remoteUpdateListeners.add(listener);
       if (latestRemoteUpdate) {

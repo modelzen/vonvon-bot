@@ -1,4 +1,5 @@
-import { EventEmitter } from 'node:events';
+import { EventEmitter, once } from 'node:events';
+import type { Server } from 'node:http';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,7 +8,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, IpcMainInvokeEvent } from 'electron';
 import type { VonvonClient } from '@vonvon/client/browser';
 import { ConnectionError, RpcError } from '@vonvon/client/browser';
-import type { DevicesState } from '@vonvon/protocol';
+import { agentIdSchema, groupIdSchema, type DevicesState, type RecipeAuthoringRequest, type RecipeAuthoringReply, type AccountStatus } from '@vonvon/protocol';
 import { clientChannelNames, desktopChannels, type AttachedDaemon, type DesktopEvent, type DesktopResources } from '../src/ipc-contract.js';
 import { DeviceConnectionsError, type DeviceConnections, type ViewChange } from '../src/connections.js';
 import { ServiceActionError } from '../src/service-error.js';
@@ -62,6 +63,7 @@ function fakeDevices() {
     onState: (listener: (value: DevicesState) => void) => { stateListeners.add(listener); return () => { stateListeners.delete(listener); }; },
     onView: (listener: (change: ViewChange) => void) => { viewListeners.add(listener); return () => { viewListeners.delete(listener); }; },
     view: () => current,
+    retainSource: vi.fn(async () => { throw new Error('retained sources are outside this bridge fixture'); }),
     switchTo: vi.fn(async (_id: string) => {}),
     retry: vi.fn(), wake: vi.fn(),
     inspectLink: vi.fn((_text: string) => ({ ok: false as const, code: 'invalid_link' as const })),
@@ -159,7 +161,12 @@ function harness() {
     hide: vi.fn(), confirmQuit: vi.fn(async () => {}), connectionLost: vi.fn(), quitKeepsDaemon: vi.fn(async () => true),
   };
   const devs = fakeDevices();
-  const bridge = installBridge(owner, window, paths, actions, devs.devices);
+  const account = {
+    status: () => ({ kind: 'signedOut' as const }), login: vi.fn(async () => ({ kind: 'signingIn' as const })),
+    cancelLogin: vi.fn(async () => ({ kind: 'signedOut' as const })), logout: vi.fn(async () => ({ kind: 'signedOut' as const })),
+    onStatus: vi.fn(() => () => {}), request: vi.fn(), dispose: vi.fn(),
+  };
+  const bridge = installBridge(owner, window, paths, actions, devs.devices, account);
   /** As the page sends it: a channel to a daemon gets the view last, 'current' unless said. */
   const invokeAs = (view: string, channel: string, ...args: unknown[]) => {
     const handler = handlers.get(channel);
@@ -167,9 +174,9 @@ function harness() {
     return handler(event, ...args, ...(clientChannels.has(channel) ? [view] : []));
   };
   const invoke = (channel: string, ...args: unknown[]) => invokeAs('current', channel, ...args);
-  return { bridge, event, frame, webContents, window, paths, invoke, invokeAs, snapshot, machine, run, schedule, device, dispose, actions, owner, devs,
+  return { bridge, account, event, frame, webContents, window, paths, invoke, invokeAs, snapshot, machine, run, schedule, device, dispose, actions, owner, devs,
     /** What the page was sent, leaving out the device list it gets on every subscribe and change. */
-    events: (): DesktopEvent[] => webContents.send.mock.calls.map(call => call[1] as DesktopEvent).filter(value => value.type !== 'devices'),
+    events: (): DesktopEvent[] => webContents.send.mock.calls.map(call => call[1] as DesktopEvent).filter(value => value.type !== 'devices' && value.type !== 'account'),
     emitSnapshot: (value: unknown) => onSnapshot(value),
     emitDevice: (value: unknown) => { for (const listener of [...deviceListeners]) listener(value); },
     emitError: (error: Error) => { for (const listener of [...errorListeners]) listener(error); } };
@@ -178,11 +185,104 @@ function harness() {
 beforeEach(() => { handlers.clear(); openExternal.mockClear(); failRegistration.channel = ''; });
 
 describe('desktop IPC boundary', () => {
+  it('uses the local account on a remote view and rejects payloads or untrusted senders', async () => {
+    const h = harness();
+    await h.invoke(desktopChannels.subscribe);
+    expect(h.webContents.send).toHaveBeenCalledWith(desktopChannels.event, { type: 'account', value: { kind: 'signedOut' } });
+    await h.devs.show(remoteView(REMOTE_A, remoteClient()));
+    expect(await h.invoke(desktopChannels.accountLogin)).toEqual({ ok: true, value: { kind: 'signingIn' } });
+    expect(await h.invoke(desktopChannels.accountLogin, 'https://untrusted.example')).toMatchObject({ ok: false });
+    h.frame.url = 'https://untrusted.example';
+    expect(await h.invoke(desktopChannels.accountLogout)).toMatchObject({ ok: false });
+    expect(h.account.login).toHaveBeenCalledTimes(1);
+    expect(h.account.logout).not.toHaveBeenCalled();
+    await h.bridge.dispose();
+  });
   it('forwards a device request and refuses one of no known shape', async () => {
     const h = harness();
     expect([await h.invoke(desktopChannels.device, { type: 'clients' }), await h.invoke(desktopChannels.device, { type: 'revokeClient' })]).toMatchObject([{ ok: true, value: { kind: 'clients' } }, { ok: false }]);
     expect(h.device).toHaveBeenCalledExactlyOnceWith({ type: 'clients' });
     await h.bridge.dispose();
+  });
+  it('rejects an installation after remote A→B→A or a paired-key change during identity lookup',async()=>{
+    for(const transition of ['switch','key']) {
+      const h=harness(), remote=remoteClient(), other=remoteClient(), pk=Buffer.alloc(32,4).toString('base64url');
+      const accountId='33333333-3333-4333-8333-333333333333', signal=new AbortController();
+      Object.assign(h.account,{lease:()=>signal.signal});let paired=pk;
+      Object.assign(h.devs.devices,{pairedPublicKey:()=>paired});
+      const a=remoteView(REMOTE_A,remote);
+      Object.assign(remote.client,{device:async()=>{
+        if(transition==='switch'){await h.devs.show(remoteView(REMOTE_B,other));await h.devs.show(a);} else paired='changed';
+        return {kind:'deviceStatus',status:{device:{id:REMOTE_A,name:'test',publicKey:pk},remote:{port:3000,addresses:[]},clients:{total:1,active:1}}};
+      }});
+      await h.devs.show(a);
+      expect(await h.invoke(desktopChannels.recipeUse,{type:'begin',accountId,viewId:REMOTE_A,botId:'cli_fixture',groupId:'oc_fixture',
+        recipeId:'44444444-4444-4444-8444-444444444444',versionId:'55555555-5555-4555-8555-555555555555'})).toMatchObject({ok:false});
+      expect(h.account.request).not.toHaveBeenCalled();await h.bridge.dispose();
+    }
+  });
+  it('links through the scoped shell, discards stale account generations, and never exposes raw device RPC', async () => {
+    const h = harness();
+    const accountId = REMOTE_A, session = REMOTE_B, botId = agentIdSchema.parse('cli_fixture');
+    const groupId = groupIdSchema.parse('oc_fixture');
+    const challengeId = '33333333-3333-4333-8333-333333333333', evidence = 'a'.repeat(64);
+    let generation = new AbortController();
+    const status: AccountStatus = {kind:'signedIn',accountId,displayName:'写作者',provider:'google',persistence:'memory'};
+    const calls: RecipeAuthoringRequest[] = [];
+    Object.assign(h.account,{status:() => status, lease:(id:string) => id === accountId ? generation.signal : undefined});
+    h.account.request.mockImplementation(async (_id:string, path:string) => {
+      expect(path).toBe('/v1/me');
+      return Response.json({accountId});
+    });
+    Object.assign(h.owner.client, {
+      device:async () => ({kind:'deviceStatus',status:{device:{id:REMOTE_A,name:'本机',publicKey:Buffer.alloc(32,4).toString('base64url')},
+        remote:{addresses:[],port:3000},clients:{active:1,total:1}}}),
+      snapshot:async () => ({agents:[{id:botId,name:'助手'}],groups:[{id:groupId,name:'产品群'}],memberships:[{agentId:botId,groupId}]}),
+      recipeAuthoring:async (r:RecipeAuthoringRequest):Promise<RecipeAuthoringReply> => {
+        calls.push(r);
+        if (r.type === 'open') return {kind:'session', session, leaseMs:45000,linked:false};
+        if (r.type === 'workflow') return {kind:'workflow',activity:0,ageMs:0,pausedContexts:[]};
+        if (r.type === 'status') return {kind:'status',linked:false,operations:[],reconciliation:[]};
+        if (r.type === 'beginLink') return {kind:'challenge',challengeId,code:'123456',expiresAt:Date.now()+30000};
+        if (r.type === 'inspectLink') return {kind:'link',linked:false,evidence,recipient:{openId:'ou_admin',chatId:groupId,tenantKey:'test'}};
+        if (r.type === 'confirmLink') return {kind:'link',linked:true};
+        if (r.type === 'close') return {kind:'closed'};
+        throw Error('unexpected RPC');
+      },
+    });
+    const {shell,client} = createDesktopFacades({invoke:(channel,...args) => h.invoke(channel,...args), receive:() => () => {}});
+    expect(client.recipeAuthoring).toBeUndefined();
+    const request = shell.recipeAuthoring.request;
+    const opened = await request({type:'open',viewId:'local',accountId,botId});
+    if (opened.kind !== 'session') throw Error('expected authoring session');
+    const {handle} = opened;
+    expect(opened.target).toMatchObject({botName:'助手',accountName:'写作者'});
+    expect(handle).not.toBe(session);
+    expect(await h.invoke(desktopChannels.recipeAuthoring,{type:'answerField',session,botId,request:{},value:'fake'})).toMatchObject({ok:false});
+    expect(await h.invoke(desktopChannels.recipeAuthoring,{type:'advance',session,ticket:'test'})).toMatchObject({ok:false});
+    expect(await h.invoke(desktopChannels.recipeAuthoring,{type:'status',handle,accountId})).toMatchObject({ok:false});
+    expect(await request({type:'beginLink',handle})).toMatchObject({kind:'challenge',challengeId});
+    await expect(request({type:'confirmLink',handle,challengeId,evidence})).rejects.toThrow();
+    await request({type:'inspectLink',handle,challengeId});
+    await expect(request({type:'confirmLink',handle,challengeId,evidence})).resolves.toEqual({kind:'link',linked:true});
+    generation.abort();
+    generation = new AbortController();
+    await expect(request({type:'status',handle})).rejects.toThrow();
+    expect(calls.at(-1)).toEqual({type:'close',session,botId});
+    expect(calls.filter(r => r.type === 'confirmLink')).toHaveLength(1);
+    const fresh = await request({type:'open',viewId:'local',accountId,botId});
+    if (fresh.kind !== 'session') throw Error('expected renewed session');
+    const started = Date.now();
+    const now = vi.spyOn(Date,'now');
+    try {
+      for (const minute of [10,20,29]) {
+        now.mockReturnValue(started+minute*60_000);
+        expect(await request({type:'status',handle:fresh.handle})).toMatchObject({kind:'session'});
+      }
+      now.mockReturnValue(started+30*60_000);
+      await expect(request({type:'status',handle:fresh.handle})).rejects.toThrow('暂停');
+      expect(calls.at(-1)).toEqual({type:'close',session,botId});
+    } finally {now.mockRestore(); await h.bridge.dispose();}
   });
   it('forwards a schedule request with its bot and checks both arguments', async () => {
     const h = harness();
@@ -599,6 +699,21 @@ describe('desktop IPC boundary', () => {
     for (const url of ['https://github.com/modelzen/vonvon-bot/releases', 'https://vonvon.cc.evil.test/get/', 'https://vonvon.cc/other/', 'https://bot.vonvon.cc/get/'])
       await expect(openAllowedExternal(url)).rejects.toThrow('Unsupported external link');
     expect(openExternal).toHaveBeenCalledTimes(2);
+  });
+
+  it('opens safe recipe documents only when explicitly requested through the App bridge',async()=>{
+    const h=harness();
+    const {shell}=createDesktopFacades({invoke:async(channel,...args)=>h.invoke(channel,...args),receive:()=>()=>{}});
+    const links=['https://my.feishu.cn/share/base/ExampleReference6','https://vonvon.cc/docs/troubleshooting/','http://example.com/guide'];
+    for(const url of links){await shell.openExternal(url,'recipe-document');expect(openExternal).toHaveBeenLastCalledWith(url);}
+    for(const url of links)await expect(openAllowedExternal(url)).rejects.toThrow('Unsupported external link');
+    for(const value of [
+      {kind:'recipe-document',url:'javascript:alert(1)'}, {kind:'recipe-document',url:'data:text/html,test'},
+      {kind:'recipe-document',url:'https://user:pass@example.com'}, {kind:'recipe-document',url:'//example.com'},
+      {kind:'recipe-document',url:'not a URL'}, {kind:'recipe-document',url:'https://example.com',extra:true},
+      {kind:'unrecognized',url:'https://example.com'},
+    ])await expect(openAllowedExternal(value)).rejects.toThrow('Unsupported external link');
+    expect(openExternal).toHaveBeenCalledTimes(3);await h.bridge.dispose();
   });
 
   it('removes earlier handlers if bridge installation fails', () => {
@@ -1182,4 +1297,84 @@ describe('devices-ui-1a views', () => {
     expect(await h.invoke(desktopChannels.devicesRemove, REMOTE_A)).toEqual({ ok: true, value: { revokedRemotely: false } });
     await h.bridge.dispose();
   });
+});
+
+it('carries only typed acquisition outcomes through the actual community IPC and facade', async () => {
+  const h = harness();
+  const accountId = '11111111-1111-4111-8111-111111111111';
+  const versionId = '22222222-2222-4222-8222-222222222222';
+  Object.assign(h.account, {status: () => ({kind: 'signedIn', accountId})});
+  const {shell} = createDesktopFacades({
+    invoke: async (channel, ...args) => structuredClone(await handlers.get(channel)!(h.event, ...args)),
+    receive: () => () => {},
+  });
+  const request = {type: 'acquire' as const, accountId, versionId, requestId: 'a2.01932a00-0000-7abc-8def-0123456789ab', code: 'TEST-CODE'};
+  for (const [code, status] of [['operation_expired',410],['operation_clock_skew',422],['request_upgrade_required',409],['acquire_rate_limited',429]] as const) {
+    h.account.request.mockResolvedValueOnce(Response.json({error:{code, message:'DO-NOT-FORWARD-CODE'}}, {status, headers:{'Retry-After':'123'}}));
+    expect(await shell.community.request(request)).toEqual({ok:false,error:{code,retryAfter:123}});
+  }
+  h.account.request.mockResolvedValueOnce(Response.json({error:{code:'DO-NOT-FORWARD-CODE'}}, {status:503}));
+  expect(await shell.community.request(request)).toEqual({ok:false,error:{code:'unavailable'}});
+  h.account.request.mockRejectedValueOnce(new Error('DO-NOT-FORWARD-CODE'));
+  expect(await shell.community.request(request)).toEqual({ok:false,error:{code:'unavailable'}});
+  h.account.request.mockResolvedValueOnce(Response.json({recipeId:versionId,versionId,owned:false,acquired:true}));
+  expect(await shell.community.request(request)).toEqual({ok:true,value:{recipeId:versionId,versionId,owned:false,acquired:true}});
+  expect(Object.keys(shell.community)).toEqual(['request']);
+  await h.bridge.dispose();
+});
+
+it('preserves the real redeem HTTP limiter outcome through serialized main IPC and the facade',async()=>{
+  const apiSource=new URL('../../../services/recipe-api/src/http.mjs',import.meta.url).href;
+  const errorSource=new URL('../../../services/recipe-api/src/errors.mjs',import.meta.url).href;
+  const limiterSource=new URL('../../../services/recipe-api/src/limiter.mjs',import.meta.url).href;
+  const {createRecipeServer}=await import(apiSource);
+  const {ApiError}=await import(errorSource);
+  const {codeAttempts}=await import(limiterSource);
+  const execute=vi.fn(async()=>{throw new ApiError(422,'invalid_code');});
+  const server:Server=createRecipeServer({verify:async()=>({issuer:'https://project.example/auth/v1',subject:REMOTE_A}),execute,attempts:codeAttempts({now:()=>1000})});
+  const h=harness();
+  try {
+    server.listen(0,'127.0.0.1');await once(server,'listening');
+    const address=server.address();if(!address||typeof address==='string')throw new Error('Missing HTTP port');
+    Object.assign(h.account,{status:()=>({kind:'signedIn',accountId:REMOTE_A}),request:vi.fn(async(_accountId:string,path:string,init:RequestInit)=>fetch(`http://127.0.0.1:${address.port}`+path,{...init,headers:{...init.headers,Authorization:'Bearer synthetic'}}))});
+    const {shell}=createDesktopFacades({invoke:async(channel,...args)=>structuredClone(await handlers.get(channel)!(h.event,...args)),receive:()=>()=>{}});
+    const request={type:'acquire' as const,accountId:REMOTE_A,versionId:REMOTE_B,requestId:'a2.01932a00-0000-7abc-8def-0123456789ab',code:'TEST-CODE'};
+    for(let n=0;n<10;n++)expect(await shell.community.request(request)).toEqual({ok:false,error:{code:'invalid_code'}});
+    expect(await shell.community.request(request)).toEqual({ok:false,error:{code:'rate_limited',retryAfter:600}});
+    expect(execute).toHaveBeenCalledTimes(10);expect(Object.keys(shell.community)).toEqual(['request']);
+  } finally {await h.bridge.dispose();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
+});
+
+it('continues through the public shell IPC on its fixed local source after hide and another-device view',async()=>{
+  const h=harness(),accountId=REMOTE_A,session=REMOTE_B,botId=agentIdSchema.parse('cli_creator'),groupId=groupIdSchema.parse('oc_creator');
+  const signal=new AbortController(),calls:RecipeAuthoringRequest[]=[];
+  const state:AccountStatus={kind:'signedIn',accountId,displayName:'作者',provider:'google',persistence:'memory'};
+  Object.assign(h.account,{status:()=>state,lease:(id:string)=>id===accountId?signal.signal:undefined});
+  h.account.request.mockImplementation(async()=>Response.json({accountId}));
+  Object.assign(h.owner.client,{
+    device:async()=>({kind:'deviceStatus',status:{device:{id:REMOTE_A,name:'本机',publicKey:Buffer.alloc(32,4).toString('base64url')},remote:{addresses:[],port:3000},clients:{active:1,total:1}}}),
+    snapshot:async()=>({agents:[{id:botId,name:'原 Bot'}],groups:[{id:groupId,name:'原群'}],memberships:[{agentId:botId,groupId}]}),
+    recipeAuthoring:async(r:RecipeAuthoringRequest):Promise<RecipeAuthoringReply>=>{
+      calls.push(r);
+      switch(r.type){
+        case 'creatorDiscover':return {kind:'creatorBinding',association:{binding:REMOTE_A,scope:'a'.repeat(64),recipient:{openId:'ou_author',chatId:groupId,tenantKey:'test'}},wakeId:null};
+        case 'creatorOpen':return {kind:'creatorSession',session,binding:r.binding,scope:r.scope,leaseMs:45000};
+        case 'creatorPoll':return {kind:'creatorJobs',jobs:[]};
+        case 'workflow':return {kind:'workflow',activity:1,ageMs:0,pausedContexts:[]};
+        case 'status':return {kind:'status',linked:true,operations:[],reconciliation:[]};
+        case 'groupSourceIdentity':return {kind:'groupSourceIdentity',groupId,identity:'b'.repeat(64)};
+        case 'beginHandoff':return {kind:'handoff',handoff:{retryId:r.retryId,groupId,state:'selecting'}};
+        case 'close':return {kind:'closed'};
+        default:throw Error(r.type);
+      }
+    },
+  });
+  const {shell}=createDesktopFacades({invoke:(channel,...args)=>h.invoke(channel,...args),receive:()=>()=>{}});
+  const input={type:'creatorContinue' as const,accountId,entry:{kind:'source' as const,viewId:'local',botId,groupId}};
+  expect(await shell.recipeAuthoring.request(input)).toEqual({kind:'creatorContinuing',accountId,viewId:'local',botId});
+  await shell.hideWindow();await h.devs.show(remoteView(REMOTE_A,remoteClient()));
+  expect(await shell.recipeAuthoring.request(input)).toMatchObject({kind:'creatorContinuing',viewId:'local'});
+  expect(calls.filter(r=>r.type==='creatorOpen')).toHaveLength(1);
+  expect(calls.filter(r=>r.type==='open'||r.type==='close')).toEqual([]);
+  await h.bridge.dispose();expect(calls.filter(r=>r.type==='close')).toEqual([{type:'close',botId,session}]);
 });

@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createClient } from "../../client/src/client";
 import type { DevicesState } from "@vonvon/protocol";
@@ -72,4 +72,10 @@ it("takes a ready device from its connection and a connecting one from its row",
     id: REMOTE, isRemote: true, name: "机房", mode: "full", platform: "windows", version: "0.8.1", capabilities: [],
   });
   expect(activeDeviceFrom(state({ id: "local", phase: "ready", attempt: 0 }))).toEqual({ ...LOCAL_ACTIVE_DEVICE, capabilities: [] });
+});
+
+it('keeps the desktop account capability while another device is shown', () => {
+  const account = {status: vi.fn(), onStatus: vi.fn(), login: vi.fn(), cancelLogin: vi.fn(), logout: vi.fn()};
+  const remote = shellForDevice({account}, activeDeviceFrom(state({id: REMOTE, phase: 'connecting', attempt: 0})));
+  expect(remote?.account).toBe(account);
 });

@@ -55,6 +55,7 @@ export interface ClaudeThreadConfig {
   skills?: string[];
   /** The profile's capability package directories, loaded as local plugins (T4b). */
   plugins?: string[];
+  recipePlugins?: readonly {pluginId:string; skills:readonly {qualifiedName:string}[]}[];
   /** Which filesystem settings the SDK loads. The SDK default is none — so
    * project/user CLAUDE.md, skills and `.claude/settings.json` are NOT read
    * unless set. The backend passes ['user','project'] to make a claude session
@@ -396,11 +397,11 @@ export class ClaudeAgentThread implements AgentThread {
       ...(cfg.settingSources ? { settingSources: cfg.settingSources } : {}),
       ...(cfg.additionalDirectories?.length ? { additionalDirectories: cfg.additionalDirectories } : {}),
       ...(plugins.length ? { plugins: plugins.map(path => ({ type: 'local' as const, path, skipMcpDiscovery: true })) } : {}),
-      ...(cfg.skills ? { skills: plugins.length ? [...cfg.skills, ...BUILTIN_SKILL_NAMES] : cfg.skills } : {}),
+      ...(cfg.skills ? { skills: plugins.length ? [...cfg.skills, ...BUILTIN_SKILL_NAMES, ...(cfg.recipePlugins ?? []).flatMap(pkg=>pkg.skills.map(s=>s.qualifiedName))] : cfg.skills } : {}),
       ...(cfg.env ? { env: cfg.env } : {}),
       settings: {
         ...AUTO_COMPACT_SETTINGS,
-        ...(plugins.length ? { enabledPlugins: { [BUILTIN_PLUGIN_ID]: true } } : {}),
+        ...(plugins.length ? { enabledPlugins: { [BUILTIN_PLUGIN_ID]: true, ...Object.fromEntries((cfg.recipePlugins ?? []).map(pkg=>[`${pkg.pluginId}@inline`,true])) } } : {}),
         // SDK consumes an absolute path; plan files stay inside the existing write boundary.
         ...(cfg.access.native?.permissionMode === 'plan'
           ? { plansDirectory: cfg.access.planState?.directory ?? resolve(cfg.access.realCwd, '.claude/plans') } : {}),
