@@ -33,7 +33,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   const {navigate} = useDraftGuard();
   const route = community.route;
   const authoring = useShellCapabilities()?.recipeAuthoring;
-  const [preparation,setPreparation]=useState<{parent?:{versionId:string};draft?:RecipeRichDraft}>();
+  const [preparation,setPreparation]=useState<{parent?:{recipeId:string;versionId:string};draft?:RecipeRichDraft}>();
   useEffect(()=>setPreparation(undefined),[route]);
   const [tab, setTab] = useState<'recipes' | 'rental'>('recipes');
   const [workspaceTab, setWorkspaceTab] = useState<'drafts' | 'published'>('drafts');
@@ -193,7 +193,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
       </>}
       {route.kind === 'detail' && detail && <>
         <RecipeDetails recipe={detail} share={shareUrl && <CopyButton key={shareUrl} value={shareUrl}/>} action={detail.owned || detail.acquired ? <GlowButton variant="dark" disabled={!community.onUse} onClick={() => community.onUse?.(detail)}>添加到群聊</GlowButton> : <GlowButton variant="dark" disabled={busy} onClick={() => {if (detail.public.access === 'coded' && accountId) {setError(undefined); setCodeDialog(true);} else void run(acquire);}}>获取配方</GlowButton>}
-          management={route.privateView && detail.owned ? <div className="community-actions"><Button onClick={() => detail.format==='rich-v2'?setPreparation({parent:{versionId:detail.versionId}}):open({kind:'draft',source:detail})}>准备新版</Button></div> : undefined}/>
+          management={route.privateView && detail.owned ? <div className="community-actions"><Button onClick={() => detail.format==='rich-v2'?setPreparation({parent:{recipeId:detail.recipeId,versionId:detail.versionId}}):open({kind:'draft',source:detail})}>准备新版</Button></div> : undefined}/>
         {!detail.owned && !detail.acquired && detail.public.access === 'coded' && accountId && <Dialog open={codeDialog} size="sm" title="获取配方" description={`${detail.public.name} · 版本 ${detail.public.version}`} initialFocusRef={codeInput} onClose={busy ? undefined : () => setCodeDialog(false)} footer={<><Button disabled={busy} onClick={() => setCodeDialog(false)}>取消</Button><GlowButton type="submit" form="community-acquire-code" variant="dark" disabled={busy || !code.trim()}>获取配方</GlowButton></>}><form id="community-acquire-code" className="community-code-form" onSubmit={event => {event.preventDefault(); if (!busy && code.trim()) void run(acquire);}}><label>分享码<input ref={codeInput} aria-label="分享码" placeholder="作者提供的分享码" autoComplete="off" value={code} maxLength={128} onChange={event => editCode(detail.versionId, event.target.value)}/></label>{error && <InlineNotice title="获取未完成" tone="warning">{error}</InlineNotice>}</form></Dialog>}
         {(detail.owned || detail.acquired) && !community.onUse && <p className="community-muted">已保存在账号中。请使用最新版 Vonvon Bot 桌面应用，把配方添加到群聊。</p>}
         {route.privateView && detail.owned && detail.public.access === 'coded' && <RecipeCodes key={detail.versionId} shell={shell} accountId={accountId!} versionId={detail.versionId}/>}

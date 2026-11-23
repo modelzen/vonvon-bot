@@ -25,18 +25,33 @@ function fixture(){
     throw Error(path);
   });
   const account={lease:()=>new AbortController().signal,request} as unknown as NativeAccount;
-  return {account,accountId,versionId,content,logo,detail,request,tamper:()=>{member=Buffer.from('wrong');},other:()=>{authorId=randomUUID();}};
+  return {account,accountId,recipeId,versionId,content,logo,detail,request,tamper:()=>{member=Buffer.from('wrong');},other:()=>{authorId=randomUUID();}};
 }
 it('inherits verified owned public fields, coded access and exact logo bytes while clearing display version',async()=>{
   const f=fixture(),before=JSON.stringify(f.content);
-  const inherited=await inheritedPublication(f.account,f.accountId,f.versionId,()=>{});
+  const inherited=await inheritedPublication(f.account,f.accountId,f.recipeId,f.versionId,()=>{});
   expect(inherited).toEqual({accountId:f.accountId,versionId:f.versionId,public:{name:'帮助反馈',summary:'摘要',overview:'# 介绍\n完整说明',version:''},access:'coded',logo:f.logo.toString('base64url')});
   expect(JSON.stringify(f.content)).toBe(before);
 });
 it('refuses other authors, stale accounts, unowned snapshots and corrupted logo bytes',async()=>{
-  const other=fixture();other.other();await expect(inheritedPublication(other.account,other.accountId,other.versionId,()=>{})).rejects.toThrow('本人');
+  const other=fixture();other.other();await expect(inheritedPublication(other.account,other.accountId,other.recipeId,other.versionId,()=>{})).rejects.toThrow('本人');
   expect(other.request).toHaveBeenCalledOnce();
-  const stale=fixture();stale.account.lease=()=>undefined;await expect(inheritedPublication(stale.account,stale.accountId,stale.versionId,()=>{})).rejects.toThrow('账号');
-  const unowned=fixture();unowned.detail.owned=false;await expect(inheritedPublication(unowned.account,unowned.accountId,unowned.versionId,()=>{})).rejects.toThrow('来源版本');
-  const corrupt=fixture();corrupt.tamper();await expect(inheritedPublication(corrupt.account,corrupt.accountId,corrupt.versionId,()=>{})).rejects.toThrow();
+  const stale=fixture();stale.account.lease=()=>undefined;await expect(inheritedPublication(stale.account,stale.accountId,stale.recipeId,stale.versionId,()=>{})).rejects.toThrow('账号');
+  const unowned=fixture();unowned.detail.owned=false;await expect(inheritedPublication(unowned.account,unowned.accountId,unowned.recipeId,unowned.versionId,()=>{})).rejects.toThrow('来源版本');
+  const corrupt=fixture();corrupt.tamper();await expect(inheritedPublication(corrupt.account,corrupt.accountId,corrupt.recipeId,corrupt.versionId,()=>{})).rejects.toThrow();
+});
+
+it('does not read unrelated publication history when preparing a known version',async()=>{
+ const f=fixture();
+ await inheritedPublication(f.account,f.accountId,f.recipeId,f.versionId,()=>{});
+ expect(f.request.mock.calls.some(([,path])=>path==='/v2/me/publications')).toBe(false);
+});
+
+it('strictly requires recipe and version IDs together for a renderer parent',async()=>{
+ const {desktopAuthoringRequestSchema}=await import('@vonvon/protocol');
+ const f=fixture(),request={type:'beginHandoff',handle:randomUUID(),retryId:randomUUID(),groupId:'oc_test',source:{recipeId:f.recipeId,versionId:f.versionId}};
+ expect(desktopAuthoringRequestSchema.safeParse(request).success).toBe(true);
+ expect(desktopAuthoringRequestSchema.safeParse({...request,source:{versionId:f.versionId}}).success).toBe(false);
+ expect(desktopAuthoringRequestSchema.safeParse({...request,sourceVersionId:f.versionId}).success).toBe(false);
+ await expect(inheritedPublication(f.account,f.accountId,randomUUID(),f.versionId,()=>{})).rejects.toThrow();
 });

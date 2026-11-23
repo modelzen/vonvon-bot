@@ -15,7 +15,7 @@ const operation = { ...handle, operationId: uuid };
 const link = { ...handle, challengeId: uuid };
 export const desktopAuthoringRequestSchema = z.discriminatedUnion('type', [
   z.object({type:z.literal('openDraftSource'),accountId:uuid,viewId:viewIdSchema,draftId:uuid,baseRevision:revision}).strict(),
-  z.object({type:z.literal('beginHandoff'),...handle,retryId:uuid,groupId:groupIdSchema,sourceVersionId:uuid.optional()}).strict(),
+  z.object({type:z.literal('beginHandoff'),...handle,retryId:uuid,groupId:groupIdSchema,source:z.object({recipeId:uuid,versionId:uuid}).strict().optional()}).strict(),
   z.object({type:z.literal('beginDraftHandoff'),...handle,retryId:uuid,draftId:uuid,baseRevision:revision}).strict(),
   z.object({type:z.literal('handoffStatus'),...handle,retryId:uuid}).strict(),
   z.object({type:z.literal('cancelHandoff'),...handle,retryId:uuid}).strict(),

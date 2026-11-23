@@ -25,6 +25,7 @@ type InventoryOptions=Preparation['selection']['options'];
 export interface RichLocalDraft {
   selectionDigest?:string;
   privateSelection?:boolean;
+  inheritedVersionId?:string;
   sourceCaptureDigest?:string;
   newFields?:string[];
   sourceRef?:string;
@@ -246,7 +247,7 @@ export function richCardReview(op:{rich?:RichLocalDraft;view:Pick<LocalOperation
     const request=richFreezeInputSchema.parse(rich.request),payloadDigest=richReviewDigest(rich);
     const sourceCapture=!!rich.privateSelection&&!!rich.source&&rich.newFields?.length===0&&rich.sourceCaptureDigest===payloadDigest&&'content'in request;
     if(!sourceCapture&&rich.members?.some(m=>m.kind==='finalLogo'))return;
-    const fields='content'in request?contentReviewFields(request.content,sourceCapture):(()=>{
+    const fields='content'in request?contentReviewFields(request.content,sourceCapture,sourceCapture?rich.inheritedVersionId:undefined):(()=>{
       const base=decodeRichRecipeContent(Buffer.from(request.baseCanonical,'base64url')).content;
       const resolve=(ref:{sourceIntentId:string;candidateId:string})=>{
         const donor=request.candidates?.find(src=>src.sourceIntentId===ref.sourceIntentId);
@@ -266,7 +267,7 @@ export function richCardReview(op:{rich?:RichLocalDraft;view:Pick<LocalOperation
       });
     })();
     if(sourceCapture)for(const logo of rich.members?.filter(m=>m.kind==='finalLogo')??[])
-      fields.push({label:'Logo',valueJson:JSON.stringify('已选本地图片 · '+Buffer.from(logo.bytes,'base64url').length+' 字节')});
+      fields.push({label:'Logo',valueJson:JSON.stringify((rich.inheritedVersionId?'已继承来源 Logo · ':'已选本地图片 · ')+Buffer.from(logo.bytes,'base64url').length+' 字节')});
     if(request.access)fields.push({label:'获取方式',valueJson:JSON.stringify(request.access==='coded'?'凭码获取':'直接获取')});
     return {draftId:op.view.draftId??op.view.operationId,revision:op.view.baseRevision??1,payloadDigest,fields,...(sourceCapture&&{sourceCapture:true as const})};
   }catch{return;}

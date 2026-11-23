@@ -161,6 +161,7 @@ export class PrivateHandoffs {
           ...(h.inherited?.logo&&{logo:h.inherited.logo}),
           ...(h.sourceVersionId&&{sourceVersionId:h.sourceVersionId})}},inv,p.account);
       rich.privateSelection=true;
+      if(h.inherited)rich.inheritedVersionId=h.inherited.versionId;
       const details=richCardReview({view:{operationId:h.retryId},rich});
       if(!details||!candidateConfirmation(h.ref,details)){
         h.phase={state:'selecting'};rotate(h);

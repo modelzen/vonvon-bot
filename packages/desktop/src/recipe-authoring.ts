@@ -792,10 +792,10 @@ export class RecipeAuthoringController {
         await this.names(h);
         const groupName = h.groups.get(r.groupId);
         if (!groupName) throw recheck();
-        const inherited=r.sourceVersionId?await inheritedPublication(this.account,h.open.accountId,r.sourceVersionId,()=>this.check(h)):undefined;
+        const inherited=r.source?await inheritedPublication(this.account,h.open.accountId,r.source.recipeId,r.source.versionId,()=>this.check(h)):undefined;
         await this.checkGroup(h);
         const scope = {retryId:r.retryId,groupId:r.groupId};
-        return this.beginHandoff(h,scope,{type:r.type,...scope,groupName,sourceVersionId:r.sourceVersionId,...(inherited&&{inherited})});
+        return this.beginHandoff(h,scope,{type:r.type,...scope,groupName,sourceVersionId:r.source?.versionId,...(inherited&&{inherited})});
       }
       case 'beginDraftHandoff': {
         const source = h.draftSource;

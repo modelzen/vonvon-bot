@@ -57,3 +57,45 @@ it('keeps first creation blank and rejects account changes, snapshot drift and l
  delete f.db.handoffs[f.retryId]!.inherited;
  await expect(f.handoffs.begin(f.p,f.link,f.req)).rejects.toThrow('重新准备');
 });
+it('confirms a published long inherited overview without changing its full digest-bound value',async()=>{
+ const f=fixture();f.inherited.public.overview='甲'.repeat(10500);
+ await f.handoffs.begin(f.p,f.link,f.req);
+ const row=f.db.handoffs[f.retryId]!;
+ const request={retryId:f.retryId,ref:row.ref,generation:row.generation,lease:'a'.repeat(64),versions:[]};row.phase={state:'awaitingAttestations',request};
+ let prepared:RichLocalDraft|undefined;
+ await f.handoffs.answer(f.p,f.link,{type:'answerHandoff',botId:f.req.botId,session:f.p.session,request,attestations:[]},async target=>{
+  prepared=target.rich;return {kind:'operation',operation:{operationId:randomUUID(),purpose:'prepareDraft',targetPublicKey:'a'.repeat(43),nonceCommitment:'a'.repeat(43),state:'waiting',deliveryUnknown:false,createdAt:1000}};
+ });
+ expect(prepared?.request&&'content'in prepared.request&&prepared.request.content.public.overview.value).toBe(f.inherited.public.overview);
+ const review=richCardReview({view:{operationId:randomUUID()},rich:prepared});
+ expect(JSON.stringify(review)).toContain('完整发布信息在 App 核对');expect(Buffer.byteLength(JSON.stringify(review))).toBeLessThan(10000);
+ const before=review?.payloadDigest;
+ if(prepared?.request&&'content'in prepared.request)prepared.request.content.public.overview.value+='x';
+ expect(richCardReview({view:{operationId:randomUUID()},rich:prepared})?.payloadDigest).not.toBe(before);
+});
+import {mkdtemp,readFile,writeFile,stat,realpath,readdir} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {recipeAuthoringRequestSchema} from '@vonvon/protocol';
+import {AuthoringJournal as RealJournal} from '../src/recipe/authoring-journal';
+it('accepts published Unicode fields and enforces byte and scalar limits',()=>{
+ const f=fixture();f.inherited.public.name='🧩'.repeat(60);f.inherited.public.summary='🧩'.repeat(240);
+ expect(recipeAuthoringRequestSchema.safeParse(f.req).success).toBe(true);
+ f.inherited.public.name+='x';expect(recipeAuthoringRequestSchema.safeParse(f.req).success).toBe(false);
+ f.inherited.public.name='ok';f.inherited.public.overview='甲'.repeat(10923);expect(recipeAuthoringRequestSchema.safeParse(f.req).success).toBe(false);
+});
+it('keeps large repeated snapshots outside the journal and verifies recovery blobs',async()=>{
+ const root=await realpath(await mkdtemp(join(tmpdir(),'inherit-blob-')));const journal=new RealJournal(root,()=>1000);
+ const f=fixture();await f.handoffs.begin(f.p,f.link,f.req);const row=f.db.handoffs[f.retryId]!;
+ row.inherited!.logo=Buffer.alloc(131072,1).toString('base64url');row.inherited!.public.overview='甲'.repeat(10922);
+ await journal.run(db=>{db.handoffs=Object.fromEntries(Array.from({length:100},()=>{const retryId=randomUUID();return [retryId,{...row,retryId}];}));});
+ const file=join(root,'recipe-authoring/journal.json'),disk=JSON.parse(await readFile(file,'utf8'));
+ expect((await stat(file)).size).toBeLessThan(200000);
+ const entry=Object.values(disk.handoffs)[0] as {inheritedBlob:string};expect(entry.inheritedBlob).toMatch(/^[a-f0-9]{64}$/);
+ await journal.run(db=>{expect(Object.values(db.handoffs!)[0]!.inherited).toEqual(row.inherited);});
+ await writeFile(join(root,'recipe-authoring','rich-'+entry.inheritedBlob+'.json'),'{}');
+ await expect(journal.run(db=>Object.values(db.handoffs!)[0]!.inherited)).rejects.toThrow('已变化');
+ const expired=new RealJournal(root,()=>row.expiresAt+7*86400000+1);
+ await expired.run(db=>{expect(Object.keys(db.handoffs!)).toHaveLength(0);});
+ expect((await readdir(join(root,'recipe-authoring'))).filter(name=>name.startsWith('rich-'))).toEqual([]);
+});

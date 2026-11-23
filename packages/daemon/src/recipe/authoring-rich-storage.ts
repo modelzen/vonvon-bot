@@ -22,7 +22,7 @@ function read(dir:string,hash:string){
   }finally{closeSync(fd);}
 }
 function visit(ledger:AuthoringLedger,fn:(owner:object,key:string)=>void){
-  for(const handoff of Object.values(ledger.handoffs??{}))fn(handoff,'edit');
+  for(const handoff of Object.values(ledger.handoffs??{})){fn(handoff,'edit');fn(handoff,'inherited');}
   for(const operation of Object.values(ledger.operations)){
     fn(operation,'rich');fn(operation,'richSaved');
   }

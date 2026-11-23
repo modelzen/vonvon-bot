@@ -32,7 +32,7 @@ type Target = {source: AuthoringSource; registration: string; botName: string; g
 type Props = {
   source?: AuthoringSource;
   draft?: Draft;
-  parent?: {versionId: string};
+  parent?: {recipeId: string; versionId: string};
   onBack: () => void;
   onSaved: (draftId: string, revision: number) => void;
 };
@@ -141,6 +141,7 @@ export function RecipeAuthoringPage(props: Props) {
     device.id,
     props.draft?.draftId,
     props.draft?.revision,
+    props.parent?.recipeId,
     props.parent?.versionId,
     props.source?.botId,
     props.source?.groupId,
@@ -438,7 +439,7 @@ function PrivateFlow({
             handle: s.handle,
             groupId: target.source.groupId,
             retryId: id,
-            ...(parent && {sourceVersionId: parent.versionId}),
+            ...(parent && {source: parent}),
           }
         : {
             type: 'beginDraftHandoff',
