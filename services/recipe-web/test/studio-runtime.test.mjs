@@ -36,13 +36,13 @@ async function runtime(t, {signedIn = false, route = '/studio', sessionFails = f
 function assertGuide(document) {
   const main = document.querySelector('main');
   assert.equal(main.querySelectorAll('form,input,textarea,select,[contenteditable="true"]').length, 0, 'website studio must not expose manual authoring controls');
-  assert.equal(main.querySelector('h1')?.textContent, '在 Vonvon Bot 中创作');
-  assert.match(main.textContent, /社区.*创作中心.*准备配方/s);
-  assert.match(main.textContent, /Bot.*已有群聊/s);
+  assert.equal(main.querySelector('h1')?.textContent, '在 Bot 私聊中创作和发布');
+  assert.match(main.textContent, /社区.*我的配方.*分享配方/s);
+  assert.match(main.textContent, /已有 Bot.*群聊.*本地配置/s);
   assert.match(main.textContent, /飞书私聊/);
-  assert.match(main.textContent, /回到 App.*核对.*发布/s);
-  assert.match(main.textContent, /草稿.*已发布版本.*分享码.*App/s);
-  assert.doesNotMatch(main.textContent, /新建文字草稿|保存草稿|预览发布|确认发布|准备新版|生成分享码/);
+  assert.match(main.textContent, /私聊中查看完整预览.*私聊中确认发布/s);
+  assert.match(main.textContent, /完整配置.*已发布版本.*分享码.*App/s);
+  assert.doesNotMatch(main.textContent, /新建文字草稿|保存草稿|准备新版|生成分享码|回到 App 核对并发布/);
   assert.equal(document.querySelector('a[href="/"]')?.textContent.includes('Vonvon Bot'), true);
   assert.equal(document.querySelector('#library-link')?.getAttribute('href'), '/library');
 }
