@@ -21,6 +21,7 @@ import { voiceView } from '../voice/view';
 import type { VoiceAction, VoiceView } from '../voice/types';
 import { readFile, realpath, rm, stat } from 'node:fs/promises';
 import { botIdentity, loadBots, setBotActivation, setBotBadgeNumber, removeBot, type BotIdentity } from '../config/bots';
+import { active as activeAuthoring, AuthoringJournal, authoringBotKey } from '../recipe/authoring-journal';
 import { assertRecipeRemovalSafe, RecipeRecoveryRequired } from '../recipe/store';
 import { dmPreparationError, prepareDmProjectForBot } from '../bot/dm-project';
 import { botPaths, botDir, paths } from '../config/paths';
@@ -141,6 +142,7 @@ export interface AdminService {
   pendingGroups?(botId: string): Promise<{ groups: PendingGroup[] }>;
   joinedGroups?(botId: string, cursor?: string): Promise<JoinedGroups>;
   groupMembers?(botId: string, chatId: string, cursor?: string): Promise<GroupMembers>;
+  recipeAuthoring?: (botId: string, op: import('../recipe/authoring-service').AuthoringIpc) => Promise<unknown>;
   assertGroupMembership?(botId: string, chatId: string, identity: BotIdentity): Promise<void>;
   /** dm-agent 7.3: a Feishu read, on the Bot `reach` comes to (admin/feishu-route.ts). Refusals are replies, not errors. */
   feishuRead?(reach: FeishuReach, request: Omit<FeishuReadRequest, 'only'>): Promise<FeishuReadReply>;
@@ -483,6 +485,7 @@ export interface AdminServiceDeps {
   executeSettingsRead?: (botId: string, op: AdminSettingsReadOp) => Promise<unknown>;
   codexTools?: CodexSetupService;
   executeCollaboration?: (botId: string, request: CollaborationRequest) => Promise<unknown>;
+  recipeAuthoring?: AdminService['recipeAuthoring'];
   executeGroups?: (botId: string, op: AdminGroupOp) => Promise<unknown>;
   executeWrite?: (botId: string, op: AdminWriteOp) => Promise<unknown>;
   /** Asks a running bot process to follow a project's new workspace (admin/library.ts `AdminLibraryOp`). */
@@ -740,6 +743,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       if (!deps.executeGroups) throw new NotWiredYetError('群成员');
       return parseGroupMembers(await deps.executeGroups(botId, { kind: 'groupMembers', chatId, cursor }));
     },
+    recipeAuthoring: deps.recipeAuthoring,
     async assertGroupMembership(botId, chatId, identity) {
       if (!deps.executeGroups) throw new NotWiredYetError('群成员身份');
       parseGroupMembership(await deps.executeGroups(botId, {kind: 'groupMembership', chatId, identity}));
@@ -1239,6 +1243,10 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         result = await removeBot(expected, {
           isRunning: async () => (await runState(appId)).running,
           cleanup: async () => {
+            const key = authoringBotKey(expected);
+            const pending = await new AuthoringJournal(paths.appDir, Date.now).run(ledger =>
+              Object.values(ledger.operations).some(op => op.bot === key && activeAuthoring(op)));
+            if (pending) throw new RecipeRecoveryRequired('这个 Bot 还有待恢复的配方草稿操作。请启用它，用原账号恢复或取消后再移除。');
             await assertRecipeRemovalSafe({file: botPaths(appId).projectsFile, dataRoot: paths.appDir});
             await removeSecret(secretKeyForApp(appId));
             await rm(botDir(appId), { recursive: true, force: true });
