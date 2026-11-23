@@ -87,6 +87,7 @@ export async function checkMemoryPolicy({connectAdmin,req,upload,read,start,appl
   assert.deepEqual(await keptAccept(),keptReceipt);
   assert.deepEqual(await publish(),historicalPublication);
   assert.deepEqual(await committedMetadata.patch(200),{status:'committed',receipt:metadataReceipt});
+  assert.deepEqual(await call('rich_save_metadata($1,$2,$3,$4,$5,$6,$7,$8,$9)',committedMetadata.args),metadataReceipt);
   const badProof=[...keptAccept.sqlArgs];badProof[3]=Buffer.alloc(32);
   await assert.rejects(call('rich_accept($1,$2,$3,$4,$5,$6,$7,$8)',badProof),/invalid_operation_proof/);
   await req('/v2/drafts/'+publishedReceipt.draftId+'/publish',token,{canonical:keptPlan.canonical},{key:publishKey,rev:1,status:409});
@@ -126,6 +127,34 @@ export async function checkMemoryPolicy({connectAdmin,req,upload,read,start,appl
   await req('/v2/objects/'+dirtyRows.id+'/cancel',token,{});
   await collector.collect(accountId,dirtyRows.id);
 
+  const cleanMetadata=await metadata(base,2,{},clean.content),client=connectAdmin();
+  assert.equal(cleanMetadata.content.memories.length,0);
+  assert.ok(JSON.parse(cleanMetadata.args[7]).every(item=>item.kind!=='memory'));
+  await client.connect();
+  try{
+    const stored=async()=>{
+      const {rows:[row]}=await client.query('select d.revision,r.items from recipe_private.drafts d join recipe_private.rich_drafts r on r.id=d.id where d.id=$1',[draftId]);
+      return row;
+    };
+    const before=await stored();
+    assert.equal(before.revision,2);assert.equal(before.items.filter(item=>item.kind==='memory').length,64);
+    await client.query('begin');await client.query('set local role recipe_api');
+    await client.query("select set_config('app.recipe_account',$1,true)",[accountId]);
+    try{
+      let error,result;
+      try{
+        const {rows:[row]}=await client.query('select recipe_api.rich_save_metadata($1,$2,$3,$4,$5,$6,$7,$8,$9) as result',cleanMetadata.args);
+        result=row.result;
+      }catch(cause){error=cause;}
+      assert.match(error?.message??JSON.stringify(result),/^invalid_input$/,'metadata must reject unreviewed removal from the locked draft');
+    }finally{
+      await client.query('rollback');assert.deepEqual(await stored(),before,'metadata probe must leave the complete original revision and items unchanged');
+      console.log('PASS: direct metadata SQL probe rolled back to unchanged revision 2 and 64 original memory items.');
+    }
+  }finally{await client.end();}
+  await req('/v2/objects/'+cleanMetadata.id+'/cancel',token,{});
+  await collector.collect(accountId,cleanMetadata.id);
+
   const edit=await start(token,{purpose:'editDraft',draftId,baseRevision:2});
   await req(edit.path+'/freeze',token,copyInput,{status:422});
   const include=patch([{op:'includeCandidate',value:{kind:'memory',source:{sourceIntentId:kept.op,candidateId:base.memories[0].itemId,expectedRevision:1}}},{op:'removeLegacyMemories'}]);
@@ -139,6 +168,7 @@ export async function checkMemoryPolicy({connectAdmin,req,upload,read,start,appl
   const detail=await req('/v2/recipes/'+publication.recipeId+'/versions/'+publication.versionId,token);
   assert.equal(detail.release.contentSha256,next.contentSha256);
   assert.deepEqual(await committedMetadata.patch(200),{status:'committed',receipt:metadataReceipt});
+  assert.deepEqual(await call('rich_save_metadata($1,$2,$3,$4,$5,$6,$7,$8,$9)',committedMetadata.args),metadataReceipt);
   assert.deepEqual(await keptAccept(),keptReceipt);
   assert.deepEqual(await read(token,'versions',historicalPublication.versionId,storedBytes.manifest.objectId),historicalBytes);
   console.log('PASS: no-memory new plan/accept/publish/metadata SQL and HTTP boundaries; authenticated pre-policy receipt replays; 64-memory cleanup and stale revision; historical release unchanged.');

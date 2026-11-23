@@ -226,6 +226,7 @@ begin
 
   content:=convert_from(canonical,'UTF8')::jsonb;
   if content->'memories' is distinct from '[]'::jsonb
+    or exists(select from jsonb_array_elements(rd.items) x where x->>'kind'='memory')
     or exists(select from jsonb_array_elements(items) x where x->>'kind'='memory') then raise exception 'invalid_input'; end if;
   if (content->>'format'='rich-v2' and content->'schemaVersion'='2'::jsonb
     and access_ in ('direct','coded') and jsonb_array_length(items) between 4 and 320) is not true then
