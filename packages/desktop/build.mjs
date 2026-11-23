@@ -54,7 +54,12 @@ await build({
   target: 'node22',
   format: 'cjs',
   external: ['electron'],
-  define: { 'process.env.NODE_ENV': '"production"', __VONVON_WINDOWS_CLI_SHA256__: JSON.stringify(windowsCliSha256) ?? 'undefined' },
+  define: {
+    __VONVON_ACCOUNT_WEB_ORIGIN__: JSON.stringify(process.env.VONVON_ACCOUNT_WEB_ORIGIN) ?? 'undefined',
+    __VONVON_ACCOUNT_API_ORIGIN__: JSON.stringify(process.env.VONVON_ACCOUNT_API_ORIGIN) ?? 'undefined',
+    'process.env.NODE_ENV': '"production"',
+    __VONVON_WINDOWS_CLI_SHA256__: JSON.stringify(windowsCliSha256) ?? 'undefined',
+  },
 });
 await writeFile(join(dist, 'update-config.json'), JSON.stringify(updateConfig) + '\n');
 await writeFile(join(dist, 'windows-update-config.json'), JSON.stringify(windowsUpdateConfig) + '\n');

@@ -1,6 +1,6 @@
 import type { VonvonClient } from '@vonvon/client/browser';
 import {
-  adminReplySchema, backendInstallEventPayloadSchema, collaborationReplySchema,
+  accountStatusSchema, type AccountStatus, adminReplySchema, backendInstallEventPayloadSchema, collaborationReplySchema,
   commandResultSchema, desktopSnapshotSchema, directoryReplySchema, memoryReplySchema, contextPreviewReplySchema,
   environmentReplySchema, libraryReplySchema, logEventPayloadSchema, machineReplySchema, desktopUpdateSchema, deviceReplySchema,
   scheduleReplySchema, settingsReplySchema, viewIdSchema, devicesStateSchema, deviceEventPayloadSchema, linkPreviewSchema,
@@ -67,6 +67,8 @@ function readValue(raw: object): unknown {
 export function createDesktopFacades(transport: FacadeTransport): { client: VonvonClient; shell: DesktopShell } {
   const quitListeners = new Set<() => void>();
   const updateListeners = new Set<(value: DesktopUpdate) => void>();
+  const accountListeners = new Set<(value: AccountStatus) => void>();
+  let latestAccount: AccountStatus | undefined;
   const stateListeners = new Set<(value: DevicesState) => void>();
   const localDeviceListeners = new Set<(value: DeviceEventPayload) => void>();
   const remoteUpdateListeners = new Set<(text: string | undefined) => void>();
@@ -116,6 +118,10 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
         }
         case 'localDevice':
           deliverShell(localDeviceListeners, deviceEventPayloadSchema.parse(readValue(raw)));
+          return;
+        case 'account':
+          latestAccount = accountStatusSchema.parse(readValue(raw));
+          deliverShell(accountListeners, latestAccount);
           return;
         case 'devices':
           latestDevices = devicesStateSchema.parse(readValue(raw));
@@ -372,6 +378,19 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
       return () => { quitListeners.delete(listener); };
     },
     devices,
+    account: {
+      status: () => callShellFor(desktopChannels.accountStatus, value => accountStatusSchema.parse(value)),
+      login: () => callShellFor(desktopChannels.accountLogin, value => accountStatusSchema.parse(value)),
+      cancelLogin: () => callShellFor(desktopChannels.accountCancel, value => accountStatusSchema.parse(value)),
+      logout: () => callShellFor(desktopChannels.accountLogout, value => accountStatusSchema.parse(value)),
+      onStatus(listener) {
+        accountListeners.add(listener);
+        if (latestAccount) {
+          try { listener(latestAccount); } catch (error) { shellFailure(error); }
+        }
+        return () => { accountListeners.delete(listener); };
+      },
+    },
     onRemoteUpdate(listener) {
       remoteUpdateListeners.add(listener);
       if (latestRemoteUpdate) {

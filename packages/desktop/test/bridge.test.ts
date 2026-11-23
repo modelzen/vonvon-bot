@@ -159,7 +159,12 @@ function harness() {
     hide: vi.fn(), confirmQuit: vi.fn(async () => {}), connectionLost: vi.fn(), quitKeepsDaemon: vi.fn(async () => true),
   };
   const devs = fakeDevices();
-  const bridge = installBridge(owner, window, paths, actions, devs.devices);
+  const account = {
+    status: () => ({ kind: 'signedOut' as const }), login: vi.fn(async () => ({ kind: 'signingIn' as const })),
+    cancelLogin: vi.fn(async () => ({ kind: 'signedOut' as const })), logout: vi.fn(async () => ({ kind: 'signedOut' as const })),
+    onStatus: vi.fn(() => () => {}), request: vi.fn(), dispose: vi.fn(),
+  };
+  const bridge = installBridge(owner, window, paths, actions, devs.devices, account);
   /** As the page sends it: a channel to a daemon gets the view last, 'current' unless said. */
   const invokeAs = (view: string, channel: string, ...args: unknown[]) => {
     const handler = handlers.get(channel);
@@ -167,9 +172,9 @@ function harness() {
     return handler(event, ...args, ...(clientChannels.has(channel) ? [view] : []));
   };
   const invoke = (channel: string, ...args: unknown[]) => invokeAs('current', channel, ...args);
-  return { bridge, event, frame, webContents, window, paths, invoke, invokeAs, snapshot, machine, run, schedule, device, dispose, actions, owner, devs,
+  return { bridge, account, event, frame, webContents, window, paths, invoke, invokeAs, snapshot, machine, run, schedule, device, dispose, actions, owner, devs,
     /** What the page was sent, leaving out the device list it gets on every subscribe and change. */
-    events: (): DesktopEvent[] => webContents.send.mock.calls.map(call => call[1] as DesktopEvent).filter(value => value.type !== 'devices'),
+    events: (): DesktopEvent[] => webContents.send.mock.calls.map(call => call[1] as DesktopEvent).filter(value => value.type !== 'devices' && value.type !== 'account'),
     emitSnapshot: (value: unknown) => onSnapshot(value),
     emitDevice: (value: unknown) => { for (const listener of [...deviceListeners]) listener(value); },
     emitError: (error: Error) => { for (const listener of [...errorListeners]) listener(error); } };
@@ -178,6 +183,19 @@ function harness() {
 beforeEach(() => { handlers.clear(); openExternal.mockClear(); failRegistration.channel = ''; });
 
 describe('desktop IPC boundary', () => {
+  it('uses the local account on a remote view and rejects payloads or untrusted senders', async () => {
+    const h = harness();
+    await h.invoke(desktopChannels.subscribe);
+    expect(h.webContents.send).toHaveBeenCalledWith(desktopChannels.event, { type: 'account', value: { kind: 'signedOut' } });
+    await h.devs.show(remoteView(REMOTE_A, remoteClient()));
+    expect(await h.invoke(desktopChannels.accountLogin)).toEqual({ ok: true, value: { kind: 'signingIn' } });
+    expect(await h.invoke(desktopChannels.accountLogin, 'https://untrusted.example')).toMatchObject({ ok: false });
+    h.frame.url = 'https://untrusted.example';
+    expect(await h.invoke(desktopChannels.accountLogout)).toMatchObject({ ok: false });
+    expect(h.account.login).toHaveBeenCalledTimes(1);
+    expect(h.account.logout).not.toHaveBeenCalled();
+    await h.bridge.dispose();
+  });
   it('forwards a device request and refuses one of no known shape', async () => {
     const h = harness();
     expect([await h.invoke(desktopChannels.device, { type: 'clients' }), await h.invoke(desktopChannels.device, { type: 'revokeClient' })]).toMatchObject([{ ok: true, value: { kind: 'clients' } }, { ok: false }]);

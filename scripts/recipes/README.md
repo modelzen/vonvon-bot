@@ -12,6 +12,8 @@ node scripts/recipes/check.mjs
 
 多版本 PostgreSQL 可用 `PG_BINDIR` 指定二进制目录，例如 Homebrew 的 `$(brew --prefix postgresql@15)/bin`。测试使用本片全部 migrations、非管理数据库登录和临时 JWKS 发行方，通过 HTTP 创建及发布需码配方，以另一个账号兑换，验证旧版不被新版解锁、失败的旧发布确认不产生版本。独立数据库覆盖权限和事务，真实 Supabase、第三方登录、飞书和设备仍需在 staging 验收。
 
+账号测试在账号迁移前写入旧作者和领取权益，再升级并验证归属不变。新账号覆盖并发首次登录、业务 ID 与 Auth subject 分离、错误 issuer 启动失败及原始表权限隔离。停止和停用状态逐一覆盖私人读取与所有写操作。领取回执覆盖已有权益的无操作重试和同键异参；签发测试填满 500 枚日额后验证重放不重复占额。
+
 本机社区试用入口会创建一套新的临时数据库，读取 [Vonvon 帮助配方](../../content/recipes/vonvon-help/recipe.json)，以作者身份通过草稿和发布 API 创建第一个公开版本。首页起初只有这份配方。普通数据库验收使用的晨报、分享码和领取记录留在各自的临时测试库。
 
 ```sh
