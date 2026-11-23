@@ -649,8 +649,8 @@ it('offers the group identity retry while a rich review is blocked by an unreada
   useReply=()=>({kind:'richReview',handle,groupId,reviewToken:token,conflicts:[]});
   await draw();await inGroup(groupId,'检查新版');await inGroup(groupId,'预览更新');
   expect(document.querySelector('[role="dialog"]')!.textContent).toContain('暂时无法读取飞书群名');
-  const confirm=Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find(button=>button.textContent==='确认这些选择并预览应用')!;
-  expect(confirm.disabled).toBe(true);
+  expect(requests.some(request=>request.type==='richResolve')).toBe(false);
   readIdentity=request=>({kind:'groupIdentity',agentId:request.agentId,groupId:request.groupId,name:'重新核对群名'});
-  await click('刷新群名');expect(confirm.disabled).toBe(false);
+  await click('重新读取群名');
+  expect(requests.filter(request=>request.type==='richResolve')).toHaveLength(1);
 });

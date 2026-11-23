@@ -1,6 +1,5 @@
 .recipe-use-name,.recipe-use-target,.recipe-source-version { overflow-wrap:anywhere; word-break:break-word; }
 .recipe-use-target { font-size:13px; line-height:1.8; }
-.recipe-use-stages { margin:0 0 24px; padding-left:24px; color:var(--color-text-secondary); font-size:13px; line-height:1.8; }
 .recipe-use-review { display:grid; gap:24px; }
 .recipe-use-review > p { margin:0; color:var(--color-text-secondary); line-height:1.6; }
 .recipe-use-review h3 { margin:0 0 12px; font-size:15px; }
@@ -26,3 +25,20 @@
 .recipe-source-setup { padding:12px 20px; font-size:13px; line-height:1.7; overflow-wrap:anywhere; }
 .recipe-source-setup summary { cursor:pointer; min-height:40px; }
 .recipe-source-setup p { white-space:pre-wrap; }
+.recipe-use-target--compact { display:grid; gap:4px; margin:0 0 24px; }
+.recipe-use-target--compact strong { font-size:16px; font-weight:600; color:var(--color-text); }
+.recipe-use-target--compact span,.recipe-use-target--compact small { color:var(--color-text-secondary); font-size:12px; }
+.recipe-use-preview { display:grid; gap:20px; }
+.recipe-use-preview h3 { margin:0; font-size:15px; }
+.recipe-use-preview .community-detail-layout { margin:0; }
+.recipe-use-preview .community-detail-heading { display:none; }
+.recipe-use-preview .community-detail-content { min-width:0; }
+.recipe-use-preview .community-detail { min-width:0; }
+.recipe-use-conflict { border:0; padding:0; margin:0; min-width:0; }
+.recipe-use-conflict legend { margin-bottom:12px; font-size:14px; font-weight:600; }
+.recipe-use-retained { display:grid; gap:12px; }
+.recipe-use-confirm.ui-button--primary { background:var(--color-text); border-color:var(--color-text); color:var(--color-surface); }
+.recipe-use-compare dd { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; }
+.recipe-use-compare dl { margin:0; font-size:13px; line-height:1.7; }
+.recipe-use-compare dt { color:var(--color-text-secondary); font-size:12px; }
+.recipe-use-compare dl > div + div { margin-top:8px; }
