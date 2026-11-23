@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {agentIdSchema,type RecipeAuthoringRequest,type RecipeAuthoringReply,type AuthoringHandoff} from '@vonvon/protocol';
 import type {z} from 'zod';
-import {AuthoringJournal,sameRecipient,type Link,type Recipient} from './authoring-journal';
+import {AuthoringJournal,sameRecipient,type AuthoringLedger,type Link,type Recipient} from './authoring-journal';
 import {AuthoringIm,candidateConfirmation} from './authoring-im';
 import {groupSourceIdentity} from './authoring-source';
 import {preparedRich,readRichSource,richSkillOptions,typedRichEdit,richCardReview,type RichNativeOptions,type RichLocalDraft} from './authoring-rich-flow';
@@ -9,6 +9,7 @@ import {candidateChanges,contentItems,emptySelection,handoffCard,selectedSource,
 import {wireDigest} from './authoring-rich-snapshot';
 
 type Begin=Extract<RecipeAuthoringRequest,{type:'beginHandoff'|'beginDraftHandoff'}>;
+type Restore=Extract<RecipeAuthoringRequest,{type:'restoreHandoff'}>;
 type Answer=Extract<RecipeAuthoringRequest,{type:'answerHandoff'}>;
 type Presence={session:string;account:string;scope:string};
 type Target={rich:RichLocalDraft;sourceIdentity:string;draftId?:string;baseRevision?:number;instructionId:string;
@@ -107,8 +108,55 @@ export class PrivateHandoffs {
         (edit?op.view.draftId===edit.draftId:op.view.groupId===r.groupId)))throw new Error('这份配方已有进行中的私聊，请先在原卡片完成或取消。');
       return slots[r.retryId]={account:p.account,scope:p.scope,groupId:r.groupId,groupName:r.groupName,identity,binding:link.binding,recipient:link.recipient,
         ref:randomUUID(),generation:1,sendUuid:randomUUID(),session:p.session,retryId:r.retryId,expiresAt:this.now()+30*60_000,selection:emptySelection(),phase:{state:'selecting'},
-        ...(edit&&{edit,draftId:edit.draftId}),...(r.type==='beginHandoff'&&r.sourceVersionId&&{sourceVersionId:r.sourceVersionId,inherited:structuredClone(r.inherited)})} satisfies PrivateHandoff;
+        ...(edit&&{edit,draftId:edit.draftId,baseRevision:edit.baseRevision}),...(r.type==='beginHandoff'&&r.sourceVersionId&&{sourceVersionId:r.sourceVersionId,inherited:structuredClone(r.inherited)})} satisfies PrivateHandoff;
     });
+    h=await this.transaction(p,link,h.retryId,row=>{if(row.ref!==h.ref)throw changed();return row;});
+    return this.resumeExisting(p,link,h);
+  }
+  async restore(p:Presence,link:Link,r:Restore):Promise<Extract<RecipeAuthoringReply,{kind:'handoff'|'handoffUnavailable'}>>{
+    const read=(db:AuthoringLedger)=>{
+      this.live(p);
+      const row=db.handoffs?.[r.retryId];
+      if(!row)return;
+      const expected=r.expected;
+      if(!bound(row,p,link)||row.groupId!==expected.groupId||row.draftId!==(expected.kind==='draft'?expected.draftId:undefined))throw changed();
+      const op=row.phase.state==='prepared'?db.operations[row.phase.operationId]:undefined;
+      if(expected.kind==='source'){
+        if(row.sourceVersionId!==expected.sourceVersionId||wireDigest(row.inherited??null)!==wireDigest(expected.inherited??null))throw changed();
+      }else{
+        const revision=row.baseRevision??row.edit?.baseRevision??op?.view.baseRevision;
+        if(revision===undefined)return {row,available:false};
+        if(revision!==expected.baseRevision)throw changed();
+      }
+      if(row.phase.state==='prepared'){
+        if(!op)return {row,available:false};
+        if(op.accountId!==p.account||op.scope!==p.scope||op.bot!==link.bot||op.binding!==link.binding||!sameRecipient(op.recipient,link.recipient)||
+          op.revoked||op.view.format!=='rich-v2'||op.instructionId!==row.retryId||
+          op.originalGroup?.groupId!==row.groupId||op.originalGroup.identity!==row.identity||
+          op.view.purpose!==(expected.kind==='draft'?'editDraft':'prepareDraft')||
+          (expected.kind==='draft'?(op.view.draftId!==expected.draftId||op.view.baseRevision!==expected.baseRevision):op.view.groupId!==row.groupId))throw changed();
+      }
+      return {row,available:true};
+    };
+    const found=await this.ledger.run(read);
+    const unavailable={kind:'handoffUnavailable',retryId:r.retryId,reason:'notFound'} as const;
+    if(!found)return unavailable;
+    try{
+      await this.identity(p,found.row);
+      if(!found.available)return unavailable;
+      const current=await this.ledger.run(db=>{
+        const retained=read(db);
+        if(retained&&(retained.row.ref!==found.row.ref||!Object.values(db.links).some(l=>l.binding===link.binding&&sameRecipient(l.recipient,link.recipient))))throw changed();
+        return retained;
+      });
+      if(!current?.available)return unavailable;
+      return {kind:'handoff',handoff:await this.resumeExisting(p,link,current.row)};
+    }catch(error){
+      if(!await this.ledger.run(db=>Boolean(db.handoffs?.[r.retryId])))return unavailable;
+      throw error;
+    }
+  }
+  private async resumeExisting(p:Presence,link:Link,h:PrivateHandoff){
     if(!active(h))return publicView(h);
     if(h.session!==p.session){
       if(!h.messageId&&h.sentAt!==undefined){h=await this.send(p,link,h);if(!h.messageId)return publicView(h);}

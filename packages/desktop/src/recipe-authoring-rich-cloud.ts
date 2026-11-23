@@ -42,6 +42,12 @@ export function richAuthoringCloud(account:AccountTransport,accountId:string,sig
   }
   const route=(operation:string)=>'/v2/authoring/'+uuid.parse(operation);
   const pkg=(packageId:string)=>'/v2/objects/'+uuid.parse(packageId);
+  async function draftMetadata(draftId:string){
+    const meta=z.object({format:z.literal('rich-v2'),draftId:uuid,revision:z.number().int(),sourceIntentId:uuid,manifest:recipeRichManifestObjectSchema,
+      sourceManifest:recipeRichManifestObjectSchema}).parse(await json('/v2/drafts/'+uuid.parse(draftId)));
+    if(meta.draftId!==draftId)throw fail();
+    return meta;
+  }
   return {
     async register(op:AuthoringOperation){
       const r=z.object({format:z.literal('rich-v2'),destinationDraftId:uuid,operationId:uuid,accountId:uuid,
@@ -52,10 +58,13 @@ export function richAuthoringCloud(account:AccountTransport,accountId:string,sig
           r.nonceCommitment!==op.nonceCommitment||op.purpose==='editDraft'&&op.draftId!==r.destinationDraftId)throw fail();
       return r.destinationDraftId;
     },
+    async draftSourceLocator(draftId:string){
+      const meta=await draftMetadata(draftId);
+      return {draftId:meta.draftId,sourceIntentId:meta.sourceIntentId};
+    },
     async draftMetadata(draftId:string,revision:number){
-      const meta=z.object({format:z.literal('rich-v2'),draftId:uuid,revision:z.number().int(),sourceIntentId:uuid,manifest:recipeRichManifestObjectSchema,
-        sourceManifest:recipeRichManifestObjectSchema}).parse(await json('/v2/drafts/'+uuid.parse(draftId)));
-      if(meta.draftId!==draftId||meta.revision!==revision)throw fail();
+      const meta=await draftMetadata(draftId);
+      if(meta.revision!==revision)throw fail();
       return meta;
     },
     async draft(draftId:string,revision:number){

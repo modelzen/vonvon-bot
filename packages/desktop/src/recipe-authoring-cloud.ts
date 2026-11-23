@@ -10,8 +10,10 @@ import {
   type AuthoringReconciliation,
 } from '@vonvon/protocol';
 import type { NativeAccount } from './account-session.js';
+import { AccountFault } from './account-auth.js';
 
 export class AuthoringError extends Error {}
+export class AuthoringServiceUnavailable extends AuthoringError {}
 class OperationExpired extends AuthoringError {}
 const unredeemable = z.object({operationId:z.string().uuid(), accountId:z.string().uuid(), unredeemable:z.literal(true)}).strict();
 export const invalidAuthoring = () => new AuthoringError('配方操作与原记录不一致，请重新核对。');
@@ -104,6 +106,11 @@ export function authoringCloud(account: NativeAccount, accountId: string, signal
       check,
     );
     check();
+    if (response.status === 408 || response.status === 429 || response.status >= 500) {
+      void response.body?.cancel().catch(() => {});
+      throw new AuthoringServiceUnavailable(response.status === 429
+        ? '配方操作已达限额，请稍后重试。' : '账号服务未确认本次操作，请稍后恢复。');
+    }
     const reader = response.body?.getReader();
     if (!reader) throw invalidAuthoring();
     const chunks: Uint8Array[] = [];
@@ -129,7 +136,6 @@ export function authoringCloud(account: NativeAccount, accountId: string, signal
     if (response.status === 410 && code.success && code.data.error.code === 'operation_expired')
       throw new OperationExpired('这次操作已到期，请查看原操作。');
     if (response.status === 410) throw new AuthoringError('这次操作已到期，请查看原操作。');
-    if (response.status === 429) throw new AuthoringError('配方操作已达限额，请稍后重试。');
     if (response.status === 404 || response.status === 403) throw new AuthoringError('当前账号找不到这份草稿或操作。');
     throw new AuthoringError('账号服务未确认本次操作，请稍后恢复。');
   }
@@ -151,10 +157,21 @@ export function authoringCloud(account: NativeAccount, accountId: string, signal
   }
   return {
     async presence() {
+      let raw: unknown;
+      try {
+        raw = await read('/v1/me');
+      } catch (error) {
+        check();
+        if (error instanceof TypeError ||
+          error instanceof DOMException && (error.name === 'TimeoutError' || error.name === 'AbortError') ||
+          error instanceof AccountFault && error.reason === 'offline')
+          throw new AuthoringServiceUnavailable('账号服务未确认本次操作，请稍后恢复。');
+        throw error;
+      }
       const actor = z
         .object({ accountId: uuid })
         .strict()
-        .parse(await read('/v1/me'));
+        .parse(raw);
       if (actor.accountId !== accountId) throw invalidAuthoring();
     },
     async sourceHistory(ids: string[]) {

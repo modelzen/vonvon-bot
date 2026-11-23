@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { agentIdSchema, groupIdSchema } from './domain.js';
 import { viewIdSchema } from './desktop-devices.js';
 import { recipePublicSchema, recipeConfigSchema } from './desktop-community.js';
-import { authoringChangeSchema, authoringOperationSchema, authoringHandoffSchema } from './recipe-authoring.js';
+import { authoringChangeSchema, authoringOperationSchema, authoringHandoffSchema, handoffUnavailableSchema } from './recipe-authoring.js';
 import { recipeSetupSchema } from './recipe-setup.js';
 
 const uuid = z.string().uuid();
@@ -14,6 +14,10 @@ const handle = { handle: uuid };
 const operation = { ...handle, operationId: uuid };
 const link = { ...handle, challengeId: uuid };
 export const desktopAuthoringRequestSchema = z.discriminatedUnion('type', [
+  z.object({type:z.literal('restoreHandoff'),accountId:uuid,viewId:viewIdSchema,retryId:uuid,handle:uuid.optional(),target:z.discriminatedUnion('kind',[
+    z.object({kind:z.literal('source'),botId:agentIdSchema,groupId:groupIdSchema,parent:z.object({recipeId:uuid,versionId:uuid}).strict().optional()}).strict(),
+    z.object({kind:z.literal('draft'),draftId:uuid,baseRevision:revision}).strict(),
+  ])}).strict(),
   z.object({type:z.literal('openDraftSource'),accountId:uuid,viewId:viewIdSchema,draftId:uuid,baseRevision:revision}).strict(),
   z.object({type:z.literal('beginHandoff'),...handle,retryId:uuid,groupId:groupIdSchema,source:z.object({recipeId:uuid,versionId:uuid}).strict().optional()}).strict(),
   z.object({type:z.literal('beginDraftHandoff'),...handle,retryId:uuid,draftId:uuid,baseRevision:revision}).strict(),
@@ -85,12 +89,7 @@ export const sourceHistoryEntrySchema = z.discriminatedUnion('state', [
   z.object({state: z.literal('unknown'), operationId: uuid, draftId: z.null(), recipeId: z.null(), versionId: z.null()}).strict(),
 ]);
 export type SourceHistoryEntry = z.infer<typeof sourceHistoryEntrySchema>;
-export const desktopAuthoringReplySchema = z.discriminatedUnion('kind', [
-  z.object({kind:z.literal('handoff'),handoff:authoringHandoffSchema}).strict(),
-  z.object({kind:z.literal('richCandidate'),operation:desktopAuthoringOperationSchema,reviewDigest:digest,request:richFreezeInputSchema}).strict(),
-  richSourceOptionsSchema,
-  z.object({kind:z.literal('richInventory'),groupId:groupIdSchema,inventory:richLocalInventorySchema}).strict(),
-  z
+const desktopAuthoringSessionSchema = z
     .object({
       kind: z.literal('session'),
       ...handle,
@@ -99,7 +98,16 @@ export const desktopAuthoringReplySchema = z.discriminatedUnion('kind', [
       sourceGroup:z.object(group).strict().optional(),
       operations: z.array(desktopAuthoringOperationSchema).max(540),
     })
-    .strict(),
+    .strict();
+export const desktopAuthoringReplySchema = z.discriminatedUnion('kind', [
+  handoffUnavailableSchema,
+  z.object({kind:z.literal('handoffRestored'),session:desktopAuthoringSessionSchema,handoff:authoringHandoffSchema}).strict(),
+  z.object({kind:z.literal('handoffLinkRequired'),session:desktopAuthoringSessionSchema}).strict(),
+  z.object({kind:z.literal('handoff'),handoff:authoringHandoffSchema}).strict(),
+  z.object({kind:z.literal('richCandidate'),operation:desktopAuthoringOperationSchema,reviewDigest:digest,request:richFreezeInputSchema}).strict(),
+  richSourceOptionsSchema,
+  z.object({kind:z.literal('richInventory'),groupId:groupIdSchema,inventory:richLocalInventorySchema}).strict(),
+  desktopAuthoringSessionSchema,
   z.object({kind: z.literal('sourceHistory'), entries: z.array(sourceHistoryEntrySchema).max(32), nextCursor: uuid.nullable()}).strict(),
   z.object({ kind: z.literal('closed') }).strict(),
   z

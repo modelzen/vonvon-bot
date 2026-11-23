@@ -38,6 +38,7 @@ let bodies: {path:string;body:string}[], cloud: {action:string;body:Record<strin
 let messages: Map<string,{message_id:string;chat_id:string;card_id:string}>, cards: Map<string,string>;
 const textSend = vi.fn(async (..._args: unknown[])=>({messageId:'om_fixed'}));
 let loseSend = false, loseAccept = false, loseDispatch = false;
+let onMembership:(()=>void)|undefined;
 let updateFault: 'drop' | 'loseReply' | 'conflict' | 'expired' | undefined;
 const updateKeys = new Set<string>();
 const puts = () => bodies.filter(b => /cardkit\/v1\/cards\/card_/.test(b.path));
@@ -72,7 +73,7 @@ beforeEach(async () => {
   cardActions.mockClear();
   proposeRich.mockReset();
   propose.mockReset().mockRejectedValue(new Error('offline')); readDraftField.mockReset();
-  updateFault=undefined;updateKeys.clear();
+  updateFault=undefined;updateKeys.clear();onMembership=undefined;
   n = 0;clock=Date.now();bodies=[];cloud=[];messages=new Map();cards=new Map();results.clear();loseSend=loseAccept=loseDispatch=false;
   await rm(join(root,'recipe-authoring'),{recursive:true,force:true});
   await rm(botPaths(appId).dir,{recursive:true,force:true});
@@ -86,7 +87,7 @@ beforeEach(async () => {
     bodies.push({path,body:text});
     let value: unknown = {code:0,data:{}};
     if (path.includes('tenant_access_token')) value = {code:0,tenant_access_token:'synthetic-token',expire:7200};
-    else if (path.includes('is_in_chat')) value = {code:0,data:{is_in_chat:true}};
+    else if (path.includes('is_in_chat')) {onMembership?.();value = {code:0,data:{is_in_chat:true}};}
     else if (path === '/open-apis/cardkit/v1/cards' && req.method === 'POST') {
       const id = 'card_'+ ++n; cards.set(id,data.data); value = {code:0,data:{card_id:id}};
     } else if (path === '/open-apis/cardkit/v1/cards/id_convert') {
@@ -1373,4 +1374,198 @@ it.each([[false,false],[true,false],[true,true]])('selected role omission inheri
   if(!('content'in resumed.request))throw Error('missing content');
   expect(resumed.request.content.public.version.value).toBe('3.0');expect(resumed.request.content.role).toBeUndefined();
   await act(ref());expect((await status(op.operationId)).state).toBe('pendingCloud');
+});
+
+
+it('restores a collected handoff as unavailable without allocating or sending a replacement',async()=>{
+  await link();const arg=beginInput();await rpc('beginHandoff',arg);
+  expect(messages.size).toBe(1);expect(cards.size).toBe(1);
+  clock+=8*86400000;await open();
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  expect(await ledger.run(db=>db.handoffs?.[arg.retryId])).toBeUndefined();
+  const before=bodies.length;
+  for(let i=0;i<2;i++)expect(await rpc('restoreHandoff',{retryId:arg.retryId,expected:{kind:'source',groupId}}))
+    .toEqual({kind:'handoffUnavailable',retryId:arg.retryId,reason:'notFound'});
+  expect(await ledger.run(db=>Object.keys(db.handoffs??{}))).toEqual([]);
+  expect(await ledger.run(db=>Object.keys(db.operations))).toEqual([]);
+  expect(bodies.slice(before).some(b=>b.path==='/open-apis/cardkit/v1/cards'||b.path.startsWith('/open-apis/im/v1/messages?'))).toBe(false);
+  expect(messages.size).toBe(1);expect(cards.size).toBe(1);
+});
+
+
+it('does not allocate when maintenance removes a handoff between restore lookup and continuation',async()=>{
+  await link();const arg=beginInput();await rpc('beginHandoff',arg);
+  const sent=bodies.length;
+  onMembership=()=>{onMembership=undefined;clock+=8*86400000;};
+  expect(await rpc('restoreHandoff',{retryId:arg.retryId,expected:{kind:'source',groupId}}))
+    .toEqual({kind:'handoffUnavailable',retryId:arg.retryId,reason:'notFound'});
+  expect(bodies.slice(sent).some(b=>b.path==='/open-apis/cardkit/v1/cards'||b.path.startsWith('/open-apis/im/v1/messages?'))).toBe(false);
+  expect(cards.size).toBe(1);expect(messages.size).toBe(1);
+});
+
+it('restores an uncertain logical send and selected items without accepting callbacks from the old session',async()=>{
+  await link();const arg=beginInput();loseSend=true;
+  expect(kind(await rpc('beginHandoff',arg),'handoff').handoff.state).toBe('deliveryUnknown');
+  const stale=privateChoice('确认所选来源');
+  await orch.shutdown();restart();await open();orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});loseSend=false;
+  const restored=await rpc('restoreHandoff',{retryId:arg.retryId,expected:{kind:'source',groupId}});
+  expect(restored).toMatchObject({kind:'handoff',handoff:{retryId:arg.retryId,state:'selecting'}});
+  const sends=bodies.filter(b=>b.path.startsWith('/open-apis/im/v1/messages?')).map(b=>JSON.parse(b.body).uuid);
+  expect(new Set(sends).size).toBe(1);expect(cards.size).toBe(1);expect(messages.size).toBe(1);
+  await tap(stale);expect(kind(await rpc('workflow'),'workflow').handoff).toBeUndefined();
+  await tap(privateChoice('☐ 群角色'));
+  await orch.shutdown();restart();await open();orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});await rpc('restoreHandoff',{retryId:arg.retryId,expected:{kind:'source',groupId}});
+  expect(privateChoice('☑ 群角色')).toBeTruthy();
+  await tap(privateChoice('确认所选来源'));
+  const request=kind(await rpc('workflow'),'workflow').handoff!;
+  const prepared=kind(await rpc('answerHandoff',{request,attestations:[]}),'handoff').handoff;
+  restart();await open();
+  expect(await rpc('restoreHandoff',{retryId:arg.retryId,expected:{kind:'source',groupId}})).toEqual({kind:'handoff',handoff:prepared});
+  expect(kind(await rpc('status'),'status').operations.map(op=>op.operationId)).toEqual([prepared.operationId]);
+  expect(cards.size).toBe(1);expect(messages.size).toBe(1);
+});
+
+it.each(['cancelled','expired','needsReview'] as const)('does not restart a %s preparation',async terminal=>{
+  await link();const arg=beginInput();await rpc('beginHandoff',arg);
+  if(terminal==='cancelled')await rpc('cancelHandoff',{retryId:arg.retryId});
+  else if(terminal==='expired'){clock+=31*60_000;await open();}
+  else {
+    await tap(privateChoice('确认所选来源'));
+    const request=kind(await rpc('workflow'),'workflow').handoff!;
+    await rpc('answerHandoff',{request,unavailable:true,attestations:[]});
+  }
+  const before=bodies.length;
+  for(let i=0;i<2;i++)expect(await rpc('restoreHandoff',{retryId:arg.retryId,expected:{kind:'source',groupId}}))
+    .toMatchObject({kind:'handoff',handoff:{retryId:arg.retryId,state:terminal}});
+  expect(bodies.slice(before).some(b=>b.path==='/open-apis/cardkit/v1/cards'||b.path.startsWith('/open-apis/im/v1/messages?'))).toBe(false);
+  expect(cards.size).toBe(1);expect(messages.size).toBe(1);
+});
+
+it('returns unavailable for a begin that never reached the daemon',async()=>{
+  await link();
+  const retryId=randomUUID();
+  expect(await rpc('restoreHandoff',{retryId,expected:{kind:'source',groupId}})).toEqual({kind:'handoffUnavailable',retryId,reason:'notFound'});
+  expect(cards.size).toBe(0);expect(messages.size).toBe(0);
+});
+
+it.each(['group','parent','recipient','binding','account','device','bot','groupIdentity'] as const)('refuses restoration across changed %s identity',async change=>{
+  await link();const arg=beginInput();await rpc('beginHandoff',arg);
+  const expected={kind:'source',groupId};
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  if(change==='group')expected.groupId=groupIdSchema.parse('oc_different');
+  if(change==='recipient'||change==='binding')await ledger.run(db=>{
+    const row=db.handoffs![arg.retryId]!;
+    if(change==='recipient')row.recipient.tenantKey='changed-tenant';else row.binding=randomUUID();
+  });
+  if(change==='account')session=kind(await service.request(peer,recipeAuthoringRequestSchema.parse({type:'open',botId:appId,accountId:randomUUID()})),'session').session;
+  if(change==='device')session=kind(await service.request({...peer,device:'changed-device'},recipeAuthoringRequestSchema.parse({type:'open',botId:appId,accountId:account})),'session').session;
+  if(change==='bot')await writeFile(join(root,'bots.json'),JSON.stringify({version:1,bots:[{name:'replacement',...bot,registrationId:randomUUID()}]}));
+  if(change==='groupIdentity'){
+    await removeProject('PRIVATE-GROUP-SENTINEL');
+    await addProject({chatId:groupId,name:'PRIVATE-GROUP-SENTINEL',createdAt:clock,cwd:root,blank:false});
+  }
+  const before=bodies.length;
+  await expect(rpc('restoreHandoff',{retryId:arg.retryId,expected:{...expected,...(change==='parent'&&{sourceVersionId:randomUUID()})}})).rejects.toThrow();
+  expect(bodies.slice(before).some(b=>b.path==='/open-apis/cardkit/v1/cards'||b.path.startsWith('/open-apis/im/v1/messages?'))).toBe(false);
+  expect(cards.size).toBe(1);expect(messages.size).toBe(1);
+});
+
+
+it.each(['original','draft','baseRevision','purpose','instruction','originalGroup'] as const)('checks the exact prepared edit operation on restore (%s)',async change=>{
+  await link();
+  const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
+  const field=(value:string)=>({itemId:randomUUID(),originId:randomUUID(),value});
+  const draftId=randomUUID(),sourceIntentId=randomUUID();
+  const canonical=Buffer.from(canonicalizeRichRecipeContent({format:'rich-v2',schemaVersion:2,
+    public:{name:field('周报'),summary:field(''),overview:field(''),version:field('1')},
+    settings:[],files:[],skills:[],tasks:[],memories:[],rules:[],setup:[],parts:[]}).canonicalUTF8).toString('base64url');
+  const identity=kind(await rpc('groupSourceIdentity',{groupId}),'groupSourceIdentity').identity;
+  const arg={...beginInput(),draftId,baseRevision:4,identity,canonical,source:{sourceIntentId,canonical}};
+  await rpc('beginDraftHandoff',arg);await tap(privateChoice('☐ 名称'));await tap(privateChoice('确认本次修改范围'));
+  const handoff=kind(await rpc('handoffStatus',{retryId:arg.retryId}),'handoff').handoff;
+  const id=handoff.operationId!;
+  if(change==='original')await rpc('settle',{operationId:id,receipt:{operationId:id,status:'accepted',stateRevision:3,draftId,revision:5}});
+  else {
+    const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+    await new AuthoringJournal(root,()=>clock).run(db=>{
+      const op=db.operations[id]!;
+      if(change==='draft')op.view.draftId=randomUUID();
+      if(change==='baseRevision')op.view.baseRevision=5;
+      if(change==='purpose')op.view.purpose='prepareDraft';
+      if(change==='instruction')op.instructionId=randomUUID();
+      if(change==='originalGroup')op.originalGroup={groupId,identity:'0'.repeat(64)};
+    });
+  }
+  restart();await open();
+  const restore=()=>rpc('restoreHandoff',{retryId:arg.retryId,expected:{kind:'draft',groupId,draftId,baseRevision:4}});
+  if(change==='original'){
+    expect(await restore()).toEqual({kind:'handoff',handoff});
+    expect((await status(id)).receipt).toMatchObject({operationId:id,status:'accepted',draftId,revision:5});
+    await expect(rpc('restoreHandoff',{retryId:arg.retryId,expected:{kind:'draft',groupId,draftId,baseRevision:5}})).rejects.toThrow();
+  }else await expect(restore()).rejects.toThrow();
+  expect(cards.size).toBe(1);expect(messages.size).toBe(1);
+});
+
+
+async function editHandoff(){
+  const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
+  const field=(value:string)=>({itemId:randomUUID(),originId:randomUUID(),value});
+  const canonical=Buffer.from(canonicalizeRichRecipeContent({format:'rich-v2',schemaVersion:2,
+    public:{name:field('周报'),summary:field(''),overview:field(''),version:field('1')},
+    settings:[],files:[],skills:[],tasks:[],memories:[],rules:[],setup:[],parts:[]}).canonicalUTF8).toString('base64url');
+  const identity=kind(await rpc('groupSourceIdentity',{groupId}),'groupSourceIdentity').identity;
+  const arg={...beginInput(),draftId:randomUUID(),baseRevision:4,identity,canonical,source:{sourceIntentId:randomUUID(),canonical}};
+  await rpc('beginDraftHandoff',arg);
+  return arg;
+}
+
+it.each(['cancelled','expired'] as const)('retains exact base revision evidence for a %s edit and refuses unproven historical rows',async terminal=>{
+  await link();const arg=await editHandoff();
+  if(terminal==='cancelled')await rpc('cancelHandoff',{retryId:arg.retryId});
+  else {clock+=31*60_000;await open();}
+  const expected={kind:'draft',groupId,draftId:arg.draftId,baseRevision:arg.baseRevision};
+  expect(await rpc('restoreHandoff',{retryId:arg.retryId,expected})).toMatchObject({kind:'handoff',handoff:{state:terminal}});
+  await expect(rpc('restoreHandoff',{retryId:arg.retryId,expected:{...expected,baseRevision:5}})).rejects.toThrow();
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  await new AuthoringJournal(root,()=>clock).run(db=>{Reflect.deleteProperty(db.handoffs![arg.retryId]!,'baseRevision');});
+  expect(await rpc('restoreHandoff',{retryId:arg.retryId,expected})).toEqual({kind:'handoffUnavailable',retryId:arg.retryId,reason:'notFound'});
+  expect(cards.size).toBe(1);expect(messages.size).toBe(1);expect(cloud).toEqual([]);
+});
+
+it('returns unavailable when normal maintenance has pruned the prepared receipt before its handoff',async()=>{
+  await link();const arg=beginInput();await rpc('beginHandoff',arg);
+  await tap(privateChoice('群角色'));await tap(privateChoice('确认所选来源'));
+  const request=kind(await rpc('workflow'),'workflow').handoff!;
+  const h=kind(await rpc('answerHandoff',{request,attestations:[]}),'handoff').handoff;
+  const id=h.operationId!;
+  clock+=60_000;await open();
+  await rpc('settle',{operationId:id,receipt:{operationId:id,status:'accepted',stateRevision:3,draftId:randomUUID(),revision:1}});
+  clock+=7*86400000+60_000;await open();
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  expect(await ledger.run(db=>db.operations[id])).toBeUndefined();
+  expect(await ledger.run(db=>db.handoffs?.[arg.retryId])).toBeDefined();
+  const before=bodies.length;
+  for(let i=0;i<2;i++)expect(await rpc('restoreHandoff',{retryId:arg.retryId,expected:{kind:'source',groupId}}))
+    .toEqual({kind:'handoffUnavailable',retryId:arg.retryId,reason:'notFound'});
+  expect(cards.size).toBe(1);expect(messages.size).toBe(1);expect(cloud).toEqual([]);
+  expect(bodies.slice(before).filter(b=>b.path.includes('/cards')||b.path.includes('/messages?'))).toEqual([]);
+});
+
+it('scopes status before mutating unrelated operations and supports linked-only reads',async()=>{
+  await link();const arg=beginInput();await rpc('beginHandoff',arg);
+  await tap(privateChoice('群角色'));await tap(privateChoice('确认所选来源'));
+  const request=kind(await rpc('workflow'),'workflow').handoff!;
+  const h=kind(await rpc('answerHandoff',{request,attestations:[]}),'handoff').handoff;
+  const id=h.operationId!,otherId=randomUUID();
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  await ledger.run(db=>{const other=structuredClone(db.operations[id]!);other.view.operationId=otherId;other.binding=randomUUID();db.operations[otherId]=other;});
+  expect(kind(await rpc('status',{operationId:null}),'status')).toMatchObject({linked:true,operations:[],reconciliation:[]});
+  expect(kind(await rpc('status',{operationId:id}),'status').operations.map(op=>op.operationId)).toEqual([id]);
+  expect(kind(await rpc('status',{operationId:randomUUID()}),'status')).toMatchObject({operations:[],reconciliation:[]});
+  expect(await ledger.run(db=>db.operations[otherId]!.revoked)).toBeUndefined();
+  expect(await ledger.run(db=>db.operations[otherId]!.view.state)).toBe('pendingMain');
 });

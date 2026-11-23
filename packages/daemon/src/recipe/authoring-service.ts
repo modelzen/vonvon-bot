@@ -279,6 +279,10 @@ export class AuthoringService {
           const link=await this.allowed(p);this.interact(p);
           return {kind:'handoff',handoff:await this.handoffs.begin(p,link,req)};
         }
+        case 'restoreHandoff':{
+          const link=await this.allowed(p);this.interact(p);
+          return this.handoffs.restore(p,link,req);
+        }
         case 'handoffStatus':
         case 'cancelHandoff':{
           const link=await this.allowed(p);
@@ -318,7 +322,7 @@ export class AuthoringService {
             const link = this.liveLink(db,p);
             const operations = [], reconciliation = [];
             for (const op of Object.values(db.operations)) {
-              if (op.scope !== p.scope || op.accountId !== p.account) continue;
+              if (op.scope !== p.scope || op.accountId !== p.account || req.operationId !== undefined && op.view.operationId !== req.operationId) continue;
               if (bound(op,link)) operations.push(operationView(op,this.now()));
               else {
                 // Also recover a disk/journal failure during removal or an orphan from an older daemon.

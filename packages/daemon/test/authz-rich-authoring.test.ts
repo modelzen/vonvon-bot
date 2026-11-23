@@ -9,8 +9,10 @@ const session = randomUUID(), operationId = randomUUID(), draftId = randomUUID()
 const digest = 'a'.repeat(64), binary = Buffer.alloc(32, 1).toString('base64url');
 const options = { skills: [], includeBotMemories: false, includeTasks: false };
 const payloads = [
+  {type:'status',operationId:null},{type:'status',operationId},
   {type:'beginHandoff',groupId,groupName:'产品群',retryId:operationId},
   {type:'beginDraftHandoff',groupId,groupName:'产品群',retryId:operationId,identity:digest,draftId,baseRevision:1,canonical:'e30',source:{sourceIntentId:operationId,canonical:'e30'}},
+  {type:'restoreHandoff',retryId:operationId,expected:{kind:'source',groupId}},
   {type:'handoffStatus',retryId:operationId},{type:'cancelHandoff',retryId:operationId},
   {type:'answerHandoff',request:{retryId:operationId,generation:1,ref:operationId,lease:digest,versions:[]},attestations:[]},
   { type: 'richSourceOptions', groupId },
@@ -71,4 +73,9 @@ test.each(['dm', 'group', 'comment'] as const)('Bot %s session cannot dispatch r
     for (const payload of payloads) expect(await bot.call(request(payload))).toMatchObject({ type: 'error', code: 'permission_denied' });
     expect(handler).not.toHaveBeenCalled();
   } finally { await bot.close(); }
+});
+
+
+test.each(['invalid-operation',42,{},[]].map(operationId=>({operationId})))('rejects malformed status operation scope $operationId',({operationId})=>{
+  expect(recipeAuthoringRequestSchema.safeParse({type:'status',botId,session,operationId}).success).toBe(false);
 });

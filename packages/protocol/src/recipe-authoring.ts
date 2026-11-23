@@ -22,6 +22,7 @@ export const authoringHandoffSchema = z.object({
   state:z.enum(['selecting','awaitingAttestations','prepared','cancelled','expired','needsReview','deliveryUnknown']),
   operationId:uuid.optional(),
 }).strict();
+export const handoffUnavailableSchema = z.object({kind:z.literal('handoffUnavailable'),retryId:uuid,reason:z.literal('notFound')}).strict();
 export type AuthoringHandoff = z.infer<typeof authoringHandoffSchema>;
 const handoffAttestation = z.object({retryId:uuid,ref:uuid,generation:positive,lease:digest,versions:uuid.array().max(64),items:z.array(z.object({versionId:uuid,itemIds:uuid.array().min(1).max(512)}).strict()).max(64).optional()}).strict();
 export type HandoffAttestation = z.infer<typeof handoffAttestation>;
@@ -69,6 +70,10 @@ export const recipeAuthoringRequestSchema = z.discriminatedUnion('type', [
   z.object({type:z.literal('beginHandoff'),...session,retryId:uuid,groupId:groupIdSchema,groupName:z.string().min(1).max(512),sourceVersionId:uuid.optional(),inherited:inheritedPublicationSchema.optional()}).strict(),
   z.object({type:z.literal('beginDraftHandoff'),...session,retryId:uuid,groupId:groupIdSchema,groupName:z.string().min(1).max(512),identity:digest,
     draftId:uuid,baseRevision:positive,canonical:z.string().min(1).max(1401000),source:editSource}).strict(),
+  z.object({type:z.literal('restoreHandoff'),...session,retryId:uuid,expected:z.discriminatedUnion('kind',[
+    z.object({kind:z.literal('source'),groupId:groupIdSchema,sourceVersionId:uuid.optional(),inherited:inheritedPublicationSchema.optional()}).strict(),
+    z.object({kind:z.literal('draft'),groupId:groupIdSchema,draftId:uuid,baseRevision:positive}).strict(),
+  ])}).strict(),
   z.object({type:z.literal('handoffStatus'),...session,retryId:uuid}).strict(),
   z.object({type:z.literal('cancelHandoff'),...session,retryId:uuid}).strict(),
   z.object({type:z.literal('answerHandoff'),...session,request:handoffAttestation,unavailable:z.literal(true).optional(),attestations:richSourceAttestationSchema.array().max(64)}).strict(),
@@ -85,7 +90,7 @@ export const recipeAuthoringRequestSchema = z.discriminatedUnion('type', [
     accepted:z.object({frozen:richFrozenResponseSchema,manifestId:uuid,packageId:uuid}).strict().optional()}).strict(),
   z.object({type: z.literal('open'), ...target, accountId: uuid}).strict(),
   z.object({type: z.literal('close'), ...session}).strict(),
-  z.object({type: z.literal('status'), ...session}).strict(),
+  z.object({type: z.literal('status'), ...session, operationId:uuid.nullable().optional()}).strict(),
   z.object({type: z.literal('workflow'), ...session}).strict(),
   z.object({type: z.literal('answerField'), ...session, request:fieldRequest, value:z.string().max(4000).nullable()}).strict(),
   z.object({type: z.literal('resumeContext'), ...operation}).strict(),
@@ -109,6 +114,7 @@ export const recipeAuthoringRequestSchema = z.discriminatedUnion('type', [
 ]);
 export type RecipeAuthoringRequest = z.infer<typeof recipeAuthoringRequestSchema>;
 export const recipeAuthoringReplySchema = z.discriminatedUnion('kind', [
+  handoffUnavailableSchema,
   z.object({kind:z.literal('handoff'),handoff:authoringHandoffSchema}).strict(),
   richSourceOptionsSchema,
   z.object({kind:z.literal('richInventory'),groupId:groupIdSchema,inventory:richLocalInventorySchema}).strict(),

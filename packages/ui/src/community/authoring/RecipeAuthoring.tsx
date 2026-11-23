@@ -1,4 +1,5 @@
 import {useEffect, useRef, useState, type ReactNode, type RefObject} from 'react';
+import {z} from 'zod';
 import {
   agentIdSchema,
   groupIdSchema,
@@ -34,6 +35,7 @@ type Props = {
   draft?: Draft;
   parent?: {recipeId: string; versionId: string};
   onBack: () => void;
+  onWorkspace: () => void;
   onSaved: (draftId: string, revision: number) => void;
 };
 const progress: Record<DesktopAuthoringOperation['state'], string> = {
@@ -88,6 +90,30 @@ function storedHandoff(key: string): StoredHandoff | undefined {
   } catch {
     return;
   }
+}
+
+type RetainedHandoff = {kind:'none'} | {kind:'ambiguous';scopes:string[]} |
+  {kind:'source';scope:string;record:StoredHandoff} | {kind:'draft';scope:string;record:StoredHandoff;revision:number};
+const draftScopeSchema=z.tuple([z.string().uuid(),z.string(),z.string().uuid(),z.number().int().positive(),z.null(),z.null(),z.null(),z.null()]);
+function retainedHandoff(scope:string,accountId:string,viewId:ViewId,draft?:Draft):RetainedHandoff {
+  if(!draft){
+    const record=storedHandoff(scope);
+    return record?{kind:'source',scope,record}:{kind:'none'};
+  }
+  const entries:Array<{scope:string;revision:number;record:StoredHandoff|undefined}>=[];
+  for(const key of Object.keys(localStorage)){
+    if(!key.startsWith('recipe-private-handoff:'))continue;
+    try{
+      const parsed=draftScopeSchema.safeParse(JSON.parse(key.slice('recipe-private-handoff:'.length)));
+      if(!parsed.success)continue;
+      const [account,view,id,revision]=parsed.data;
+      if(account===accountId&&view===viewId&&id===draft.draftId)entries.push({scope:key,revision,record:storedHandoff(key)});
+    }catch{continue;}
+  }
+  const entry=entries[0];
+  if(entries.length===0)return {kind:'none'};
+  if(entries.length!==1||!entry?.record)return {kind:'ambiguous',scopes:entries.map(entry=>entry.scope)};
+  return {kind:'draft',scope:entry.scope,record:entry.record,revision:entry.revision};
 }
 
 function SourceDialog({
@@ -172,7 +198,8 @@ function SourcePicker(
 ) {
   const {scope, source, draft, snapshot, onBack, title} = props;
   const botInput = useRef<HTMLSelectElement>(null);
-  const [stored, setStored] = useState(() => storedHandoff(scope));
+  const [retained, setRetained] = useState(() => retainedHandoff(scope,props.accountId,props.viewId,draft));
+  const stored = 'record' in retained ? retained.record : undefined;
   const [botId, setBot] = useState<AgentId | undefined>(source?.botId ?? stored?.botId);
   const [groupId, setGroup] = useState<GroupId | undefined>(source?.groupId ?? stored?.groupId);
   const [confirmed, setConfirmed] = useState<Target | undefined>(draft ? {draft} : undefined);
@@ -213,12 +240,13 @@ function SourcePicker(
     return (
       <PrivateFlow
         {...props}
-        target={target}
-        resume={Boolean(matching) || Boolean(draft && stored)}
+        scope={'scope' in retained?retained.scope:scope}
+        ambiguous={retained.kind==='ambiguous'}
+        target={'draft' in target&&retained.kind==='draft'?{draft:{...target.draft,revision:retained.revision}}:target}
         agent={snapshot?.agents.find((b) => 'source' in target && b.id === target.source.botId)}
         onRestart={() => {
-          localStorage.removeItem(scope);
-          setStored(undefined);
+          for(const key of retained.kind==='ambiguous'?retained.scopes:['scope' in retained?retained.scope:scope])localStorage.removeItem(key);
+          setRetained({kind:'none'});
           setConfirmed(undefined);
           if (draft) onBack();
         }}
@@ -229,7 +257,7 @@ function SourcePicker(
   const destination = bots.length && !unavailableBot ? 'groups' : 'agents';
   function resetSelection() {
     localStorage.removeItem(scope);
-    setStored(undefined);
+    setRetained({kind:'none'});
     setConfirmed(undefined);
     setBot(source?.botId);
     setGroup(source?.groupId);
@@ -346,7 +374,6 @@ function SourcePicker(
 
 function PrivateFlow({
   target,
-  resume,
   shell,
   scope,
   title,
@@ -357,10 +384,11 @@ function PrivateFlow({
   parent,
   onRestart,
   onBack,
+  onWorkspace,
   onSaved,
+  ambiguous,
 }: Props & {
   target: Target;
-  resume: boolean;
   shell: RecipeAuthoringShell;
   scope: string;
   title: string;
@@ -369,6 +397,7 @@ function PrivateFlow({
   agent?: Agent;
   snapshot?: DesktopSnapshot;
   onRestart: () => void;
+  ambiguous: boolean;
 }) {
   const capabilities = useShellCapabilities();
   const [session, setSession] = useState<Session>();
@@ -377,6 +406,7 @@ function PrivateFlow({
   const [handoff, setHandoff] = useState<AuthoringHandoff>();
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const [unavailable,setUnavailable]=useState(false);
   const [busy, setBusy] = useState(false),
     [attempt, reconnect] = useState(0);
   const generation = useRef(0);
@@ -393,7 +423,7 @@ function PrivateFlow({
     : undefined;
   const accepted = operation?.receipt?.status === 'accepted' ? operation.receipt : undefined;
   const done =
-    accepted ||
+    unavailable || accepted ||
     operation?.state === 'cancelled' ||
     operation?.state === 'expired' ||
     (handoff && ['cancelled', 'expired', 'needsReview'].includes(handoff.state));
@@ -450,6 +480,38 @@ function PrivateFlow({
           };
     adopt(await request(s, input), id);
   }
+  async function restore(s?:Session) {
+    const id=retry.current??storedHandoff(scope)?.retryId;
+    if(!id)throw new Error('本次准备的记录不可用，请重新核对。');
+    retry.current=id;
+    const epoch=generation.current,previous=owner.current;
+    const reply=await shell.request({type:'restoreHandoff',accountId,viewId,retryId:id,...(s&&{handle:s.handle}),
+      target:'source' in target?{kind:'source',...target.source,...(parent&&{parent})}:
+        {kind:'draft',draftId:target.draft.draftId,baseRevision:target.draft.revision}});
+    if(epoch!==generation.current||owner.current!==previous){
+      if((reply.kind==='handoffRestored'||reply.kind==='handoffLinkRequired')&&reply.session.handle!==owner.current?.handle)
+        detach(shell,reply.session.handle);
+      return;
+    }
+    if(reply.kind==='handoffUnavailable'){
+      if(reply.retryId!==id)throw new Error('请求来源已变化，请重新核对。');
+      setUnavailable(true);
+      setError(undefined);
+      return;
+    }
+    if(reply.kind!=='handoffRestored'&&reply.kind!=='handoffLinkRequired')throw new Error('来源暂不可用。');
+    const next=reply.session;
+    if(next.target.accountId!==accountId||next.target.viewId!==viewId||botId&&next.target.botId!==botId)throw new Error('请求来源已变化，请重新核对。');
+    const restored=reply.kind==='handoffRestored'?adopt({kind:'handoff',handoff:reply.handoff},id):undefined;
+    const owned=previous?.handle===next.handle?previous:next;
+    owner.current=owned;
+    setSession(next);
+    setUnavailable(false);
+    setError(undefined);
+    if(reply.kind==='handoffLinkRequired')await newLink(owned);
+    else if(!draftId&&restored?.state==='cancelled')onRestart();
+    return owned;
+  }
   async function newLink(s: Session) {
     setLink(undefined);
     setNotice(undefined);
@@ -470,8 +532,17 @@ function PrivateFlow({
     setLink(undefined);
     setNotice(undefined);
     setError(undefined);
+    setUnavailable(false);
     setBusy(true);
     void (async () => {
+      if(ambiguous){setUnavailable(true);return;}
+      const record=storedHandoff(scope);
+      if(record){
+        retry.current=record.retryId;
+        const restored=await restore();
+        handle=restored?.handle;
+        return;
+      }
       const next = await shell.request(
         draftId && revision
           ? {type: 'openDraftSource', accountId, viewId, draftId, baseRevision: revision}
@@ -489,12 +560,7 @@ function PrivateFlow({
         await newLink(next);
         return;
       }
-      const record = storedHandoff(scope);
-      if (record && (resume || attempt)) {
-        retry.current = record.retryId;
-        const restored = await progressFor(next, record.retryId);
-        if (active && !draftId && restored?.state === 'cancelled') onRestart();
-      } else await begin(next);
+      await begin(next);
     })()
       .catch((reason) => {
         if (active) setError(message(reason));
@@ -504,7 +570,10 @@ function PrivateFlow({
       });
     return () => {
       active = false;
+      generation.current++;
+      const current=owner.current;
       owner.current = undefined;
+      if(current&&current.handle!==handle)detach(shell,current.handle);
       if (handle) detach(shell, handle);
     };
   }, [accountId, viewId, draftId, revision, botId, groupId, shell, attempt]);
@@ -512,16 +581,16 @@ function PrivateFlow({
     const s = owner.current;
     if (!s || busy || locked.current) return;
     locked.current = true;
-    generation.current++;
+    const epoch=++generation.current;
     setBusy(true);
     setError(undefined);
     setNotice(undefined);
     try {
       await action(s);
     } catch (reason) {
-      if (owner.current === s) setError(message(reason));
+      if (epoch===generation.current) setError(message(reason));
     } finally {
-      if (owner.current === s) {
+      if (epoch===generation.current) {
         locked.current = false;
         setBusy(false);
       }
@@ -593,7 +662,9 @@ function PrivateFlow({
       onBack={onBack}
       footer={
         <>
-          {accepted ? (
+          {unavailable ? (
+            <><Button onClick={onWorkspace}>查看创作中心</Button><Button onClick={onRestart}>重新准备</Button></>
+          ) : accepted ? (
             <GlowButton
               variant="dark"
               onClick={() => {
@@ -624,7 +695,8 @@ function PrivateFlow({
                         setChallenge(undefined);
                         setLink(value);
                         setSession({...s, linked: true});
-                        await begin(s);
+                        if(retry.current??storedHandoff(scope)?.retryId)await restore(s);
+                        else await begin(s);
                       }
                     })
                   }
@@ -690,7 +762,8 @@ function PrivateFlow({
         </>
       }
     >
-      {status && (
+      {unavailable&&<p role="status">无法找回这次准备。请先到创作中心确认是否已有草稿，再重新准备。</p>}
+      {!unavailable&&status && (
         <p role="status">
           <strong>{status}</strong>
         </p>
@@ -705,7 +778,7 @@ function PrivateFlow({
           {botName} · {target.groupName}
         </p>
       )}
-      {!status && !challenge && !error && <p role="status">正在核验来源与本人私聊…</p>}
+      {!unavailable && !status && !challenge && !error && <p role="status">正在核验来源与本人私聊…</p>}
       {challenge && (
         <>
           <p>用管理员身份在「{botName}」的本人私聊发送这条命令。</p>
@@ -737,8 +810,8 @@ function PrivateFlow({
       )}
       {notice && <p role="status">{notice}</p>}
       {error && <p role="alert">{error}</p>}
-      {operation?.syncMessage && <p>{operation.syncMessage}</p>}
-      {operation?.contextPaused && (
+      {!unavailable && operation?.syncMessage && <p>{operation.syncMessage}</p>}
+      {!unavailable && operation?.contextPaused && (
         <Button
           disabled={busy}
           onClick={() =>
@@ -755,7 +828,7 @@ function PrivateFlow({
         <Button
           disabled={busy}
           onClick={() => {
-            if (session && retry.current) void act(begin);
+            if (session && retry.current) void act(async s=>{await restore(s);});
             else reconnect((n) => n + 1);
           }}
         >

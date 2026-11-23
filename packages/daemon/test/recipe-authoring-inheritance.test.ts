@@ -2,15 +2,16 @@ import {createHash,randomUUID} from 'node:crypto';
 import {expect,it,vi} from 'vitest';
 import {agentIdSchema,groupIdSchema,type InheritedPublication,type RecipeRichContent} from '@vonvon/protocol';
 const state=vi.hoisted(()=>({inventory:undefined as unknown}));
-vi.mock('../src/recipe/authoring-source',()=>({groupSourceIdentity:async()=> 'identity'}));
+vi.mock('../src/recipe/authoring-source',()=>({groupSourceIdentity:vi.fn(async()=> 'identity')}));
 vi.mock('../src/recipe/authoring-rich-flow',async load=>({...await load<object>(),readRichSource:async()=>state.inventory}));
 import {PrivateHandoffs} from '../src/recipe/authoring-handoff';
 import {bindRichMembers,chatRichProposal,richCardReview,type RichLocalDraft} from '../src/recipe/authoring-rich-flow';
-import type {AuthoringJournal,Link} from '../src/recipe/authoring-journal';
+import {AuthoringJournal,maintain,newCarrier,type AuthoringLedger,type Link} from '../src/recipe/authoring-journal';
+import {groupSourceIdentity} from '../src/recipe/authoring-source';
 import type {PrivateHandoff} from '../src/recipe/authoring-handoff-menu';
 import {candidateConfirmation,type AuthoringIm} from '../src/recipe/authoring-im';
 import type {LocalOperation} from '../src/recipe/authoring-journal';
-function fixture(inherit=true){
+function fixture(inherit=true,now=()=>1000){
  const account=randomUUID(),versionId=randomUUID(),retryId=randomUUID(),groupId=groupIdSchema.parse('oc_inherit');
  const field=(value:string)=>({itemId:randomUUID(),originId:randomUUID(),value});
  const content:RecipeRichContent={format:'rich-v2',schemaVersion:2,public:{name:field(''),summary:field(''),overview:field(''),version:field('')},
@@ -19,14 +20,37 @@ function fixture(inherit=true){
  const logo=Buffer.from('524946460e000000574542505650384c020000002f00','hex').toString('base64url');
  const inherited:InheritedPublication={accountId:account,versionId,public:{name:'本人名称',summary:'本人摘要',overview:'完整介绍',version:''},access:'coded',logo};
  const recipient={openId:'ou_test',chatId:groupId,tenantKey:'tenant'},link:Link={bot:'cli_inherit',binding:'binding',recipient,sources:[]};
- const db={handoffs:{} as Record<string,PrivateHandoff>,links:{link},operations:{}};
- const ledger={run:async(fn:(value:typeof db)=>unknown)=>structuredClone(await fn(db))} as unknown as AuthoringJournal;
- const im={createJson:async()=> 'card',send:async()=> 'message',updateJson:async()=> 'updated'} as unknown as AuthoringIm;
+ const db={version:1 as const,handoffs:{} as Record<string,PrivateHandoff>,links:{link},operations:{} as Record<string,LocalOperation>,daily:{}} satisfies AuthoringLedger;
+ class MemoryJournal extends AuthoringJournal {
+  override async run<T>(edit:(value:AuthoringLedger)=>T):Promise<T>{maintain(db,now());return structuredClone(edit(db));}
+ }
+ const ledger=new MemoryJournal('',now);
+ const createJson=vi.fn(async()=> 'card'),send=vi.fn(async()=> 'message');
+ const im={createJson,send,updateJson:async()=> 'updated'} as unknown as AuthoringIm;
  const native={bot:{appId:'cli_inherit'},channel:{}} as ConstructorParameters<typeof PrivateHandoffs>[0];
- const handoffs=new PrivateHandoffs(native,ledger,im,()=>1000,()=>{}),p={session:randomUUID(),account,scope:'scope'};
+ const handoffs=new PrivateHandoffs(native,ledger,im,now,()=>{}),p={session:randomUUID(),account,scope:'scope'};
  const req={type:'beginHandoff' as const,botId:agentIdSchema.parse('cli_inherit'),session:p.session,retryId,groupId,groupName:'群',...(inherit&&{sourceVersionId:versionId,inherited})};
- return {handoffs,p,link,db,req,inherited,logo,retryId};
+ return {handoffs,p,link,db,req,inherited,logo,retryId,createJson,send};
 }
+it('returns unavailable when maintenance prunes the exact prepared operation during restore identity verification',async()=>{
+ let clock=1000;
+ const f=fixture(false,()=>clock);await f.handoffs.begin(f.p,f.link,f.req);
+ const row=f.db.handoffs[f.retryId]!,operationId=randomUUID(),terminalAt=clock+60_000;
+ row.phase={state:'prepared',operationId};
+ f.db.operations[operationId]={accountId:f.p.account,scope:f.p.scope,bot:f.link.bot,binding:f.link.binding,recipient:f.link.recipient,
+  carrier:newCarrier('saved'),dispatched:true,instructionId:f.retryId,originalGroup:{groupId:f.req.groupId,identity:row.identity},terminalAt,
+  view:{operationId,format:'rich-v2',purpose:'prepareDraft',groupId:f.req.groupId,targetPublicKey:'a'.repeat(43),nonceCommitment:'b'.repeat(43),
+   state:'completed',deliveryUnknown:false,createdAt:clock,receipt:{operationId,status:'accepted',stateRevision:3,draftId:randomUUID(),revision:1}}};
+ clock=terminalAt+7*86_400_000-1;
+ vi.mocked(groupSourceIdentity).mockImplementationOnce(async()=>{clock+=2;return row.identity;});
+ const restore=()=>f.handoffs.restore(f.p,f.link,{type:'restoreHandoff',botId:f.req.botId,session:f.p.session,retryId:f.retryId,expected:{kind:'source',groupId:f.req.groupId}});
+ const first=await restore();
+ expect(f.db.operations[operationId]).toBeUndefined();expect(f.db.handoffs[f.retryId]).toBeDefined();
+ expect(first).toEqual({kind:'handoffUnavailable',retryId:f.retryId,reason:'notFound'});
+ expect(await restore()).toEqual({kind:'handoffUnavailable',retryId:f.retryId,reason:'notFound'});
+ expect(Object.keys(f.db.operations)).toEqual([]);expect(Object.keys(f.db.handoffs)).toEqual([f.retryId]);
+ expect(f.createJson).toHaveBeenCalledTimes(1);expect(f.send).toHaveBeenCalledTimes(1);
+});
 it('captures inherited snapshot at begin and carries identical metadata, access, parent and uploaded logo through review',async()=>{
  const f=fixture();await f.handoffs.begin(f.p,f.link,f.req);
  let row=f.db.handoffs[f.retryId]!;
