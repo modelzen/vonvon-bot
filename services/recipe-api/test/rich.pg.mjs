@@ -3,18 +3,21 @@ import {createHash,randomUUID,generateKeyPairSync,randomBytes,sign} from 'node:c
 import {mkdtempSync,mkdirSync,rmSync,readdirSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {fileURLToPath} from 'node:url';
+import {build} from 'esbuild';
+import {fileURLToPath,pathToFileURL} from 'node:url';
 import {createServer} from 'node:http';
 import {execFileSync} from 'node:child_process';
 import pg from 'pg';
 import sharp from 'sharp';
 import {startRecipeService} from '../src/main.mjs';
 import {createRichBrokerServer} from '../src/rich-broker.mjs';
+import {createObjectBroker} from '../src/object-broker.mjs';
 import {createObjectStore} from '../src/object-store.mjs';
 import {createVerifier} from '../src/auth.mjs';
 import {richInstallProof} from '../src/rich-install-proof.mjs';
 import {installProof} from '../src/install-proof.mjs';
 import {richProof} from '../src/rich-proof.mjs';
+import {checkMetadataSaves} from './rich-metadata-flow.mjs';
 import {inventory} from '../src/rich-document.mjs';
 import {authoringProof,DISPATCH_DIGEST} from '../src/authoring-proof.mjs';
 const root=fileURLToPath(new URL('../../../',import.meta.url)),folders=join(root,'supabase/migrations');
@@ -49,7 +52,8 @@ try{
   pool=new pg.Pool({user:'verifier_test',database:'postgres',host:sock,port:5432});
   const bytes=new Map(),storage={async create(id,lane,v){const k=lane+id;assert.ok(!bytes.has(k));bytes.set(k,Buffer.from(v));},
     async read(id,lane){return bytes.get(lane+id)??null;},async remove(id,lane){bytes.delete(lane+id);}};
-  broker=createRichBrokerServer({verify:createVerifier(issuer),store:await createObjectStore(pool),storage,admit:true});await listen(broker);
+  const store=await createObjectStore(pool),collector=createObjectBroker({store,storage});
+  broker=createRichBrokerServer({verify:createVerifier(issuer),store,storage,admit:true});await listen(broker);
   async function req(path,token,body,{status=200,key,rev,method}={}){
     const headers={};if(token)headers.authorization='Bearer '+token;if(body!==undefined)headers['content-type']='application/json';
     if(key)headers['idempotency-key']=key;if(rev)headers['if-match']='"'+rev+'"';
@@ -106,10 +110,13 @@ try{
     await req('/v2/objects/'+pkg+'/reserve',token,{draftId:draft,cap:250000});
     return {op,pkg,path,draft,
       freeze:async b=>req(path+'/freeze',token,b),
-      async commit(plan){
+      async prepareAccept(plan){
         const m=await upload(token,pkg,65,'manifest',Buffer.from(plan.canonical,'base64url'));
         const c=await cap('accept',plan.payloadDigest),msg={...possess(c),payload:plan.payload,canonical:plan.canonical,manifestId:m.objectId,packageId:pkg};
-        const post=()=>req(path+'/accept',null,msg),r=await post();assert.deepEqual(await post(),r);return r;
+        return (status=200)=>req(path+'/accept',null,msg,{status});
+      },
+      async commit(plan){
+        const post=await this.prepareAccept(plan),r=await post();assert.deepEqual(await post(),r);return r;
       }};
   }
   const prep=await start(a);const privateBytes=Buffer.from('SELECTED PRIVATE MEMORY');
@@ -282,6 +289,12 @@ try{
   assert.equal(new Set([...first.items,...next.items].map(i=>i.recipeId)).size,12);
   await req('/v2/community/recipes?cursor='+first.nextCursor,undefined,undefined,{status:422});
   await req('/v2/community/recipes?cursor='+first.nextCursor.slice(0,-3),undefined,undefined,{status:422});
+  const mainModule=join(dir,'metadata-main.mjs');
+  await build({entryPoints:[join(root,'packages/desktop/src/community-api.ts')],outfile:mainModule,bundle:true,format:'esm',platform:'node',target:'node22'});
+  const {communityRequest}=await import(pathToFileURL(mainModule).href);
+  const accountRequest=(token,path,init)=>fetch((path.includes('/objects/')&&!path.endsWith('/reserve')?orig(broker):orig(api.server))+path,
+    {...init,headers:{...init?.headers,authorization:'Bearer '+token}});
+  await checkMetadataSaves({connectAdmin:()=>new pg.Client({user:'cloud_test',database:'postgres',host:sock,port:5432}),communityRequest,accountRequest,req,upload,read,start,sql,opId,token:jwt(randomUUID()),other:b,body,fixture,png,collector});
   console.log('PASS: normalized public Logo without private selector, signed stable pagination, tamper and query mismatch rejection.');
   console.log('PASS: exact broker bytes; separate proof domain; typed copy/edit; atomic replay; foreign coded origin/redacted text; historical refs, feature, withdraw, ban.');
 }finally{if(broker)await close(broker);if(pool)await pool.end();if(api)await api.close();if(issuerServer)await close(issuerServer);

@@ -19,10 +19,10 @@ function bound(h:PrivateHandoff,p:Presence,link:Link){
   return h.account===p.account&&h.scope===p.scope&&h.binding===link.binding&&sameRecipient(h.recipient,link.recipient);
 }
 const active=(h:PrivateHandoff)=>h.phase.state==='selecting'||h.phase.state==='awaitingAttestations';
-function rotate(h:PrivateHandoff){h.ref=randomUUID();h.generation++;}
+function rotate(h:PrivateHandoff){h.ref=randomUUID();h.generation++;h.cardDirty=true;}
 function publicView(h:PrivateHandoff):AuthoringHandoff{
   const view=viewHandoff(h);
-  if(h.phase.state==='selecting'&&h.sentAt!==undefined&&!h.messageId)view.state='deliveryUnknown';
+  if(active(h)&&(h.cardDirty||h.sentAt!==undefined&&!h.messageId))view.state='deliveryUnknown';
   return view;
 }
 export class PrivateHandoffs {
@@ -69,7 +69,10 @@ export class PrivateHandoffs {
     this.live(p);
     const body=handoffCard(h);
     const result=await this.im.updateJson(h.cardId,h.generation,h.ref,body);
-    if(result==='updated'||result==='conflict'&&await this.im.showsJson(h.messageId,h.recipient.chatId,body))return;
+    if(result==='updated'||result==='conflict'&&await this.im.showsJson(h.messageId,h.recipient.chatId,body)){
+      await this.transaction(p,link,h.retryId,row=>{if(row.ref===h.ref)delete row.cardDirty;});
+      delete h.cardDirty;return;
+    }
     if(result==='unavailable')await this.transaction(p,link,h.retryId,row=>{if(row.ref===h.ref&&active(row)){row.phase={state:'needsReview'};delete row.edit;}});
     throw new Error('卡片尚未更新，请从 App 继续同一次准备。');
   }

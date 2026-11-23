@@ -1,3 +1,6 @@
+import {boundedJson} from './community-response.js';
+import {saveRichMetadata} from './community-metadata.js';
+import {MetadataJournal} from './community-metadata-journal.js';
 import {decodeRichRecipeContent} from '@vonvon/protocol';
 import {richCommunity, MissingRichRecipe,RichCommunityUnavailable} from './community-rich.js';
 import {communityFailureMessages, communityRequestSchema, communityResponseSchemas, type CommunityRequest, type CommunityResponses} from '@vonvon/protocol';
@@ -9,7 +12,7 @@ export class CommunityError extends Error {
 }
 const fallback = '社区请求未完成，请稍后重试同一操作。';
 
-function endpoint(r: Exclude<CommunityRequest, {type: 'shareLink'}>): {path: string; method?: string; body?: unknown; revision?: number} {
+function endpoint(r: Exclude<CommunityRequest, {type: 'shareLink'|'saveRichDraftMetadata'}>): {path: string; method?: string; body?: unknown; revision?: number} {
   switch (r.type) {
     case 'catalog': {const query = new URLSearchParams(); if (r.query) query.set('q', r.query); if (r.cursor) query.set('cursor', r.cursor); return {path: '/v1/community/recipes' + (query.size ? '?' + query : '')};}
     case 'detail': return {path: `/v1/recipes/${r.recipeId}/versions/${r.versionId}`};
@@ -33,29 +36,13 @@ function endpoint(r: Exclude<CommunityRequest, {type: 'shareLink'}>): {path: str
   }
 }
 
-async function boundedJson(response: Response): Promise<unknown> {
-  const reader = response.body?.getReader();
-  if (!reader) throw new CommunityError(fallback);
-  const chunks: Uint8Array[] = []; let bytes = 0;
-  try {
-    while (true) {
-      const {done, value} = await reader.read(); if (done) break;
-      bytes += value.byteLength;
-      if (bytes > 16 * 1024 * 1024) throw new CommunityError(fallback);
-      chunks.push(value);
-    }
-  } catch {await reader.cancel().catch(() => {}); throw new CommunityError(fallback);}
-  finally {reader.releaseLock();}
-  const content = new Uint8Array(bytes); let offset = 0;
-  for (const chunk of chunks) {content.set(chunk, offset); offset += chunk.byteLength;}
-  try {return JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(content));} catch {throw new CommunityError(fallback);}
-}
-
-export async function communityRequest<T extends CommunityRequest['type']>(account: NativeAccount, raw: Extract<CommunityRequest, {type: T}>): Promise<CommunityResponses[T]> {
+const ephemeralMetadataJournal = new MetadataJournal();
+export async function communityRequest<T extends CommunityRequest['type']>(account: NativeAccount, raw: Extract<CommunityRequest, {type: T}>, metadataJournal = ephemeralMetadataJournal): Promise<CommunityResponses[T]> {
   const r = communityRequestSchema.parse(raw);
   if (r.type === 'shareLink') {
     try {return communityResponseSchemas.shareLink.parse({url: account.recipeLink!(r.recipeId, r.versionId)}) as CommunityResponses[T];} catch {throw new CommunityError(fallback);}
   }
+  if(r.type==='saveRichDraftMetadata') return await saveRichMetadata(account,r,metadataJournal) as CommunityResponses[T];
   const initial = account.status();
   if (r.accountId && (initial.kind !== 'signedIn' || initial.accountId !== r.accountId)) throw new CommunityError('账号已切换，请重新打开社区。', 'session_changed');
   let changed = false;

@@ -1,3 +1,4 @@
+import { bridgeFeedback } from '../feedback/bridge';
 import { nativeRichSourceItems } from '../recipe/rich-source-lineage';
 import { codexDraftParser } from '../recipe/codex-draft-parser';
 import { resolveModelPreference } from '../config/execution';
@@ -94,6 +95,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   await mergeTiers();
   const app = opts.cfg.accounts.app;
   const channel = createBridgeChannel(app, opts.appSecret);
+  const feedback = bridgeFeedback(identity, opts.cfg, opts.appSecret, channel);
   const cardCallbacks = createCardCallbackRecorder(app.id, {
     onError: error => log.fail('setup', error, { phase: 'card-callback-verification', appId: app.id }),
   });
@@ -118,9 +120,9 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     if (!('members' in result)) throw new Error('Invalid members reply');
     return result;
   };
-  const entries = createAgentEntries({ appId: app.id, isAdmin: id => isAdmin(opts.cfg, id), ...(sessions ? { sessions } : {}),
+  const entries = createAgentEntries({ feedbackEnabled: feedback.enabled, appId: app.id, isAdmin: id => isAdmin(opts.cfg, id), ...(sessions ? { sessions } : {}),
     memoryPlace: turn => memory.placeOf(turn), tools: createCommandTools({
-    appId: app.id, memory, feishu, groupTier: chatId => orchestrator.permissionOf(chatId),
+    appId: app.id, feedback: true, memory, feishu, groupTier: chatId => orchestrator.permissionOf(chatId),
     schedule: { execute: (actor, request) => orchestrator.scheduleAs(actor, request) },
     groups: async cursor => {
       const result = await createGroupExecutor(channel, identity)({ kind: 'joinedGroups', cursor });
@@ -143,7 +145,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     return result.tasks;
   }});
   const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }),
-    { entries, memory, authoring, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity, ...(host ? { host } : {}), ...(sessionCli ? { sessionCli } : {}) });
+    { entries, memory, authoring, feedback, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity, ...(host ? { host } : {}), ...(sessionCli ? { sessionCli } : {}) });
   const firstHello = createFirstHello({ cfg: opts.cfg, appSecret: opts.appSecret, channel, write: orchestrator.writePreferences });
   const roles = createAppRoleRefresher(app, opts.appSecret);
   await roles.refresh();
@@ -169,6 +171,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     rolesStopped = true;
     firstHello.stop();
     clearTimeout(rolesTimer);
+    const feedbackClosing = Promise.allSettled([feedback.close()]);
     const rolesClosing = roles.stop();
     // s18c: stop taking events first. One that comes after this is not acknowledged, so Feishu pushes it again to the
     // next process, which answers it; taken now, it would be acknowledged and dropped by the closing orchestrator.
@@ -185,6 +188,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     const orchestratorClosing = orchestrator.shutdown(reason);
     closing = (async () => {
       const errors: unknown[] = [];
+      for (const result of await feedbackClosing) if (result.status === 'rejected') errors.push(result.reason);
       await rolesClosing;
       try { await orchestratorClosing; }
       catch (error) { errors.push(error); }

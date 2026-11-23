@@ -83,7 +83,7 @@ it('saves publication information directly without a source or authoring session
   const original = draft;
   await draw({chatContinuationUnavailable: '来源群聊已不可用，仍可编辑发布信息。'});
   expect(button('在飞书私聊中修改').disabled).toBe(true);
-  await click('编辑发布信息'); await fill('配方名称', '发布信息新名称'); await click('保存');
+  await click('编辑发布信息'); await fill('配方名称', '发布信息新名称'); await click('完成编辑');
   const request = requests.find(item => item.type === 'saveRichDraftMetadata');
   expect(request).toMatchObject({accountId, draftId, revision: 1, public: {name: '发布信息新名称'}, logo: {kind: 'keep'}});
   if (request?.type !== 'saveRichDraftMetadata') throw new Error('Missing metadata command');
@@ -201,4 +201,129 @@ it('guards navigation with unsaved inputs and delegates continuation only with a
 it('leaves public recipe details free of draft author controls', async () => {
   await act(async () => root.render(<RecipeDetails recipe={{recipeId: draftId, versionId: draftId, revision: 1, public: draft.public, owned: false, acquired: true, rich: draft.rich}}/>));
   expect(document.body.textContent).not.toMatch(/编辑发布信息|在飞书私聊中修改|删除草稿|保存/);
+});
+
+it('keeps newer input when a leave-dialog retry confirms only the older command', async () => {
+  let finish!: () => void; let attempt = 0;
+  send = async request => {
+    if (request.type === 'draft') return draft;
+    if (request.type === 'saveRichDraftMetadata') {
+      if (++attempt === 1) {await new Promise<void>(resolve => {finish = resolve;}); return {status: 'uncertain', code: 'offline'};}
+      return committed(request);
+    }
+    throw new Error('Unexpected request');
+  };
+  await draw(); await click('编辑发布信息'); await fill('配方名称', '保存 A');
+  await act(async () => {button('保存').click();}); await fill('配方名称', '仍未提交 B'); await act(async () => finish());
+  await click('返回创作中心'); expect(button('放弃并离开').disabled).toBe(true);
+  await click('保存并离开'); expect(back).not.toHaveBeenCalled();
+  expect(document.querySelector<HTMLInputElement>('[aria-label="配方名称"]')?.value).toBe('仍未提交 B');
+  expect(document.body.textContent).toContain('先前提交已保存，当前输入仍未保存');
+  expect(document.querySelector('.rich-draft-status')?.textContent).not.toBe('发布信息已保存');
+  const saves = requests.filter(item => item.type === 'saveRichDraftMetadata'); expect(saves[1]).toEqual(saves[0]);
+  await click('保存并离开'); expect(back).toHaveBeenCalledOnce();
+  expect(requests.filter(item => item.type === 'saveRichDraftMetadata')[2]).toMatchObject({public: {name: '仍未提交 B'}, revision: 2});
+});
+
+it('updates an open leave dialog when a save becomes unresolved', async () => {
+  let finish!: () => void;
+  send = async request => {
+    if (request.type === 'draft') return draft;
+    if (request.type === 'saveRichDraftMetadata') {await new Promise<void>(resolve => {finish = resolve;}); return {status: 'uncertain', code: 'offline'};}
+    throw new Error('Unexpected request');
+  };
+  await draw(); await click('编辑发布信息'); await fill('配方名称', '待核对'); await click('返回创作中心');
+  expect(button('放弃并离开').disabled).toBe(false);
+  await act(async () => {button('保存并离开').click();}); expect(button('放弃并离开').disabled).toBe(true);
+  await act(async () => finish()); expect(button('放弃并离开').disabled).toBe(true);
+  expect(document.body.textContent).toContain('已提交的保存尚未核对'); expect(back).not.toHaveBeenCalled();
+});
+
+it.each([false, true])('requires a fresh delete confirmation after a remote revision (read succeeds %s)', async readSucceeds => {
+  await draw(); await click('删除草稿');
+  await act(async () => emit({type: 'account', value: {kind: 'signedIn', accountId, displayName: '作者', provider: 'github', persistence: 'memory'}}));
+  draft = richDraft(2, {name: '尚未确认的新版本'});
+  send = async () => {if (!readSucceeds) throw new Error('offline'); return draft;};
+  await act(async () => emit({type: 'authoringSaved', value: {accountId, draftId, revision: 2}}));
+  const deletes = [...document.querySelectorAll<HTMLButtonElement>('button')].filter(item => item.textContent === '删除草稿');
+  expect(deletes.at(-1)?.disabled).toBe(true); await act(async () => deletes.at(-1)?.click());
+  expect(requests.some(item => item.type === 'deleteDraft')).toBe(false);
+  await click('保留');
+  if (!readSucceeds) {send = async () => draft; await click('重新读取');}
+  await click('删除草稿');
+  send = async request => {expect(request).toMatchObject({type: 'deleteDraft', revision: 2}); return {};};
+  await act(async () => [...document.querySelectorAll<HTMLButtonElement>('button')].filter(item => item.textContent === '删除草稿').at(-1)?.click());
+  expect(requests.some(item => item.type === 'deleteDraft' && item.revision === 2)).toBe(true);
+});
+
+async function deferLogo() {
+  let finish!: () => void; const bytes = new Uint8Array([251, 255, 0, 1]);
+  const file = new File([bytes], 'logo.png', {type: 'image/png'});
+  Object.defineProperty(file, 'arrayBuffer', {value: () => new Promise<ArrayBuffer>(resolve => {finish = () => resolve(bytes.buffer);})});
+  const input = document.querySelector<HTMLInputElement>('[aria-label="上传配方 Logo"]')!;
+  Object.defineProperty(input, 'files', {value: [file]});
+  await act(async () => input.dispatchEvent(new Event('change', {bubbles: true})));
+  return () => act(async () => finish());
+}
+it.each([[false, '完成编辑'], [true, '完成编辑'], [true, '保存']])('waits for a selected Logo before saving (text changed %s, action %s)', async (changeText, action) => {
+  await draw(); await click('编辑发布信息'); if (changeText) await fill('配方名称', '文字与图片');
+  const finish = await deferLogo(); await act(async () => button(String(action)).click());
+  expect(requests.some(item => item.type === 'saveRichDraftMetadata')).toBe(false);
+  expect(document.querySelector('.rich-draft-metadata')).not.toBeNull(); await finish();
+  await vi.waitFor(() => expect(requests.find(item => item.type === 'saveRichDraftMetadata')).toMatchObject({logo: {kind: 'replace', base64: '+/8AAQ=='}}));
+  expect(document.querySelector('.rich-draft-metadata')).toBeNull();
+});
+it('guards a pending Logo read and waits before saving and leaving', async () => {
+  await draw(); await click('编辑发布信息'); const finish = await deferLogo();
+  await click('返回创作中心'); expect(back).not.toHaveBeenCalled();
+  await act(async () => button('保存并离开').click()); expect(back).not.toHaveBeenCalled(); await finish();
+  await vi.waitFor(() => expect(back).toHaveBeenCalledOnce());
+  expect(requests.find(item => item.type === 'saveRichDraftMetadata')).toMatchObject({logo: {kind: 'replace', base64: '+/8AAQ=='}});
+});
+it('cancels an unsubmitted Logo read without creating hidden changes', async () => {
+  await draw(); await click('编辑发布信息'); const finish = await deferLogo();
+  await click('取消'); await finish(); await click('返回创作中心');
+  expect(back).toHaveBeenCalledOnce(); expect(requests.some(item => item.type === 'saveRichDraftMetadata')).toBe(false);
+});
+it('invalidates deletion when a manual refresh cannot establish the current revision', async () => {
+  await draw(); await click('编辑发布信息'); await fill('配方名称', 'x'.repeat(61)); await click('保存');
+  await click('删除草稿'); send = async () => {throw new Error('offline');}; await click('重新读取');
+  const confirm = [...document.querySelectorAll<HTMLButtonElement>('button')].filter(item => item.textContent === '删除草稿').at(-1)!;
+  expect(confirm.disabled).toBe(true); await act(async () => confirm.click());
+  expect(requests.some(item => item.type === 'deleteDraft')).toBe(false);
+  await click('保留'); expect(button('删除草稿').disabled).toBe(true);
+});
+it('discards an unsubmitted image through the leave guard without a late hidden change', async () => {
+  await draw(); await click('编辑发布信息'); const finish = await deferLogo();
+  await click('返回创作中心'); await click('放弃并离开'); expect(back).toHaveBeenCalledOnce();
+  await finish(); expect(requests.some(item => item.type === 'saveRichDraftMetadata')).toBe(false);
+  await click('返回创作中心'); expect(back).toHaveBeenCalledTimes(2);
+});
+it('retries an unresolved exact command while retaining a newer unread remote revision requirement', async () => {
+  let attempt = 0;
+  send = async request => {
+    if (request.type === 'draft') {if (attempt === 1) throw new Error('offline'); return draft;}
+    if (request.type === 'saveRichDraftMetadata') return ++attempt === 1 ? {status: 'uncertain', code: 'offline'} : committed(request);
+    throw new Error('Unexpected request');
+  };
+  await draw(); await click('编辑发布信息'); await fill('配方名称', '待核对的提交'); await click('保存');
+  await act(async () => emit({type: 'account', value: {kind: 'signedIn', accountId, displayName: '作者', provider: 'github', persistence: 'memory'}}));
+  await act(async () => emit({type: 'authoringSaved', value: {accountId, draftId, revision: 3}}));
+  await click('重试保存');
+  const saves = requests.filter(item => item.type === 'saveRichDraftMetadata'); expect(saves[1]).toEqual(saves[0]);
+  expect(button('预览发布').disabled).toBe(true); expect(button('删除草稿').disabled).toBe(true);
+  draft = richDraft(3); await click('重新读取'); expect(button('预览发布').disabled).toBe(false);
+});
+it('keeps text unsent when the selected Logo cannot be read', async () => {
+  await draw(); await click('编辑发布信息'); await fill('配方名称', '尚未保存的文字');
+  let fail!: () => void;
+  const file = new File(['image'], 'logo.png', {type: 'image/png'});
+  Object.defineProperty(file, 'arrayBuffer', {value: () => new Promise<ArrayBuffer>((_resolve, reject) => {fail = () => reject(new Error('read failed'));})});
+  const input = document.querySelector<HTMLInputElement>('[aria-label="上传配方 Logo"]')!;
+  Object.defineProperty(input, 'files', {value: [file]});
+  await act(async () => input.dispatchEvent(new Event('change', {bubbles: true})));
+  await act(async () => button('保存').click()); await act(async () => fail());
+  expect(requests.some(item => item.type === 'saveRichDraftMetadata')).toBe(false);
+  expect(document.body.textContent).toContain('图片尚未读取，请重新选择');
+  expect(document.querySelector<HTMLInputElement>('[aria-label="配方名称"]')?.value).toBe('尚未保存的文字');
 });
