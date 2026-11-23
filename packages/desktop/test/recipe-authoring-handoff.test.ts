@@ -90,6 +90,11 @@ function fixture(path?:string) {
   const openDraft={type:'openDraftSource' as const,accountId,viewId:'local',baseRevision:2,draftId};
   return {build,binding,draftId,draft,original,op,openDraft,retryId,sourceIntentId,groupId,identity,remote,calls,rpc,request,signal};
 }
+function gate(){
+  let release!:()=>void;
+  const ready=new Promise<void>(resolve=>{release=resolve;});
+  return {ready,release};
+}
 
 it('backfills an old verified target from the exact daemon operation, then reopens after both journals expire',async()=>{
   const dir=mkdtempSync(join(tmpdir(),'authoring-locator-'));
@@ -428,6 +433,133 @@ it('does not answer a pending field after a transient online confirmation failur
   f.remote.field=undefined;
   f.request.mockImplementation(normal);
   await expect(controller.request({type:'status',handle:opened.handle})).resolves.toMatchObject({kind:'session',handle:opened.handle});
+});
+
+it('pauses an in-flight restore when a background account confirmation fails',async()=>{
+  vi.useFakeTimers();
+  clean.push(()=>vi.useRealTimers());
+  const f=fixture(),{controller}=f.build();
+  const session=await controller.request({type:'open',accountId:f.binding.accountId,viewId:'local',botId:f.binding.botId,groupId:f.groupId});
+  if(session.kind!=='session')throw Error('session');
+  await controller.request({type:'beginHandoff',handle:session.handle,retryId:f.retryId,groupId:f.groupId});
+  const restore={type:'restoreHandoff' as const,accountId:f.binding.accountId,viewId:'local',handle:session.handle,
+    retryId:f.retryId,target:{kind:'source' as const,botId:f.binding.botId,groupId:f.groupId}};
+  const atStatus=gate(),resume=gate(),events:string[]=[];
+  const normalRpc=f.rpc.getMockImplementation()!,normalAccount=f.request.getMockImplementation()!;
+  let hold=true,offline=false;
+  f.rpc.mockImplementation(async input=>{
+    if(input.type==='status'&&input.operationId===null&&hold){hold=false;atStatus.release();await resume.ready;}
+    if(input.type==='restoreHandoff')events.push(input.type);
+    return normalRpc(input);
+  });
+  f.request.mockImplementation((id,path)=>{
+    if(path==='/v1/me'){
+      events.push(offline?'me503':'me200');
+      if(offline)return Promise.resolve(new Response('{}',{status:503}));
+    }
+    return normalAccount(id,path);
+  });
+  const pending=controller.request(restore).then(reply=>({reply}),error=>({error}));
+  await atStatus.ready;
+  offline=true;
+  await vi.advanceTimersByTimeAsync(12000);
+  expect(events).toContain('me503');
+  resume.release();
+  const outcome=await pending;
+  expect(events.slice(events.lastIndexOf('me503')+1)).not.toContain('restoreHandoff');
+  expect(outcome).toHaveProperty('error');
+  expect(f.calls.filter(r=>r.type==='close')).toEqual([]);
+  offline=false;
+  await expect(controller.request(restore)).resolves.toMatchObject({kind:'handoffRestored',session:{handle:session.handle}});
+  expect(f.calls.filter(r=>r.type==='open')).toHaveLength(1);
+});
+
+it('pauses an in-flight field answer when concurrent restore loses account confirmation',async()=>{
+  vi.useFakeTimers();
+  clean.push(()=>vi.useRealTimers());
+  const f=fixture(),{controller}=f.build();
+  f.remote.operations=[f.op];
+  const restore={type:'restoreHandoff' as const,accountId:f.binding.accountId,viewId:'local',retryId:f.retryId,
+    target:{kind:'source' as const,botId:f.binding.botId,groupId:f.groupId}};
+  const restored=await controller.request(restore);
+  if(restored.kind!=='handoffRestored')throw Error('restore');
+  const handle=restored.session.handle,atRead=gate(),resume=gate(),events:string[]=[];
+  f.remote.field={requestId:randomUUID(),operationId:f.op.operationId,draftId:f.draftId,revision:1,field:'name'};
+  const normalRpc=f.rpc.getMockImplementation()!,normalAccount=f.request.getMockImplementation()!;
+  let hold=true,offline=false;
+  f.request.mockImplementation(async(id,path)=>{
+    if(path==='/v1/me'){
+      events.push(offline?'me503':'me200');
+      if(offline)return new Response('{}',{status:503});
+    }
+    if(path==='/v1/authoring/'+f.op.operationId)return Response.json(f.op.receipt);
+    if(path==='/v1/drafts/'+f.draftId){
+      if(hold){hold=false;atRead.release();await resume.ready;}
+      return Response.json({draftId:f.draftId,recipeId:null,revision:1,public:{name:'fixture title',summary:'',overview:'',version:'',access:'direct'},
+        format:'rich-v2',sourceIntentId:f.sourceIntentId,rich:{content:JSON.parse(f.draft.canonical),texts:{},canonical:f.draft.canonical}});
+    }
+    return normalAccount(id,path);
+  });
+  f.rpc.mockImplementation(async input=>{
+    if(input.type==='answerField'){events.push('answerField');return {kind:'fieldAnswered'};}
+    return normalRpc(input);
+  });
+  await vi.advanceTimersByTimeAsync(3000);
+  await atRead.ready;
+  offline=true;
+  await expect(controller.request({...restore,handle})).rejects.toThrow();
+  resume.release();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(events).toContain('me503');
+  expect(events.slice(events.indexOf('me503')+1)).not.toContain('answerField');
+  expect(f.calls.filter(r=>r.type==='close')).toEqual([]);
+  offline=false;
+  await expect(controller.request({...restore,handle})).resolves.toMatchObject({kind:'handoffRestored',session:{handle}});
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(events).toContain('answerField');
+});
+
+it('pauses an in-flight handoff answer when account confirmation fails during group lookup',async()=>{
+  vi.useFakeTimers();
+  clean.push(()=>vi.useRealTimers());
+  const f=fixture(),{controller}=f.build();
+  const restore={type:'restoreHandoff' as const,accountId:f.binding.accountId,viewId:'local',retryId:f.retryId,
+    target:{kind:'source' as const,botId:f.binding.botId,groupId:f.groupId}};
+  const restored=await controller.request(restore);
+  if(restored.kind!=='handoffRestored')throw Error('restore');
+  const handle=restored.session.handle,source=gate(),group=gate(),groupStarted=gate(),sourceStarted=gate(),events:string[]=[];
+  f.remote.pending={retryId:f.retryId,ref:randomUUID(),generation:2,lease:'a'.repeat(64),versions:[randomUUID()]};
+  const normalAccount=f.request.getMockImplementation()!,normalRpc=f.rpc.getMockImplementation()!;
+  let holdGroup=false,offline=false;
+  f.request.mockImplementation(async(id,path)=>{
+    if(path.endsWith('/source-items')){sourceStarted.release();await source.ready;return normalAccount(id,path);}
+    if(path==='/v1/me'){
+      events.push(offline?'me503':'me200');
+      if(offline)return new Response('{}',{status:503});
+    }
+    return normalAccount(id,path);
+  });
+  f.rpc.mockImplementation(async input=>{
+    if(input.type==='groupSourceIdentity'&&holdGroup){holdGroup=false;groupStarted.release();await group.ready;}
+    if(input.type==='answerHandoff')events.push(input.type);
+    return normalRpc(input);
+  });
+  await controller.request({type:'status',handle});
+  await sourceStarted.ready;
+  holdGroup=true;
+  source.release();
+  await groupStarted.ready;
+  offline=true;
+  await expect(controller.request({...restore,handle})).rejects.toThrow();
+  group.release();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(events).toContain('me503');
+  expect(events.slice(events.indexOf('me503')+1)).not.toContain('answerHandoff');
+  expect(f.calls.filter(r=>r.type==='close')).toEqual([]);
+  offline=false;
+  await expect(controller.request({...restore,handle})).resolves.toMatchObject({kind:'handoffRestored',session:{handle}});
+  await vi.advanceTimersByTimeAsync(12000);
+  expect(events).toContain('answerHandoff');
 });
 
 it.each(['forbidden','account mismatch','invalid response','unexpected error','lease aborted'])('still revokes a handle after confirmed identity or lease failure (%s)',async failure=>{

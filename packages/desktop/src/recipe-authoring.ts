@@ -163,6 +163,11 @@ export class RecipeAuthoringController {
   }
   private async daemon(h: Handle, request: ScopedRequest): Promise<RecipeAuthoringReply> {
     await this.identity(h);
+    if (request.type === 'restoreHandoff' || request.type === 'answerField' || request.type === 'answerHandoff') {
+      await this.present(h,false);
+      if (h.lastVerified === undefined || Date.now() - h.lastVerified >= 10_000)
+        throw new AuthoringServiceUnavailable('账号服务未确认本次操作，请稍后恢复。');
+    }
     this.check(h);
     if (!h.session || !h.lease.client.recipeAuthoring) throw changed();
     const reply = recipeAuthoringReplySchema.parse(
