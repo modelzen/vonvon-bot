@@ -25,7 +25,7 @@ import {
 } from '@vonvon/protocol';
 import type { NativeAccount } from './account-session.js';
 import type { RecipeDeviceLease } from './recipe-use.js';
-import { authoringCloud, AuthoringError, invalidAuthoring, dispatchDigest } from './recipe-authoring-cloud.js';
+import { authoringCloud, AuthoringError, AuthoringServiceUnavailable, invalidAuthoring, dispatchDigest } from './recipe-authoring-cloud.js';
 import { AuthoringJournal } from './recipe-authoring-journal.js';
 
 type Open = Extract<DesktopAuthoringRequest, { type: 'open' }>;
@@ -51,12 +51,13 @@ type Handle = {
   tail: Promise<void>;
   queued: number;
   attached: boolean;
+  ownership: number;
   workflow?: Promise<void>;
   nextRefresh: number;
   sequence: number;
   pausedContexts: Set<string>;
   lastActivity: number;
-  lastVerified: number;
+  lastVerified?: number;
   retry: Map<string, { state: string; until: number; delay: number; message?: string }>;
   target: DesktopAuthoringOperation['target'];
   groups: Map<GroupId, string>;
@@ -199,11 +200,13 @@ export class RecipeAuthoringController {
   }
   private async present(h: Handle, force = true) {
     this.check(h);
-    if (!force && Date.now() - h.lastVerified < 10_000) return;
+    if (!force && h.lastVerified !== undefined && Date.now() - h.lastVerified < 10_000) return;
     try {
       await this.cloud(h).presence();
       h.lastVerified = Date.now();
-    } catch {
+    } catch (error) {
+      delete h.lastVerified;
+      if (error instanceof AuthoringServiceUnavailable) throw error;
       this.revoke(h);
       throw new AuthoringError('账号连接已暂停，重新打开此 Bot 后可继续原操作。');
     }
@@ -279,6 +282,7 @@ export class RecipeAuthoringController {
         this.checkIdle(prior);
         const session = await this.refresh(prior);
         prior.attached = true;
+        prior.ownership++;
         return session;
       }
       return await this.openTarget(input,source);
@@ -303,9 +307,8 @@ export class RecipeAuthoringController {
       stop: new AbortController(),
       deviceId: '',
       deviceKey: '',
-      attached:true, nextRefresh:0, sequence:0, pausedContexts:new Set(),
+      attached:true, ownership:0, nextRefresh:0, sequence:0, pausedContexts:new Set(),
       lastActivity: Date.now(),
-      lastVerified: 0,
       retry: new Map(),
       groups: new Map(),
       operations: new Map(),
@@ -379,6 +382,11 @@ export class RecipeAuthoringController {
     }
     this.checkIdle(h);
     h.pausedContexts = new Set(info.pausedContexts);
+    if (h.intent.kind==='restore' && !h.intent.operationId && h.handoff) {
+      await this.checkGroup(h);
+      const reply=this.verifyHandoff(h.handoff,expectKind(await this.daemon(h,{type:'handoffStatus',retryId:h.intent.retryId}),'handoff'));
+      this.trackRestoredOperation(h,reply.handoff);
+    }
     if (info.handoff && info.handoff.retryId === h.handoff?.retryId && !h.attesting) {
       h.attesting = this.attestHandoff(h,info.handoff).catch(() => this.invalidateStale()).finally(() => {delete h.attesting;});
     }
@@ -398,7 +406,10 @@ export class RecipeAuthoringController {
         const draft = await cloud.draft(request.draftId,request.revision);
         const text = draft.public[request.field];
         if (safeDraftModelText(text)) value = text;
-      } catch { this.check(h); }
+      } catch (error) {
+        this.check(h);
+        if (error instanceof AuthoringServiceUnavailable) throw error;
+      }
     }
     this.checkIdle(h);
     const pending = expectKind(await this.daemon(h,{type:'workflow'}),'workflow').field;
@@ -432,6 +443,7 @@ export class RecipeAuthoringController {
       }
       const pending = expectKind(await this.daemon(h,{type:'workflow'}),'workflow').handoff;
       if (!pending || canonical(pending) !== canonical(request) || h.handoff?.retryId !== request.retryId) return;
+      await this.present(h,false);
       this.checkIdle(h);
       await this.checkGroup(h);
       const reply = expectKind(await this.daemon(h,{type:'answerHandoff',request,
@@ -448,8 +460,10 @@ export class RecipeAuthoringController {
     if (h.workflow) return;
     try {
       await this.workflow(h);
-    } catch {
-      this.revoke(h);
+    } catch (error) {
+      if (error instanceof AuthoringServiceUnavailable) {
+        try { this.check(h); this.checkIdle(h); } catch { this.revoke(h); }
+      } else this.revoke(h);
       return;
     }
     if (h.busy || Date.now() < h.nextRefresh) return;
@@ -511,12 +525,11 @@ export class RecipeAuthoringController {
     return { ...summary, ...(h.pausedContexts.has(op.operationId) && {contextPaused:true}), ...(syncMessage && {syncMessage}), target: h.target, ...(op.groupId && { groupName: h.groups.get(op.groupId) || op.groupId }) };
   }
   private async status(h: Handle) {
-    const result = expectKind(await this.daemon(h, { type: 'status',
+    const status = expectKind(await this.daemon(h, { type: 'status',
       ...(h.intent.kind==='restore'&&{operationId:h.intent.operationId??null}),
     }), 'status');
     const id=h.intent.kind==='restore'?h.intent.operationId:undefined;
-    const status=h.intent.kind==='restore'?{...result,operations:result.operations.filter(op=>op.operationId===id),
-      reconciliation:result.reconciliation.filter(op=>op.operationId===id)}:result;
+    if(h.intent.kind==='restore'&&(status.operations.some(op=>op.operationId!==id)||status.reconciliation.some(op=>op.operationId!==id)))throw invalidAuthoring();
     this.check(h);
     const current = new Set(status.operations.map(op => op.operationId));
     for (const id of h.operations.keys()) if (!current.has(id)) h.operations.delete(id);
@@ -987,7 +1000,7 @@ export class RecipeAuthoringController {
         previous.handoff&&previous.handoff.retryId!==r.retryId||previous.intent.kind==='restore'&&previous.intent.retryId!==r.retryId)throw recheck();
       return this.enqueue(previous,()=>this.restoreExisting(previous,r));
     }
-    const owners=new Set(this.handles.keys());
+    const owners=new Map([...this.handles.values()].map(h=>[h.id,h.ownership]));
     let source:DraftSource|undefined;
     let open:Open;
     if(r.target.kind==='draft'){
@@ -999,7 +1012,7 @@ export class RecipeAuthoringController {
       source=original.source;
       open={type:'open',accountId:r.accountId,viewId:r.viewId,botId:original.botId};
     }else open={type:'open',accountId:r.accountId,viewId:r.viewId,botId:r.target.botId,groupId:r.target.groupId};
-    if([...this.handles.values()].some(h=>h.open.viewId===open.viewId&&h.open.botId===open.botId&&!owners.has(h.id)))throw changed();
+    if([...this.handles.values()].some(h=>h.open.viewId===open.viewId&&h.open.botId===open.botId&&owners.get(h.id)!==h.ownership))throw changed();
     const key=open.viewId+'/'+open.botId;
     if(this.opening.has(key))throw new AuthoringError('正在连接这个 Bot，请稍后继续。');
     this.opening.add(key);
@@ -1023,7 +1036,11 @@ export class RecipeAuthoringController {
     await this.names(h);
     await this.checkGroup(h);
     const status=expectKind(await this.daemon(h,{type:'status',operationId:null}),'status');
-    if(!status.linked)return {kind:'handoffLinkRequired',session:this.sessionView(h,false,[])};
+    if(status.operations.length||status.reconciliation.length)throw invalidAuthoring();
+    if(!status.linked){
+      delete h.handoff;
+      return {kind:'handoffLinkRequired',session:this.sessionView(h,false,[])};
+    }
     const target=r.target;
     const groupId=target.kind==='source'?target.groupId:h.draftSource?.groupId;
     if(!groupId)throw recheck();
@@ -1035,6 +1052,7 @@ export class RecipeAuthoringController {
     if(reply.kind==='handoffUnavailable'){
       if(reply.retryId!==r.retryId)throw invalidAuthoring();
       h.intent={kind:'restore',retryId:r.retryId};
+      delete h.handoff;
       h.operations.clear();
       return reply;
     }
@@ -1046,7 +1064,15 @@ export class RecipeAuthoringController {
     const session=await this.refresh(h);
     if(restored.operationId){
       const op=session.operations.find(op=>op.operationId===restored.operationId);
-      if(!op||op.format!=='rich-v2'||op.purpose!==(target.kind==='draft'?'editDraft':'prepareDraft')||
+      if(!op){
+        const current=await this.daemon(h,{type:'restoreHandoff',retryId:r.retryId,expected});
+        if(current.kind!=='handoffUnavailable'||current.retryId!==r.retryId)throw invalidAuthoring();
+        h.intent={kind:'restore',retryId:r.retryId};
+        delete h.handoff;
+        h.operations.clear();
+        return current;
+      }
+      if(op.format!=='rich-v2'||op.purpose!==(target.kind==='draft'?'editDraft':'prepareDraft')||
         (target.kind==='draft'?(op.draftId!==target.draftId||op.baseRevision!==target.baseRevision):op.groupId!==target.groupId)||
         op.receipt?.status==='accepted'&&(op.receipt.operationId!==op.operationId||
           (target.kind==='draft'?(op.receipt.draftId!==target.draftId||op.receipt.revision!==target.baseRevision+1):op.receipt.revision!==1)))throw invalidAuthoring();

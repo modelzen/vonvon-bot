@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {agentIdSchema,type RecipeAuthoringRequest,type RecipeAuthoringReply,type AuthoringHandoff} from '@vonvon/protocol';
 import type {z} from 'zod';
-import {AuthoringJournal,sameRecipient,type Link,type Recipient} from './authoring-journal';
+import {AuthoringJournal,sameRecipient,type AuthoringLedger,type Link,type Recipient} from './authoring-journal';
 import {AuthoringIm,candidateConfirmation} from './authoring-im';
 import {groupSourceIdentity} from './authoring-source';
 import {preparedRich,readRichSource,richSkillOptions,typedRichEdit,richCardReview,type RichNativeOptions,type RichLocalDraft} from './authoring-rich-flow';
@@ -110,10 +110,11 @@ export class PrivateHandoffs {
         ref:randomUUID(),generation:1,sendUuid:randomUUID(),session:p.session,retryId:r.retryId,expiresAt:this.now()+30*60_000,selection:emptySelection(),phase:{state:'selecting'},
         ...(edit&&{edit,draftId:edit.draftId,baseRevision:edit.baseRevision}),...(r.type==='beginHandoff'&&r.sourceVersionId&&{sourceVersionId:r.sourceVersionId,inherited:structuredClone(r.inherited)})} satisfies PrivateHandoff;
     });
+    h=await this.transaction(p,link,h.retryId,row=>{if(row.ref!==h.ref)throw changed();return row;});
     return this.resumeExisting(p,link,h);
   }
   async restore(p:Presence,link:Link,r:Restore):Promise<Extract<RecipeAuthoringReply,{kind:'handoff'|'handoffUnavailable'}>>{
-    const found=await this.ledger.run(db=>{
+    const read=(db:AuthoringLedger)=>{
       this.live(p);
       const row=db.handoffs?.[r.retryId];
       if(!row)return;
@@ -136,20 +137,26 @@ export class PrivateHandoffs {
           (expected.kind==='draft'?(op.view.draftId!==expected.draftId||op.view.baseRevision!==expected.baseRevision):op.view.groupId!==row.groupId))throw changed();
       }
       return {row,available:true};
-    });
+    };
+    const found=await this.ledger.run(read);
     const unavailable={kind:'handoffUnavailable',retryId:r.retryId,reason:'notFound'} as const;
     if(!found)return unavailable;
     try{
       await this.identity(p,found.row);
       if(!found.available)return unavailable;
-      return {kind:'handoff',handoff:await this.resumeExisting(p,link,found.row)};
+      const current=await this.ledger.run(db=>{
+        const retained=read(db);
+        if(retained&&(retained.row.ref!==found.row.ref||!Object.values(db.links).some(l=>l.binding===link.binding&&sameRecipient(l.recipient,link.recipient))))throw changed();
+        return retained;
+      });
+      if(!current?.available)return unavailable;
+      return {kind:'handoff',handoff:await this.resumeExisting(p,link,current.row)};
     }catch(error){
       if(!await this.ledger.run(db=>Boolean(db.handoffs?.[r.retryId])))return unavailable;
       throw error;
     }
   }
   private async resumeExisting(p:Presence,link:Link,h:PrivateHandoff){
-    h=await this.transaction(p,link,h.retryId,row=>{if(row.ref!==h.ref)throw changed();return row;});
     if(!active(h))return publicView(h);
     if(h.session!==p.session){
       if(!h.messageId&&h.sentAt!==undefined){h=await this.send(p,link,h);if(!h.messageId)return publicView(h);}
