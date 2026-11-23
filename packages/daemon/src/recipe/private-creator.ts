@@ -440,7 +440,12 @@ export class PrivateCreator{
         (o.contextUntil??0)>this.now()&&(o.view.draftId===selected.snapshot.work.draftId||o.view.receipt?.status==='accepted'&&o.view.receipt.draftId===selected.snapshot.work.draftId));
       const focusedOperation=!selected&&s.focusDraft&&Object.values(db.operations).some(o=>o.bot===this.botKey&&o.accountId===p.account&&o.scope===p.scope&&o.binding===link.binding&&sameRecipient(o.recipient,recipient)&&
         !o.revoked&&o.contextOpen&&(o.contextUntil??0)>this.now()&&(o.view.draftId===s.focusDraft||o.view.receipt?.status==='accepted'&&o.view.receipt.draftId===s.focusDraft));
-      return {selected,quote:activeCard||undefined,logo:s.awaitLogo,duplicate:s.seen?.includes(msg.messageId),originalOp:Boolean(op),matching:matching||focusedOperation,foreignQuote:Boolean(quoted&&!op&&!activeCard),active:Boolean(s.focusUntil&&s.focusUntil>this.now())};
+      const openOperations=Object.values(db.operations).filter(o=>o.bot===this.botKey&&o.accountId===p.account&&o.scope===p.scope&&o.binding===link.binding&&sameRecipient(o.recipient,recipient)&&
+        o.contextOpen&&(o.contextUntil??0)>this.now()&&o.terminalAt===undefined);
+      const commandOperation=!quoted&&!selected&&s.focusUntil&&s.focusUntil>this.now()&&openOperations.length===1?openOperations[0]:undefined;
+      const editableFocus=commandOperation&&!commandOperation.revoked&&commandOperation.view.purpose==='editDraft'&&commandOperation.view.draftId===s.focusDraft&&
+        ['waiting','candidate'].includes(commandOperation.view.state);
+      return {selected,quote:activeCard||undefined,logo:s.awaitLogo,duplicate:s.seen?.includes(msg.messageId),originalOp:Boolean(op),matching:matching||focusedOperation,editableFocus:Boolean(editableFocus),foreignQuote:Boolean(quoted&&!op&&!activeCard),active:Boolean(s.focusUntil&&s.focusUntil>this.now())};
     });
     if(selection.duplicate)return true;
     const {quote}=selection;
@@ -457,7 +462,7 @@ export class PrivateCreator{
     const retry=/^\/recipe\s+retry$/i.test(text);
     if(msg.replyToMessageId&&selection.foreignQuote&&selection.active){await this.im.reply(recipient.chatId,msg.messageId,'请选择原作品的当前卡片。');return true;}
     if(selection.originalOp&&!intent)return false;
-    if(!current&&selection.matching&&change&&/^(name|summary|overview|version)$/i.test(change[1]!))return false;
+    if(!current&&selection.editableFocus&&change&&/^(name|summary|overview|version)$/i.test(change[1]!))return false;
     if(!intent&&!photo&&!change&&!issue&&!retry){
       if(!selection.active)return false;
       if(selection.matching)return false;

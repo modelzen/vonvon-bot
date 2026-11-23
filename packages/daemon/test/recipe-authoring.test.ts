@@ -2725,3 +2725,20 @@ it('keeps an explicitly selected version when an earlier draft snapshot arrives'
   expect(current).toEqual({kind:'version',target,name:'版本 B',version:'9'});
   expect(lastCard()).toContain('确认生成');
 });
+
+it('keeps an unquoted version command for completed draft A from editing a different waiting draft B',async()=>{
+  const {content,draftId}=await richChatContext(['version'],true);
+  const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
+  const canonical=Buffer.from(canonicalizeRichRecipeContent(content).canonicalUTF8).toString('base64url');
+  await attachCreator();
+  const idB=randomUUID();
+  const b=kind(await rpc('richEdit',{draftId:idB,baseRevision:2,canonical,selected:[content.public.version.itemId]}),'operation').operation;
+  await rpc('richAdvance',{operationId:b.operationId,destinationDraftId:idB,authorization:{...await auth(b,'dispatch'),format:'rich-v2'}});
+  await attachCreator();
+  await rpc('creatorContinue',{selection:{kind:'draft',work:{draftId,source:null},name:'A',version:'1'}});
+  expect((await status(b.operationId)).state).toBe('waiting');
+  await orch.onMessage(msg('/recipe version 8.2'));
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const result=await new AuthoringJournal(root,()=>clock).run(db=>({chosen:Object.values(db.links)[0]!.creator!.focusDraft===draftId,state:db.operations[b.operationId]!.view.state,request:db.operations[b.operationId]!.rich?.request}));
+  expect({chosen:result.chosen,state:result.state,mutation:result.request&&'payload'in result.request&&result.request.payload.changes}).toEqual({chosen:true,state:'waiting',mutation:undefined});
+});
