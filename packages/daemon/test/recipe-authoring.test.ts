@@ -2973,3 +2973,80 @@ it('CHAT RESUME preserves B selected during the initial works-source validation'
   expect(await ledger.run(db=>Object.values(db.links).map(l=>l.creator?.chosenUntil))).toEqual(chosen);
   expect(await ledger.run(db=>db.operations[op.operationId]!.contextOpen)).toBe(false);
 });
+
+it('INDEPENDENT skips pending unsent group selection after its wake expires', async()=>{
+  await link();await anotherAuthor();await attachCreator();
+  await service.onMessage(msg('创建配方'));await tap(privateChoice('关联 1'));
+  const {AuthoringIm}=await import('../src/recipe/authoring-im');
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock),before=messages.size;
+  const rejected=vi.spyOn(AuthoringIm.prototype,'send').mockRejectedValueOnce(new Error('network unavailable before send'));
+  try{await expect(creatorJobs()).rejects.toThrow('network unavailable before send');}finally{rejected.mockRestore();}
+  expect(messages.size).toBe(before);
+  await ledger.run(db=>{const w=Object.values(db.links).find(l=>l.wake)!.wake!;expect(w.cardRef).toBeTruthy();w.expiresAt=clock});
+  expect(await creatorJobs()).toEqual([]);
+  expect(messages.size).toBe(before);
+});
+it('INDEPENDENT keeps B selected during the original works-card authenticity check',async()=>{
+  const {op,draftId}=await richChatContext();
+  const b=await anotherAuthor();await attachCreator();
+  await service.onMessage(msg('我的配方'));
+  const list=(await creatorJobs()).find(j=>j.task.kind==='read'&&j.task.read.kind==='works')!;
+  await rpc('creatorAnswer',{id:list.id,answer:{kind:'works',items:[{kind:'draft',work:{draftId,source:null},name:'原作品',version:'1'}],nextOffset:null}});
+  const button=privateChoice('原作品');
+  const {AuthoringJournal,linkKey}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  await ledger.run(db=>{db.operations[op.operationId]!.contextOpen=false;});
+  const bDraft=randomUUID();let chosenB='';
+  onCardMatch=async()=>{onCardMatch=undefined;await b.request('edit',{draftId:bDraft,baseRevision:1});chosenB=await ledger.run(db=>Object.keys(db.links).find(k=>(db.links[k]!.creator?.chosenUntil??0)>clock)!)};
+  await tap(button);
+  expect(chosenB).toBeTruthy();
+  expect(await ledger.run(db=>({chosen:Object.keys(db.links).filter(k=>(db.links[k]!.creator?.chosenUntil??0)>clock),open:db.operations[op.operationId]!.contextOpen}))).toEqual({chosen:[chosenB],open:false});
+});
+it('INDEPENDENT never sends an expired group card when the wake lapses during Feishu card creation',async()=>{
+  await link();await anotherAuthor();await attachCreator();
+  await service.onMessage(msg('创建配方'));await tap(privateChoice('关联 1'));
+  const {AuthoringIm}=await import('../src/recipe/authoring-im');
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock),before=messages.size;
+  await ledger.run(db=>{Object.values(db.links).find(l=>l.wake)!.wake!.expiresAt=clock+1000;});
+  const create=AuthoringIm.prototype.createJson;
+  const delayed=vi.spyOn(AuthoringIm.prototype,'createJson').mockImplementationOnce(async function(this:InstanceType<typeof AuthoringIm>,body){
+    const id=await create.call(this,body);clock+=1001;return id;
+  });
+  try {expect(await creatorJobs()).toEqual([]);expect(messages.size).toBe(before);}
+  finally {delayed.mockRestore();}
+});
+
+
+it.each(['saved','sourceChanged','accountChanged'] as const)('CHAT CORRECTION retains a verified legacy works source through resumed edit, %s',async(outcome)=>{
+  const {op,draftId}=await richChatContext();
+  const preparation=await advance(await prepare(),'dispatch');
+  await rpc('settle',{operationId:preparation.operationId,receipt:{operationId:preparation.operationId,status:'accepted',stateRevision:3,draftId,revision:1}});
+  const {AuthoringJournal,linkKey}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock),identity=kind(await rpc('groupSourceIdentity',{groupId}),'groupSourceIdentity').identity;
+  const work={draftId,source:{groupId,identity,preparationId:preparation.operationId}};
+  await ledger.run(db=>{const row=db.operations[op.operationId]!;row.contextOpen=false;row.originalGroup={groupId,identity};row.creatorSave=true;});
+  const b=outcome==='accountChanged'?await anotherAuthor():undefined;
+  await attachCreator();
+  const scope=await ledger.run(db=>db.operations[op.operationId]!.scope);
+  expect(await ledger.run(db=>db.links[linkKey(scope,account)]!.creator?.sources?.[draftId])).toBeUndefined();
+  await service.onMessage(msg('我的配方'));
+  const list=(await creatorJobs()).find(j=>j.task.kind==='read'&&j.task.read.kind==='works')!;
+  await rpc('creatorAnswer',{id:list.id,answer:{kind:'works',items:[{kind:'draft',work,name:'原作品',version:'1'}],nextOffset:null}});
+  const choice=privateChoice('原作品');
+  if(outcome==='sourceChanged')await removeProject('PRIVATE-GROUP-SENTINEL');
+  if(b)onCardMatch=async()=>{onCardMatch=undefined;await b.request('edit',{draftId:randomUUID(),baseRevision:1});};
+  await tap(choice);
+  if(outcome!=='saved'){
+    expect(await ledger.run(db=>({source:db.links[linkKey(scope,account)]!.creator?.sources?.[draftId],open:db.operations[op.operationId]!.contextOpen}))).toEqual({source:undefined,open:false});
+    return;
+  }
+  expect(await ledger.run(db=>db.operations[op.operationId]!.contextOpen)).toBe(true);
+  await rpc('settle',{operationId:op.operationId,receipt:{operationId:op.operationId,status:'accepted',stateRevision:3,draftId,revision:3}});
+  const jobs=await creatorJobs();
+  expect(jobs).toHaveLength(1);
+  expect(jobs[0]!.task).toEqual({kind:'read',read:{kind:'draft',work}});
+  expect(await creatorJobs()).toEqual(jobs);
+  expect(await rpc('creatorCheck',{id:jobs[0]!.id})).toMatchObject({mode:'read'});
+});

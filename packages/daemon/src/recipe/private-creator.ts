@@ -400,22 +400,27 @@ export class PrivateCreator{
     });
     await this.display(p,link,c);
   }
-  private async selected(p:Presence,link:Link,selection:CreatorSelection,clicked?:{card:Card;index:number},select=true){
+  private selectionState(db:AuthoringLedger,actual:Link){
+    return JSON.stringify({
+      chosen:Object.entries(db.links).filter(([,l])=>l.bot===this.botKey&&sameRecipient(l.recipient,actual.recipient)).map(([key,l])=>[key,l.binding,l.creator?.chosenUntil,l.wake?.id]),
+      focus:[actual.creator?.focusDraft,actual.creator?.focusUntil,actual.creator?.current],
+    });
+  }
+  private async selected(p:Presence,link:Link,selection:CreatorSelection,clicked?:{card:Card;index:number;selectionState:string},select=true){
     const commit=(s:CreatorLedger,actual:Link,db:AuthoringLedger)=>{
-      if(clicked)this.consumeChoice(s,p,clicked.card,clicked.index);
+      if(clicked){
+        if(clicked.selectionState!==this.selectionState(db,actual))throw new CreatorSelectionChanged();
+        this.consumeChoice(s,p,clicked.card,clicked.index);
+      }
       if(select)selectCreatorBinding(db,actual,this.now());
     };
     if(selection.kind==='draft'){
-      const selectionState=(db:AuthoringLedger,actual:Link)=>({
-        chosen:Object.entries(db.links).filter(([,l])=>l.bot===this.botKey&&sameRecipient(l.recipient,link.recipient)).map(([key,l])=>[key,l.binding,l.creator?.chosenUntil,l.wake?.id]),
-        focus:[actual.creator?.focusDraft,actual.creator?.focusUntil,actual.creator?.current],
-      });
-      const beforeSource=await this.run(p,link,(_s,actual,db)=>selectionState(db,actual));
+      const beforeSource=clicked?.selectionState??await this.run(p,link,(_s,actual,db)=>this.selectionState(db,actual));
       await this.source(p,selection.work);
       const edits=(db:AuthoringLedger)=>Object.values(db.operations).filter(o=>o.bot===this.botKey&&o.accountId===p.account&&o.scope===p.scope&&o.binding===link.binding&&
         sameRecipient(o.recipient,link.recipient)&&o.terminalAt===undefined&&o.view.purpose==='editDraft'&&o.view.draftId===selection.work.draftId);
       const editing=await this.run(p,link,(s,actual,db)=>{
-        if(!same(beforeSource,selectionState(db,actual)))throw new CreatorSelectionChanged();
+        if(beforeSource!==this.selectionState(db,actual))throw new CreatorSelectionChanged();
         const rows=edits(db);
         if(rows.length){
           const row=rows[0]!,source=selection.work.source;
@@ -433,6 +438,7 @@ export class PrivateCreator{
           const s=state(actual),rows=edits(db),known=s.sources?.[selection.work.draftId];
           if(!matchesAuthoringRoute(db,actual,editing.route,this.now())||s.focusDraft!==selection.work.draftId||s.focusUntil!==editing.focusUntil||
             s.current||rows.length!==1||rows[0]!.view.operationId!==editing.id||known!==undefined&&!same(known,selection.work.source))throw new CreatorSelectionChanged();
+          if(selection.work.source)(s.sources??={})[selection.work.draftId]=selection.work.source;
         });
         return;
       }
@@ -561,6 +567,11 @@ export class PrivateCreator{
     const raw=evt.raw as {operator?:{open_id?:string;tenant_key?:string}};
     if(!raw?.operator?.tenant_key||raw.operator.open_id!==evt.operator.openId)return;
     const recipient={openId:evt.operator.openId,chatId:evt.chatId,tenantKey:raw.operator.tenant_key};
+    const selectionState=await this.ledger.run(db=>{
+      const actual=db.links[linkKey(p.scope,p.account)];
+      if(!actual)throw denied();
+      return this.selectionState(db,actual);
+    });
     const link=await this.hooks.guard(p,recipient);
     const click=creatorClick.safeParse(evt.action?.value).data;
     if(click?.verb!=='creator')return;
@@ -576,7 +587,7 @@ export class PrivateCreator{
       case 'detailPage':return this.preview(p,link,c,choice);
       case 'codePage':return this.display(p,link,await this.run(p,link,s=>this.cards.codePage(s,p,choice.answer,choice.offset,c.version)));
       case 'select':
-        try{return await this.selected(p,link,choice.selection,{card:c,index});}
+        try{return await this.selected(p,link,choice.selection,{card:c,index,selectionState});}
         catch(error){
           await this.im.reply(evt.chatId,evt.messageId,error instanceof CreatorSelectionChanged?'账号选择已改变，请引用原配方卡或重新选择账号后重发本条修改。':denied().message);
           throw error;
@@ -686,7 +697,7 @@ export class PrivateCreator{
       case 'creatorPoll':{
         const wakeId=await this.run(p,link,(_s,l,db)=>l.wake&&l.wake.expiresAt>this.now()&&this.wakeRoute(db,l)?l.wake.id:undefined);
         if(wakeId)await this.open(p,link.binding,wakeId).catch(error=>{if(!(error instanceof CreatorSelectionChanged))throw error;});
-        const {jobs,cards}=await this.run(p,link,(s,_l,db)=>{
+        const {jobs,cards}=await this.run(p,link,(s,l,db)=>{
           const now=this.now();
           for(const [id,r] of Object.entries(s.jobs)){
             if(r.job.task.kind==='read'&&r.job.task.read.kind==='page'){
@@ -724,7 +735,7 @@ export class PrivateCreator{
           const next=[...pending.slice(offset),...pending.slice(0,offset)].slice(0,16).map(r=>r.job);
           this.pollOffset=offset+next.length;
           return {jobs:next,
-            cards:Object.values(s.cards).filter(c=>(!c.messageId||c.needsUpdate)&&c.session===p.session&&(!c.previewOwner||this.livePreview(s,p,s.jobs[c.previewOwner]))).slice(0,4)};
+            cards:Object.values(s.cards).filter(c=>c.ref!==l.wake?.cardRef&&(!c.messageId||c.needsUpdate)&&c.session===p.session&&(!c.previewOwner||this.livePreview(s,p,s.jobs[c.previewOwner]))).slice(0,4)};
         });
         for(const c of cards){
           if(c.previewOwner)await this.redeliver(p,link,c).catch(()=>undefined);

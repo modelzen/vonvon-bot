@@ -113,6 +113,13 @@ export function retire(op: LocalOperation, state: 'completed' | 'cancelled' | 'e
   discardAuthoringMaterial(op);
 }
 export function maintain(ledger: AuthoringLedger, now: number) {
+  for(const link of Object.values(ledger.links))if(link.wake&&link.wake.expiresAt<=now){
+    const creator=link.creator,wake=link.wake;
+    if(creator&&wake.cardRef&&!Object.values(creator.jobs).some(job=>job.receiptCard&&job.resultCard===wake.cardRef))delete creator.cards[wake.cardRef];
+    const job=creator&&wake.jobId&&creator.jobs[wake.jobId];
+    if(creator&&job&&job.job.task.kind==='read'&&job.job.task.read.kind==='works'&&!job.receiptCard)delete creator.jobs[job.job.id];
+    delete link.wake;
+  }
   for(const [id,h] of Object.entries(ledger.handoffs??{})){
     if(h.expiresAt+7*DAY<=now){delete ledger.handoffs![id];continue;}
     if(h.expiresAt<=now&&!['prepared','cancelled','needsReview'].includes(h.phase.state)){
