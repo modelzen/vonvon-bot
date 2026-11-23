@@ -1,5 +1,8 @@
 # vonvon-bot
 
+[配方、账号与社区开发归档索引](docs/archive/2026-11-23-recipes.md)
+
+
 V1 contains the `@vonvon/protocol` package. It extracts the pinned desktop request families and adds machine handshake, correlated RPC envelopes, and snapshot events. The bridge project store has a separate reader-compatible schema; it is not the client project view.
 
 Development requires Node.js 22.12 or later in the 22.x series, 24.x, or 26 and later.
