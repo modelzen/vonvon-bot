@@ -16,9 +16,9 @@ const recipe: RecipeDetail = {recipeId: '11111111-1111-4111-8111-111111111111', 
   public: {name: '会议纪要', summary: '保留会议决定', overview: '', version: '1.2', access: 'direct'}, owned: false, acquired: false};
 const initialCatalog: CommunityResponses['catalog'] = {hero: recipe, items: [], nextCursor: 'next-eight'};
 const shell: CommunityShell = {request: h.request};
-function Harness({initial = {kind: 'catalog'}}: {initial?: CommunityRoute}) {
+function Harness({initial = {kind: 'catalog'}, catalogResult = initialCatalog}: {initial?: CommunityRoute; catalogResult?: CommunityResponses['catalog']}) {
   const [route, setRoute] = useState(initial);
-  const [catalog, setCatalog] = useState<Community['catalog']>({query: '', search: '', scrollTop: 0, result: initialCatalog});
+  const [catalog, setCatalog] = useState<Community['catalog']>({query: '', search: '', scrollTop: 0, result: catalogResult});
   h.community = {shell, route, catalog, setCatalog, open: next => setRoute(next ?? {kind: 'catalog'}), isOpen: true, close() {}, leave() {}, consumeDeparture() {}};
   return <CommunityPage/>;
 }
@@ -133,4 +133,20 @@ it('keeps the empty studio focused on preparation without a blank-draft shortcut
   expect(document.body.textContent).not.toContain('手动');
   expect([...document.querySelectorAll('button')].filter(button => button.textContent === '准备配方')).toHaveLength(1);
   expect(h.request.mock.calls.map(([request]) => request.type)).toEqual(['drafts', 'publications']);
+});
+
+it.each(['featured', 'latest'] as const)('labels committed search results once and restores the %s catalog heading after clearing', async heroKind => {
+  const unfiltered = {...initialCatalog, heroKind};
+  const title = heroKind === 'featured' ? '场景精选' : '最新配方';
+  h.request.mockResolvedValueOnce({hero: null, items: [recipe], nextCursor: 'next-eight'}).mockResolvedValueOnce(unfiltered);
+  await act(async () => root.render(<Harness catalogResult={unfiltered}/>));
+  expect(document.querySelector('.community-section-heading h2')?.textContent).toBe(title);
+  await type('会议');
+  expect(document.querySelector('.community-section-heading h2')?.textContent).toBe(title);
+  await tick();
+  expect([...document.querySelectorAll('.community-section-heading h2, .community-catalog-list > h2')].map(heading => heading.textContent)).toEqual(['搜索结果']);
+  expect(document.body.textContent).not.toContain('Vonvon 编辑推荐');
+  expect(document.querySelectorAll('.community-card')).toHaveLength(1);
+  await click('清除搜索');
+  expect(document.querySelector('.community-section-heading h2')?.textContent).toBe(title);
 });
