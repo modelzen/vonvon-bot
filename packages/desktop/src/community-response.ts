@@ -15,4 +15,3 @@ export async function boundedJson(response: Response, limit = 16 * 1024 * 1024):
   for (const chunk of chunks) {content.set(chunk, offset); offset += chunk.byteLength;}
   try {return JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(content));} catch {throw new Error('社区响应无效');}
 }
-
