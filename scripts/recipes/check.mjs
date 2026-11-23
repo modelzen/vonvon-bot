@@ -231,6 +231,8 @@ try {
     const nextDraft=await request('/drafts',{method:'POST',token:author,body:{...unicode,public:{...unicode.public,version:'2'},recipeId:unicodeVersion.recipeId,sourceVersionId:unicodeVersion.versionId}});
     const nextVersion=await request('/drafts/'+nextDraft.draftId+'/publish',{method:'POST',token:author,revision:nextDraft.revision,body:{}});
     await checkNativeInstall({root,tmp,origin,author,accountId,version:unicodeVersion,nextVersion,sql});
+    const {checkNativeAuthoring} = await import('./native-authoring-check.mjs');
+    await checkNativeAuthoring({root,tmp,origin,author,reader,accountId,sql,request});
     console.log('PASS: native boundary reads Unicode versions and recovers a lost code batch after cross-client redemption and disable.');
     const spare=await request('/versions/'+v.versionId+'/codes',{method:'POST',token:author,body:{count:2}});
     for (const token of [author,other]) {
