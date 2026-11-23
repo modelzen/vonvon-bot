@@ -1,5 +1,5 @@
 import { isAbsolute } from 'node:path';
-import { JUDGE_PROVIDER_IDS, cardDisplayConfigSchema, completionTemplateSchema } from '@vonvon/protocol';
+import { JUDGE_PROVIDER_IDS, workRulesSchema, cardDisplayConfigSchema, completionTemplateSchema } from '@vonvon/protocol';
 import { isHomeRelative } from '../platform/home-path';
 import type { SettingsAction, SettingsEdit, SettingsScope, ModelQuery } from './settings-types';
 export class SettingsInputError extends Error {
@@ -102,7 +102,7 @@ const schemas: Record<string, Record<string, Rule>> = {
   },
   project: {
     profile: shape({ persona: body, memory: body, inheritPersona: bool, inheritMemory: bool }, true),
-    role: shape({ supplement: body }, true),
+    role: shape({ supplement: body, workRules: value => workRulesSchema.safeParse(value).success }, true),
     modelAccess: shape({ backend: text, models: value => array(text)(value) && (value as unknown[]).length > 0, efforts: array(text), modelEfforts: stringMap(array(text)), modelServiceTiers: stringMap(array(one('fast', 'ultrafast'))), defaultModel: text, defaultEffort: text }, true),
     workspace: shape({ primary: value => value !== null && path(value), directories: array(value => value !== null && path(value)), repositories: array(value => value !== null && path(value)) }, true),
     smartRules: shape({ respond: body, newTopic: body }, true),

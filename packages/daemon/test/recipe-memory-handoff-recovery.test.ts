@@ -106,9 +106,9 @@ it.each(['pending','conflict','unavailable'])('does not resend an old entity whe
 
 it('describes the surviving recipe context as work rules in the provider prompt',()=>{
   const source:ContextSources={place:{kind:'group',chatId:'oc_review',chatName:'Review'},botName:'probe',soul:'',
-    role:parseRole(''),supplement:'',failed:{},recipeContext:'ORDERED_WORK_RULE'};
+    role:parseRole(''),supplement:'',failed:{},workRules:'ORDERED_WORK_RULE'};
   const prompt=openingInstructions(assemble(source),'fixture');
-  expect(prompt).toContain('[本群配方 · 工作规则]');
+  expect(prompt).toContain('[本群工作规则]');
   expect(prompt).toContain('ORDERED_WORK_RULE');
   expect(prompt).not.toContain('选中的记忆');
 });

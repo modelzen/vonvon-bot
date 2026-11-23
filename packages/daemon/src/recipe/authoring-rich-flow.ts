@@ -84,7 +84,8 @@ export async function readRichSource(native:RichNativeOptions,scope:string,accou
   const inventory=await nativeRichInventory({seed,row,botRoot:botPaths(native.bot.appId).dir,botId:native.bot.appId,...options,skills:options.skills.filter(choice=>!handles.has(choice.skill)),
     tasks:options.includeTasks?await native.tasks?.(group):[]});
   if('richRecipe' in row && row.richRecipe){
-    const visible=selectManagedSources(managed!,options);
+    const visible=selectManagedSources(managed!,options).filter(item=>
+      row.workRules===undefined||item.kind!=='rules'||item.value.purpose!=='work');
     applyManagedInventory(inventory.content,inventory.evidence,visible,account);
     inventory.lease=wireDigest([inventory.lease,metadata,managed,row.richRecipe.pointer,options]);
   }
