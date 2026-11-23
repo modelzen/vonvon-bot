@@ -114,9 +114,11 @@ it.each(['failed', 'maintenance', 'unknown'] as const)('renders community throug
   const state = phase === 'unknown' ? undefined : devicesState({id: A, phase: phase === 'failed' ? 'failed' : 'ready', mode: phase === 'maintenance' ? 'maintenance' : 'full'});
   h.community.isOpen = true;
   const root = DesktopRootView({state, shell: h.shell, fallback: newClient(), renderApp: () => <p>COMMUNITY-APP</p>});
-  const device = root.props.children.props.children.props.children;
+  const device = root.props.children.props.children;
   const rendered = device.type(device.props);
-  expect(nodes(rendered).some(node => node.type === CommunityWindow)).toBe(true);
-  expect(nodes(rendered).some(node => node.type === DeviceGate)).toBe(false);
+  const content = nodes(rendered).find(node => node.props.hasDevices === true)!;
+  const selected = (content.type as (props: typeof content.props) => unknown)(content.props);
+  expect(nodes(selected).some(node => node.type === CommunityWindow)).toBe(true);
+  expect(nodes(selected).some(node => node.type === DeviceGate)).toBe(false);
   expect(h.shell!.devices.switchTo).not.toHaveBeenCalled();
 });

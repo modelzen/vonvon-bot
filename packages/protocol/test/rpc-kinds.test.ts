@@ -7,7 +7,7 @@ it("names every request once, nested variants by their own field", () => {
   expect(new Set(kinds).size).toBe(kinds.length);
   for (const entry of entries) expect(entry.kind.startsWith(`${entry.method}.${entry.type}`)).toBe(true);
   for (const kind of [
-    "snapshot.get", "contextPreview.get", "command.bindGroup", "command.setAgentBadgeNumber", "schedule.create", "schedule.listBot", "memory.newCounts",
+    "snapshot.get", "contextPreview.get", "command.bindGroup", "command.readGroupIdentity", "command.setAgentBadgeNumber", "schedule.create", "schedule.listBot", "memory.newCounts",
     "settings.read.host", "settings.save.session", "settings.act.adminMember", "settings.sessions",
     "machine.mcp.add", "machine.service.start", "machine.bridgeImport.rollback", "machine.stopHost",
   ]) expect(kinds).toContain(kind);
@@ -20,7 +20,9 @@ it("names every request once, nested variants by their own field", () => {
   // dm-agent 7.3: command.feishuRead. Badges added command.setAgentBadgeNumber.
   const installs=kinds.filter(kind=>kind.startsWith('recipeInstall.')).sort();
   expect(installs).toEqual(['cancel','commit','createdGroup','ignoreVersion','issuing','prepare','reconcile','source','status'].map(kind=>'recipeInstall.'+kind));
-  expect(kinds.length - installs.length).toBe(154);
+  const authoring = kinds.filter(kind => kind.startsWith('recipeAuthoring.')).sort();
+  expect(authoring).toEqual('advance beginLink cancel close confirmLink deliver edit inspectCandidate inspectLink open prepare reconcile resend reviewSource settle status updateCard'.split(' ').map(kind => 'recipeAuthoring.' + kind));
+  expect(kinds.length - installs.length - authoring.length).toBe(155);
   for (const kind of ["device.pair", "device.setPort", "admin.negotiate", "memory.branchDelete", "machine.desktopUpdateReport"]) expect(kinds).toContain(kind);
   for (const kind of ["machine.repairCli", "collaboration.openGroup", "environment.installCodex", "environment.startCodexLogin"]) expect(kinds).not.toContain(kind);
 });
