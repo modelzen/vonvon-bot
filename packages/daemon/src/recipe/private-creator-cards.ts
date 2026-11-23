@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import type {CreatorAnswer,CreatorCommand,CreatorRead,CreatorSelection,CreatorWork,InheritedPublication} from '@vonvon/protocol';
+import type {CreatorAnswer,CreatorCommand,CreatorRead,CreatorSelection,CreatorSnapshot,CreatorWork,InheritedPublication} from '@vonvon/protocol';
 import {button,card,linkButton} from '../card/cards';
 import type {Presence} from './authoring-service';
 import type {CreatorLedger,JobRecord,VersionSelection} from './private-creator';
@@ -12,7 +12,7 @@ type Choice =
   | {kind:'groups';offset:number;inherited?:InheritedPublication}
   | {kind:'read';read:CreatorRead}
   | {kind:'approve';id:string;retry:boolean}
-  | {kind:'offer';command:CreatorCommand}
+  | {kind:'offer';command:CreatorCommand;codeLabel?:string}
   | {kind:'codePage';answer:Extract<CreatorAnswer,{kind:'codes'}>;offset:number}
   | {kind:'detailPage';id:string;page:number}
   | {kind:'logo';work:CreatorWork}
@@ -20,7 +20,7 @@ type Choice =
 export type Option={label:string;choice:Choice};
 export type Card={
   ref:string;generation:number;session:string;sendId:string;expiresAt:number;title:string;text:string;
-  options:Option[];needsUpdate?:true;retryId?:string;cardId?:string;messageId?:string;url?:string;workId?:string;
+  options:Option[];previewOwner?:string;previewApproval?:string;version?:VersionSelection;needsUpdate?:true;retryId?:string;cardId?:string;messageId?:string;url?:string;workId?:string;
 };
 export const layout=(c:Card)=>card([
   {tag:'div',text:{tag:'plain_text',content:c.text}},
@@ -28,19 +28,44 @@ export const layout=(c:Card)=>card([
   ...(c.url?[linkButton('打开社区版本',c.url)]:[]),
 ],{header:{title:c.title},forward:false,summary:c.title});
 
+function checkSize(row:Card){
+  if(Buffer.byteLength(JSON.stringify({data:JSON.stringify(layout(row))}))>28_000)throw new Error('内容过长，请分段核对。');
+}
+export function sectionName(snapshot:CreatorSnapshot,index:number){
+  const title=snapshot.sections[index]!.title;
+  const labels:Record<string,string>={role:'群角色',settings:'群设置',rules:'规则',skills:'技能',files:'文件',tasks:'任务',setup:'准备步骤',parts:'附件清单',finalLogo:'配方 Logo'};
+  const part=snapshot.parts.findIndex(item=>item.kind==='text'&&item.objectId===title);
+  return part>=0?'附件正文 '+(part+1):Object.hasOwn(labels,title)?labels[title]!:title;
+}
 export class CreatorCards {
   constructor(private readonly now:()=>number) {}
   newCard(s:CreatorLedger,p:Presence,title:string,text:string,buttons:Option[],workId?:string,url?:string){
     const ref=randomUUID();
     const row:Card={ref,sendId:randomUUID(),generation:1,session:p.session,expiresAt:this.now()+30*60_000,title,text,options:buttons,workId,url};
-    if(Buffer.byteLength(JSON.stringify({data:JSON.stringify(layout(row))}))>28_000)throw new Error('内容过长，请分段核对。');
+    checkSize(row);
     if(Object.keys(s.cards).length>=128)throw new Error('本次配方卡片已满。');
     s.cards[ref]=row;return row;
   }
+  previewCard(s:CreatorLedger,p:Presence,owner:JobRecord,title:string,text:string,options:Option[],draftId:string){
+    const preview=owner.preview??={};
+    const existing=preview.ref&&s.cards[preview.ref];
+    if(existing){
+      existing.title=title;existing.text=text;existing.options=options;existing.generation++;
+      existing.needsUpdate=true;existing.session=p.session;existing.previewApproval=owner.offerRef;
+      checkSize(existing);
+      existing.expiresAt=s.cards[owner.offerRef!]!.expiresAt;
+      return existing;
+    }
+    const result=this.newCard(s,p,title,text,options,draftId);
+    result.expiresAt=s.cards[owner.offerRef!]!.expiresAt;
+    result.previewOwner=owner.job.id;result.previewApproval=owner.offerRef;preview.ref=result.ref;
+    return result;
+  }
   approvalCard(p:Presence,s:CreatorLedger,row:JobRecord,retry:boolean){
     const task=row.job.task;if(task.kind!=='command')throw new Error('需要具体的已选操作。');
-    const c=task.command,work=c.kind==='publish'?c.snapshot.work:'work'in c?c.work:undefined,target='target'in c?c.target:undefined;
+    const c=task.command,work=c.kind==='publish'?c.snapshot.work:'work'in c?c.work:undefined;
     const choices:Option[]=[];
+    const workName=row.workName??'所选草稿',versionName=row.version?row.version.name+' · '+row.version.version:'所选版本';
     let title:string, text:string, label:string;
     if(c.kind==='publish'){
       const snap=c.snapshot,pub=snap.public;
@@ -48,10 +73,10 @@ export class CreatorCards {
       const longOverview=[...pub.overview].length>1500;
       if(longOverview)choices.push({label:'查看完整公开概览',choice:{kind:'detailPage',id:row.job.id,page:0}});
       text=[pub.name+' · '+pub.version,pub.summary,longOverview?'公开概览可分段查看。':pub.overview,pub.access==='coded'?'凭分享码获取':'直接获取',
-        '草稿 '+snap.work.draftId+' · 修订 '+snap.revision,
-        snap.work.source?'来源 '+snap.work.source.groupId:'本人账号的旧格式作品',
-        ...(snap.parent?['父版本 '+snap.parent.versionId]:[]),'可按节查看完整发布内容。修改公开信息可发送 /recipe name、version、summary 或 overview，后面加新值。获取方式可发送 /recipe access 直接获取 或 /recipe access 凭码获取。'].join('\n');
-      snap.sections.forEach((part,section)=>choices.push({label:part.title,choice:{kind:'read',read:{kind:'page',work:snap.work,snapshotDigest:c.snapshotDigest,section,page:0}}}));
+        '草稿修订 '+snap.revision,
+        snap.work.source?[row.botName&&'Bot '+row.botName,row.groupName?'来源群 '+row.groupName:'来源群的本地配置'].filter(Boolean).join(' · '):'本人账号的旧格式作品',
+        ...(snap.parent?['基于已选的历史版本创作']:[]),'可按节查看完整发布内容。修改公开信息可发送 /recipe name、version、summary 或 overview，后面加新值。获取方式可发送 /recipe access 直接获取 或 /recipe access 凭码获取。'].join('\n');
+      snap.sections.forEach((_part,section)=>choices.push({label:sectionName(snap,section),choice:{kind:'read',read:{kind:'page',work:snap.work,snapshotDigest:c.snapshotDigest,section,page:0}}}));
       if(!retry){
         choices.push({label:'继续修改内容',choice:{kind:'edit',id:row.job.id}});
         if(snap.format==='rich-v2')choices.push({label:'更换 Logo',choice:{kind:'logo',work:snap.work}});
@@ -60,42 +85,55 @@ export class CreatorCards {
     }else if(c.kind==='metadata'){
       title='采用公开信息修改';label='采用修改';
       const field={name:'名称',summary:'简介',overview:'概览',version:'显示版本',access:'获取方式',logo:'Logo'}[c.change.field];
-      text='草稿 '+c.work.draftId+' · 修订 '+c.revision+'\n'+field+' → '+(c.change.field==='logo'?(c.change.value==='attachment'?'原私聊图片 · '+c.change.sha256:'移除 Logo'):c.change.value);
+      const value=c.change.field==='access'?(c.change.value==='coded'?'凭分享码获取':'直接获取'):
+        c.change.field==='logo'?(c.change.value==='attachment'?'本次发送的私聊图片':'移除 Logo'):c.change.value;
+      text=workName+' · 修订 '+c.revision+'\n'+field+' → '+value;
     }else if(c.kind==='discard'){
-      title='删除创作中的作品';label='确认删除';text='将删除草稿 '+c.work.draftId+' 的修订 '+c.revision+'。已发布版本会保留。';
+      title='删除创作中的作品';label='确认删除';text='将删除「'+workName+'」的草稿修订 '+c.revision+'。已发布版本会保留。';
     }else{
       title='版本管理';label={withdraw:'确认撤下',issue:'确认生成',disable:'确认停用',reveal:'在本人私聊显示'}[c.kind];
-      text='配方 '+target!.recipeId+'\n版本 '+target!.versionId+'\n'+
-        (c.kind==='withdraw'?'撤下这个版本并停用剩余可用码，已取得的授权保留。':c.kind==='issue'?'生成 '+c.count+' 枚分享码。':(c.kind==='disable'?'停用分享码 ':'重显分享码 ')+c.codeId);
+      text=versionName+'\n'+
+        (c.kind==='withdraw'?'撤下这个版本并停用剩余可用码，已取得的授权保留。':c.kind==='issue'?'生成 '+c.count+' 枚分享码。':(c.kind==='disable'?'停用':'重显')+(row.codeLabel??'所选分享码'));
     }
     if(c.kind==='metadata'&&[...text].length>1800){
-      text='草稿 '+c.work.draftId+' · 修订 '+c.revision+'。请分段查看本次输入的完整新值。';
+      text=workName+' · 修订 '+c.revision+'。请分段查看本次输入的完整新值。';
       choices.push({label:'查看完整新值',choice:{kind:'detailPage',id:row.job.id,page:0}});
     }
-    if(retry){title='核对原请求';text+='\n原请求 '+row.job.id+' 的结果尚未确定。重试将沿用原参数与请求键。';label='重新确认并重试';}
+    if(retry){title='核对原请求';text+='\n上次操作的结果尚未确定。重新确认后会核验同一次请求。';label='重新确认并重试';}
     choices.unshift({label,choice:{kind:'approve',id:row.job.id,retry}});
     const card=this.newCard(s,p,title,text,choices,work?.draftId);
+    if(row.preview?.readId){delete s.jobs[row.preview.readId];delete row.preview.readId;}
+    if(row.preview){
+      delete row.preview.position;
+      const prior=row.preview.ref&&s.cards[row.preview.ref];
+      if(prior){prior.session=p.session;prior.expiresAt=card.expiresAt;}
+    }
     row.offerRef=card.ref;return card;
   }
-  codePage(s:CreatorLedger,p:Presence,a:Extract<CreatorAnswer,{kind:'codes'}>,offset:number){
+  codePage(s:CreatorLedger,p:Presence,a:Extract<CreatorAnswer,{kind:'codes'}>,offset:number,version?:VersionSelection){
     const items=a.items.slice(offset,offset+6);
     const buttons:Option[]=[];
-    const lines=items.map(item=>item.codeId+' · '+item.suffix+' · '+{available:'可用',redeemed:'已兑换',disabled:'已停用'}[item.status]);
-    for(const item of items)if(item.status==='available'){
-      for(const kind of ['reveal','disable'] as const)buttons.push({label:(kind==='reveal'?'重显 ':'停用 ')+item.suffix+' · '+item.codeId.slice(-8),choice:{kind:'offer',command:{kind,target:a.target,codeId:item.codeId}}});
-    }
+    const lines=items.map((item,index)=>{
+      const label='分享码 '+(offset+index+1)+(item.suffix?' · 尾号 '+item.suffix:'');
+      if(item.status==='available'){
+        for(const kind of ['reveal','disable'] as const)buttons.push({label:(kind==='reveal'?'重显':'停用')+label,choice:{kind:'offer',command:{kind,target:a.target,codeId:item.codeId},codeLabel:label}});
+      }
+      return label+' · '+{available:'可用',redeemed:'已兑换',disabled:'已停用'}[item.status];
+    });
     if(offset>0)buttons.push({label:'上一页',choice:{kind:'codePage',answer:a,offset:offset-6}});
     if(offset+6<a.items.length)buttons.push({label:'下一页',choice:{kind:'codePage',answer:a,offset:offset+6}});
     else if(a.nextCursor)buttons.push({label:'下一页',choice:{kind:'read',read:{kind:'codes',target:a.target,cursor:a.nextCursor}}});
-    return this.newCard(s,p,'版本分享码',lines.join('\n')||'暂无分享码。',buttons);
+    const c=this.newCard(s,p,version?version.name+' · '+version.version+' 的分享码':'版本分享码',lines.join('\n')||'暂无分享码。',buttons);
+    c.version=version;return c;
   }
   versionCard(s:CreatorLedger,p:Presence,v:VersionSelection,url?:string){
     const {target}=v;
-    return this.newCard(s,p,v.name+' · '+v.version,(url?'已发布版本 ':'版本 ')+target.versionId+'\n可发送 /recipe issue 3 指定分享码数量。',[
+    const c=this.newCard(s,p,v.name+' · '+v.version,(url?'已发布。':'管理这个版本的分享码或准备新版。')+'\n可发送 /recipe issue 3 指定分享码数量。',[
       {label:'管理分享码',choice:{kind:'read',read:{kind:'codes',target,cursor:null}}},
       {label:'生成一枚分享码',choice:{kind:'offer',command:{kind:'issue',target,count:1}}},
       {label:'准备新版',choice:{kind:'read',read:{kind:'parent',target}}},
       {label:'撤下版本',choice:{kind:'offer',command:{kind:'withdraw',target}}},
     ],undefined,url);
+    c.version=v;return c;
   }
 }

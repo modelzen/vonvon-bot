@@ -49,7 +49,7 @@ export function candidateConfirmation(ref: string, details?: CandidateCardDetail
 }
 export function authoringCard(ref: string, mode: CardMode, details?: CandidateCardDetails, editing?:RichEditCardContext,creator=false) {
   if (mode === 'confirm') return candidateConfirmation(ref,details,creator) ?? authoringBody([
-    plain('本次改动无法在卡片完整、安全地展示，不能在这里确认。请取消后发送更小的修改；名称、简介、概览和版本也可以在 App 编辑。'), action(ref,'cancel','取消'),
+    plain(creator?'本次改动超过卡片可完整展示的范围。请点「取消」，回到私聊一次修改一个字段或一小段内容。':'本次改动无法在卡片完整、安全地展示，不能在这里确认。请取消后发送更小的修改；名称、简介、概览和版本也可以在 App 编辑。'), action(ref,'cancel','取消'),
   ]);
   const introduction=mode==='richEdit'&&editing ? '本次可修改：'+(editing.labels.join('、')||'已选内容')+'。\n'+copy.richEdit+
     (editing.example?'\n也可以发送 '+editing.example+'。':'') : copy[mode];
@@ -89,11 +89,16 @@ export class AuthoringIm {
     return id;
   }
   async matches(messageId: string, chatId: string, cardId: string): Promise<boolean> {
+    return await this.cardStatus(messageId, chatId, cardId) === 'matched';
+  }
+  async cardStatus(messageId: string, chatId: string, cardId: string): Promise<'matched'|'unavailable'|'unknown'> {
     const result = await this.channel.rawClient.im.v1.message.get({path: {message_id: messageId}});
-    const item = result.data?.items?.find(row => row.message_id === messageId && row.chat_id === chatId && row.msg_type === 'interactive' && !row.deleted);
-    if (result.code !== 0 || !item) return false;
+    if (result.code !== 0 || !result.data?.items) return 'unknown';
+    const item = result.data.items.find(row => row.message_id === messageId && row.chat_id === chatId && row.msg_type === 'interactive' && !row.deleted);
+    if (!item) return 'unavailable';
     const converted = await this.channel.rawClient.cardkit.v1.card.idConvert({data: {message_id: messageId}});
-    return converted.code === 0 && converted.data?.card_id === cardId;
+    if (converted.code !== 0 || !converted.data?.card_id) return 'unknown';
+    return converted.data.card_id === cardId ? 'matched' : 'unavailable';
   }
   async update(cardId: string, seq: number, ref: string, mode: CardMode, details?: CandidateCardDetails, editing?:RichEditCardContext,creator=false) {
     return this.updateJson(cardId,seq,ref,authoringCard(ref,mode,details,editing,creator));

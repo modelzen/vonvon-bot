@@ -100,7 +100,9 @@ export class RecipeCreatorExecutor {
     const parent=await this.parentContext(account,context.association.accountId,draft);
     const parts=draft.format==='rich-v2'?validateWritableRichRecipeContent(draft.rich.content).content.parts:[];
     const encoded=draft.format==='rich-v2'?draft.rich.canonical:Buffer.from(canonical(draft.config)).toString('base64url');
-    const sections=[{title:'配方、来源与版本',text:JSON.stringify({draftId:draft.draftId,recipeId:draft.recipeId,parent,revision:draft.revision,source:work.source,public:draft.public},null,2)}];
+    const sections=[{title:'配方、来源与版本',text:[draft.public.name+' · '+draft.public.version,draft.public.summary,draft.public.overview,
+      draft.public.access==='coded'?'凭分享码获取':'直接获取','草稿修订 '+draft.revision,
+      work.source?'来源群的本地配置':'本人账号的旧格式作品',...(parent?['基于已选的历史版本创作']:[])].join('\n')}];
     if(draft.format==='rich-v2'){
       for(const key of ['role','settings','rules','skills','files','tasks','setup','parts','finalLogo'] as const){
         sections.push({title:key,text:JSON.stringify(draft.rich.content[key]??null,null,2)});

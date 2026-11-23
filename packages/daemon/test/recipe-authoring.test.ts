@@ -22,7 +22,7 @@ const { createOrchestrator } = await import('../src/bot/handle-message');
 const { useBotDir, botPaths } = await import('../src/config/paths');
 const { addProject, mutateProjectByChatId, removeProject } = await import('../src/project/registry');
 const bot = {appId:'cli_authoring', tenant:'feishu' as const, createdAt:1, registrationId:randomUUID()};
-const peer = {id:randomUUID(), device:'fixture-device'}, otherPeer = {id:randomUUID(), device:'other-device'};
+const peer = {id:randomUUID(), device:randomUUID()}, otherPeer = {id:randomUUID(), device:'other-device'};
 const appId = bot.appId, groupId = groupIdSchema.parse('oc_source'), chatId = 'oc_private';
 const account = process.env.AUTHORING_TEST_ACCOUNT ?? randomUUID();
 const owner = 'ou_author', stranger = 'ou_stranger', tenant = 'tenant_fixture';
@@ -1173,8 +1173,8 @@ it('does not interpret the retired setup slash command as an editable product fi
   expect(propose).not.toHaveBeenCalled();
 });
 
-function privateChoice(label:string){
-  const m=[...messages.values()].at(-1)!;
+function privateChoice(label:string,messageId?:string){
+  const m=(messageId?[...messages.values()].find(row=>row.message_id===messageId):[...messages.values()].at(-1))!;
   const body=JSON.parse(cards.get(m.card_id)!) as {body:{elements:{text?:{content:string};behaviors?:{value:Record<string,unknown>}[]}[]}};
   const button=body.body.elements.find(e=>e.behaviors&&e.text?.content.includes(label));
   if(!button)throw new Error('卡片没有 '+label+' '+JSON.stringify(body));
@@ -1675,8 +1675,9 @@ it('requires the original preview card for the exact draft, can read a full page
     raw:{operator:{open_id:by,tenant_key:tenant}},action:{tag:'button',value:button.value}});
   const offer=displayed('确认发布');
   await press(displayed('查看完整公开概览'));
+  const navigation=[...messages.values()].at(-1)!;
   await press(displayed('下一页'));
-  expect([...cards.values()].at(-1)).toContain('概览末尾');
+  expect(cards.get(navigation.card_id)).toContain('概览末尾');
   await press(displayed('角色',offer.messageId));
   const page=(await jobs()).find(j=>j.task.kind==='read'&&j.task.read.kind==='page')!;
   if(page.task.kind!=='read'||page.task.read.kind!=='page')throw new Error('missing page');
@@ -1697,7 +1698,7 @@ it('requires the original preview card for the exact draft, can read a full page
   await press(displayed('角色'));
   const retryPage=(await jobs()).find(j=>j.task.kind==='read'&&j.task.read.kind==='page')!;
   await rpc('creatorAnswer',{id:retryPage.id,answer:{kind:'page',snapshotDigest:page.task.read.snapshotDigest,section:0,page:0,text:contents}});
-  expect([...cards.values()].at(-1)).toContain(contents);
+  expect(cards.get(navigation.card_id)).toContain(contents);
   const target={recipeId:randomUUID(),versionId:randomUUID()},firstCodeId=randomUUID();
   await rpc('creatorAnswer',{id:command.id,answer:{kind:'published',target,draftId:work.draftId,draftRevision:2,revision:1,firstCodeId,url:'https://vonvon.cc/recipes/'+target.recipeId+'/versions/'+target.versionId}});
   const delivery=(await jobs()).find(j=>j.task.kind==='deliverCodes')!;
@@ -1759,10 +1760,10 @@ it('rejects an old creator session and adopted workflow after the same account i
 });
 
 const creatorJobs=async()=>kind(await rpc('creatorPoll'),'creatorJobs').jobs;
-async function openManualWork(name:string,revision=2,draftId=randomUUID()){
+async function openManualWork(name:string,revision=2,draftId=randomUUID(),sections=[{title:'角色',pageHashes:[digest('角色')]}]){
   const work={draftId,source:null};
   const snapshot={work,format:'role-v1',recipeId:null,parent:null,revision,public:{name,summary:'简介',overview:'概览',version:'2',access:'direct'},
-    contentSha256:digest('角色'),parts:[],sections:[{title:'角色',pageHashes:[digest('角色')]}]};
+    contentSha256:digest('角色'),parts:[],sections};
   await rpc('creatorContinue',{selection:{kind:'draft',work,name,version:'2'}});
   const job=(await creatorJobs()).find(j=>j.task.kind==='read'&&j.task.read.kind==='draft'&&j.task.read.work.draftId===draftId)!;
   await rpc('creatorAnswer',{id:job.id,answer:{kind:'snapshot',snapshot}});
@@ -1779,12 +1780,18 @@ it('rechecks only the identical unknown issue after a fresh private click and de
   const rows=Array.from({length:12},(_,n)=>({codeId:randomUUID(),suffix:'SAME',status:n===1?'redeemed':n===3?'disabled':'available'}));
   await rpc('creatorAnswer',{id:listing.id,answer:{kind:'codes',target,items:rows,nextCursor:null}});
   expect([...cards.values()].at(-1)).toContain('已兑换');expect([...cards.values()].at(-1)).toContain('已停用');
+  expect([...cards.values()].at(-1)).toContain('甲作品 · 1.2');expect([...cards.values()].at(-1)).not.toContain(rows[8]!.codeId);
   await tap(privateChoice('下一页'));
-  await tap(privateChoice('停用 SAME · '+rows[8]!.codeId.slice(-8)));
+  const disableButton=privateChoice('停用分享码 9 · 尾号 SAME');
+  await rpc('creatorContinue',{selection:{kind:'version',target:{recipeId:randomUUID(),versionId:randomUUID()},name:'另一个作品',version:'2'}});
+  await tap(disableButton);
+  expect([...cards.values()].at(-1)).toContain('甲作品 · 1.2');
+  expect([...cards.values()].at(-1)).not.toContain('另一个作品');
   await tap(privateChoice('确认停用'));
   const disable=(await creatorJobs()).find(j=>j.task.kind==='command'&&j.task.command.kind==='disable')!;
   expect(disable.task).toMatchObject({command:{target,codeId:rows[8]!.codeId}});
   await rpc('creatorAnswer',{id:disable.id,answer:{kind:'disabled',target,codeId:rows[8]!.codeId}});
+  await rpc('creatorContinue',{selection:{kind:'version',target,name:'甲作品',version:'1.2'}});
   await orch.onMessage(msg('/recipe issue 3'));
   const old=privateChoice('确认生成');
   await tap(old);
@@ -1865,10 +1872,23 @@ it('starts from a private real-group menu, adopts the actual rich handoff and wa
   expect(jobs).toHaveLength(1);
   expect(jobs[0]?.task).toMatchObject({kind:'read',read:{kind:'draft',work:{draftId:destinationDraftId,source:{preparationId:op.operationId,groupId}}}});
   expect(await rpc('creatorCheck',{id:jobs[0]!.id})).toMatchObject({mode:'read'});
-  expect([...cards.values()].join('')).not.toContain(hiddenMemory);expect(proposeRich).not.toHaveBeenCalled();
-  await removeProject('PRIVATE-GROUP-SENTINEL');
-  await addProject({chatId:groupId,name:'PRIVATE-GROUP-SENTINEL',createdAt:clock,cwd:root,blank:false});
-  await expect(rpc('creatorCheck',{id:jobs[0]!.id})).rejects.toThrow();
+  const {savedRichPreview}=await import('./fixtures/rich-desktop-authoring.mjs');
+  const main=await savedRichPreview({accountId:account,botId:appId,deviceId:peer.device,session,draftJob:jobs[0]!,content,daemon:input=>service.request(peer,input)});
+  try{
+    await main.run(jobs[0]!);
+    const source=privateChoice('配方、来源与版本'),role=privateChoice('群角色');
+    expect([...cards.values()].at(-1)).toContain('Bot fixture');
+    await tap(source);
+    await main.run((await creatorJobs())[0]!);
+    expect([...cards.values()].at(-1)).toContain('来源群的本地配置');
+    expect([...cards.values()].at(-1)).not.toContain(groupId);
+    expect([...cards.values()].join('')).not.toContain(hiddenMemory);expect(proposeRich).not.toHaveBeenCalled();
+    await tap(role);
+    const roleJob=(await creatorJobs())[0]!;
+    await removeProject('PRIVATE-GROUP-SENTINEL');
+    await addProject({chatId:groupId,name:'PRIVATE-GROUP-SENTINEL',createdAt:clock,cwd:root,blank:false});
+    await expect(rpc('creatorCheck',{id:roleJob.id})).rejects.toThrow();
+  }finally{main.close();}
 },25000);
 
 it('reads Logo bytes only from the verified original private image and refuses changed bytes before issuing a native save',async()=>{
@@ -1942,3 +1962,128 @@ it('uses the selected parent for a new private version, restores original select
   const originalResult=[...messages.values()].find(m=>m.message_id===confirm.messageId)!;
   expect(cards.get(originalResult.card_id)).toContain('版本已撤下');
 },25000);
+
+it('reads all 151 frozen pages in one private message and publishes only from the original approval',async()=>{
+  await link();await attachCreator();
+  const group=kind(await rpc('groupSourceIdentity',{groupId}),'groupSourceIdentity');
+  const work={draftId:randomUUID(),source:{preparationId:randomUUID(),groupId,identity:group.identity}};
+  const pages=Array.from({length:151},(_,n)=>('page '+(n+1)+' ').padEnd(4000,'x'));
+  await rpc('creatorContinue',{selection:{kind:'draft',work,name:'长文',version:'2'}});
+  const draft=(await creatorJobs())[0]!;
+  await rpc('creatorAnswer',{id:draft.id,answer:{kind:'snapshot',snapshot:{
+    work,format:'rich-v2',recipeId:null,parent:null,revision:3,public:{name:'长文',version:'2',summary:'长文配方',overview:'',access:'direct'},
+    contentSha256:digest(pages.join('')),parts:[],sections:[{title:'文件',pageHashes:pages.map(page=>digest(page))}],
+  }}});
+  const approval=privateChoice('确认发布'),section=privateChoice('文件');
+  let next=section;
+  for(const [page,text] of pages.entries()){
+    await tap(next);
+    if(page===1)await tap(next);
+    const jobs=await creatorJobs();
+    expect(jobs).toHaveLength(1);
+    const job=jobs[0]!;
+    if(job.task.kind!=='read'||job.task.read.kind!=='page')throw new Error('missing page');
+    expect(job.task.read.page).toBe(page);
+    const answer={kind:'page',snapshotDigest:job.task.read.snapshotDigest,section:0,page,text};
+    if(page===1)await expect(rpc('creatorAnswer',{id:job.id,answer:{...answer,text:'other page'}})).rejects.toThrow();
+    await rpc('creatorAnswer',{id:job.id,answer});
+    if(page===1){
+      await rpc('creatorAnswer',{id:job.id,answer});
+      await tap(next);
+      expect(await creatorJobs()).toEqual([]);
+    }
+    expect(messages.size).toBe(2);
+    expect([...cards.values()].at(-1)).toContain(text);
+    if(page<pages.length-1)next=privateChoice('下一页');
+  }
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=await new AuthoringJournal(root,()=>clock).run(db=>Object.values(db.links)[0]!.creator!);
+  expect(Object.keys(ledger.cards)).toHaveLength(2);
+  expect(Object.values(ledger.jobs).filter(j=>j.job.task.kind==='read'&&j.job.task.read.kind==='page').length).toBeLessThanOrEqual(1);
+  expect(await creatorJobs()).toEqual([]);
+  await tap(approval);
+  expect((await creatorJobs())[0]?.task).toMatchObject({kind:'command',command:{kind:'publish',snapshot:{work,revision:3}}});
+},120000);
+
+it('supersedes delayed page answers and repairs lost replies, replaced cards and a restarted preview session',async()=>{
+  await link();await attachCreator();
+  const sections=[{title:'角色',pageHashes:['甲一','甲二','甲三'].map(t=>digest(t))},{title:'技能',pageHashes:[digest('乙一')]}];
+  const snap=await openManualWork('周报',2,randomUUID(),sections);
+  const first=privateChoice('角色'),second=privateChoice('技能'),approval=privateChoice('确认发布');
+  const read=async()=>{
+    const job=(await creatorJobs())[0]!;
+    if(job.task.kind!=='read'||job.task.read.kind!=='page')throw Error('没有读取任务');
+    const {section,page,snapshotDigest}=job.task.read;
+    return {id:job.id,answer:{kind:'page',section,page,snapshotDigest,text:section?'乙一':['甲一','甲二','甲三'][page]}};
+  };
+  await tap(first);const delayed=await read();
+  await tap(second);const selected=await read();
+  await expect(rpc('creatorAnswer',delayed)).rejects.toThrow();
+  loseSend=true;
+  await expect(rpc('creatorAnswer',selected)).rejects.toThrow();
+  expect(messages.size).toBe(2);
+  loseSend=false;await rpc('creatorAnswer',selected);
+  const originalNav=[...messages.values()].at(-1)!;
+  expect(cards.get(originalNav.card_id)).toContain('乙一');
+  expect(messages.size).toBe(2);
+  await tap(first);const firstRead=await read();
+  updateFault='loseReply';await expect(rpc('creatorAnswer',firstRead)).rejects.toThrow();
+  updateFault=undefined;await rpc('creatorAnswer',firstRead);
+  expect(messages.size).toBe(2);
+  const oldNext=privateChoice('下一页',originalNav.message_id);
+  await tap(oldNext);const waiting=await read();
+  originalNav.card_id='card_replaced';
+  await expect(rpc('creatorAnswer',waiting)).rejects.toThrow();
+  await tap(first);const reopen=await read();
+  await rpc('creatorAnswer',reopen);
+  expect(messages.size).toBe(3);
+  expect([...cards.values()].at(-1)).toContain('甲一');
+  await tap(oldNext);expect(await creatorJobs()).toEqual([]);
+  await tap(privateChoice('下一页'));const interrupted=await read();
+  await orch.shutdown();restart();orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});await attachCreator();
+  expect(await creatorJobs()).toEqual([]);
+  await expect(rpc('creatorAnswer',interrupted)).rejects.toThrow();
+  await tap(approval);expect(await creatorJobs()).toEqual([]);
+  await openManualWork('周报',2,snap.work.draftId,sections);
+  await tap(privateChoice('角色'));await rpc('creatorAnswer',await read());
+  expect([...cards.values()].at(-1)).toContain('甲一');
+},30000);
+
+it('guides an oversized creator edit back to a smaller private chat change',async()=>{
+  const {authoringCard}=await import('../src/recipe/authoring-im');
+  const output=JSON.stringify(authoringCard('ref','confirm',undefined,undefined,true));
+  expect(output).toContain('回到私聊一次修改一个字段');expect(output).not.toContain('App');
+});
+
+it('frees pre-upgrade per-page records at the card limit and expires the original preview buttons',async()=>{
+  await link();await attachCreator();
+  const snapshot=await openManualWork('迁移中的预览'),section=privateChoice('角色');
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  await ledger.run(db=>{
+    const state=Object.values(db.links)[0]!.creator!;
+    const offer=Object.values(state.jobs).find(row=>row.job.task.kind==='command')!;
+    const cmd=offer.job.task;
+    if(cmd.kind!=='command'||cmd.command.kind!=='publish')throw Error('missing approval');
+    const original=state.cards[offer.offerRef!]!;
+    for(let i=0;i<127;i++){
+      const ref=randomUUID(),id=randomUUID();
+      state.cards[ref]={...original,ref,title:'角色',text:'过去的分页',options:[],messageId:'om_old_'+i};
+      state.jobs[id]={job:{...offer.job,id,task:{kind:'read',read:{kind:'page',work:snapshot.work,snapshotDigest:cmd.command.snapshotDigest,page:0,section:0}}},
+        state:'finished',created:clock,expiresAt:original.expiresAt,resultCard:ref};
+    }
+    expect(Object.keys(state.cards)).toHaveLength(128);
+  });
+  await creatorJobs();
+  expect(await ledger.run(db=>Object.keys(Object.values(db.links)[0]!.creator!.cards).length)).toBe(1);
+  await tap(section);const job=(await creatorJobs())[0]!;
+  if(job.task.kind!=='read'||job.task.read.kind!=='page')throw Error('missing read');
+  await ledger.run(db=>{
+    const state=Object.values(db.links)[0]!.creator!;
+    const original=Object.values(state.cards).find(card=>card.messageId===section.messageId)!;
+    original.expiresAt=clock;
+  });
+  await expect(rpc('creatorAnswer',{id:job.id,answer:{kind:'page',snapshotDigest:job.task.read.snapshotDigest,section:0,page:0,text:'角色'}})).rejects.toThrow();
+  await tap(section);expect(await creatorJobs()).toEqual([]);
+  expect(messages.size).toBe(1);
+});
