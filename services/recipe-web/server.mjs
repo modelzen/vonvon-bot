@@ -77,7 +77,7 @@ export function createRecipeWeb(env = process.env) {
     if (url.origin !== publicOrigin) throw new WebError(400, 'invalid_path');
     if (['/open/draft', '/open-draft.mjs', '/open-draft.css'].includes(url.pathname)) {
       res.setHeader('Referrer-Policy', 'no-referrer');
-      res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
+      res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
       if (req.method !== 'GET' || url.search) throw new WebError(400, 'invalid_path');
       const asset = url.pathname === '/open/draft' ? ['open-draft.html', 'text/html; charset=utf-8']
         : url.pathname === '/open-draft.mjs' ? ['open-draft.mjs', 'text/javascript; charset=utf-8']

@@ -1,7 +1,7 @@
 import { createContext, useContext, type ReactNode } from "react";
 import type { VonvonClient } from "@vonvon/client/browser";
 import type {
-  AccountShell, CommunityShell, RecipeUseShell, RecipeAuthoringShell, RecipeSourceShell, AddDeviceRequest, AddDeviceResult, DesktopUpdate, DeviceEventPayload, DevicesState, LinkPreview, MachineReply, RemoveDeviceResult,
+  AccountShell, CommunityShell, RecipeUseShell, RecipeAuthoringShell, RecipeSourceShell, RecipePreviewShell, AddDeviceRequest, AddDeviceResult, DesktopUpdate, DeviceEventPayload, DevicesState, LinkPreview, MachineReply, RemoveDeviceResult,
 } from "@vonvon/protocol";
 
 /** devices-ui-1a 4.7: the desktop's devices, through its shell. U2–U4 use the hooks below, not this directly. */
@@ -26,6 +26,7 @@ export type ShellCapabilities = {
   recipeAuthoring?: RecipeAuthoringShell;
   recipeUse?: RecipeUseShell;
   recipeSource?: RecipeSourceShell;
+  recipePreview?: RecipePreviewShell;
   openExternal?: (url: string, kind?: "recipe-document") => Promise<void>;
   chooseExecutablePath?: () => Promise<string | null>;
   chooseDirectoryPaths?: (multiple: boolean) => Promise<string[] | null>;

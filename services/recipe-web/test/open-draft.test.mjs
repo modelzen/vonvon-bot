@@ -26,16 +26,24 @@ test('landing URL only opens an exact draft in its configured channel', () => {
 
 test('opening landing script prepares a user-click link without networking or automatic navigation', async () => {
   const source = (await readFile(new URL('../public/open-draft.mjs', import.meta.url), 'utf8')).replace('export function', 'function');
-  const button = {hidden: true}, status = {};
+  const button = {hidden: true, removeAttribute(name) {delete this[name];}}, status = {};
   const location = {hash: fragment, search: ''};
+  const events = new Map();
   runInNewContext(source, {document: {
     documentElement: {dataset: {desktopChannel: 'preview'}},
     getElementById: id => id === 'open-app' ? button : status,
-  }, location});
+  }, location, window: {addEventListener: (name, listener) => events.set(name, listener)}});
   assert.equal(button.href, 'vonvon-preview://recipes/drafts/' + draftId + '?revision=2');
   assert.equal(button.hidden, false);
   assert.deepEqual(location, {hash: fragment, search: ''});
   assert.match(status.textContent, /请点击按钮/);
+  location.hash = '#' + draftId + '?revision=3';
+  events.get('hashchange')();
+  assert.equal(button.href, 'vonvon-preview://recipes/drafts/' + draftId + '?revision=3');
+  location.hash = '#broken';
+  events.get('hashchange')();
+  assert.equal(button.hidden, true);
+  assert.equal(button.href, undefined);
 });
 
 test('static landing does not access accounts or API and refuses redirect/auth queries', async t => {

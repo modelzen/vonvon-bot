@@ -13,13 +13,14 @@ export function canSaveAll(drafts: Iterable<Pick<Draft, 'save'>>): boolean {
 }
 type Guard = {
   register: (id: string, draft: Draft) => () => void;
-  navigate: (action: () => void) => void;
+  navigate: (action: () => void, onCancel?: () => void) => boolean;
 };
 const Context = createContext<Guard | null>(null);
 
 export function DraftGuardProvider({children}: {children: ReactNode}) {
   const drafts = useRef(new Map<string, Draft>());
   const destination = useRef<(() => void) | null>(null);
+  const cancellation = useRef<(() => void) | undefined>(undefined);
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<string>();
@@ -38,10 +39,11 @@ export function DraftGuardProvider({children}: {children: ReactNode}) {
     refresh();
     return () => { if (drafts.current.get(id) === draft) {drafts.current.delete(id); queueMicrotask(refresh);} };
   }, [refresh]);
-  const navigate = useCallback((action: () => void) => {
-    if (destination.current) return;
-    if (!drafts.current.size) { action(); return; }
+  const navigate = useCallback((action: () => void, onCancel?: () => void) => {
+    if (destination.current) return false;
+    if (!drafts.current.size) { action(); return true; }
     destination.current = action;
+    cancellation.current = onCancel;
     const pending = [...drafts.current];
     if (pending.every(([, draft]) => draft.autoSave && draft.save)) {
       void (async () => {
@@ -51,20 +53,25 @@ export function DraftGuardProvider({children}: {children: ReactNode}) {
             if (drafts.current.get(id) === draft) drafts.current.delete(id);
           }
           // A newer draft opened during the save remains on its page.
-          if (!drafts.current.size) action();
-        } finally {destination.current = null;}
+          if (!drafts.current.size) {cancellation.current = undefined; action();}
+        } finally {
+          destination.current = null;
+          const cancel = cancellation.current; cancellation.current = undefined; cancel?.();
+        }
       })().catch(() => { /* Inline editors own their error feedback and retain the draft. */ });
-      return;
+      return true;
     }
     setFailure(undefined);
     refresh();
     setOpen(true);
+    return true;
   }, [refresh]);
   const context = useMemo(() => ({register, navigate}), [register, navigate]);
-  function stay() { destination.current = null; setOpen(false); }
+  function stay() { destination.current = null; setOpen(false); const cancel = cancellation.current; cancellation.current = undefined; cancel?.(); }
   function proceed() {
     const action = destination.current;
     destination.current = null;
+    cancellation.current = undefined;
     setOpen(false);
     action?.();
   }
@@ -113,6 +120,8 @@ export function useDraftGuard() {
   if (!guard) throw new Error('DraftGuardProvider is required.');
   return guard;
 }
+
+export function useOptionalDraftGuard() {return useContext(Context);}
 
 export function useDraft(dirty: boolean, draft: Draft) {
   const guard = useContext(Context);

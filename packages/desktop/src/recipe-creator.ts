@@ -1,7 +1,7 @@
 import {isDeepStrictEqual} from 'node:util';
 import {z} from 'zod';
 import {creatorSnapshotSchema,recipeAuthoringReplySchema,validateWritableRichRecipeContent,recipePublicSchema,richMetadataRequestSchema,
-  communityResponseSchemas,type CreatorJob,type CreatorAnswer,type CreatorRead,type CreatorWork,type CreatorVersion,type RecipeDraft,type CommunityRequest,
+  communityResponseSchemas,type CreatorJob,type CreatorAnswer,type CreatorRead,type CreatorWork,type CreatorVersion,type CreatorSnapshot,type RecipeDraft,type CommunityRequest,
   type AuthoringPublished,type AuthoringSaved,type RecipeAuthoringRequest,type RecipeAuthoringReply} from '@vonvon/protocol';
 import type {NativeAccount} from './account-session.js';
 import {RecipeCreatorJournal,checkVersionSource,sameCreatorSource,creatorSha,creatorSnapshotDigest,type CreatorAssociation,type CreatorCommandRecord} from './recipe-creator-journal.js';
@@ -111,8 +111,8 @@ export class RecipeCreatorExecutor {
       result.parent&&result.parent.recipeId!==draft.recipeId)throw invalid();
     return result.parent;
   }
-  private async freeze(context:CreatorContext,job:CreatorJob,work:CreatorWork){
-    const {account,draft}=await this.workDraft(context,job,work);
+  private async freeze(context:CreatorContext,job:CreatorJob,work:CreatorWork,modes:Checked['mode'][]=['read','execute']){
+    const {account,draft}=await this.workDraft(context,job,work,modes);
     const parent=await this.parentContext(account,context.association.accountId,draft);
     const parts=draft.format==='rich-v2'?validateWritableRichRecipeContent(draft.rich.content).content.parts:[];
     const encoded=draft.format==='rich-v2'?draft.rich.canonical:Buffer.from(canonical(draft.config)).toString('base64url');
@@ -132,10 +132,30 @@ export class RecipeCreatorExecutor {
     // Text parts share one bounded section, preserving every byte without exceeding the protocol section limit.
     const collapsed=sections.length<=16?sections:[...sections.slice(0,10),{title:'全部文件正文',text:sections.slice(10).map(s=>s.title+'\n'+s.text).join('\n\n')}];
     const rendered=collapsed.map(section=>pages(section.text));
-    const snapshot=creatorSnapshotSchema.parse({work,format:draft.format??'role-v1',recipeId:draft.recipeId,parent,revision:draft.revision,public:draft.public,
+    const appPreviewUrl=this.previewUrl(draft);
+    const snapshot=creatorSnapshotSchema.parse({work,format:draft.format??'role-v1',recipeId:draft.recipeId,parent,revision:draft.revision,public:draft.public,...(appPreviewUrl&&{appPreviewUrl}),
       contentSha256:creatorSha(Buffer.from(encoded,'base64url')),parts,sections:collapsed.map((section,i)=>({title:section.title,pageHashes:rendered[i]!.map(page=>creatorSha(page))}))});
     this.journal.freeze({association:context.association,snapshot,canonical:encoded,pages:rendered});
-    return snapshot;
+    return {draft,snapshot};
+  }
+  private previewUrl(draft:RecipeDraft){
+    if(!this.account.recipeLink)return;
+    const url=new URL(this.account.recipeLink(draft.draftId,draft.draftId));
+    if(url.username||url.password||url.protocol!=='https:'&&!(url.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(url.hostname)))throw invalid();
+    return `${url.origin}/open/draft#${draft.draftId}?revision=${draft.revision}`;
+  }
+  private sameSnapshot(current:CreatorSnapshot,expected:CreatorSnapshot){
+    const {appPreviewUrl:_url,...legacy}=current;
+    return isDeepStrictEqual(expected.appPreviewUrl?current:legacy,expected);
+  }
+  async preview(context:CreatorContext,job:CreatorJob){
+    if(job.task.kind!=='command'||job.task.command.kind!=='publish')throw invalid();
+    const checked=await this.checked(context,job);
+    if(checked.mode!=='preview'&&checked.mode!=='receipt')throw invalid();
+    const current=await this.freeze(context,job,job.task.command.snapshot.work,['preview','receipt']);
+    const expected=job.task.command.snapshot;
+    if(!this.sameSnapshot(current.snapshot,expected)||creatorSnapshotDigest(expected)!==job.task.command.snapshotDigest)throw invalid();
+    return {draft:current.draft,snapshot:expected};
   }
   private async backfillVersions(context:CreatorContext,account:NativeAccount,targets:CreatorVersion[]){
     const a=context.association,remaining=new Map(targets.filter(target=>!this.journal.version(a.accountId,target.versionId)).map(target=>[target.versionId,target]));
@@ -195,7 +215,7 @@ export class RecipeCreatorExecutor {
         for(const item of publications.items)if(sameCreatorSource(this.journal.version(accountId,item.versionId),context.association))items.push({kind:'version',target:{recipeId:item.recipeId,versionId:item.versionId},name:item.public.name,version:item.public.version});
         return {kind:'works',items:items.slice(read.offset,read.offset+16),nextOffset:items.length>read.offset+16?read.offset+16:null};
       }
-      case 'draft':return {kind:'snapshot',snapshot:await this.freeze(context,job,read.work)};
+      case 'draft':return {kind:'snapshot',snapshot:(await this.freeze(context,job,read.work)).snapshot};
       case 'page': {
         await this.verifyWork(context,job,read.work);
         const stored=this.journal.snapshot(read.snapshotDigest);
@@ -226,7 +246,7 @@ export class RecipeCreatorExecutor {
         const stored=this.journal.snapshot(command.snapshotDigest);
         if(!stored||!isDeepStrictEqual(stored.association,context.association)||!isDeepStrictEqual(stored.snapshot,command.snapshot)||creatorSnapshotDigest(command.snapshot)!==command.snapshotDigest)throw invalid();
         const current=await this.freeze(context,job,command.snapshot.work);
-        if(!isDeepStrictEqual(current,command.snapshot))throw invalid();
+        if(!this.sameSnapshot(current.snapshot,command.snapshot))throw invalid();
         request={type:'publishDraft',accountId,requestId:job.id,draftId:command.snapshot.work.draftId,revision:command.snapshot.revision,
           ...(command.snapshot.format==='rich-v2'&&{format:'rich-v2',canonical:stored.canonical})};break;
       }
@@ -266,7 +286,7 @@ export class RecipeCreatorExecutor {
         request={type:command.kind==='disable'?'disableCode':'revealCode',accountId,requestId:job.id,codeId:command.codeId};break;
       }
     }
-    const row:CreatorCommandRecord={association:context.association,id:job.id,command,grant:{approval:job.task.approval,expiresAt:job.task.expiresAt},request,phase:'frozen'};
+    const row:CreatorCommandRecord={association:context.association,id:job.id,command,grant:{approval:job.task.approval,expiresAt:job.task.expiresAt,confirmation:job.task.confirmation},request,phase:'frozen'};
     this.journal.save(row);return row;
   }
   private async findCodes(account:NativeAccount,accountId:string,target:CreatorVersion,ids:string[]){
@@ -363,11 +383,11 @@ export class RecipeCreatorExecutor {
       if(row.phase==='awaitingReceipt'||checked.mode!=='execute'||job.task.approval===row.grant.approval||job.task.expiresAt<=Date.now())return {kind:'unknown'};
     }
     if(checked.mode!=='execute')return {kind:'unknown'};
-    if(job.task.approval!==row.grant.approval){row={...row,grant:{approval:job.task.approval,expiresAt:job.task.expiresAt}};this.journal.save(row);}
+    if(job.task.approval!==row.grant.approval){row={...row,grant:{approval:job.task.approval,expiresAt:job.task.expiresAt,confirmation:job.task.confirmation}};this.journal.save(row);}
     if(!wasDispatched){
       if(row.command.kind==='publish'){
         const snapshot=await this.freeze(context,job,row.command.snapshot.work);
-        if(!isDeepStrictEqual(snapshot,row.command.snapshot))throw invalid();
+        if(!this.sameSnapshot(snapshot.snapshot,row.command.snapshot))throw invalid();
       }else if(row.command.kind==='metadata'||row.command.kind==='discard'){
         const {draft}=await this.workDraft(context,job,row.command.work);
         if(draft.revision!==row.command.revision)throw invalid();
@@ -393,6 +413,7 @@ export class RecipeCreatorExecutor {
   }
   async run(context:CreatorContext,job:CreatorJob){
     const checked=await this.checked(context,job);
+    if(checked.mode==='preview')throw invalid();
     if(job.task.kind==='deliverCodes'){
       if(checked.mode!=='delivery')throw invalid();
       const account=await this.requireVersion(context,job,job.task.target,['delivery']);

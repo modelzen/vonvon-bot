@@ -29,6 +29,12 @@ export const creatorSnapshotSchema = z.object({
   work:creatorWorkSchema, format:z.enum(['role-v1','rich-v2']), recipeId:uuid.nullable(), parent:version.nullable(),
   revision:positive, public:recipePublicSchema, contentSha256:digest, parts:recipeRichPartDescriptorSchema.array().max(194),
   sections:z.array(z.object({title:z.string().min(1).max(128), pageHashes:digest.array().min(1).max(2048)}).strict()).min(1).max(16),
+  appPreviewUrl:z.string().url().max(2048).refine(value=>{
+    const url=new URL(value);
+    return !url.username&&!url.password&&!url.search&&
+      (url.protocol==='https:'||url.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(url.hostname))&&
+      url.pathname==='/open/draft'&&/^#[0-9a-f-]{36}\?revision=[1-9][0-9]*$/.test(url.hash);
+  }).optional(),
 }).strict().refine(s => s.format === 'role-v1' || s.work.source !== null);
 export type CreatorSnapshot = z.infer<typeof creatorSnapshotSchema>;
 const read = z.discriminatedUnion('kind', [
@@ -60,9 +66,13 @@ export const creatorCommandSchema = z.discriminatedUnion('kind', [
 ]);
 export type CreatorCommand = z.infer<typeof creatorCommandSchema>;
 const codeIds = uuid.array().min(1).max(100).refine(ids => new Set(ids).size === ids.length);
+export const creatorConfirmationSchema=z.discriminatedUnion('kind',[
+  z.object({kind:z.literal('feishu-card')}).strict(),
+  z.object({kind:z.literal('app'),confirmationId:uuid}).strict(),
+]);
 const task = z.discriminatedUnion('kind', [
   z.object({kind:z.literal('read'),read}).strict(),
-  z.object({kind:z.literal('command'),command:creatorCommandSchema,expiresAt:z.number().int().safe().nonnegative(),approval:digest}).strict(),
+  z.object({kind:z.literal('command'),command:creatorCommandSchema,expiresAt:z.number().int().safe().nonnegative(),approval:digest,confirmation:creatorConfirmationSchema.optional()}).strict(),
   z.object({kind:z.literal('deliverCodes'),target:version,codeIds}).strict(),
 ]);
 const job = z.object({id:uuid,binding:uuid,scope:digest,task}).strict();
@@ -102,14 +112,17 @@ export const creatorRequests = [
   z.object({type:z.literal('creatorAnswer'),...session,id:uuid,answer}).strict(),
   z.object({type:z.literal('creatorLogo'),...session,id:uuid}).strict(),
   z.object({type:z.literal('creatorDeliver'),...session,id:uuid,items:secretItem.array().min(1).max(100)}).strict(),
+  z.object({type:z.literal('creatorPreview'),...session,work:creatorWorkSchema,revision:positive}).strict(),
+  z.object({type:z.literal('creatorAppConfirm'),...session,id:uuid,snapshotDigest:digest,confirmationId:uuid}).strict(),
 ] as const;
 export type CreatorRequest = z.infer<(typeof creatorRequests)[number]>;
 export const creatorReplies = [
   z.object({kind:z.literal('creatorBinding'),association:z.object({binding:uuid,scope:digest,recipient}).strict().nullable(),wakeId:uuid.nullable()}).strict(),
   z.object({kind:z.literal('creatorSession'),session:uuid,binding:uuid,scope:digest,leaseMs:positive}).strict(),
   z.object({kind:z.literal('creatorJobs'),jobs:job.array().max(16)}).strict(),
-  z.object({kind:z.literal('creatorChecked'),job,mode:z.enum(['read','execute','receipt','delivery'])}).strict(),
+  z.object({kind:z.literal('creatorChecked'),job,mode:z.enum(['read','preview','execute','receipt','delivery'])}).strict(),
   z.object({kind:z.literal('creatorLogoBytes'),base64:z.string().min(4).max(2796204).regex(/^[A-Za-z0-9+/]+={0,2}$/),sha256:digest}).strict(),
   z.object({kind:z.literal('creatorAck')}).strict(),
+  z.object({kind:z.literal('creatorPreview'),job,state:z.enum(['preparing','offer','active','unknown','finished']),result:answer.optional()}).strict(),
 ] as const;
 export type CreatorReply = z.infer<(typeof creatorReplies)[number]>;

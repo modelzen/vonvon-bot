@@ -20,7 +20,7 @@ function fixture(){
   const association={accountId,viewId:'local',deviceId:randomUUID(),deviceKey:Buffer.alloc(32,7).toString('base64url'),botId:agentIdSchema.parse('cli_creator'),binding:randomUUID(),scope:'c'.repeat(64)};
   const publicValue={name:'私聊配方',summary:'简介',overview:'概览'.repeat(4000),version:'1.1',access:'coded' as const};
   const draft={draftId,recipeId:null,revision:3,public:publicValue,config:{role:'角色\n'.repeat(2000)}};
-  let job:CreatorJob,mode:'read'|'execute'|'receipt'|'delivery'='read',revoked=false;
+  let job:CreatorJob,mode:'read'|'preview'|'execute'|'receipt'|'delivery'='read',revoked=false;
   const answers:CreatorAnswer[]=[],deliveries:Extract<RecipeAuthoringRequest,{type:'creatorDeliver'}>[]=[],rpcs:RecipeAuthoringRequest[]=[];
   let receive=(_:string)=>{};
   const socket:ClientConnection={isOpen:()=>true,onMessage:listener=>{receive=listener;},onClose:()=>{},onError:()=>{},close:async()=>{},send(frame,done){
@@ -393,4 +393,40 @@ it('refuses version management from a replacement source before its cloud reques
   expect(f.cloud).not.toHaveBeenCalled();
   expect(f.answers.at(-1)?.kind).toBe('rejected');
   expect(f.journal.command(f.accountId,job.id)).toBeUndefined();
+});
+
+it('APP PUBLICATION preview freezes actual draft bytes and never executes an unapproved offer',async()=>{
+  const f=fixture(),executor=f.build(),work={draftId:f.draftId,source:null};
+  await executor.run(f.context,f.set({kind:'read',read:{kind:'draft',work}},'read'));
+  const frozen=f.answers.at(-1);if(frozen?.kind!=='snapshot')throw Error('snapshot');
+  expect(frozen.snapshot.appPreviewUrl).toBe(`https://vonvon.cc/open/draft#${f.draftId}?revision=3`);
+  const task={kind:'command' as const,command:{kind:'publish' as const,snapshot:frozen.snapshot,snapshotDigest:creatorSnapshotDigest(frozen.snapshot)},approval:'0'.repeat(64),expiresAt:Date.now()+60000};
+  const job=f.set(task,'preview');
+  const preview=await executor.preview(f.context,job);expect(preview.draft).toEqual(f.draft);
+  await expect(executor.run(f.context,job)).rejects.toThrow();
+  expect(f.journal.command(f.accountId,job.id)).toBeUndefined();
+  f.draft.config.role='Changed after App preview';
+  await expect(executor.preview(f.context,job)).rejects.toThrow();
+  expect(f.cloud.mock.calls.every(([,path,init])=>!path.endsWith('/publish')&&(init?.method??'GET')==='GET')).toBe(true);
+});
+
+it('APP PUBLICATION preserves explicit App grant and exact receipt recovery in the existing disk journal',async()=>{
+  const f=fixture(),executor=f.build(),work={draftId:f.draftId,source:null};
+  await executor.run(f.context,f.set({kind:'read',read:{kind:'draft',work}},'read'));
+  const frozen=f.answers.at(-1);if(frozen?.kind!=='snapshot')throw Error('snapshot');
+  const confirmation={kind:'app' as const,confirmationId:randomUUID()};
+  const job=f.set({kind:'command',command:{kind:'publish',snapshot:frozen.snapshot,snapshotDigest:creatorSnapshotDigest(frozen.snapshot)},confirmation,approval:'a'.repeat(64),expiresAt:Date.now()+60000},'execute');
+  const prior=f.cloud.getMockImplementation()!;let posted=0,committed=false,recovered=false;
+  f.cloud.mockImplementation(async(id,path,init)=>{
+    if(path===`/v1/drafts/${f.draftId}/publish`){posted++;committed=true;throw Error('lost reply');}
+    if(path.startsWith('/v1/receipts/publications/'))return recovered?Response.json({status:'committed',receipt:{requestId:job.id,format:'role-v1',draftId:f.draftId,draftRevision:3,
+      recipeId:f.recipeId,versionId:f.versionId,revision:1,public:f.publicValue,firstCodeId:f.firstCodeId}}):Response.json({status:'unknown'});
+    if(committed)throw Error('retired draft');
+    return prior(id,path,init);
+  });
+  await executor.run(f.context,job);expect(f.answers.at(-1)).toEqual({kind:'unknown'});
+  const durable=new RecipeCreatorJournal(f.journalPath);expect(durable.command(f.accountId,job.id)?.grant.confirmation).toEqual(confirmation);
+  f.mode('receipt');recovered=true;await f.build(durable).run(f.context,job);
+  expect(posted).toBe(1);expect(f.answers.at(-1)).toMatchObject({kind:'published',draftId:f.draftId,draftRevision:3});
+  expect(f.publications).toHaveBeenCalledOnce();
 });

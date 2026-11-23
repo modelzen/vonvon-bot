@@ -20,7 +20,6 @@ export class RecipePreviewNavigation {
   open(raw: unknown): boolean {
     const locator = parseDraftPreview(raw, this.scheme);
     if (!locator) return false;
-    // A repeated OS delivery must not duplicate an unacknowledged navigation.
     const existing = this.pending().find(value => value.draftId === locator.draftId && value.revision === locator.revision);
     if (existing) return true;
     const navigation = {...locator, navigationId: randomUUID()};

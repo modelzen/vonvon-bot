@@ -3,7 +3,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {closeSync,fsyncSync,mkdirSync,openSync,readFileSync,renameSync,statSync,unlinkSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {z} from 'zod';
-import {agentIdSchema,viewIdSchema,recipeBinary32Schema,creatorCommandSchema,creatorSnapshotSchema,creatorRequests,communityRequestSchema} from '@vonvon/protocol';
+import {agentIdSchema,viewIdSchema,recipeBinary32Schema,creatorCommandSchema,creatorConfirmationSchema,creatorSnapshotSchema,creatorRequests,communityRequestSchema} from '@vonvon/protocol';
 
 const uuid=z.string().uuid(), digest=z.string().regex(/^[a-f0-9]{64}$/);
 export const creatorAssociationSchema=z.object({accountId:uuid,viewId:viewIdSchema,deviceId:uuid,deviceKey:recipeBinary32Schema,botId:agentIdSchema,binding:uuid,scope:digest}).strict();
@@ -18,7 +18,7 @@ const snapshot=z.object({association:creatorAssociationSchema,snapshot:creatorSn
   pages:z.array(z.array(z.string().max(4096)).min(1).max(2048)).min(1).max(16)}).strict();
 export type CreatorFrozenSnapshot=z.infer<typeof snapshot>;
 const command=z.object({association:creatorAssociationSchema,id:uuid,command:creatorCommandSchema,
-  grant:z.object({approval:digest,expiresAt:z.number().int().safe().nonnegative()}).strict(),
+  grant:z.object({approval:digest,expiresAt:z.number().int().safe().nonnegative(),confirmation:creatorConfirmationSchema.optional()}).strict(),
   request:communityRequestSchema,phase:z.enum(['frozen','dispatched','unknown','awaitingReceipt','committed']),result:creatorRequests[5].shape.answer.optional()}).strict();
 export type CreatorCommandRecord=z.infer<typeof command>;
 export const creatorSha=(value:string|Uint8Array)=>createHash('sha256').update(value).digest('hex');

@@ -3,7 +3,7 @@ import {richFreezeInputSchema,richPreparationSchema,richSourceOptionsSchema,rich
 import { z } from 'zod';
 import { agentIdSchema, groupIdSchema } from './domain.js';
 import { viewIdSchema } from './desktop-devices.js';
-import { recipePublicSchema, recipeConfigSchema } from './desktop-community.js';
+import { recipePublicSchema, recipeConfigSchema, recipeDraftSchema } from './desktop-community.js';
 import { authoringChangeSchema, authoringOperationSchema, authoringHandoffSchema, handoffUnavailableSchema } from './recipe-authoring.js';
 import { recipeSetupSchema } from './recipe-setup.js';
 
@@ -15,6 +15,8 @@ const operation = { ...handle, operationId: uuid };
 const link = { ...handle, challengeId: uuid };
 const creatorSource = z.object({viewId:viewIdSchema,botId:agentIdSchema}).strict();
 export const desktopAuthoringRequestSchema = z.discriminatedUnion('type', [
+  z.object({type:z.literal('preparePublication'),accountId:uuid,draft:recipeDraftSchema}).strict(),
+  z.object({type:z.literal('confirmPublication'),accountId:uuid,reviewId:uuid}).strict(),
   z.object({type:z.literal('creatorContinue'),accountId:uuid,entry:z.discriminatedUnion('kind',[
     z.object({kind:z.literal('source'),viewId:viewIdSchema,botId:agentIdSchema,groupId:groupIdSchema,parent:z.object({recipeId:uuid,versionId:uuid}).strict().optional()}).strict(),
     z.object({kind:z.literal('draft'),draftId:uuid,revision}).strict(),
@@ -105,7 +107,13 @@ const desktopAuthoringSessionSchema = z
       operations: z.array(desktopAuthoringOperationSchema).max(540),
     })
     .strict();
+export const authoringPublishedSchema=z.object({accountId:uuid,draftId:uuid,recipeId:uuid,versionId:uuid,revision}).strict();
 export const desktopAuthoringReplySchema = z.discriminatedUnion('kind', [
+  z.object({kind:z.literal('publicationReady'),reviewId:uuid,draftId:uuid,revision,public:recipePublicSchema}).strict(),
+  z.object({kind:z.literal('publicationResult'),result:z.discriminatedUnion('kind',[
+    z.object({kind:z.literal('pending')}).strict(),
+    z.object({kind:z.literal('published'),publication:authoringPublishedSchema}).strict(),
+  ])}).strict(),
   z.object({kind:z.literal('creatorContinuing'),accountId:uuid,viewId:viewIdSchema,botId:agentIdSchema}).strict(),
   z.object({kind:z.literal('creatorSourceRequired'),options:z.array(creatorSource.extend({botName:name})).max(64)}).strict(),
   handoffUnavailableSchema,
@@ -166,7 +174,6 @@ export type DesktopAuthoringReply = z.infer<typeof desktopAuthoringReplySchema>;
 export type DesktopAuthoringOperation = z.infer<typeof desktopAuthoringOperationSchema>;
 export const authoringSavedSchema = z.object({accountId:uuid,draftId:uuid,revision}).strict();
 export type AuthoringSaved = z.infer<typeof authoringSavedSchema>;
-export const authoringPublishedSchema=z.object({accountId:uuid,draftId:uuid,recipeId:uuid,versionId:uuid,revision}).strict();
 export type AuthoringPublished=z.infer<typeof authoringPublishedSchema>;
 export interface RecipeAuthoringShell {
   onPublished?(listener:(receipt:AuthoringPublished)=>void):()=>void;

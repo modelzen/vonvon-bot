@@ -11,13 +11,20 @@ export function draftAppUrl(fragment, channel) {
 if (typeof document !== 'undefined') {
   const button = document.getElementById('open-app');
   const status = document.getElementById('status');
-  const link = location.search ? undefined : draftAppUrl(location.hash, document.documentElement.dataset.desktopChannel);
-  if (link) {
-    button.href = link;
-    button.hidden = false;
-    button.textContent = document.documentElement.dataset.desktopChannel === 'preview' ? '打开 Vonvon Bot 预览版' : '打开 Vonvon Bot';
-    status.textContent = '请点击按钮打开 App。登录后将读取你拥有的草稿。';
-  } else {
-    status.textContent = '草稿链接不完整或已损坏。请回到飞书重新打开预览，或在 App 的「我的草稿」查找作品。';
+  function update() {
+    const link = location.search ? undefined : draftAppUrl(location.hash, document.documentElement.dataset.desktopChannel);
+    button.removeAttribute('href');
+    button.hidden = true;
+    if (link) {
+      button.href = link;
+      button.hidden = false;
+      button.textContent = document.documentElement.dataset.desktopChannel === 'preview' ? '打开 Vonvon Bot 预览版' : '打开 Vonvon Bot';
+      status.textContent = '请点击按钮打开 App，查看完整配方。';
+    } else {
+      status.textContent = '配方链接不完整或已损坏。请回到飞书重新打开预览，或在 App 的「我的配方」查找作品。';
+    }
   }
+  update();
+  window.addEventListener('hashchange', update);
+  window.addEventListener('popstate', update);
 }

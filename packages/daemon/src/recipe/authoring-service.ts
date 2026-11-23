@@ -273,7 +273,7 @@ export class AuthoringSession {
     if (!p || p.peer.id !== peer.id || p.peer.device !== peer.device || p.session !== req.session) refusal();
     this.present(p);
     p.until = this.now()+LEASE;
-    if (req.type === 'creatorContinue' || req.type === 'creatorPoll' || req.type === 'creatorCheck' || req.type === 'creatorAnswer' || req.type === 'creatorLogo' || req.type === 'creatorDeliver') {
+    if (req.type === 'creatorContinue' || req.type === 'creatorPoll' || req.type === 'creatorCheck' || req.type === 'creatorAnswer' || req.type === 'creatorLogo' || req.type === 'creatorDeliver' || req.type === 'creatorPreview' || req.type === 'creatorAppConfirm') {
       return this.serial(()=>this.creator.request(p,req));
     }
     if (p.binding) {

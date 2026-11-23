@@ -60,7 +60,7 @@ import {
 } from "@vonvon/protocol";
 import type { CollaborationView, Page } from "./collaboration-model";
 import {SettingsPanel} from "./settings/SettingsPanel";
-import {DraftGuardProvider, useDraftGuard} from './settings/DraftGuard';
+import {DraftGuardProvider, useDraftGuard, useOptionalDraftGuard} from './settings/DraftGuard';
 import {decisionProviderSection, diagnosticsSection, OPEN_SETTING_EVENT, searchEntries, settingAnchor, type Destination, type SearchEntry, type Selection} from './search';
 import {agentPanes, initialRoute, openDm, openMembership, openScheduleTab, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type AgentPane, type CollaborationRoute, joinedGroupRoute} from './collaboration-navigation';
 import {SearchDialog} from './SearchDialog';
@@ -148,7 +148,9 @@ function BotDetailTabs({selected, onSelect}: {selected: AgentPane['kind']; onSel
 function FeaturePage({feature}: {feature: (typeof uiFeatures)[number]}) { const Component = feature.component; return <Component/>; }
 
 export function App() {
-  return <DraftGuardProvider><DesktopUpdateProvider><DesktopApp /></DesktopUpdateProvider></DraftGuardProvider>;
+  const guard = useOptionalDraftGuard();
+  const content = <DesktopUpdateProvider><DesktopApp /></DesktopUpdateProvider>;
+  return guard ? content : <DraftGuardProvider>{content}</DraftGuardProvider>;
 }
 function DesktopApp() {
   const {navigate} = useDraftGuard();

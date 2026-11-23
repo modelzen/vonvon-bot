@@ -1951,6 +1951,7 @@ it('requires the original preview card for the exact draft, can read a full page
   }
   const press=async(button:ReturnType<typeof displayed>,id=button.messageId,by=owner)=>dispatchAuthoring({messageId:id,chatId,operator:{openId:by},
     raw:{operator:{open_id:by,tenant_key:tenant}},action:{tag:'button',value:button.value}});
+  await seedLegacyCreatorCard();
   const offer=displayed('确认发布');
   await press(displayed('查看完整公开概览'));
   const navigation=[...messages.values()].at(-1)!;
@@ -1973,6 +1974,7 @@ it('requires the original preview card for the exact draft, can read a full page
   original.card_id=cardId;
   await rpc('creatorAnswer',{id:command.id,answer:{kind:'unknown'}});
   expect(await rpc('creatorCheck',{id:command.id})).toMatchObject({mode:'receipt'});
+  await seedLegacyCreatorCard();
   await press(displayed('角色'));
   const retryPage=(await jobs()).find(j=>j.task.kind==='read'&&j.task.read.kind==='page')!;
   await rpc('creatorAnswer',{id:retryPage.id,answer:{kind:'page',snapshotDigest:page.task.read.snapshotDigest,section:0,page:0,text:contents}});
@@ -2048,6 +2050,22 @@ async function openManualWork(name:string,revision=2,draftId=randomUUID(),sectio
   return snapshot;
 }
 
+async function seedLegacyCreatorCard(){
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const {layout,sectionName}=await import('../src/recipe/private-creator-cards');
+  const legacy=await new AuthoringJournal(root,()=>clock).run(db=>{
+    const state=Object.values(db.links).find(link=>link.creator?.current?.kind==='draft')!.creator!;
+    const row=Object.values(state.jobs).filter(row=>row.offerRef&&['offer','unknown'].includes(row.state)&&row.job.task.kind==='command'&&row.job.task.command.kind==='publish').at(-1)!;
+    const task=row.job.task;if(task.kind!=='command'||task.command.kind!=='publish')throw Error('missing legacy publish card');
+    const command=task.command,snapshot=command.snapshot,card=state.cards[row.offerRef!]!;
+    card.options.push({label:'查看完整公开概览',choice:{kind:'detailPage',id:row.job.id,page:0}});
+    snapshot.sections.forEach((_section,index)=>card.options.push({label:sectionName(snapshot,index),choice:{kind:'read',read:{kind:'page',work:snapshot.work,snapshotDigest:command.snapshotDigest,section:index,page:0}}}));
+    if(row.state==='offer')card.options.push({label:'删除创作中作品',choice:{kind:'offer',command:{kind:'discard',work:snapshot.work,revision:snapshot.revision}}});
+    return card;
+  });
+  cards.set(legacy.cardId!,JSON.stringify(layout(legacy)));
+}
+
 it('rechecks only the identical unknown issue after a fresh private click and delivers the original batch states after restart',async()=>{
   await link();await attachCreator();
   const target={recipeId:randomUUID(),versionId:randomUUID()};
@@ -2112,6 +2130,7 @@ it('invalidates a superseded preview, keeps an uncertain work frozen and allows 
   expect(meta.task).toMatchObject({kind:'command',command:{kind:'metadata',work:first.work,revision:2,baseSha256:first.contentSha256,change:{field:'access',value:'coded'}}});
   await rpc('creatorAnswer',{id:meta.id,answer:{kind:'unknown'}});
   const second=await openManualWork('乙',8);
+  await seedLegacyCreatorCard();
   const discard=privateChoice('删除创作中作品');
   await tap(discard);await tap(privateChoice('确认删除'));
   const deleting=(await creatorJobs()).find(j=>j.task.kind==='command'&&j.task.command.kind==='discard')!;
@@ -2161,8 +2180,9 @@ it.each(['none','account','scope'])('starts from a private real-group menu and w
     const {AuthoringJournal,linkKey}=await import('../src/recipe/authoring-journal');
     const current=await new AuthoringJournal(root,()=>clock).run(db=>db.links[linkKey(jobs[0]!.scope,account)]?.creator?.current);
     expect(current?.kind==='draft'&&current.snapshot.work.draftId).toBe(destinationDraftId);
+    await seedLegacyCreatorCard();
     const source=privateChoice('配方、来源与版本'),role=privateChoice('群角色');
-    expect([...cards.values()].at(-1)).toContain('Bot fixture');
+    expect([...cards.values()].at(-1)).not.toContain('Bot fixture');
     await tap(source);
     await main.run((await creatorJobs())[0]!);
     expect([...cards.values()].at(-1)).toContain('来源群的本地配置');
@@ -2184,7 +2204,7 @@ it('reads Logo bytes only from the verified original private image and refuses c
   const read=(await creatorJobs())[0]!;
   await rpc('creatorAnswer',{id:read.id,answer:{kind:'snapshot',snapshot:{work,format:'rich-v2',recipeId:null,parent:null,revision:1,
     public:{name:'图标',version:'1',summary:'原说明',overview:'',access:'direct'},contentSha256:digest('原配置'),parts:[],sections:[{title:'配置',pageHashes:[digest('配置')]}]}}});
-  await tap(privateChoice('更换 Logo'));
+  await orch.onMessage(msg('/recipe logo'));
   privateLogo=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB','base64');
   const image=(id:string,rawKey:string):NormalizedMessage=>{
     const input=msg('',id);
@@ -2259,6 +2279,7 @@ it('reads all 151 frozen pages in one private message and publishes only from th
     work,format:'rich-v2',recipeId:null,parent:null,revision:3,public:{name:'长文',version:'2',summary:'长文配方',overview:'',access:'direct'},
     contentSha256:digest(pages.join('')),parts:[],sections:[{title:'文件',pageHashes:pages.map(page=>digest(page))}],
   }}});
+  await seedLegacyCreatorCard();
   const approval=privateChoice('确认发布'),section=privateChoice('文件');
   let next=section;
   for(const [page,text] of pages.entries()){
@@ -2294,6 +2315,7 @@ it('supersedes delayed page answers and repairs lost replies, replaced cards and
   await link();await attachCreator();
   const sections=[{title:'角色',pageHashes:['甲一','甲二','甲三'].map(t=>digest(t))},{title:'技能',pageHashes:[digest('乙一')]}];
   const snap=await openManualWork('周报',2,randomUUID(),sections);
+  await seedLegacyCreatorCard();
   const first=privateChoice('角色'),second=privateChoice('技能'),approval=privateChoice('确认发布');
   const read=async()=>{
     const job=(await creatorJobs())[0]!;
@@ -2330,6 +2352,7 @@ it('supersedes delayed page answers and repairs lost replies, replaced cards and
   await expect(rpc('creatorAnswer',interrupted)).rejects.toThrow();
   await tap(approval);expect(await creatorJobs()).toEqual([]);
   await openManualWork('周报',2,snap.work.draftId,sections);
+  await seedLegacyCreatorCard();
   await tap(privateChoice('角色'));await rpc('creatorAnswer',await read());
   expect([...cards.values()].at(-1)).toContain('甲一');
 },30000);
@@ -2342,7 +2365,8 @@ it('guides an oversized creator edit back to a smaller private chat change',asyn
 
 it('frees pre-upgrade per-page records at the card limit and expires the original preview buttons',async()=>{
   await link();await attachCreator();
-  const snapshot=await openManualWork('迁移中的预览'),section=privateChoice('角色');
+  const snapshot=await openManualWork('迁移中的预览');
+  await seedLegacyCreatorCard();const section=privateChoice('角色');
   const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
   const ledger=new AuthoringJournal(root,()=>clock);
   await ledger.run(db=>{
@@ -3049,4 +3073,72 @@ it.each(['saved','sourceChanged','accountChanged'] as const)('CHAT CORRECTION re
   expect(jobs[0]!.task).toEqual({kind:'read',read:{kind:'draft',work}});
   expect(await creatorJobs()).toEqual(jobs);
   expect(await rpc('creatorCheck',{id:jobs[0]!.id})).toMatchObject({mode:'read'});
+});
+
+it('APP PUBLICATION prepares one existing durable offer without approving and records truthful App provenance',async()=>{
+  await link();await attachCreator();
+  const work={draftId:randomUUID(),source:null};
+  const preview=async()=>kind(await rpc('creatorPreview',{work,revision:2}),'creatorPreview');
+  const pending=await Promise.all([preview(),preview()]);
+  expect(pending[0]!.job.id).toBe(pending[1]!.job.id);expect(pending[0]!.state).toBe('preparing');
+  const snapshot={work,format:'role-v1',recipeId:null,parent:null,revision:2,public:{name:'短卡名称',summary:'禁止出现在短卡的简介',overview:'禁止出现在短卡的概览'.repeat(1000),version:'2',access:'direct'},
+    contentSha256:digest('角色'),parts:[],sections:[{title:'角色',pageHashes:[digest('角色')]}],appPreviewUrl:'https://vonvon.cc/open/draft#'+work.draftId+'?revision=2'};
+  await rpc('creatorAnswer',{id:pending[0]!.job.id,answer:{kind:'snapshot',snapshot}});
+  const ready=await preview(),task=ready.job.task;
+  if(task.kind!=='command'||task.command.kind!=='publish')throw Error('missing publish offer');
+  expect(ready.state).toBe('offer');expect(await creatorJobs()).toEqual([]);
+  expect(await rpc('creatorCheck',{id:ready.job.id})).toMatchObject({mode:'preview'});
+  const rendered=[...cards.values()].at(-1)!;
+  expect(rendered).toContain('在 App 中预览');expect(rendered).toContain(snapshot.appPreviewUrl);
+  expect(rendered).toContain('确认发布 2');expect(rendered).not.toContain('禁止出现在短卡');expect(rendered).not.toContain('pageHashes');
+  const confirmationId=randomUUID();
+  await expect(rpc('creatorAppConfirm',{id:ready.job.id,snapshotDigest:'f'.repeat(64),confirmationId})).rejects.toThrow();
+  await rpc('creatorAppConfirm',{id:ready.job.id,snapshotDigest:task.command.snapshotDigest,confirmationId});
+  const approved=kind(await rpc('creatorCheck',{id:ready.job.id}),'creatorChecked');
+  expect(approved.mode).toBe('execute');expect(approved.job.task).toMatchObject({confirmation:{kind:'app',confirmationId}});
+  const carrier=[...messages.values()].at(-1)!,physicalCardId=carrier.card_id;
+  carrier.card_id='card_replaced_after_app_confirmation';
+  expect(await rpc('creatorCheck',{id:ready.job.id})).toMatchObject({mode:'execute'});
+  carrier.card_id=physicalCardId;
+  const originalTask=structuredClone(approved.job.task);
+  await rpc('creatorAppConfirm',{id:ready.job.id,snapshotDigest:task.command.snapshotDigest,confirmationId:randomUUID()});
+  expect(kind(await rpc('creatorCheck',{id:ready.job.id}),'creatorChecked').job.task).toEqual(originalTask);
+  expect((await preview()).job.id).toBe(ready.job.id);
+});
+
+it('APP PUBLICATION refuses pending saves and changed revisions and keeps legacy short cards usable',async()=>{
+  await link();await attachCreator();const snapshot=await openManualWork('旧快照');
+  const ready=kind(await rpc('creatorPreview',{work:snapshot.work,revision:2}),'creatorPreview');
+  expect([...cards.values()].at(-1)).toContain('我的配方');expect([...cards.values()].at(-1)).not.toContain('在 App 中预览');
+  await expect(rpc('creatorPreview',{work:snapshot.work,revision:3})).rejects.toThrow();
+  await rpc('edit',{draftId:snapshot.work.draftId,baseRevision:2});
+  await expect(rpc('creatorPreview',{work:snapshot.work,revision:2})).rejects.toThrow();
+  if(ready.job.task.kind!=='command'||ready.job.task.command.kind!=='publish')throw Error('publish');
+  await expect(rpc('creatorAppConfirm',{id:ready.job.id,snapshotDigest:ready.job.task.command.snapshotDigest,confirmationId:randomUUID()})).rejects.toThrow();
+  expect(await creatorJobs()).toEqual([]);
+});
+
+it('APP PUBLICATION shares the same job with a simultaneous real private-card confirmation and recovers it after restart',async()=>{
+  await link();await attachCreator();const snapshot=await openManualWork('同一次发布');
+  const ready=kind(await rpc('creatorPreview',{work:snapshot.work,revision:2}),'creatorPreview');
+  if(ready.job.task.kind!=='command'||ready.job.task.command.kind!=='publish')throw Error('publish');
+  const args={id:ready.job.id,snapshotDigest:ready.job.task.command.snapshotDigest,confirmationId:randomUUID()};
+  const physical=privateChoice('确认发布');
+  await Promise.all([tap(physical),rpc('creatorAppConfirm',args)]);
+  const jobs=await creatorJobs();expect(jobs).toHaveLength(1);expect(jobs[0]!.id).toBe(ready.job.id);
+  const initial=kind(await rpc('creatorCheck',{id:ready.job.id}),'creatorChecked');
+  expect(initial.mode).toBe('execute');
+  await rpc('creatorAnswer',{id:ready.job.id,answer:{kind:'unknown'}});
+  await orch.shutdown();restart();orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});await attachCreator();
+  const restored=kind(await rpc('creatorPreview',{work:snapshot.work,revision:2}),'creatorPreview');
+  expect(restored.job.id).toBe(ready.job.id);expect(restored.state).toBe('unknown');
+  expect(await rpc('creatorCheck',{id:ready.job.id})).toMatchObject({mode:'receipt'});
+  await rpc('creatorAppConfirm',{...args,confirmationId:randomUUID()});
+  const retry=kind(await rpc('creatorCheck',{id:ready.job.id}),'creatorChecked');
+  expect(retry.mode).toBe('execute');expect(retry.job.id).toBe(ready.job.id);
+  const target={recipeId:randomUUID(),versionId:randomUUID()};
+  const answer={kind:'published',target,draftId:snapshot.work.draftId,draftRevision:2,revision:1,firstCodeId:null,url:`https://vonvon.cc/recipes/${target.recipeId}/versions/${target.versionId}`};
+  await rpc('creatorAnswer',{id:ready.job.id,answer});
+  expect(await rpc('creatorPreview',{work:snapshot.work,revision:2})).toMatchObject({state:'finished',job:{id:ready.job.id},result:answer});
+  expect(await creatorJobs()).toEqual([]);
 });

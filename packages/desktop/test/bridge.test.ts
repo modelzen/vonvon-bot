@@ -15,6 +15,7 @@ import { DeviceConnectionsError, type DeviceConnections, type ViewChange } from 
 import { ServiceActionError } from '../src/service-error.js';
 import { StartHostRefusal } from '../src/daemon-manager.js';
 import { DesktopUpdateError } from '../src/updates.js';
+import {RecipeCreatorSupervisor} from '../src/recipe-creator-supervisor.js';
 
 const { handlers, openExternal, failRegistration } = vi.hoisted(() => ({
   handlers: new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>>(),
@@ -187,6 +188,33 @@ function harness() {
 beforeEach(() => { handlers.clear(); openExternal.mockClear(); failRegistration.channel = ''; });
 
 describe('desktop IPC boundary', () => {
+  it('routes explicit publication preparation and confirmation through the same restricted authoring channel', async () => {
+    const prepare = vi.spyOn(RecipeCreatorSupervisor.prototype, 'preparePublication').mockResolvedValue({kind: 'publicationReady', reviewId: REMOTE_B, draftId: REMOTE_A, revision: 1, public: {name: '配方', summary: '', overview: '', version: '1.0', access: 'direct'}});
+    const confirm = vi.spyOn(RecipeCreatorSupervisor.prototype, 'confirmPublication').mockResolvedValue({kind: 'publicationResult', result: {kind: 'pending'}});
+    const invalidate = vi.spyOn(RecipeCreatorSupervisor.prototype, 'invalidateReviews');
+    const h = harness();
+    try {
+      const input = {type: 'preparePublication', accountId: REMOTE_B, draft: {draftId: REMOTE_A, recipeId: null, revision: 1, public: {name: '配方', summary: '', overview: '', version: '1.0', access: 'direct'}, config: {role: '角色'}}};
+      const handler = handlers.get(desktopChannels.recipeAuthoring)!;
+      expect(await handler({...h.event, senderFrame: {...h.frame}} as IpcMainInvokeEvent, input)).toMatchObject({ok: false});
+      expect(await h.invoke(desktopChannels.recipeAuthoring, {...input, publish: true})).toMatchObject({ok: false});
+      expect(prepare).not.toHaveBeenCalled();
+      expect(await h.invoke(desktopChannels.recipeAuthoring, input)).toMatchObject({ok: true, value: {kind: 'publicationReady'}});
+      expect(prepare).toHaveBeenCalledWith(input);
+      expect(confirm).not.toHaveBeenCalled();
+      const confirmation = {type: 'confirmPublication', accountId: REMOTE_B, reviewId: REMOTE_B};
+      expect(await h.invoke(desktopChannels.recipeAuthoring, confirmation)).toEqual({ok: true, value: {kind: 'publicationResult', result: {kind: 'pending'}}});
+      expect(confirm).toHaveBeenCalledWith(confirmation);
+      invalidate.mockClear();
+      h.recipePreview.open('vonvon-preview://recipes/drafts/' + REMOTE_A + '?revision=1');
+      expect(invalidate).toHaveBeenCalledOnce();
+      h.webContents.emit('did-start-navigation', {isMainFrame: true, isSameDocument: false, url: h.frame.url});
+      expect(invalidate).toHaveBeenCalledTimes(2);
+    } finally {
+      await h.bridge.dispose();
+      prepare.mockRestore(); confirm.mockRestore(); invalidate.mockRestore();
+    }
+  });
   it('exposes locator-only navigation to the exact local main frame and preserves unacknowledged delivery', async () => {
     const h = harness();
     h.recipePreview.open('vonvon-preview://recipes/drafts/8d85af21-e80d-4665-a6b8-ccf162dc1923?revision=2');

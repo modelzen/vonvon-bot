@@ -4,7 +4,7 @@ import {resolve} from 'node:path';
 import {act} from 'react';
 import {createRoot, type Root} from 'react-dom/client';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
-import {canonicalizeRichRecipeContent, communityRequestSchema, recipeRichDraftSchema, type CommunityRequest, type RecipeDraft, type RecipeRichDraft} from '@vonvon/protocol';
+import {canonicalizeRichRecipeContent, communityRequestSchema, desktopAuthoringRequestSchema, recipeRichDraftSchema, type CommunityRequest, type DesktopAuthoringRequest, type RecipeDraft, type RecipeRichDraft} from '@vonvon/protocol';
 import {createDesktopFacades} from '../../desktop/src/facade';
 import {desktopChannels} from '../../desktop/src/ipc-contract';
 import {ClientProvider} from '../src/client-context';
@@ -17,6 +17,8 @@ let root: Root;
 let draft: RecipeDraft;
 let requests: CommunityRequest[];
 let send: (request: CommunityRequest) => Promise<unknown>;
+let authoringRequests: DesktopAuthoringRequest[];
+let authoringSend: (request: DesktopAuthoringRequest) => Promise<unknown>;
 let facade: ReturnType<typeof createDesktopFacades>;
 let emit: (value: unknown) => void;
 let back: ReturnType<typeof vi.fn>;
@@ -40,10 +42,10 @@ function button(label: string) {
   expect(found, label).toBeDefined(); return found!;
 }
 async function click(label: string) {expect(button(label).disabled).toBe(false); await act(async () => button(label).click());}
-async function draw(account = accountId) {
+async function draw(account = accountId, expectedRevision?: number) {
   await act(async () => {
     emit({type: 'account', value: {kind: 'signedIn', accountId: account, displayName: '作者', provider: 'github', persistence: 'memory'}});
-    root.render(<ClientProvider client={facade.client} shell={facade.shell}><RecipeDraftPage shell={facade.shell.community!} accountId={account} draftId={draftId} onBack={back} onContinueInChat={resume}/></ClientProvider>);
+    root.render(<ClientProvider client={facade.client} shell={facade.shell}><RecipeDraftPage shell={facade.shell.community!} accountId={account} draftId={draftId} expectedRevision={expectedRevision} onBack={back} onContinueInChat={resume}/></ClientProvider>);
   });
 }
 async function saved(revision: number, account = accountId, id = draftId) {await act(async () => emit({type: 'authoringSaved', value: {accountId: account, draftId: id, revision}}));}
@@ -52,9 +54,17 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', class {observe() {} unobserve() {} disconnect() {}});
   vi.stubGlobal('matchMedia', () => ({matches: false, addEventListener() {}, removeEventListener() {}}));
   document.body.innerHTML = '<div id="root"></div>'; root = createRoot(document.getElementById('root')!);
-  draft = richDraft(); requests = []; back = vi.fn(); resume.mockReset();
+  draft = richDraft(); requests = []; authoringRequests = []; back = vi.fn(); resume.mockReset();
+  authoringSend = async request => {
+    if (request.type === 'preparePublication') return {kind: 'publicationReady', reviewId: otherAccount, draftId, revision: request.draft.revision, public: request.draft.public};
+    throw new Error('Unexpected authoring request ' + request.type);
+  };
   send = async request => {if (request.type === 'draft') return draft; throw new Error('Unexpected request ' + request.type);};
   facade = createDesktopFacades({receive: listener => {emit = listener; return () => {};}, invoke: async (channel, ...args) => {
+    if (channel === desktopChannels.recipeAuthoring) {
+      const request = desktopAuthoringRequestSchema.parse(args[0]); authoringRequests.push(request);
+      return {ok: true, value: await authoringSend(request)};
+    }
     if (channel !== desktopChannels.community) throw new Error('Unexpected channel ' + channel);
     const request = communityRequestSchema.parse(args[0]); requests.push(request);
     return {ok: true, value: await send(request)};
@@ -69,7 +79,8 @@ it('reads complete rich content through five shared tabs without editing, publis
   expect(document.body.textContent).toContain('创作中 · 仅自己可见');
   expect(document.body.textContent).toContain('LEGACY_SETUP_KEEP');
   expect(document.querySelector('input, textarea')).toBeNull();
-  expect(document.body.textContent).not.toMatch(/编辑发布信息|预览发布|发布到社区/);
+  expect(document.body.textContent).not.toMatch(/编辑发布信息/);
+  expect(button('发布到社区').disabled).toBe(false);
   expect([...document.querySelectorAll('[aria-label="配方详细信息"] button')].map(node => node.textContent)).toEqual(['概览', '模型与权限', '能力', '沟通方式', '任务']);
   for (const section of ['概览', '模型与权限', '能力', '沟通方式', '任务']) {
     await click(section);
@@ -79,6 +90,7 @@ it('reads complete rich content through five shared tabs without editing, publis
   await click('沟通方式'); expect(document.body.textContent).toContain('语音回复');
   await click('在飞书继续创作'); expect(resume).toHaveBeenCalledWith(draft);
   expect(requests).toEqual([{type: 'draft', accountId, draftId}]);
+  expect(authoringRequests).toEqual([]);
 });
 
 it('preserves complete legacy role data without conversion and names unnamed works honestly', async () => {
@@ -160,8 +172,9 @@ it('confirms deletion and retries the exact revision with the same operation ide
 
 it('invalidates a delete confirmation immediately when chat saves a newer revision', async () => {
   await draw(); await click('删除未发布配方');
-  draft = richDraft(2); await saved(2);
-  await act(async () => button('删除').click());
+  const oldDelete = button('删除');
+  draft = richDraft(2);
+  await act(async () => {emit({type: 'authoringSaved', value: {accountId, draftId, revision: 2}}); oldDelete.click();});
   await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
   expect(requests.filter(request => request.type === 'deleteDraft')).toEqual([]);
   await click('删除未发布配方'); await click('保留配方');
@@ -178,4 +191,106 @@ it('ignores stale reads after an account change and does not show another accoun
   await act(async () => stale(richDraft(1, {name: '旧账号私密内容'})));
   expect(document.querySelector('h1')?.textContent).toBe('新账号作品');
   expect(document.body.textContent).not.toContain('旧账号私密内容');
+});
+
+it('prepares exactly the displayed content and waits for a separate explicit publication confirmation', async () => {
+  await draw();
+  await click('发布到社区');
+  expect(authoringRequests).toEqual([{type: 'preparePublication', accountId, draft}]);
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('产品群待办');
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('所有人都可以查看完整内容');
+  await click('继续检查');
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(authoringRequests.every(request => request.type !== 'confirmPublication')).toBe(true);
+  expect(requests.every(request => request.type === 'draft')).toBe(true);
+});
+
+it('keeps the original displayed draft while recovering an uncertain publication', async () => {
+  const receipt = {accountId, draftId, recipeId: accountId, versionId: otherAccount, revision: 1};
+  let attempts = 0;
+  const prepared = authoringSend;
+  authoringSend = async request => {
+    if (request.type === 'confirmPublication') {attempts++; return {kind: 'publicationResult', result: {kind: 'pending'}};}
+    if (attempts) return {kind: 'publicationResult', result: {kind: 'published', publication: receipt}};
+    return prepared(request);
+  };
+  await draw(); await click('发布到社区'); await click('确认发布');
+  expect(document.body.textContent).toContain('正在核对发布结果');
+  expect(button('发布到社区').disabled).toBe(true);
+  expect(button('在飞书继续创作').disabled).toBe(true);
+  await click('核对发布结果');
+  expect(document.body.textContent).toContain('已发布到社区');
+  expect(authoringRequests.filter(request => request.type === 'confirmPublication')).toEqual([
+    {type: 'confirmPublication', accountId, reviewId: otherAccount},
+  ]);
+  expect(authoringRequests.filter(request => request.type === 'preparePublication')).toEqual([
+    {type: 'preparePublication', accountId, draft}, {type: 'preparePublication', accountId, draft},
+  ]);
+  expect(requests.filter(request => request.type === 'publishDraft')).toEqual([]);
+});
+
+it('discards a confirmation and a delayed preparation when chat saves a newer revision', async () => {
+  await draw(); await click('发布到社区');
+  draft = richDraft(2); await saved(2);
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(authoringRequests.filter(request => request.type === 'confirmPublication')).toEqual([]);
+  let ready!: (reply: unknown) => void;
+  authoringSend = () => new Promise(resolve => {ready = resolve;});
+  const starting = draft;
+  await click('发布到社区');
+  draft = richDraft(3); await saved(3);
+  await act(async () => ready({kind: 'publicationReady', reviewId: otherAccount, draftId, revision: 2, public: starting.public}));
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(document.body.textContent).toContain('配方内容已变化');
+});
+
+it('does not show a preparation from the previous account and warns when a preview link names an older revision', async () => {
+  let ready!: (reply: unknown) => void;
+  authoringSend = () => new Promise(resolve => {ready = resolve;});
+  await draw(accountId, 1);
+  await click('发布到社区');
+  const starting = draft;
+  draft = richDraft(3, {name: '新账号作品'});
+  await draw(otherAccount, 1);
+  await act(async () => ready({kind: 'publicationReady', reviewId: otherAccount, draftId, revision: 1, public: starting.public}));
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(document.body.textContent).toContain('链接指向修订 1，这里展示当前修订 3');
+  expect(authoringRequests.filter(request => request.type === 'confirmPublication')).toEqual([]);
+});
+
+it('does not treat a different draft publication receipt as success', async () => {
+  const prepared = authoringSend;
+  authoringSend = async request => request.type !== 'confirmPublication' ? prepared(request) :
+    {kind: 'publicationResult', result: {kind: 'published', publication: {accountId, draftId: otherAccount, recipeId: accountId, versionId: otherAccount, revision: 1}}};
+  await draw(); await click('发布到社区'); await click('确认发布');
+  expect(document.body.textContent).toContain('发布回执与这份配方不一致');
+  expect(document.body.textContent).not.toContain('已发布到社区');
+});
+
+it('refuses a read older than the linked revision and provides an in-place fresh read after stale preparation', async () => {
+  await draw(accountId, 2);
+  expect(document.querySelector('h1')).toBeNull();
+  expect(document.body.textContent).toContain('尚未读取到最新内容');
+  draft = richDraft(2); await click('重新读取');
+  authoringSend = async () => {throw new Error('内容已在其他地方变更');};
+  await click('发布到社区');
+  draft = richDraft(3, {name: '其他设备的新内容'}); await click('重新读取');
+  expect(document.querySelector('h1')?.textContent).toBe('其他设备的新内容');
+  expect(requests.filter(request => request.type === 'draft')).toHaveLength(3);
+  expect(authoringRequests.filter(request => request.type === 'confirmPublication')).toEqual([]);
+});
+
+it('recovers an invalidated confirmation through the original draft instead of retrying an unusable handle', async () => {
+  const prepared = authoringSend;
+  authoringSend = async request => request.type === 'confirmPublication' ? Promise.reject(new Error('确认已过期')) : prepared(request);
+  await draw(); await click('发布到社区'); await click('确认发布');
+  const original = draft;
+  draft = richDraft(2); await saved(2);
+  await click('核对发布结果');
+  expect(authoringRequests.filter(request => request.type === 'confirmPublication')).toHaveLength(1);
+  expect(authoringRequests.filter(request => request.type === 'preparePublication')).toEqual([
+    {type: 'preparePublication', accountId, draft: original}, {type: 'preparePublication', accountId, draft: original},
+  ]);
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(document.body.textContent).toContain('配方内容已变化');
 });

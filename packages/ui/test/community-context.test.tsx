@@ -11,7 +11,8 @@ vi.mock('react', async original => ({...await original<typeof import('react')>()
   useEffect: (effect: () => (() => void) | void, deps?: unknown[]) => {const i = h.ei++; const old = h.effects[i]; if (old?.deps && deps && deps.every((value, at) => Object.is(value, old.deps![at]))) return; h.pending.push(() => {old?.cleanup?.(); h.effects[i] = {deps, cleanup: effect() || undefined};});},
 }));
 vi.mock('../src/account-context', () => ({useAccount: () => ({status: h.account})}));
-vi.mock('../src/client-context', () => {const client = {}; return {useClient: () => client, useActiveDevice: () => ({id: 'local'})};});
+vi.mock('../src/client-context', () => {const client = {}; return {useClient: () => client, useActiveDevice: () => ({id: 'local'}), useShellCapabilities: () => undefined};});
+vi.mock('../src/settings/DraftGuard', () => ({useOptionalDraftGuard: () => undefined}));
 const a: AccountStatus = {kind: 'signedIn', accountId: '11111111-1111-4111-8111-111111111111', displayName: 'A', provider: 'github', persistence: 'memory'};
 const b: AccountStatus = {...a, accountId: '22222222-2222-4222-8222-222222222222', displayName: 'B'};
 function render() {

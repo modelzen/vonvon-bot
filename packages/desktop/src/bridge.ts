@@ -8,7 +8,7 @@ import {
   desktopAuthoringRequestSchema, desktopRecipeSourceRequestSchema, recipeUseRequestSchema, communityRequestSchema, accountStatusSchema, adminRequestSchema, agentIdSchema, collaborationRequestSchema, commandSchema, scheduleRequestSchema,
   directoryRequestSchema, environmentRequestSchema, libraryRequestSchema, machineRequestSchema, memoryRequestSchema, contextPreviewRequestSchema, deviceRequestSchema,
   settingsRequestSchema, machineReplySchema, addDeviceRequestSchema, viewIdSchema, LOCAL_VIEW,
-  type DesktopSnapshot, type DesktopUpdate, type MachineReply, type ViewId,
+  type AuthoringSaved, type DesktopSnapshot, type DesktopUpdate, type MachineReply, type ViewId,
 } from '@vonvon/protocol';
 import { DeviceConnectionsError, type DeviceConnections, type ViewChange, type ViewSession } from './connections.js';
 import { communityRequest, CommunityError } from './community-api.js';
@@ -445,7 +445,7 @@ export function installBridge(
   const metadataJournal = new MetadataJournal(recipeJournalPath && recipeJournalPath+'.metadata');
   const recipes = new RecipeUseController(account, captureRecipeDevice, new RecipeJournal(recipeJournalPath));
   const authoringJournal=new AuthoringJournal(authoringJournalPath);
-  const authoring = new RecipeAuthoringController(account, captureRecipeDevice, authoringJournal, value => send({type:'authoringSaved',value}));
+  const authoring = new RecipeAuthoringController(account, captureRecipeDevice, authoringJournal, onAuthoringSaved);
   const creatorJournal=new RecipeCreatorJournal(authoringJournalPath&&authoringJournalPath+'.creator');
   const retainCreatorSource=async(id:string,signal:AbortSignal):Promise<CreatorSourceLease>=>{
     if(id!==LOCAL_VIEW){
@@ -464,10 +464,15 @@ export function installBridge(
   };
   const creator=new RecipeCreatorSupervisor(account,retainCreatorSource,()=>devices.state().devices.map(row=>row.id),creatorJournal,authoringJournal,authoring,
     new RecipeCreatorExecutor(account,creatorJournal,metadataJournal,authoringJournal,
-      value=>send({type:'authoringPublished',value}),value=>send({type:'authoringSaved',value})));
+      value=>send({type:'authoringPublished',value}),onAuthoringSaved));
+  function onAuthoringSaved(value: AuthoringSaved) {
+    creator.invalidateDraft(value.accountId, value.draftId);
+    send({type:'authoringSaved',value});
+  }
   const noArg = (_: unknown): undefined => undefined;
   const onNavigation = (event: Electron.WebContentsDidStartNavigationEventParams): void => {
     if (!event.isMainFrame || event.isSameDocument) return;
+    creator.invalidateReviews();
     subscribed = false;
     if (event.url !== expectedUrl) authoring.closeRenderer();
   };
@@ -593,6 +598,8 @@ export function installBridge(
     register(desktopChannels.recipeSource,1,value=>desktopRecipeSourceRequestSchema.parse(value),value=>recipes.source(value));
     register(desktopChannels.recipeAuthoring, 1, value => desktopAuthoringRequestSchema.parse(value), async value => {
       if(value.type==='creatorContinue')return creator.continue(value);
+      if(value.type==='preparePublication')return creator.preparePublication(value);
+      if(value.type==='confirmPublication')return creator.confirmPublication(value);
       const reply=await authoring.request(value);
       if(value.type==='confirmLink'&&reply.kind==='link'&&reply.linked){
         const status=await authoring.request({type:'status',handle:value.handle});
@@ -635,7 +642,7 @@ export function installBridge(
       return { ok: true, value: undefined };
     });
     registeredChannels.push(desktopChannels.subscribe);
-    unsubscribers.push(recipePreview.onOpen(value => send({type: 'recipePreview', value})));
+    unsubscribers.push(recipePreview.onOpen(value => {creator.invalidateReviews(); send({type: 'recipePreview', value});}));
     unsubscribers.push(account.onStatus(value => send({ type: 'account', value: accountStatusSchema.parse(value) })));
     unsubscribers.push(devices.onState(value => send({ type: 'devices', value })));
     unsubscribers.push(devices.onView(change => { void onView(change); authoring.invalidateStale(); }));
