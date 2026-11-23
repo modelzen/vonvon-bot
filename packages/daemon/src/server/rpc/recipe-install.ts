@@ -8,5 +8,5 @@ export async function recipeInstallRpc(installer: RecipeInstaller | undefined, p
   if (principal.kind !== 'owner') throw new RpcError('permission_denied', '配方安装只能由主人在客户端发起');
   if (!installer) throw new RpcError('unsupported', '此设备尚未配置配方服务');
   const value = await installer.request(request);
-  return (request.type === 'source' || request.type === 'status' || request.type === 'createdGroup') ? {kind: 'read', value} : {kind: 'mutation', reply: () => value};
+  return (request.type==='richStatus'||request.type==='richSetup'&&['read','openSettings'].includes(request.action.kind)||request.type === 'source' || request.type === 'status' || request.type === 'createdGroup') ? {kind: 'read', value} : {kind: 'mutation', reply: () => value};
 }

@@ -2,7 +2,9 @@ import {communityFailureMessages, communityRequestSchema, communityResponseSchem
 import type {NativeAccount} from './account-session.js';
 
 const messages: Record<string, string> = communityFailureMessages;
-export class CommunityError extends Error {}
+export class CommunityError extends Error {
+  constructor(message: string, readonly code = 'unavailable', readonly retryAfter?: number) {super(message);}
+}
 const fallback = '社区请求未完成，请稍后重试同一操作。';
 
 function endpoint(r: Exclude<CommunityRequest, {type: 'shareLink'}>): {path: string; method?: string; body?: unknown; revision?: number} {
@@ -53,7 +55,7 @@ export async function communityRequest<T extends CommunityRequest['type']>(accou
     try {return communityResponseSchemas.shareLink.parse({url: account.recipeLink!(r.recipeId, r.versionId)}) as CommunityResponses[T];} catch {throw new CommunityError(fallback);}
   }
   const initial = account.status();
-  if (r.accountId && (initial.kind !== 'signedIn' || initial.accountId !== r.accountId)) throw new CommunityError('账号已切换，请重新打开社区。');
+  if (r.accountId && (initial.kind !== 'signedIn' || initial.accountId !== r.accountId)) throw new CommunityError('账号已切换，请重新打开社区。', 'session_changed');
   let changed = false;
   const unsubscribe = account.onStatus(next => {
     if (next.kind !== initial.kind || (next.kind === 'signedIn' && initial.kind === 'signedIn' && next.accountId !== initial.accountId)) changed = true;
@@ -69,10 +71,13 @@ export async function communityRequest<T extends CommunityRequest['type']>(accou
         : await account.publicRequest!(e.path);
     } catch {throw new CommunityError(fallback);}
     const value = await boundedJson(response);
-    if (changed) throw new CommunityError('账号已切换，请重新打开社区。');
+    if (changed) throw new CommunityError('账号已切换，请重新打开社区。', 'session_changed');
     if (!response.ok) {
       const code = typeof value === 'object' && value && 'error' in value && typeof value.error === 'object' && value.error && 'code' in value.error ? value.error.code : undefined;
-      throw new CommunityError(typeof code === 'string' && Object.hasOwn(messages, code) ? messages[code] : fallback);
+      const known = typeof code === 'string' && Object.hasOwn(messages, code);
+      const retry = response.headers.get('retry-after');
+      const retryAfter = retry && /^[1-9][0-9]{0,12}$/.test(retry) && Number.isSafeInteger(Number(retry)) ? Number(retry) : undefined;
+      throw new CommunityError(known ? messages[code] : fallback, known ? code : 'unavailable', retryAfter);
     }
     const parsed = communityResponseSchemas[r.type].safeParse(value);
     if (!parsed.success) throw new CommunityError(fallback);

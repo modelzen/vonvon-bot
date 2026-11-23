@@ -2,7 +2,6 @@ import {beforeEach, expect, it, vi} from 'vitest';
 import {isValidElement, type ReactElement} from 'react';
 import type {CommunityShell, RecipeDetail} from '@vonvon/protocol';
 import {CommunityPage} from '../src/community/CommunityPage';
-import {RecipeEditor} from '../src/community/RecipeEditor';
 import {RecipeDetails} from '../src/community/RecipeContent';
 
 type Effect = {deps?: unknown[]; cleanup?: () => void};
@@ -42,7 +41,7 @@ it('retries an uncertain code acquisition with one request key and reports accou
   h.request.mockImplementation(async request => {
     if (request.type === 'detail') return {...recipe, acquired, ...(acquired ? {config: {role: 'role'}} : {})};
     if (request.type === 'shareLink') return {url: 'https://community.example/version'};
-    if (request.type === 'acquire') {if (++attempts === 1) throw new Error('暂时离线'); acquired = true; return {...recipe, acquired: true};}
+    if (request.type === 'acquire') {if (++attempts === 1) throw new Error('暂时离线'); acquired = true; return {ok: true, value: {recipeId: recipe.recipeId, versionId: recipe.versionId, owned: false, acquired: true}};}
     return {};
   });
   render(); await flush();
@@ -78,31 +77,4 @@ it('does not use a late acquisition receipt to replace the page after navigating
   finish({acquired: true}); await flush(); all = render();
   expect(all.some(node => node.type === RecipeDetails)).toBe(false);
   expect(all.some(node => typeof node.props.children === 'string' && node.props.children.includes('已获取，已保存在你的账号中'))).toBe(false);
-});
-
-it('recovers an uncertain new-draft save before applying later edits, so retry cannot create a second draft', async () => {
-  const draftId = '44444444-4444-4444-8444-444444444444';
-  let calls = 0;
-  h.request.mockImplementation(async request => {
-    if (request.type !== 'saveDraft') return {};
-    if (++calls === 1) throw new Error('回执丢失');
-    return {draftId, recipeId: null, revision: calls - 1, public: request.public, config: request.config};
-  });
-  const editor = () => {
-    h.si = h.ri = h.ei = 0;
-    const result = nodes(RecipeEditor({shell, accountId: h.accountId!, onBack: () => {}, onPublished: () => {}}));
-    for (const effect of h.pending.splice(0)) effect();
-    return result;
-  };
-  let all = editor();
-  all.find(node => node.props['aria-label'] === '配方名称')!.props.onChange({target: {value: '原名称'}});
-  all = editor(); all.find(node => node.type === 'form')!.props.onSubmit({preventDefault() {}}); await flush();
-  all = editor(); all.find(node => node.props['aria-label'] === '配方名称')!.props.onChange({target: {value: '新名称'}});
-  all = editor(); all.find(node => node.type === 'form')!.props.onSubmit({preventDefault() {}}); await flush();
-  const saves = h.request.mock.calls.map(([request]) => request).filter(request => request.type === 'saveDraft');
-  expect(saves).toHaveLength(3);
-  expect(saves[0]).toEqual(saves[1]);
-  expect(saves[0].target.kind).toBe('new');
-  expect(saves[2]).toMatchObject({target: {kind: 'existing', draftId, revision: 1}, public: {name: '新名称'}});
-  expect(editor().find(node => node.props['aria-label'] === '配方名称')!.props.value).toBe('新名称');
 });

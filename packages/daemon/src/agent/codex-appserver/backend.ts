@@ -82,9 +82,10 @@ export function sandboxParams(
  * turn (T4b 4.4). What the code can check is that the directory is there and readable; one that is not is left out.
  */
 function readablePackages(packages: SessionProfile['capabilityPackages']): SessionProfile['capabilityPackages'] {
-  return packages.filter(({ path }) => {
+  return packages.filter(pkg => {
+    const {path} = pkg;
     try { accessSync(path, constants.R_OK | constants.X_OK); return true; }
-    catch (error) { log.fail('agent', error, { backend: 'codex-appserver', phase: 'capability-root' }); return false; }
+    catch (error) { if (pkg.kind === 'recipe') throw error; log.fail('agent', error, { backend: 'codex-appserver', phase: 'capability-root' }); return false; }
   });
 }
 
