@@ -1183,7 +1183,7 @@ export function createOrchestrator(
   /** `droppedFile`: where a shutdown keeps the queued messages it drops (s18c). No default: without it, nothing is
    * kept or answered (tests, and every caller but `daemon run`). */
   // Only daemon run supplies judgeUsageFile; tests that omit it do not persist usage.
-  options?: { entries?: AgentEntries; memory?: MemoryWriter; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention;
+  options?: { authoring?: Pick<import('../recipe/authoring-service').AuthoringService, 'onMessage' | 'onAction' | 'adminRemoved'>; entries?: AgentEntries; memory?: MemoryWriter; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention;
     /** devices-4a 4.3: where each new session's token comes from (the host, over IPC). Without it a session gets none (tests). */
     host?: Pick<HostApi, 'issueSessionToken'>;
     /** The launcher this Bot wrote for its sessions (agent/session-cli.ts); without one a session's PATH stays as it was. */
@@ -2930,11 +2930,13 @@ export function createOrchestrator(
         return;
       }
       if (msg.rawContentType === 'audio') {
+        if (options?.authoring && await options.authoring.onMessage(msg)) return;
         const textMessage = await transcribeMessage(msg, intakeOwner, await dmProject().catch(() => undefined));
         if (!textMessage) return;
         msg = textMessage;
       }
       if (askAnswered(msg)) return;
+      if (options?.authoring && await options.authoring.onMessage(msg)) return;
       if (isMenuCommand(msg)) { await handleDmConsole(channel, cfg, msg); return; }
       const dm = await openDmChat(msg);
       if (!dm) {
@@ -5106,6 +5108,7 @@ export function createOrchestrator(
       return super.on(actionId, admitEvent(handler));
     }
   }(channel, cfg);
+  if (options?.authoring) dispatcher.on('recipe.authoring', ({evt}) => options.authoring!.onAction(evt));
   const asks = new AskCoordinator(channel, cfg, names);
   dispatcher.on('ask_submit', ({ evt, value, formValue }) => {
     const result = asks.submit({ messageId: evt.messageId, chatId: evt.chatId, operatorOpenId: evt.operator?.openId, value, formValue });
@@ -10013,6 +10016,7 @@ export function createOrchestrator(
 
   /** The removal's steps after the list is written (dm-agent 3.3): the door is shut already; each failure here is only logged. */
   async function endDmOf(openId: string): Promise<void> {
+    await options?.authoring?.adminRemoved(openId);
     const chats = new Set(dmChatsOf.get(openId));
     dmChatsOf.delete(openId);
     // The files only add what this process has not seen: one that cannot be read must not keep a running turn alive.
