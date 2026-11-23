@@ -17,3 +17,8 @@ files:
   - assets/**
   - package.json
   - "!node_modules/**"
+
+# A single object replaces the inherited array. Two arrays would merge stable into Preview.
+protocols:
+  name: Vonvon draft preview
+  schemes: [vonvon-preview]

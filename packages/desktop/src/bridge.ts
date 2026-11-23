@@ -1,3 +1,5 @@
+import { draftPreviewNavigationIdSchema } from '@vonvon/protocol';
+import { RecipePreviewNavigation } from './recipe-preview-navigation.js';
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { shell, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron';
@@ -176,7 +178,7 @@ const remoteServiceToggle = (value: unknown): boolean => {
 };
 
 export function installBridge(
-  owner: AttachedDaemon, window: BrowserWindow, paths: DesktopResources, actions: ShellActions, devices: DeviceConnections, account: NativeAccount, recipeJournalPath?:string, authoringJournalPath?:string,
+  owner: AttachedDaemon, window: BrowserWindow, paths: DesktopResources, actions: ShellActions, devices: DeviceConnections, account: NativeAccount, recipeJournalPath?:string, authoringJournalPath?:string, recipePreview = new RecipePreviewNavigation('vonvon'),
 ): DesktopBridge {
   const expectedUrl = pathToFileURL(realpathSync(paths.uiIndex)).href;
   let disposed = false;
@@ -599,6 +601,8 @@ export function installBridge(
       return reply;
     });
     register(desktopChannels.recipeUse,1,value=>recipeUseRequestSchema.parse(value),value=>recipes.request(value));
+    register(desktopChannels.recipePreviewPending, 0, noArg, async () => recipePreview.pending());
+    register(desktopChannels.recipePreviewAcknowledge, 1, value => draftPreviewNavigationIdSchema.parse(value), async value => recipePreview.acknowledge(value));
     register(desktopChannels.community, 1, value => communityRequestSchema.parse(value), value => communityRequest(account, value, metadataJournal));
     register(desktopChannels.accountStatus, 0, noArg, async () => accountStatusSchema.parse(account.status()));
     register(desktopChannels.accountLogin, 0, noArg, async () => accountStatusSchema.parse(await account.login()));
@@ -631,6 +635,7 @@ export function installBridge(
       return { ok: true, value: undefined };
     });
     registeredChannels.push(desktopChannels.subscribe);
+    unsubscribers.push(recipePreview.onOpen(value => send({type: 'recipePreview', value})));
     unsubscribers.push(account.onStatus(value => send({ type: 'account', value: accountStatusSchema.parse(value) })));
     unsubscribers.push(devices.onState(value => send({ type: 'devices', value })));
     unsubscribers.push(devices.onView(change => { void onView(change); authoring.invalidateStale(); }));

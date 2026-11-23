@@ -1,3 +1,4 @@
+import { RecipePreviewNavigation, captureRecipePreviewLaunches } from './recipe-preview-navigation.js';
 import { mkdirSync, realpathSync } from 'node:fs';
 import { homedir, release } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
@@ -237,7 +238,14 @@ export async function startDesktop(): Promise<void> {
     }
   })();
 
-  app.on('second-instance', show);
+  const recipePreviewScheme = previewBuild ? 'vonvon-preview' : 'vonvon';
+  const recipePreview = new RecipePreviewNavigation(recipePreviewScheme);
+  captureRecipePreviewLaunches(recipePreview, {
+    onOpenUrl: listener => { app.on('open-url', listener); },
+    onSecondInstance: listener => { app.on('second-instance', (_event, argv) => listener(argv)); },
+    argv: process.argv,
+    reveal: show,
+  });
   app.on('activate', show);
   app.on('before-quit', event => {
     if (!quitting) {
@@ -249,6 +257,7 @@ export async function startDesktop(): Promise<void> {
   try {
     await app.whenReady();
     if (terminating) return;
+    if (app.isPackaged && (previewBuild || !testHome)) app.setAsDefaultProtocolClient(recipePreviewScheme);
     const paths = desktopResources(app.getAppPath(), app.isPackaged);
     const uiIndex = realpathSync(paths.uiIndex);
     // Use the same padded, transparent icon as the bundle, including in dev mode.
@@ -723,7 +732,7 @@ export async function startDesktop(): Promise<void> {
       },
       connectionLost: showConnectionLost,
     }, devices, account, join(app.getPath('userData'),'recipe-install-journal.json'),
-      join(app.getPath('userData'),'recipe-authoring-journal.json'));
+      join(app.getPath('userData'),'recipe-authoring-journal.json'), recipePreview);
     tray = createDesktopTray(icon, show, requestQuit);
     // U4: the daemon this app carries asks it to update when another device says so. Windows' app is updated on that
     // computer for 0.9.0 (owner 2026-11-02): its shell does not declare it can, as its daemon does not offer it.

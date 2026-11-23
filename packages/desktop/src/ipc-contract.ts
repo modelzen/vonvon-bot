@@ -1,3 +1,4 @@
+import type { DraftPreviewNavigation, RecipePreviewShell } from '@vonvon/protocol';
 import { z } from 'zod';
 import type { ServerInfo, VonvonClient } from '@vonvon/client/browser';
 import {
@@ -28,6 +29,8 @@ export const desktopChannels = {
   external: 'desktop:shell:external',
   community: 'desktop:community:request',
   recipeSource: 'desktop:recipe-source:request',
+  recipePreviewPending: 'desktop:recipe-preview:pending',
+  recipePreviewAcknowledge: 'desktop:recipe-preview:acknowledge',
   recipeAuthoring: 'desktop:recipe-authoring:request',
   recipeUse: 'desktop:recipe-use:request',
   accountStatus: 'desktop:account:status',
@@ -101,6 +104,7 @@ export type DesktopEvent =
   /** This computer's own device events, whichever device the page shows (U3's "new device paired"). */
   | { type: 'localDevice'; value: DeviceEventPayload }
   | { type: 'account'; value: AccountStatus }
+  | { type: 'recipePreview'; value: DraftPreviewNavigation }
   | { type: 'authoringSaved'; value: AuthoringSaved }
   | { type: 'authoringPublished'; value: AuthoringPublished }
   | { type: 'devices'; value: DevicesState }
@@ -114,7 +118,7 @@ export type DesktopEvent =
 
 export type DesktopShell = Required<Pick<ShellCapabilities,
   'openExternal' | 'chooseExecutablePath' | 'chooseDirectoryPaths' | 'checkDesktopUpdate' | 'retryDesktopUpdate' | 'installDesktopUpdate' | 'onDesktopUpdate' |
-  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli' | 'service' | 'setLoginItem' | 'devices' | 'onLocalDeviceEvent' | 'quitKeepsDaemon' | 'onRemoteUpdate'>> & { account: AccountShell; community: CommunityShell; recipeAuthoring: RecipeAuthoringShell; recipeUse: RecipeUseShell; recipeSource:RecipeSourceShell };
+  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli' | 'service' | 'setLoginItem' | 'devices' | 'onLocalDeviceEvent' | 'quitKeepsDaemon' | 'onRemoteUpdate'>> & { recipePreview: RecipePreviewShell; account: AccountShell; community: CommunityShell; recipeAuthoring: RecipeAuthoringShell; recipeUse: RecipeUseShell; recipeSource:RecipeSourceShell };
 
 export interface DesktopResources {
   uiIndex: string;

@@ -57,6 +57,8 @@ async function body(req, limit) {
 }
 
 export function createRecipeWeb(env = process.env) {
+  const desktopChannel = env.RECIPE_DESKTOP_CHANNEL || 'preview';
+  if (!['preview', 'stable'].includes(desktopChannel)) throw new Error('Invalid RECIPE_DESKTOP_CHANNEL');
   const port = Number(env.RECIPE_WEB_PORT || 49151);
   const publicOrigin = origin(env.RECIPE_WEB_ORIGIN || 'http://127.0.0.1:' + port, 'RECIPE_WEB_ORIGIN');
   const apiOrigin = origin(env.RECIPE_API_ORIGIN || 'http://127.0.0.1:4317', 'RECIPE_API_ORIGIN', true);
@@ -73,6 +75,18 @@ export function createRecipeWeb(env = process.env) {
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
     const url = new URL(req.url, publicOrigin);
     if (url.origin !== publicOrigin) throw new WebError(400, 'invalid_path');
+    if (['/open/draft', '/open-draft.mjs', '/open-draft.css'].includes(url.pathname)) {
+      res.setHeader('Referrer-Policy', 'no-referrer');
+      res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
+      if (req.method !== 'GET' || url.search) throw new WebError(400, 'invalid_path');
+      const asset = url.pathname === '/open/draft' ? ['open-draft.html', 'text/html; charset=utf-8']
+        : url.pathname === '/open-draft.mjs' ? ['open-draft.mjs', 'text/javascript; charset=utf-8']
+          : ['open-draft.css', 'text/css; charset=utf-8'];
+      const file = await readFile(new URL('public/' + asset[0], import.meta.url), 'utf8');
+      res.writeHead(200, {'Content-Type': asset[1]});
+      res.end(url.pathname === '/open/draft' ? file.replace('__DESKTOP_CHANNEL__', desktopChannel) : file);
+      return;
+    }
     if (await native.handle(req, res, url)) return;
     if (['POST', 'PATCH', 'DELETE'].includes(req.method) && req.headers.origin !== publicOrigin) throw new WebError(403, 'invalid_origin');
     if (req.method === 'GET' && url.pathname === '/auth/session') return json(res, 200, login.status(req));

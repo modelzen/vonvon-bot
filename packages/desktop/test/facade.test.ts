@@ -24,6 +24,27 @@ function harness() {
 }
 
 describe('synchronous desktop facade', () => {
+  it('validates pending preview locators and never dispatches publication on open', async () => {
+    const h = harness();
+    const navigation = {draftId: '8d85af21-e80d-4665-a6b8-ccf162dc1923', revision: 2, navigationId: '11111111-1111-4111-8111-111111111111'};
+    h.replies.set(desktopChannels.recipePreviewPending, async () => ({ok: true, value: [navigation]}));
+    const shell = createDesktopFacades(h.transport).shell;
+    const received: unknown[] = [];
+    const off = shell.recipePreview.onOpen(value => received.push(value));
+    expect(await shell.recipePreview.pending()).toEqual([navigation]);
+    h.event({type: 'recipePreview', value: {...navigation, publish: true}});
+    h.event({type: 'recipePreview', value: navigation});
+    expect(received).toEqual([navigation]);
+    off();
+    h.event({type: 'recipePreview', value: navigation});
+    expect(received).toHaveLength(1);
+    await shell.recipePreview.acknowledge(navigation.navigationId);
+    expect(h.calls.filter(channel => channel !== desktopChannels.subscribe)).toEqual([
+      desktopChannels.recipePreviewPending, desktopChannels.recipePreviewAcknowledge,
+    ]);
+    h.replies.set(desktopChannels.recipePreviewPending, async () => ({ok: true, value: [{...navigation, token: 'secret'}]}));
+    await expect(shell.recipePreview.pending()).rejects.toThrow();
+  });
   it('exposes only validated account status and replays it to a remounted shell listener', async () => {
     const h = harness();
     const { account } = createDesktopFacades(h.transport).shell;

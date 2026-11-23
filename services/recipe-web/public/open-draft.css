@@ -1,0 +1,10 @@
+* { box-sizing: border-box; }
+body { margin: 0; color: #202720; background: #f6f7f4; font-family: system-ui, sans-serif; }
+main { max-width: 38rem; margin: 12vh auto; padding: 2rem; }
+.eyebrow { color: #52674f; font-weight: 650; }
+h1 { font-size: clamp(1.7rem, 5vw, 2.4rem); line-height: 1.25; }
+p { line-height: 1.7; }
+a { display: inline-block; margin: 1rem 0; padding: .8rem 1.25rem; border-radius: .6rem; background: #295c38; color: white; text-decoration: none; }
+a[hidden] { display: none; }
+a:focus-visible { outline: 3px solid #6588d4; outline-offset: 4px; }
+.help { color: #596159; font-size: .9rem; }

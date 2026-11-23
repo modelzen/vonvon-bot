@@ -1,3 +1,4 @@
+import { RecipePreviewNavigation } from '../src/recipe-preview-navigation.js';
 import { EventEmitter, once } from 'node:events';
 import type { Server } from 'node:http';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -166,7 +167,8 @@ function harness() {
     cancelLogin: vi.fn(async () => ({ kind: 'signedOut' as const })), logout: vi.fn(async () => ({ kind: 'signedOut' as const })),
     onStatus: vi.fn(() => () => {}), request: vi.fn(), dispose: vi.fn(),
   };
-  const bridge = installBridge(owner, window, paths, actions, devs.devices, account);
+  const recipePreview = new RecipePreviewNavigation('vonvon-preview');
+  const bridge = installBridge(owner, window, paths, actions, devs.devices, account, undefined, undefined, recipePreview);
   /** As the page sends it: a channel to a daemon gets the view last, 'current' unless said. */
   const invokeAs = (view: string, channel: string, ...args: unknown[]) => {
     const handler = handlers.get(channel);
@@ -174,7 +176,7 @@ function harness() {
     return handler(event, ...args, ...(clientChannels.has(channel) ? [view] : []));
   };
   const invoke = (channel: string, ...args: unknown[]) => invokeAs('current', channel, ...args);
-  return { bridge, account, event, frame, webContents, window, paths, invoke, invokeAs, snapshot, machine, run, schedule, device, dispose, actions, owner, devs,
+  return { bridge, recipePreview, account, event, frame, webContents, window, paths, invoke, invokeAs, snapshot, machine, run, schedule, device, dispose, actions, owner, devs,
     /** What the page was sent, leaving out the device list it gets on every subscribe and change. */
     events: (): DesktopEvent[] => webContents.send.mock.calls.map(call => call[1] as DesktopEvent).filter(value => value.type !== 'devices' && value.type !== 'account'),
     emitSnapshot: (value: unknown) => onSnapshot(value),
@@ -185,6 +187,30 @@ function harness() {
 beforeEach(() => { handlers.clear(); openExternal.mockClear(); failRegistration.channel = ''; });
 
 describe('desktop IPC boundary', () => {
+  it('exposes locator-only navigation to the exact local main frame and preserves unacknowledged delivery', async () => {
+    const h = harness();
+    h.recipePreview.open('vonvon-preview://recipes/drafts/8d85af21-e80d-4665-a6b8-ccf162dc1923?revision=2');
+    const [navigation] = h.recipePreview.pending();
+    expect(await h.invoke(desktopChannels.recipePreviewPending)).toEqual({ok: true, value: [navigation]});
+    expect(await h.invoke(desktopChannels.recipePreviewPending, 'publish')).toMatchObject({ok: false});
+    const handler = handlers.get(desktopChannels.recipePreviewAcknowledge)!;
+    const wrongFrame = {...h.event, senderFrame: {...h.frame}} as IpcMainInvokeEvent;
+    expect(await handler(wrongFrame, navigation.navigationId)).toMatchObject({ok: false});
+    expect(await handler({...h.event, sender: {}} as IpcMainInvokeEvent, navigation.navigationId)).toMatchObject({ok: false});
+    h.frame.url += '#untrusted';
+    expect(await h.invoke(desktopChannels.recipePreviewAcknowledge, navigation.navigationId)).toMatchObject({ok: false});
+    h.frame.url = h.frame.url.replace('#untrusted', '');
+    expect(h.recipePreview.pending()).toEqual([navigation]);
+    await h.invoke(desktopChannels.subscribe);
+    h.recipePreview.open('vonvon-preview://recipes/drafts/8d85af21-e80d-4665-a6b8-ccf162dc1923?revision=3');
+    expect(h.events()).toContainEqual({type: 'recipePreview', value: expect.objectContaining({revision: 3})});
+    expect(await h.invoke(desktopChannels.recipePreviewAcknowledge, {navigationId: navigation.navigationId, publish: true})).toMatchObject({ok: false});
+    expect(await h.invoke(desktopChannels.recipePreviewAcknowledge, navigation.navigationId)).toEqual({ok: true, value: undefined});
+    expect(h.recipePreview.pending()).toEqual([expect.objectContaining({revision: 3})]);
+    expect(h.account.request).not.toHaveBeenCalled();
+    expect(h.run).not.toHaveBeenCalled();
+    await h.bridge.dispose();
+  });
   it('uses the local account on a remote view and rejects payloads or untrusted senders', async () => {
     const h = harness();
     await h.invoke(desktopChannels.subscribe);

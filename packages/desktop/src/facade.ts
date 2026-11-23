@@ -1,3 +1,4 @@
+import { draftPreviewNavigationSchema, draftPreviewNavigationIdSchema, type DraftPreviewNavigation } from '@vonvon/protocol';
 import type { VonvonClient } from '@vonvon/client/browser';
 import {
   authoringPublishedSchema, type AuthoringPublished, authoringSavedSchema, type AuthoringSaved, acquisitionFailureSchema, desktopAuthoringRequestSchema, desktopAuthoringReplySchema, desktopRecipeSourceRequestSchema,desktopRecipeSourceReplySchema,recipeUseReplySchema, recipeUseRequestSchema, communityRequestSchema, communityResponseSchemas, type CommunityShell, accountStatusSchema, type AccountStatus, adminReplySchema, backendInstallEventPayloadSchema, collaborationReplySchema,
@@ -65,6 +66,7 @@ function readValue(raw: object): unknown {
 }
 
 export function createDesktopFacades(transport: FacadeTransport): { client: VonvonClient; shell: DesktopShell } {
+  const recipePreviewListeners = new Set<(value: DraftPreviewNavigation) => void>();
   const quitListeners = new Set<() => void>();
   const updateListeners = new Set<(value: DesktopUpdate) => void>();
   const accountListeners = new Set<(value: AccountStatus) => void>();
@@ -99,6 +101,9 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
     try {
       if (!raw || typeof raw !== 'object' || !('type' in raw)) throw new Error('Invalid desktop event');
       switch (raw.type) {
+        case 'recipePreview':
+          deliverShell(recipePreviewListeners, draftPreviewNavigationSchema.parse(readValue(raw)));
+          return;
         case 'quitRequested':
           if (quitListeners.size === 0) pendingQuit = true;
           else deliverShell(quitListeners, undefined);
@@ -345,6 +350,11 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
   };
 
   const shell: DesktopShell = {
+    recipePreview: {
+      pending: () => callShellFor(desktopChannels.recipePreviewPending, value => draftPreviewNavigationSchema.array().parse(value)),
+      onOpen(listener) { recipePreviewListeners.add(listener); return () => { recipePreviewListeners.delete(listener); }; },
+      acknowledge: navigationId => callShellFor(desktopChannels.recipePreviewAcknowledge, parseVoid, draftPreviewNavigationIdSchema.parse(navigationId)),
+    },
     openExternal: (url, kind) => callShell(desktopChannels.external, kind ? {url, kind} : url),
     chooseExecutablePath: () => transport.invoke(desktopChannels.chooseExecutablePath)
       .then(value => readResult(value, parseExecutablePath), error => {

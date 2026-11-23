@@ -49,3 +49,5 @@ export {canonicalCaselessSegment, isPortableDocumentName} from './recipe-rich-fi
 export * from './schedule-grammar.js';
 export * from './recipe-rich-install.js';
 export * from './recipe-rich-authoring.js';
+
+export * from './recipe-preview.js';
