@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { ServerInfo, VonvonClient } from '@vonvon/client/browser';
 import {
-  agentIdSchema, viewIdSchema, type AccountShell, type CommunityShell, type RecipeUseShell, type RecipeSourceShell, type AccountStatus, type BackendInstallEventPayload, type CommandResult, type DesktopSnapshot, type DesktopUpdate, type DeviceEventPayload,
+  agentIdSchema, viewIdSchema, type AccountShell, type CommunityShell, type RecipeUseShell, type RecipeAuthoringShell, type RecipeSourceShell, type AccountStatus, type BackendInstallEventPayload, type CommandResult, type DesktopSnapshot, type DesktopUpdate, type DeviceEventPayload,
   type DevicesState, type LogEventPayload, type MachineReply, type ViewId,
 } from '@vonvon/protocol';
 import type { ShellCapabilities } from '../../ui/src/client-context.js';
@@ -28,6 +28,7 @@ export const desktopChannels = {
   external: 'desktop:shell:external',
   community: 'desktop:community:request',
   recipeSource: 'desktop:recipe-source:request',
+  recipeAuthoring: 'desktop:recipe-authoring:request',
   recipeUse: 'desktop:recipe-use:request',
   accountStatus: 'desktop:account:status',
   accountLogin: 'desktop:account:login',
@@ -80,6 +81,7 @@ export type SafeFailure = {
   kind: 'rpc' | 'connection' | 'validation';
   message: string;
   code?: string;
+  retryAfter?: number;
 };
 
 /** A daemon error code the renderer may see: short and plain, so it cannot carry text of its own. */
@@ -110,7 +112,7 @@ export type DesktopEvent =
 
 export type DesktopShell = Required<Pick<ShellCapabilities,
   'openExternal' | 'chooseExecutablePath' | 'chooseDirectoryPaths' | 'checkDesktopUpdate' | 'retryDesktopUpdate' | 'installDesktopUpdate' | 'onDesktopUpdate' |
-  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli' | 'service' | 'setLoginItem' | 'devices' | 'onLocalDeviceEvent' | 'quitKeepsDaemon' | 'onRemoteUpdate'>> & { account: AccountShell; community: CommunityShell; recipeUse: RecipeUseShell; recipeSource:RecipeSourceShell };
+  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli' | 'service' | 'setLoginItem' | 'devices' | 'onLocalDeviceEvent' | 'quitKeepsDaemon' | 'onRemoteUpdate'>> & { account: AccountShell; community: CommunityShell; recipeAuthoring: RecipeAuthoringShell; recipeUse: RecipeUseShell; recipeSource:RecipeSourceShell };
 
 export interface DesktopResources {
   uiIndex: string;
