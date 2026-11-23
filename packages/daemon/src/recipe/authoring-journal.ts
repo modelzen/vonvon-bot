@@ -78,6 +78,12 @@ export function selectCreatorBinding(db: AuthoringLedger, current: Link, now: nu
   }
   (current.creator ??= {jobs:{},cards:{}}).chosenUntil = now + CREATOR_SELECTION_TTL;
 }
+export function selectCreatorOperation(db: AuthoringLedger, link: Link, now: number, draftId?: string) {
+  selectCreatorBinding(db,link,now);
+  const creator=link.creator!;
+  delete creator.current; delete creator.focusUntil; delete creator.awaitLogo;
+  if(draftId)creator.focusDraft=draftId;else delete creator.focusDraft;
+}
 export function renewCreatorBinding(db: AuthoringLedger, current: Link, now: number) {
   const chosen = Object.values(db.links).filter(link => link.bot === current.bot && sameRecipient(link.recipient,current.recipient) &&
     (link.creator?.chosenUntil ?? 0) > now);
@@ -88,9 +94,9 @@ export class CreatorSelectionChanged extends Error {}
 export function matchesAuthoringRoute(db: AuthoringLedger, current: Link, route: AuthoringRoute, now: number) {
   if (db.links[route.key] !== current || current.binding !== route.binding) return false;
   if (route.kind === 'quoted') return true;
-  const chosen = Object.values(db.links).filter(link => link.bot === current.bot && sameRecipient(link.recipient,current.recipient) &&
-    (link.creator?.chosenUntil ?? 0) > now);
-  return route.kind === 'intent' ? chosen.length === 0 : chosen.length === 1 && chosen[0] === current && current.creator?.chosenUntil === route.chosenUntil;
+  const links = Object.values(db.links).filter(link => link.bot === current.bot && sameRecipient(link.recipient,current.recipient));
+  const chosen = links.filter(link => (link.creator?.chosenUntil ?? 0) > now);
+  return route.kind === 'intent' ? links.length === 1 && chosen.length === 0 : chosen.length === 1 && chosen[0] === current && current.creator?.chosenUntil === route.chosenUntil;
 }
 export const active = (op: LocalOperation) => op.terminalAt === undefined;
 export function discardAuthoringMaterial(op: LocalOperation) {

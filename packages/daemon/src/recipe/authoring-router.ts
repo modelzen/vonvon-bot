@@ -4,7 +4,7 @@ import {recipeAuthoringRequestSchema, type RecipeAuthoringRequest} from '@vonvon
 import {assertBotIdentity} from '../config/bots';
 import {paths} from '../config/paths';
 import {isAdmin} from '../config/schema';
-import {AuthoringJournal, authoringBotKey, linkKey, sameRecipient, type AuthoringRoute} from './authoring-journal';
+import {AuthoringJournal, authoringBotKey, linkKey, matchesAuthoringRoute, sameRecipient, type AuthoringRoute} from './authoring-journal';
 import {fromMessage, type AuthoringOptions, type AuthoringPeer, type AuthoringSession} from './authoring-service';
 import {creatorIntent,creatorClick} from './private-creator';
 import {AuthoringIm} from './authoring-im';
@@ -102,7 +102,10 @@ export class AuthoringRouter {
       const now=this.now(),rows=Object.entries(db.links).filter(([,l])=>l.bot===this.botKey&&sameRecipient(l.recipient,recipient));
       const own=rows.map(([key,l])=>({key,binding:l.binding}));
       const operations=Object.values(db.operations).filter(o=>o.bot===this.botKey&&sameRecipient(o.recipient,recipient));
-      const handoffs=Object.values(db.handoffs??{}).filter(h=>own.some(l=>l.key===linkKey(h.scope,h.account)&&l.binding===h.binding)&&sameRecipient(h.recipient,recipient));
+      if(operations.some(o=>o.instructionId===msg.messageId||o.seenInstructions?.includes(msg.messageId))||
+        rows.some(([,l])=>l.wake?.messageId===msg.messageId||l.creator?.seen?.includes(msg.messageId)))return;
+      const history=Object.values(db.handoffs??{}).filter(h=>sameRecipient(h.recipient,recipient)&&db.links[linkKey(h.scope,h.account)]?.bot===this.botKey);
+      const handoffs=history.filter(h=>db.links[linkKey(h.scope,h.account)]?.binding===h.binding);
       const quoted=msg.replyToMessageId?rows.filter(([key,l])=>
         Object.values(l.creator?.cards??{}).some(c=>c.messageId===msg.replyToMessageId)||
         operations.some(o=>linkKey(o.scope,o.accountId)===key&&o.binding===l.binding&&o.carrier.messageId===msg.replyToMessageId)||
@@ -110,7 +113,7 @@ export class AuthoringRouter {
       const chosen=rows.filter(([,l])=>(l.creator?.chosenUntil??0)>now);
       const context=operations.some(o=>o.contextOpen&&!o.revoked&&(o.terminalAt===undefined||o.view.state==='completed'&&(o.contextUntil??0)>now))||
         handoffs.some(h=>['selecting','awaitingAttestations'].includes(h.phase.state))||rows.some(([,l])=>(l.creator?.focusUntil??0)>now);
-      const knownQuote=Boolean(msg.replyToMessageId&&(quoted.length||operations.some(o=>o.carrier.messageId===msg.replyToMessageId)||handoffs.some(h=>h.messageId===msg.replyToMessageId)));
+      const knownQuote=Boolean(msg.replyToMessageId&&(quoted.length||operations.some(o=>o.carrier.messageId===msg.replyToMessageId)||history.some(h=>h.messageId===msg.replyToMessageId)));
       const incomplete=Object.values(db.links).some(l=>l.bot===this.botKey&&l.recipient.openId===recipient.openId&&l.recipient.chatId===recipient.chatId&&!sameRecipient(l.recipient,recipient));
       const foreignQuote=Boolean(msg.replyToMessageId&&(Object.values(db.operations).some(o=>o.bot===this.botKey&&o.carrier.messageId===msg.replyToMessageId&&!sameRecipient(o.recipient,recipient))||
         Object.values(db.links).some(l=>l.bot===this.botKey&&!sameRecipient(l.recipient,recipient)&&Object.values(l.creator?.cards??{}).some(c=>c.messageId===msg.replyToMessageId))||
@@ -121,8 +124,10 @@ export class AuthoringRouter {
         const address={key:target[0],binding:target[1].binding},until=target[1].creator?.chosenUntil;
         route=msg.replyToMessageId?{...address,kind:'quoted'}:chosen.length===1&&until!==undefined?{...address,kind:'chosen',chosenUntil:until}:{...address,kind:'intent'};
       }
-      return {own,context,knownQuote,incomplete:incomplete||foreignQuote,route,ambiguous:chosen.length>1};
+      const handoffSession=msg.replyToMessageId&&handoffs.find(h=>h.messageId===msg.replyToMessageId&&['selecting','awaitingAttestations'].includes(h.phase.state))?.session;
+      return {own,context,knownQuote,handoffSession,incomplete:incomplete||foreignQuote,route,ambiguous:chosen.length>1};
     });
+    if(!snapshot)return true;
     const {own,route}=snapshot;
     const recover=async()=>{await this.im.reply(recipient.chatId,msg.messageId,'请引用原配方卡，或发送“我的配方”重新选择账号后重发本条修改。');return true;};
     if(snapshot.incomplete)return true;
@@ -135,20 +140,22 @@ export class AuthoringRouter {
     }
     const links=own.filter(l=>l.key===route.key&&l.binding===route.binding);
     const match=active.filter(s=>{const p=s.presence!;return links.some(l=>l.key===linkKey(p.scope,p.account)&&(!p.binding||p.binding===l.binding));});
-    const original=match.find(s=>s.creator.enabled)??match[0];
+    const original=snapshot.handoffSession?match.find(s=>s.presence?.session===snapshot.handoffSession):match.find(s=>s.creator.enabled)??match[0];
     if(original){
       if(await original.onMessage(msg,route))return true;
       if(snapshot.context||snapshot.knownQuote||route.kind==='chosen')return recover();
       return false;
     }
-    if(intent&&links.length===1&&isAdmin(this.opts.cfg,recipient.openId)){
+    if(intent&&route.kind!=='quoted'&&links.length===1&&isAdmin(this.opts.cfg,recipient.openId)){
       await (this.opts.currentBot?.()??assertBotIdentity(this.opts.bot));
-      await this.journal.run(db=>{
-        const link=db.links[links[0]!.key];
-        if(!link||link.binding!==links[0]!.binding||!sameRecipient(link.recipient,recipient)||!isAdmin(this.opts.cfg,recipient.openId))return;
-        if(link.wake?.messageId===msg.messageId||link.creator?.seen?.includes(msg.messageId))return;
+      const retained=await this.journal.run(db=>{
+        const link=db.links[route.key];
+        if(!link||link.bot!==this.botKey||!sameRecipient(link.recipient,recipient)||!isAdmin(this.opts.cfg,recipient.openId)||!matchesAuthoringRoute(db,link,route,this.now()))return false;
+        if(link.wake?.messageId===msg.messageId||link.creator?.seen?.includes(msg.messageId))return true;
         link.wake={id:randomUUID(),messageId:msg.messageId,intent,expiresAt:this.now()+5*60_000};
+        return true;
       });
+      if(!retained)return recover();
       await this.im.reply(recipient.chatId,msg.messageId,'已保留本次请求。原账号的 Vonvon 连接后会在这里继续。');return true;
     }
     if(snapshot.context||snapshot.knownQuote||route.kind==='chosen')return recover();

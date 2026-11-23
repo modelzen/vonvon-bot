@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {agentIdSchema,type RecipeAuthoringRequest,type RecipeAuthoringReply,type AuthoringHandoff} from '@vonvon/protocol';
 import type {z} from 'zod';
-import {AuthoringJournal,linkKey,sameRecipient,selectCreatorBinding,type AuthoringLedger,type Link,type Recipient} from './authoring-journal';
+import {AuthoringJournal,linkKey,sameRecipient,selectCreatorBinding,selectCreatorOperation,type AuthoringLedger,type Link,type Recipient} from './authoring-journal';
 import {AuthoringIm,candidateConfirmation} from './authoring-im';
 import {groupSourceIdentity} from './authoring-source';
 import {preparedRich,readRichSource,richSkillOptions,typedRichEdit,richCardReview,type RichNativeOptions,type RichLocalDraft} from './authoring-rich-flow';
@@ -28,10 +28,10 @@ function publicView(h:PrivateHandoff):AuthoringHandoff{
 }
 export class PrivateHandoffs {
   constructor(private readonly native:RichNativeOptions,private readonly ledger:AuthoringJournal,private readonly im:AuthoringIm,
-    private readonly now:()=>number,private readonly live:(p:Presence)=>void){}
+    private readonly now:()=>number,private readonly live:(p:Presence,recipient?:Recipient)=>void){}
   private async transaction<T>(p:Presence,link:Link,id:string,edit:(h:PrivateHandoff)=>T){
     return this.ledger.run(db=>{
-      this.live(p);
+      this.live(p,link.recipient);
       const h=db.handoffs?.[id];
       const actual=db.links[linkKey(p.scope,p.account)];
       if(!h||!bound(h,p,link)||actual?.bot!==link.bot||actual.binding!==link.binding||!sameRecipient(actual.recipient,link.recipient))throw changed();
@@ -40,7 +40,7 @@ export class PrivateHandoffs {
   }
   private async save(p:Presence,link:Link,h:PrivateHandoff,previous:string,click?:PrivateHandoff,select?:(db:AuthoringLedger,actual:Link)=>void){
     return this.ledger.run(db=>{
-      this.live(p);
+      this.live(p,link.recipient);
       const actual=db.links[linkKey(p.scope,p.account)],row=db.handoffs?.[h.retryId];
       if(!actual||actual.bot!==link.bot||actual.binding!==link.binding||!sameRecipient(actual.recipient,link.recipient)||!row||!bound(row,p,actual)||
         row.ref!==previous||row.expiresAt<=this.now()||row.phase.state==='cancelled')throw changed();
@@ -49,7 +49,7 @@ export class PrivateHandoffs {
         if(!active(h)||h.session!==p.session)throw changed();
         select(db,actual);selectCreatorBinding(db,actual,this.now());
       }
-      if(click&&h.phase.state==='awaitingAttestations')selectCreatorBinding(db,actual,this.now());
+      if(click&&h.phase.state==='awaitingAttestations')selectCreatorOperation(db,actual,this.now());
       Object.assign(row,h);
       if(!h.edit)delete row.edit;
       return row;
@@ -108,7 +108,7 @@ export class PrivateHandoffs {
     if(r.type==='beginDraftHandoff'&&r.identity!==identity)throw changed();
     const edit=r.type==='beginDraftHandoff'?{draftId:r.draftId,baseRevision:r.baseRevision,canonical:r.canonical,source:r.source}:undefined;
     let h=await this.ledger.run(db=>{
-      this.live(p);
+      this.live(p,link.recipient);
       if(!Object.values(db.links).some(l=>l.binding===link.binding&&sameRecipient(l.recipient,link.recipient)))throw changed();
       const slots=db.handoffs??={};
       const previous=slots[r.retryId];
@@ -188,7 +188,7 @@ export class PrivateHandoffs {
       else await this.choices(p,h);
       h=await this.save(p,link,h,before);
     }else if(!h.cardId){await this.choices(p,h);h=await this.save(p,link,h,h.ref);}
-    if(select){const before=h.ref;rotate(h);h=await this.save(p,link,h,before,undefined,select);}
+    if(select){const before=h.ref;if(h.phase.state==='selecting')rotate(h);h=await this.save(p,link,h,before,undefined,select);}
     return publicView(await this.send(p,link,h));
   }
   async continuePrivate(p:Presence,link:Link,id:string,select:(db:AuthoringLedger,actual:Link)=>void){
@@ -220,7 +220,7 @@ export class PrivateHandoffs {
   }
   async answer(p:Presence,link:Link,r:Answer,start:Start){
     const h=await this.transaction(p,link,r.request.retryId,row=>row);
-    if(h.session!==p.session||h.phase.state!=='awaitingAttestations'||wireDigest(h.phase.request)!==wireDigest(r.request)||
+    if(h.session!==p.session||h.phase.state!=='awaitingAttestations'||h.ref!==r.request.ref||h.generation!==r.request.generation||wireDigest(h.phase.request)!==wireDigest(r.request)||
       (r.unavailable?r.attestations.length!==0:wireDigest(r.request.versions)!==wireDigest(r.attestations.map(v=>v.versionId).sort())))throw changed();
     if(r.unavailable){
       h.phase={state:'needsReview'};rotate(h);

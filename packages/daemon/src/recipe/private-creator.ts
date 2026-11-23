@@ -50,7 +50,7 @@ export interface CreatorLedger {
   versionOrigins?:Record<string,CreatorWork>;observed?:Record<string,number>;sources?:Record<string,CreatorWork['source']>;
   jobs:Record<string,JobRecord>;cards:Record<string,Card>;chosenUntil?:number;seen?:string[];focusDraft?:string;focusUntil?:number;
   current?:DraftSelection|VersionSelection;awaitLogo?:{draftId:string;expiresAt:number};
-  accountChoice?:{ref:string;messageId:string;cardId:string;intent:Intent;expiresAt:number};
+  accountChoice?:{ref:string;intent:Intent;expiresAt:number} & ({messageId?:never;cardId?:never}|{messageId:string;cardId:string});
 }
 type Hooks={
   guard(p:Presence,recipient?:Recipient):Promise<Link>;live(p:Presence):void;interact(p:Presence):void;
@@ -261,12 +261,30 @@ export class PrivateCreator{
   }
   async chooseAccount(links:{key:string;binding:string}[],recipient:Recipient,messageId:string,intent:Intent){
     if(!physicalChat(recipient.chatId)||!isAdmin(this.opts.cfg,recipient.openId))return;
-    const choices=links.slice(0,32).map(l=>({...l,ref:randomUUID()}));
+    const choices=await this.ledger.run(db=>{
+      const own=Object.values(db.links).filter(l=>l.bot===this.botKey&&sameRecipient(l.recipient,recipient));
+      if(!isAdmin(this.opts.cfg,recipient.openId)||own.filter(l=>(l.creator?.chosenUntil??0)>this.now()).length===1)return [];
+      return links.slice(0,32).flatMap(choice=>{
+        const l=db.links[choice.key];
+        if(!l||!own.includes(l)||l.binding!==choice.binding)return [];
+        const ref=randomUUID();state(l).accountChoice={ref,intent,expiresAt:this.now()+300_000};
+        return [{...choice,ref}];
+      });
+    });
+    if(!choices.length)return;
     const cardId=await this.im.createJson(card(choices.map((l,i)=>button('关联 '+(i+1)+' · '+l.binding.slice(-8),{a:'recipe.authoring',verb:'creatorAccount',ref:l.ref})),{header:{title:'选择本人账号关联'},forward:false}));
     await (this.opts.currentBot?.()??assertBotIdentity(this.opts.bot));
     if(!isAdmin(this.opts.cfg,recipient.openId))return;
     const sent=await this.im.send(recipient.chatId,cardId,randomUUID());
-    await this.ledger.run(db=>{for(const choice of choices){const l=db.links[choice.key];if(l?.binding===choice.binding&&sameRecipient(l.recipient,recipient))state(l).accountChoice={ref:choice.ref,cardId,messageId:sent,expiresAt:this.now()+300_000,intent};}});
+    await this.ledger.run(db=>{
+      if(!isAdmin(this.opts.cfg,recipient.openId))return;
+      for(const choice of choices){
+        const l=db.links[choice.key],reserved=l?.creator?.accountChoice;
+        if(l?.bot===this.botKey&&l.binding===choice.binding&&sameRecipient(l.recipient,recipient)&&reserved?.ref===choice.ref&&reserved.expiresAt>this.now()){
+          l.creator!.accountChoice={...reserved,cardId,messageId:sent};
+        }
+      }
+    });
   }
   async accountAction(evt:CardActionEvent,recipient:Recipient){
     if(!physicalChat(evt.chatId)||!isAdmin(this.opts.cfg,recipient.openId))return;
@@ -275,7 +293,7 @@ export class PrivateCreator{
     const ref=click.ref;
     const bound=await this.ledger.run(db=>Object.values(db.links).find(l=>l.bot===this.botKey&&sameRecipient(l.recipient,recipient)&&l.creator?.accountChoice?.ref===ref));
     const choice=bound?.creator?.accountChoice;
-    if(!choice||choice.messageId!==evt.messageId||choice.expiresAt<=this.now()||!await this.im.matches(evt.messageId,evt.chatId,choice.cardId))return;
+    if(!bound||!choice?.cardId||choice.messageId!==evt.messageId||choice.expiresAt<=this.now()||!await this.im.matches(evt.messageId,evt.chatId,choice.cardId))return;
     await (this.opts.currentBot?.()??assertBotIdentity(this.opts.bot));
     await this.ledger.run(db=>{
       if(!isAdmin(this.opts.cfg,recipient.openId))return;
@@ -335,12 +353,13 @@ export class PrivateCreator{
     }}finally{stream.destroy();}
     if(!size)throw denied();return Buffer.concat(chunks);
   }
-  private async offer(p:Presence,link:Link,command:CreatorCommand,{attachment,sourceChoice,selection,codeLabel,route}:{attachment?:Attachment;sourceChoice?:string;selection?:VersionSelection;codeLabel?:string;route?:AuthoringRoute}={}){
+  private async offer(p:Presence,link:Link,command:CreatorCommand,{attachment,sourceChoice,selection,codeLabel,route,quote}:{quote?:Card;attachment?:Attachment;sourceChoice?:string;selection?:VersionSelection;codeLabel?:string;route?:AuthoringRoute}={}){
     creatorCommandSchema.parse(command);
     if(command.kind==='metadata'&&!safeEditValue(command.change))throw denied();
     await this.source(p,workOf(command));
     const c=await this.run(p,link,(s,actual,db)=>{
       if(route&&!matchesAuthoringRoute(db,actual,route,this.now()))throw new CreatorSelectionChanged();
+      if(quote)this.currentCard(s,p,quote);
       const work=workOf(command),version=versionOf(command);
       const current=s.current;
       const draft=work&&'revision'in command?Object.values(s.jobs).flatMap(row=>{
@@ -381,10 +400,15 @@ export class PrivateCreator{
       await this.display(p,link,c);
     }
   }
-  private consumeChoice(s:CreatorLedger,p:Presence,original:Card,index:number){
+  private currentCard(s:CreatorLedger,p:Presence,original:Card){
     const actual=s.cards[original.ref];
     if(!actual||actual.generation!==original.generation||actual.session!==p.session||actual.expiresAt<=this.now()||actual.needsUpdate||
-      actual.messageId!==original.messageId||actual.cardId!==original.cardId||!same(actual.options[index],original.options[index]))throw denied();
+      actual.messageId!==original.messageId||actual.cardId!==original.cardId)throw denied();
+    return actual;
+  }
+  private consumeChoice(s:CreatorLedger,p:Presence,original:Card,index:number){
+    const actual=this.currentCard(s,p,original);
+    if(!same(actual.options[index],original.options[index]))throw denied();
     delete s.cards[original.ref];
   }
   private async retryCard(p:Presence,link:Link,draftId?:string,versionId?:string){
@@ -410,9 +434,16 @@ export class PrivateCreator{
         (o.contextUntil??0)>this.now()&&(o.view.draftId===selected.snapshot.work.draftId||o.view.receipt?.status==='accepted'&&o.view.receipt.draftId===selected.snapshot.work.draftId));
       const focusedOperation=!selected&&s.focusDraft&&Object.values(db.operations).some(o=>o.bot===this.botKey&&o.accountId===p.account&&o.scope===p.scope&&o.binding===link.binding&&sameRecipient(o.recipient,recipient)&&
         !o.revoked&&o.contextOpen&&(o.contextUntil??0)>this.now()&&(o.view.draftId===s.focusDraft||o.view.receipt?.status==='accepted'&&o.view.receipt.draftId===s.focusDraft));
-      return {selected,logo:s.awaitLogo,duplicate:s.seen?.includes(msg.messageId),originalOp:Boolean(op),matching:matching||focusedOperation,foreignQuote:Boolean(quoted&&!op&&!activeCard),active:Boolean(s.focusUntil&&s.focusUntil>this.now())};
+      return {selected,quote:activeCard||undefined,logo:s.awaitLogo,duplicate:s.seen?.includes(msg.messageId),originalOp:Boolean(op),matching:matching||focusedOperation,foreignQuote:Boolean(quoted&&!op&&!activeCard),active:Boolean(s.focusUntil&&s.focusUntil>this.now())};
     });
     if(selection.duplicate)return true;
+    const {quote}=selection;
+    if(quote){
+      if(!quote.cardId||!await this.im.matches(msg.replyToMessageId!,recipient.chatId,quote.cardId)){
+        await this.im.reply(recipient.chatId,msg.messageId,'请选择原作品的当前卡片。');return true;
+      }
+      await this.run(p,link,s=>this.currentCard(s,p,quote));
+    }
     const current=selection.selected;
     const photo=selection.logo&&selection.logo.expiresAt>this.now()&&['file','image'].includes(msg.rawContentType);
     const change=/^\/recipe\s+(name|summary|overview|version|access|logo)(?:\s+([\s\S]*))?$/i.exec(text);
@@ -422,15 +453,12 @@ export class PrivateCreator{
     if(selection.originalOp&&!intent)return false;
     if(!intent&&!photo&&!change&&!issue&&!retry){
       if(!selection.active)return false;
-      if(text==='/recipe end'){await this.run(p,link,(s,actual,db)=>{
-        if(route&&!matchesAuthoringRoute(db,actual,route,this.now()))throw new CreatorSelectionChanged();
-        delete s.current;delete s.focusDraft;delete s.focusUntil;
-      });return false;}
       if(selection.matching)return false;
       if(current?.kind==='draft'&&msg.rawContentType==='text'){
         const {work,revision}=current.snapshot;
         await this.run(p,link,(s,actual,db)=>{
           if(route&&!matchesAuthoringRoute(db,actual,route,this.now()))throw new CreatorSelectionChanged();
+          if(quote)this.currentCard(s,p,quote);
           invalidate(s,work.draftId);
         });
         if(current.snapshot.format==='role-v1')await this.hooks.edit(p,link,work,revision);
@@ -447,6 +475,7 @@ export class PrivateCreator{
     this.hooks.interact(p);
     await this.run(p,link,(s,actual,db)=>{
       if(route&&!matchesAuthoringRoute(db,actual,route,this.now()))throw new CreatorSelectionChanged();
+      if(quote)this.currentCard(s,p,quote);
       s.seen=[...(s.seen??[]).slice(-63),msg.messageId];
     });
     if(retry){
@@ -457,8 +486,8 @@ export class PrivateCreator{
       const sha256=digest(bytes);
       await this.hooks.guard(p,recipient);
       await this.offer(p,link,{kind:'metadata',work:current.snapshot.work,baseSha256:current.snapshot.contentSha256,revision:current.snapshot.revision,change:{field:'logo',value:'attachment',sha256}},
-        {attachment:{key:r.key,messageId:msg.messageId,type:r.type,sha256},route});
-    }else if(issue&&current?.kind==='version')await this.offer(p,link,{kind:'issue',target:current.target,count:Number(issue[1])},{route});
+        {attachment:{key:r.key,messageId:msg.messageId,type:r.type,sha256},route,quote});
+    }else if(issue&&current?.kind==='version')await this.offer(p,link,{kind:'issue',target:current.target,count:Number(issue[1])},{route,quote});
     else if(change&&current?.kind==='draft'){
       const {work,revision,contentSha256}=current.snapshot;
       const field=change[1]!.toLowerCase(),input=change[2]??'';
@@ -468,7 +497,7 @@ export class PrivateCreator{
       }
       if(field==='logo'&&current.snapshot.format!=='rich-v2'){await this.im.reply(recipient.chatId,msg.messageId,'这份旧格式作品没有 Logo 字段。');return true;}
       if(field==='logo'&&!value){await this.run(p,link,s=>{s.awaitLogo={draftId:work.draftId,expiresAt:this.now()+300_000};});await this.im.reply(recipient.chatId,msg.messageId,'请发送一张图片或图片附件。');}
-      else await this.offer(p,link,creatorCommandSchema.parse({kind:'metadata',work,revision,baseSha256:contentSha256,change:{field,value}}),{route});
+      else await this.offer(p,link,creatorCommandSchema.parse({kind:'metadata',work,revision,baseSha256:contentSha256,change:{field,value}}),{route,quote});
     }else if(intent==='works'&&current?.kind==='draft'&&/预览发布|发布吧|\/recipe\s+(?:publish|preview)/i.test(text))await this.selected(p,link,{kind:'draft',work:current.snapshot.work,name:current.snapshot.public.name,version:current.snapshot.public.version},undefined,false);
     else if(intent)await this.intent(p,link,intent);
     else await this.im.reply(recipient.chatId,msg.messageId,'请选择可执行这个操作的草稿或已发布版本。');

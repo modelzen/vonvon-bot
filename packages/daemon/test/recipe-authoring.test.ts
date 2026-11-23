@@ -2365,3 +2365,201 @@ it('frees pre-upgrade per-page records at the card limit and expires the origina
   await tap(section);expect(await creatorJobs()).toEqual([]);
   expect(messages.size).toBe(1);
 });
+
+it('INDEPENDENT replay after daemon restart cannot apply A’s accepted message to B',async()=>{
+  const {op}=await richChatContext();
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  const first=await ledger.run(db=>db.operations[op.operationId]!);
+  const event=msg('名称改成仅给甲的标题');
+  proposeRich.mockResolvedValue({kind:'proposal',commands:[{action:'setPublicText',target:'T1',text:'仅给甲的标题'}]});
+  await orch.onMessage(event);
+  expect(await ledger.run(db=>db.operations[op.operationId]!.view.state)).toBe('candidate');
+  const b=await anotherRichDraft(first.rich!.base!.canonical);
+  expect(await ledger.run(db=>db.operations[b.op.operationId]!.view.state)).toBe('waiting');
+  await orch.shutdown();restart();await open();
+  await service.request(b.author,recipeAuthoringRequestSchema.parse({type:'open',botId:appId,accountId:b.accountId}));
+  orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});
+  await orch.onMessage(event);
+  const seen=await ledger.run(db=>({state:db.operations[b.op.operationId]!.view.state,seen:db.operations[b.op.operationId]!.seenInstructions?.includes(event.messageId)??false}));
+  expect(seen).toEqual({state:'waiting',seen:false});
+  expect(proposeRich).toHaveBeenCalledTimes(1);
+});
+
+it('INDEPENDENT quoted end on one operation preserves a different in-progress handoff',async()=>{
+  const {op}=await richChatContext();
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  const a=await ledger.run(db=>db.operations[op.operationId]!);
+  await attachCreator();
+  const h=await editHandoff(true,1);
+  await tap(privateChoice('版本'));
+  expect((await rpc('handoffStatus',{retryId:h.retryId}))).toMatchObject({handoff:{state:'selecting'}});
+  await orch.onMessage({...msg('/recipe end'),replyToMessageId:a.carrier.messageId});
+  const state=await ledger.run(db=>({closed:db.operations[op.operationId]!.contextOpen===false,other:db.handoffs![h.retryId]!.phase.state}));
+  expect(state).toEqual({closed:true,other:'selecting'});
+});
+
+it('INDEPENDENT replay of already resumed A does not change chosen B',async()=>{
+  const {op}=await richChatContext();
+  const {AuthoringJournal,linkKey}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  await orch.onMessage(msg('/recipe end'));
+  await rpc('resumeContext',{operationId:op.operationId});
+  const b=await anotherAuthor();
+  await b.request('edit',{draftId:randomUUID(),baseRevision:1});
+  const chosen=()=>ledger.run(db=>Object.entries(db.links).filter(([,l])=>(l.creator?.chosenUntil??0)>clock).map(([key])=>key));
+  const before=await chosen();
+  expect(before).toEqual([await ledger.run(db=>linkKey(db.operations[op.operationId]!.scope,b.accountId))]);
+  await rpc('resumeContext',{operationId:op.operationId}).catch(()=>undefined);
+  expect(await chosen()).toEqual(before);
+});
+
+it('INDEPENDENT withdrawn creator preview quote cannot create a metadata proposal for account A',async()=>{
+  await link();await attachCreator();
+  const snapshot=await openManualWork('A');
+  const quoted=privateChoice('继续修改内容').messageId;
+  const b=await anotherAuthor();await b.request('edit',{draftId:randomUUID(),baseRevision:1});
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  for (const [token,m] of messages) if(m.message_id===quoted)messages.delete(token);
+  await orch.onMessage({...msg('/recipe name 不该出现的候选'),replyToMessageId:quoted});
+  const offers=await ledger.run(db=>Object.values(db.links).flatMap(l=>Object.values(l.creator?.jobs??{})).filter(j=>j.job.task.kind==='command'&&j.job.task.command.kind==='metadata'&&j.job.task.command.work.draftId===snapshot.work.draftId).map(j=>j.state));
+  expect(offers).toEqual([]);
+});
+
+it.each([false,true])('INDEPENDENT field confirmation makes a fresh R1 natural edit reach the restricted parser on the real creator worker (old version focus %s)',async(oldFocus)=>{
+  await link();await attachCreator();
+  const {AuthoringJournal,linkKey}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  await ledger.run(db=>{const a=Object.values(db.links)[0]!;for(let i=0;i<3;i++)db.links[linkKey('retained-'+i,randomUUID())]={...structuredClone(a),binding:randomUUID()};});
+  if(oldFocus)await rpc('creatorContinue',{selection:{kind:'version',target:{recipeId:randomUUID(),versionId:randomUUID()},name:'上一份版本',version:'2'}});
+  const h=await editHandoff(true,1);
+  await tap(privateChoice('☐ 版本'));await tap(privateChoice('☐ 群角色'));await tap(privateChoice('确认本次修改范围'));
+  const op=await status(kind(await rpc('handoffStatus',{retryId:h.retryId}),'handoff').handoff.operationId!);
+  await rpc('richAdvance',{operationId:op.operationId,destinationDraftId:h.draftId,authorization:{...await auth(op,'dispatch'),format:'rich-v2'}});
+  proposeRich.mockImplementationOnce(async(input:RichModelInput)=>({kind:'proposal',commands:input.selected.map((x,i)=>x.kind==='publicText'?{action:'setPublicText',target:'T'+(i+1),text:'1.1'}:{action:'edit',target:'T'+(i+1),valueJson:JSON.stringify({kind:'inline',value:'新角色'})})}));
+  await orch.onMessage(msg('版本改成 1.1，群角色改成新角色，其他内容不变，先预览。'));
+  expect({calls:proposeRich.mock.calls.length,state:(await status(op.operationId)).state}).toEqual({calls:1,state:'candidate'});
+});
+
+it('INDEPENDENT explicit resume of an awaiting handoff accepts its own unavailable attestation response',async()=>{
+  await link();await attachCreator();
+  const h=beginInput();await rpc('beginHandoff',h);
+  await tap(privateChoice('群角色'));await tap(privateChoice('确认所选来源'));
+  const before=kind(await rpc('workflow'),'workflow').handoff!;
+  expect(before).toBeDefined();
+  await service.onMessage(msg('/recipe works'));
+  const list=(await creatorJobs()).find(j=>j.task.kind==='read'&&j.task.read.kind==='works')!;
+  await rpc('creatorAnswer',{id:list.id,answer:{kind:'works',items:[],nextOffset:null}});
+  await tap(privateChoice('继续选择'));
+  const request=kind(await rpc('workflow'),'workflow').handoff!;
+  const answer=await rpc('answerHandoff',{request,attestations:[],unavailable:true}).then(x=>x.kind==='handoff'?x.handoff.state:x.kind).catch(()=> 'rejected');
+  const current=kind(await rpc('handoffStatus',{retryId:h.retryId}),'handoff').handoff.state;
+  expect({answer,current}).toEqual({answer:'needsReview',current:'needsReview'});
+});
+it('INDEPENDENT2 a known handoff quote stays out of ordinary tool intake after relink',async()=>{
+  await link();
+  await editHandoff(true,1);
+  const sourceCard=privateChoice('版本').messageId;
+  await link();
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  expect(await ledger.run(db=>Object.values(db.handoffs??{}).find(h=>h.messageId===sourceCard)?.phase.state)).toBe('cancelled');
+  expect(await service.onMessage({...msg('版本改成 1.2，其他不变'),replyToMessageId:sourceCard})).toBe(true);
+});
+
+it('INDEPENDENT2 an offline request revalidates the chosen account in the wake transaction',async()=>{
+  const {op}=await richChatContext();
+  const b=await anotherAuthor();
+  const {AuthoringJournal,linkKey}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  const key=await ledger.run(db=>linkKey(db.operations[op.operationId]!.scope,account));
+  service.disconnect(peer.id);
+  const bots=await import('../src/config/bots'),guard=bots.assertBotIdentity;
+  const verify=vi.spyOn(bots,'assertBotIdentity').mockImplementationOnce(async bot=>{
+    await b.request('edit',{draftId:randomUUID(),baseRevision:1});await guard(bot);
+  });
+  try{
+    const m=msg('我的配方');
+    expect(await service.onMessage(m)).toBe(true);
+    expect(await ledger.run(db=>({stillDefault:(db.links[key]!.creator!.chosenUntil??0)>clock,woke:db.links[key]!.wake?.messageId===m.messageId}))).toEqual({stillDefault:false,woke:false});
+  }finally{verify.mockRestore();}
+});
+
+it('INDEPENDENT2 a slow account list delivery cannot reactivate old choices after a newer explicit selection',async()=>{
+  await link();const b=await anotherAuthor();
+  const {AuthoringJournal,linkKey}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  const {AuthoringIm}=await import('../src/recipe/authoring-im');
+  const send=AuthoringIm.prototype.send;
+  const wait=vi.spyOn(AuthoringIm.prototype,'send').mockImplementationOnce(async function(this:InstanceType<typeof AuthoringIm>,chat,cardId,sendId){
+    const id=await send.call(this,chat,cardId,sendId);
+    await b.request('edit',{draftId:randomUUID(),baseRevision:1});
+    return id;
+  });
+  try{
+    await service.onMessage(msg('我的配方'));
+    const button=privateChoice('关联 1');
+    const selected=()=>ledger.run(db=>Object.entries(db.links).filter(([,l])=>(l.creator?.chosenUntil??0)>clock).map(([key])=>key));
+    const bKey=await ledger.run(db=>linkKey(Object.values(db.operations).find(o=>o.accountId===b.accountId)!.scope,b.accountId));
+    expect(await selected()).toEqual([bKey]);
+    await tap(button);
+    expect(await selected()).toEqual([bKey]);
+  }finally{wait.mockRestore();}
+});
+it('INDEPENDENT3 a source finish cannot select the account after admin removal during membership verification',async()=>{
+  await link();
+  const h=beginInput();await rpc('beginHandoff',h);await tap(privateChoice('群角色'));
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  const finish=privateChoice('确认所选来源');
+  onMembership=async()=>{onMembership=undefined;cfg.preferences!.access!.admins=[stranger];};
+  await tap(finish);
+  const result=await ledger.run(db=>({phase:db.handoffs![h.retryId]!.phase.state,chosen:Object.values(db.links).some(l=>(l.creator?.chosenUntil??0)>clock)}));
+  expect(result).toEqual({phase:'selecting',chosen:false});
+});
+it('INDEPENDENT-SCOPE same account on two live device scopes keeps the quote on A and default on B',async()=>{
+  const {op}=await richChatContext();
+  const {AuthoringJournal,linkKey}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock),a=await ledger.run(db=>db.operations[op.operationId]!);
+  const otherDevice={id:randomUUID(),device:randomUUID()};
+  const b=kind(await service.request(otherDevice,recipeAuthoringRequestSchema.parse({type:'open',botId:appId,accountId:account})),'session');
+  const ask=(type:string,more:object={})=>service.request(otherDevice,recipeAuthoringRequestSchema.parse({type,botId:appId,session:b.session,...more}));
+  const linkB=kind(await ask('beginLink'),'challenge');await orch.onMessage(msg('/recipe link '+linkB.code));
+  const evidence=kind(await ask('inspectLink',{challengeId:linkB.challengeId}),'link').evidence;
+  await ask('confirmLink',{challengeId:linkB.challengeId,evidence});
+  const content=(await import('@vonvon/protocol')).decodeRichRecipeContent(Buffer.from(a.rich!.base!.canonical,'base64url')).content;
+  const draftId=randomUUID(),bb=kind(await ask('richEdit',{draftId,baseRevision:1,canonical:a.rich!.base!.canonical,selected:[content.public.name.itemId]}),'operation').operation;
+  await ask('richAdvance',{operationId:bb.operationId,destinationDraftId:draftId,authorization:{...await auth(bb,'dispatch'),format:'rich-v2'}});
+  const chosen=()=>ledger.run(db=>Object.entries(db.links).filter(([,l])=>(l.creator?.chosenUntil??0)>clock).map(([key,l])=>[key,l.creator!.chosenUntil]));
+  const selected=await chosen();expect(selected[0]?.[0]).not.toBe(linkKey(a.scope,account));
+  proposeRich.mockResolvedValueOnce({kind:'proposal',commands:[{action:'setPublicText',target:'T1',text:'A'}]});
+  await orch.onMessage({...msg('名称改成 A'),replyToMessageId:a.carrier.messageId});
+  expect(await chosen()).toEqual(selected);
+  expect(await ledger.run(db=>[db.operations[op.operationId]!.view.state,db.operations[bb.operationId]!.view.state])).toEqual(['candidate','waiting']);
+});
+
+it('ends only the quoted pending selection with four links and no chosen account',async()=>{
+  await link();await attachCreator();
+  const {AuthoringJournal,linkKey}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  await ledger.run(db=>{const a=Object.values(db.links)[0]!;for(let i=0;i<3;i++)db.links[linkKey('retained-'+i,randomUUID())]={...structuredClone(a),binding:randomUUID()};});
+  const h=await editHandoff(true,1),card=privateChoice('版本').messageId;
+  const phase=async()=>kind(await rpc('handoffStatus',{retryId:h.retryId}),'handoff').handoff.state;
+  expect(await service.onMessage(msg('/recipe end'))).toBe(true);expect(await phase()).toBe('selecting');
+  expect(await service.onMessage({...msg('/recipe end'),replyToMessageId:card})).toBe(true);
+  expect(await phase()).toBe('cancelled');
+  expect(await service.onMessage(msg('今天过得怎么样'))).toBe(false);
+});
+
+it('preserves both accounts when a different sender quotes a pending selection to end it',async()=>{
+  await link();const h=await editHandoff(true,1),card=privateChoice('版本').messageId;
+  const b=await anotherAuthor(),op=kind(await b.request('edit',{draftId:randomUUID(),baseRevision:1}),'operation').operation;
+  await service.onMessage({...msg('/recipe end',undefined,stranger),replyToMessageId:card});
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  expect(await ledger.run(db=>[db.handoffs![h.retryId]!.phase.state,db.operations[op.operationId]!.contextOpen])).toEqual(['selecting',true]);
+  expect(await service.onMessage({...msg('/recipe end'),replyToMessageId:card})).toBe(true);
+  expect(await ledger.run(db=>[db.handoffs![h.retryId]!.phase.state,db.operations[op.operationId]!.contextOpen])).toEqual(['cancelled',true]);
+});

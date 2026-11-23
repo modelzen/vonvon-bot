@@ -16,7 +16,7 @@ import { isAdmin, type AppConfig } from '../config/schema';
 import { paths } from '../config/paths';
 import { configuredRecipeApiOrigin } from '../config/account-deployment';
 import { AuthoringIm, candidateConfirmation, physicalChat } from './authoring-im';
-import { authoringBotKey, discardAuthoringMaterial, editApproval, AuthoringJournal, CreatorSelectionChanged, active, cardUpdate, linkKey, matchesAuthoringRoute, newCarrier, operationView, renewCreatorBinding, reserve, retire, sameRecipient, selectCreatorBinding, setCard, type AuthoringLedger, type AuthoringRoute, type Link, type LocalOperation, type Recipient, type Source } from './authoring-journal';
+import { authoringBotKey, discardAuthoringMaterial, editApproval, AuthoringJournal, CreatorSelectionChanged, active, cardUpdate, linkKey, matchesAuthoringRoute, newCarrier, operationView, renewCreatorBinding, reserve, retire, sameRecipient, selectCreatorOperation, setCard, type AuthoringLedger, type AuthoringRoute, type Link, type LocalOperation, type Recipient, type Source } from './authoring-journal';
 import { blankPublic, candidateCardDetails, digest, freezePayload, newAuthoringKey, parseChanges } from './authoring-wire';
 import { DraftProviderBusy, draftIntent, requestedField, type DraftInstructionParser, type ReadDraftField } from './draft-instruction';
 import { checkAuthorization, postAuthoring } from './authoring-cloud';
@@ -117,8 +117,8 @@ export class AuthoringSession {
     this.im = new AuthoringIm(opts.channel);
     this.origin = opts.origin ?? configuredRecipeApiOrigin();
     this.ledger = new AuthoringJournal(opts.root ?? paths.appDir, this.now);
-    this.handoffs=new PrivateHandoffs(opts,this.ledger,this.im,this.now,p=>{
-      if(this.p!==p)refusal();
+    this.handoffs=new PrivateHandoffs(opts,this.ledger,this.im,this.now,(p,recipient)=>{
+      if(this.p!==p||recipient&&!isAdmin(opts.cfg,recipient.openId))refusal();
       this.present(this.p);
     });
     this.creator = new PrivateCreator(opts,this.ledger,this.im,this.now,{
@@ -531,7 +531,6 @@ export class AuthoringSession {
             if (!linked || !bound(row,linked)) refusal();
             row.contextOpen = true; row.contextUntil = this.now()+CONTEXT;
             linked.context = {operationId:req.operationId,until:row.contextUntil};
-            selectCreatorBinding(db,linked,this.now());
             setCard(row,row.carrier.mode);
           });
           await this.refresh(p,req.operationId); break;
@@ -562,7 +561,7 @@ export class AuthoringSession {
       if(target.draftId) invalidateWorkOffer(db,p,link!,target.draftId);
       const done=(row:LocalOperation)=>{
         if(handoff){
-          if(handoff.edit&&handoff.phase.state==='selecting')selectCreatorBinding(db,link!,this.now());
+          if(handoff.edit&&handoff.phase.state==='selecting')selectCreatorOperation(db,link!,this.now(),target.draftId);
           handoff.phase={state:'prepared',operationId:row.view.operationId};delete handoff.edit;
         }
         return row;
@@ -613,7 +612,7 @@ export class AuthoringSession {
       for (const prior of current) if (prior.view.state === 'completed' && (!this.creator.enabled || target.draftId&&prior.view.receipt?.status==='accepted'&&prior.view.receipt.draftId===target.draftId)) {prior.contextOpen = false;delete prior.richSaved;}
       link!.context = {operationId, until:this.now()+CONTEXT};
       db.operations[operationId] = row;
-      if(target.userSelection)selectCreatorBinding(db,link!,this.now());
+      if(target.userSelection)selectCreatorOperation(db,link!,this.now(),target.draftId);
       return done(row);
     }), this.opts.bot);
     if (!op.carrier.dirty) return {kind:'operation',operation:op.view};
@@ -771,6 +770,39 @@ export class AuthoringSession {
     this.menu = {session:p.session,binding:link.binding,recipient,ref,messageId,cardId,createdAt,offered,until:this.now()+300_000,instructionId};
     return true;
   }
+  private async endContext(p:Presence,recipient:Recipient,route:AuthoringRoute,quote?:string){
+    await this.current();
+    const scope=(db:AuthoringLedger)=>{
+      const link=this.liveLink(db,p);
+      if(!link||link.bot!==this.botKey||!sameRecipient(link.recipient,recipient))refusal();
+      if(!matchesAuthoringRoute(db,link,route,this.now()))throw new CreatorSelectionChanged();
+      const operations=Object.values(db.operations).filter(o=>o.scope===p.scope&&o.accountId===p.account&&o.bot===link.bot&&bound(o,link)&&o.contextOpen);
+      const handoffs=Object.values(db.handoffs??{}).filter(h=>h.scope===p.scope&&h.account===p.account&&h.binding===link.binding&&h.session===p.session&&
+        sameRecipient(h.recipient,recipient)&&h.expiresAt>this.now()&&['selecting','awaitingAttestations'].includes(h.phase.state));
+      const targets=quote?[
+        ...operations.filter(o=>o.carrier.messageId===quote).map(o=>({kind:'operation' as const,id:o.view.operationId,ref:o.carrier.ref,cardId:o.carrier.cardId,generation:o.carrier.generation})),
+        ...handoffs.filter(h=>h.messageId===quote).map(h=>({kind:'handoff' as const,id:h.retryId,ref:h.ref,cardId:h.cardId,generation:h.generation})),
+      ]:[];
+      return {link,operations,handoffs,target:targets.length===1?targets[0]:undefined};
+    };
+    const original=quote?await this.ledger.run(db=>scope(db).target):undefined;
+    if(quote&&(!original?.cardId||!await this.im.matches(quote,recipient.chatId,original.cardId)))return false;
+    const ended=await this.ledger.run(db=>{
+      const {link,operations,handoffs,target}=scope(db);
+      if(quote&&(!target||target.kind!==original?.kind||target.id!==original.id||target.ref!==original.ref||target.cardId!==original.cardId||target.generation!==original.generation))return false;
+      for(const o of operations)if(!quote||target?.kind==='operation'&&o.view.operationId===target.id)o.contextOpen=false;
+      for(const h of handoffs)if(!quote||target?.kind==='handoff'&&h.retryId===target.id){h.phase={state:'cancelled'};delete h.edit;}
+      if(!quote||target?.kind==='operation'&&link.context?.operationId===target.id)delete link.context;
+      const s=link.creator;
+      if(s){
+        if(!quote){delete s.current;delete s.focusUntil;delete s.focusDraft;delete s.awaitLogo;}
+        if(!quote||!operations.some(o=>o.contextOpen)&&!handoffs.some(h=>['selecting','awaitingAttestations'].includes(h.phase.state))&&(s.focusUntil??0)<=this.now())delete s.chosenUntil;
+      }
+      return true;
+    });
+    if(ended&&(!quote||this.menu?.messageId===quote))this.menu=undefined;
+    return ended;
+  }
   async onMessage(msg: NormalizedMessage,route?:AuthoringRoute): Promise<boolean> {
     const intent = draftIntent(msg.content);
     const explicit = /^\/recipe(?:\s|$)/i.test(msg.content.trimStart()) || Boolean(intent);
@@ -812,8 +844,12 @@ export class AuthoringSession {
         }
         await reply(genericLink); return true;
       }
+      if(cmd==='/recipe end'&&p&&live&&route&&msg.rawContentType==='text'){
+        const ended=await this.endContext(p,recipient,route,msg.replyToMessageId);
+        await reply(ended?'已结束本次私聊编辑。':'请引用原配方卡，或发送“我的配方”重新选择账号。');return true;
+      }
       if (p && live && await this.creator.message(p,recipient,msg,route)) return true;
-      const {duplicate,contexts,pausedEdit,selecting} = await this.ledger.run(db => {
+      const {contexts,pausedEdit,selecting} = await this.ledger.run(db => {
         const link=p&&this.liveLink(db,p);
         const own = Object.values(db.operations).filter(o => o.bot === this.botKey && sameRecipient(o.recipient,recipient)&&
           (!p||o.scope===p.scope&&o.accountId===p.account&&o.binding===link?.binding));
@@ -822,12 +858,10 @@ export class AuthoringSession {
             (!msg.replyToMessageId||h.messageId===msg.replyToMessageId)),
           pausedEdit: own.some(o => o.contextOpen && (o.contextUntil ?? 0) <= this.now() && (active(o) || o.view.state === 'completed') &&
             (msg.replyToMessageId && msg.replyToMessageId === o.carrier.messageId || requestedField(cmd) !== undefined || /角色|步骤/.test(cmd))),
-          duplicate: own.some(o => o.instructionId === msg.messageId || o.seenInstructions?.includes(msg.messageId)),
           contexts: own.filter(o => o.contextOpen && (Boolean(msg.replyToMessageId) && o.carrier.messageId === msg.replyToMessageId ||
             (o.contextUntil ?? 0) > this.now() && (active(o) || o.view.state === 'completed'))),
         };
       });
-      if (duplicate) return true;
       if(selecting&&cmd!=='/recipe end'){await reply('请在本次配方卡片中选择内容并确认。');return true;}
       if (!contexts.length && pausedEdit && intent !== 'create') { await reply(expiredContext); return true; }
       if (!explicit && !contexts.length) return false;
@@ -841,23 +875,6 @@ export class AuthoringSession {
       if (msg.replyToMessageId && !quoted) { await reply(appChoose); return true; }
       const open = eligible.filter(o => active(o));
       const selected = quoted ?? (open.length === 1 ? open[0] : !open.length ? eligible.find(o => o.view.operationId === link.context?.operationId) : undefined);
-      if (cmd === '/recipe end') {
-        this.menu = undefined;
-        await this.ledger.run(db => {
-          const bound = db.links[linkKey(p.scope,p.account)];
-          if(!bound)refusal();routing(db,bound);
-          for (const row of Object.values(db.operations)) {
-            if (row.scope === p.scope && row.accountId === p.account && row.binding === link.binding && sameRecipient(row.recipient,recipient) && (!quoted || row.view.operationId === quoted.view.operationId)) row.contextOpen = false;
-          }
-          for(const h of Object.values(db.handoffs??{}))if(h.scope===p.scope&&h.account===p.account&&h.binding===link.binding&&h.session===p.session&&
-            sameRecipient(h.recipient,recipient)&&['selecting','awaitingAttestations'].includes(h.phase.state))h.phase={state:'cancelled'};
-          if (bound && (!quoted || bound.context?.operationId === quoted.view.operationId)) {
-            delete bound.context;
-            if(bound.creator){delete bound.creator.chosenUntil;delete bound.creator.current;delete bound.creator.focusDraft;delete bound.creator.focusUntil;}
-          }
-        });
-        await reply('已结束本次私聊编辑。'); return true;
-      }
       if (/^\/recipe$/i.test(cmd)) {
         await reply(selected ? '可用当前私聊的 Provider 解读单条草稿指令，例如“把名称改成周报”。'+commandHelp : '发 /recipe create 创建私人草稿，或在 App 选择已有草稿并点「在飞书继续编辑」。');
         return true;
