@@ -3197,7 +3197,7 @@ it('APP PUBLICATION prepares one existing durable offer without approving and re
   expect(await rpc('creatorCheck',{id:ready.job.id})).toMatchObject({mode:'preview'});
   const rendered=[...cards.values()].at(-1)!;
   expect(rendered).toContain('在 App 中预览');expect(rendered).not.toContain(snapshot.appPreviewUrl);expect(rendered).not.toContain('open_url');
-  expect(JSON.parse(rendered).body.elements.filter((e:{tag:string})=>e.tag==='button')).toHaveLength(3);
+  expect(JSON.parse(rendered).body.elements.filter((e:{tag:string})=>e.tag==='button').map((e:{text:{content:string}})=>e.text.content)).toEqual(['在 App 中预览','确认发布 2','继续修改内容','改为凭分享码获取']);
   expect(rendered).toContain('确认发布 2');expect(rendered).not.toContain('禁止出现在短卡');expect(rendered).not.toContain('pageHashes');
   const confirmationId=randomUUID();
   await expect(rpc('creatorAppConfirm',{id:ready.job.id,snapshotDigest:'f'.repeat(64),confirmationId})).rejects.toThrow();
@@ -3729,7 +3729,7 @@ it('NATIVE SDK PREVIEW rejects old-generation approval and records a fresh appro
     expect((await nativePreviewCarrier(f)).owner).toEqual(approved);
     expect(await rpc('creatorCheck',{id:f.offer.job.id})).toMatchObject({mode:'execute'});
     const body=JSON.parse(cards.get(before.card.cardId!)!);
-    expect(body.body.elements.filter((e:{behaviors?:unknown})=>e.behaviors)).toHaveLength(3);
+    expect(body.body.elements.filter((e:{behaviors?:unknown})=>e.behaviors).map((e:{text:{content:string}})=>e.text.content)).toEqual(['在 App 中预览','确认发布 2','继续修改内容','改为凭分享码获取']);
     expect(f.requests.every(r=>r.method==='GET')).toBe(true);expect(f.published).not.toHaveBeenCalled();
   }finally{await sdk.close();f.history.history.close();}
 });
