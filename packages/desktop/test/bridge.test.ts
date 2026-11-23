@@ -7,7 +7,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, IpcMainInvokeEvent } from 'electron';
 import type { VonvonClient } from '@vonvon/client/browser';
 import { ConnectionError, RpcError } from '@vonvon/client/browser';
-import type { DevicesState } from '@vonvon/protocol';
+import { agentIdSchema, groupIdSchema, type DevicesState, type RecipeAuthoringRequest, type RecipeAuthoringReply, type AccountStatus } from '@vonvon/protocol';
 import { clientChannelNames, desktopChannels, type AttachedDaemon, type DesktopEvent, type DesktopResources } from '../src/ipc-contract.js';
 import { DeviceConnectionsError, type DeviceConnections, type ViewChange } from '../src/connections.js';
 import { ServiceActionError } from '../src/service-error.js';
@@ -218,6 +218,55 @@ describe('desktop IPC boundary', () => {
         recipeId:'44444444-4444-4444-8444-444444444444',versionId:'55555555-5555-4555-8555-555555555555'})).toMatchObject({ok:false});
       expect(h.account.request).not.toHaveBeenCalled();await h.bridge.dispose();
     }
+  });
+  it('links through the scoped shell, discards stale account generations, and never exposes raw device RPC', async () => {
+    const h = harness();
+    const accountId = REMOTE_A, session = REMOTE_B, botId = agentIdSchema.parse('cli_fixture');
+    const groupId = groupIdSchema.parse('oc_fixture');
+    const challengeId = '33333333-3333-4333-8333-333333333333', evidence = 'a'.repeat(64);
+    let generation = new AbortController();
+    const status: AccountStatus = {kind:'signedIn',accountId,displayName:'写作者',provider:'google',persistence:'memory'};
+    const calls: RecipeAuthoringRequest[] = [];
+    Object.assign(h.account,{status:() => status, lease:(id:string) => id === accountId ? generation.signal : undefined});
+    h.account.request.mockImplementation(async (_id:string, path:string) => {
+      expect(path).toBe('/v1/me');
+      return Response.json({accountId});
+    });
+    Object.assign(h.owner.client, {
+      device:async () => ({kind:'deviceStatus',status:{device:{id:REMOTE_A,name:'本机',publicKey:Buffer.alloc(32,4).toString('base64url')},
+        remote:{addresses:[],port:3000},clients:{active:1,total:1}}}),
+      snapshot:async () => ({agents:[{id:botId,name:'助手'}],groups:[{id:groupId,name:'产品群'}],memberships:[{agentId:botId,groupId}]}),
+      recipeAuthoring:async (r:RecipeAuthoringRequest):Promise<RecipeAuthoringReply> => {
+        calls.push(r);
+        if (r.type === 'open') return {kind:'session', session, leaseMs:45000,linked:false};
+        if (r.type === 'status') return {kind:'status',linked:false,operations:[],reconciliation:[]};
+        if (r.type === 'beginLink') return {kind:'challenge',challengeId,code:'123456',expiresAt:Date.now()+30000};
+        if (r.type === 'inspectLink') return {kind:'link',linked:false,evidence,recipient:{openId:'ou_admin',chatId:groupId,tenantKey:'test'}};
+        if (r.type === 'confirmLink') return {kind:'link',linked:true};
+        if (r.type === 'close') return {kind:'closed'};
+        throw Error('unexpected RPC');
+      },
+    });
+    const {shell,client} = createDesktopFacades({invoke:(channel,...args) => h.invoke(channel,...args), receive:() => () => {}});
+    expect(client.recipeAuthoring).toBeUndefined();
+    const request = shell.recipeAuthoring.request;
+    const opened = await request({type:'open',viewId:'local',accountId,botId});
+    if (opened.kind !== 'session') throw Error('expected authoring session');
+    const {handle} = opened;
+    expect(opened.target).toMatchObject({botName:'助手',accountName:'写作者'});
+    expect(handle).not.toBe(session);
+    expect(await h.invoke(desktopChannels.recipeAuthoring,{type:'advance',session,ticket:'test'})).toMatchObject({ok:false});
+    expect(await h.invoke(desktopChannels.recipeAuthoring,{type:'status',handle,accountId})).toMatchObject({ok:false});
+    expect(await request({type:'beginLink',handle})).toMatchObject({kind:'challenge',challengeId});
+    await expect(request({type:'confirmLink',handle,challengeId,evidence})).rejects.toThrow();
+    await request({type:'inspectLink',handle,challengeId});
+    await expect(request({type:'confirmLink',handle,challengeId,evidence})).resolves.toEqual({kind:'link',linked:true});
+    generation.abort();
+    generation = new AbortController();
+    await expect(request({type:'status',handle})).rejects.toThrow();
+    expect(calls.at(-1)).toEqual({type:'close',session,botId});
+    expect(calls.filter(r => r.type === 'confirmLink')).toHaveLength(1);
+    await h.bridge.dispose();
   });
   it('forwards a schedule request with its bot and checks both arguments', async () => {
     const h = harness();
