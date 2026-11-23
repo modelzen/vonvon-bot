@@ -28,6 +28,7 @@ const calls = Object.freeze({
   cancelOperation: 'recipe_api.cancel_operation($1::uuid)',
   redeemOperation: 'recipe_api.possess_operation($1::uuid,$2::bytea,$3::bytea,$4::bytea)',
   completeOperation: 'recipe_api.possess_operation($1::uuid,$2::bytea,$3::bytea,$4::bytea,$5::text)',
+  sourceHistory: 'recipe_api.source_history($1::uuid[])',
   registerAuthoring: 'recipe_api.register_authoring($1::uuid,$2::jsonb)',
   recoverAuthoring: 'recipe_api.recover_authoring($1::uuid)',
   getAuthoring: 'recipe_api.get_authoring($1::uuid)',

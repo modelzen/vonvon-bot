@@ -38,6 +38,23 @@ test('public routes distinguish a visitor from an expired supplied credential', 
   assert.equal(calls.length,1);
 });
 
+test('source history is an authenticated read and only accepts operation IDs', async t => {
+  const {base,calls} = await fixture(t);
+  const url = base+'/v1/authoring/source-history';
+  const op = '0192e22b-b000-7e93-a120-26c58d462039';
+  const get = (body, token='valid') => fetch(url, {method:'POST',
+    headers:{'content-type':'application/json',...(token ? {authorization:'Bearer '+token} : {})},
+    body:JSON.stringify(body),
+  });
+  assert.equal((await get({operationIds:[op]})).status,200);
+  assert.deepEqual(calls[0],[identity,'sourceHistory',[[op]]]);
+  assert.equal((await get({operationIds:[op]},null)).status,401);
+  assert.equal((await get({operationIds:[op],chatId:'private'})).status,422);
+  assert.equal((await get({operationIds:[op,op.toUpperCase()]})).status,422);
+  assert.equal((await get({operationIds:['x'.repeat(2048)]})).status,413);
+  assert.equal(calls.length,1);
+});
+
 test('draft writes validate and preserve operation identity and revision',async t => {
   const {write,calls} = await fixture(t);
   assert.equal((await write('/v1/drafts','POST',draft)).status,200);
