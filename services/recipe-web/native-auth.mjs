@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createLoginAdmission, WebError } from './auth.mjs';
+import { createAuthMap } from './auth-state.mjs';
 import {oauthCallback, oauthProviders, validOAuthAuthorizeUrl} from './oauth-provider.mjs';
 
 const minute = 60_000;
@@ -14,8 +15,10 @@ const nativeStatus = { issued: 'waiting', choosing: 'waiting', selected: 'provid
 const terminal = new Set(['acknowledged', 'cancelled', 'expired', 'failed', 'switching']);
 const random = () => randomBytes(32).toString('base64url');
 const digest = value => createHash('sha256').update(value).digest();
+const lookupKey = value => typeof value === 'string' ? digest(value).toString('hex') : undefined;
 const canonicalToken = value => typeof value === 'string' && tokenPattern.test(value) && Buffer.from(value, 'base64url').toString('base64url') === value;
 const same = (value, expected) => typeof value === 'string' && expected && timingSafeEqual(digest(value), expected);
+const digestFields = ['pollDigest', 'browserDigest', 'tabDigest', 'tokenDigest', 'receiptDigest', 'terminalReceiptDigest'];
 
 function json(res, value, status = 200) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -40,12 +43,36 @@ async function object(req, required, optional = [], limit = 4096) {
   return value;
 }
 
-export function createNativeLogin({ publicOrigin, accountOrigin, supabaseOrigin, publishableKey, providerNames, verifyIdentity, confirmWebSession, now = Date.now }) {
+export function createNativeLogin({ publicOrigin, accountOrigin, supabaseOrigin, publishableKey, providerNames, verifyIdentity, confirmWebSession, authStorage, now = Date.now }) {
   const available = supabaseOrigin && /^sb_publishable_[A-Za-z0-9_-]+$/.test(publishableKey || '')
     ? oauthProviders(providerNames) : [];
-  const flows = new Map(), tickets = new Map(), browsers = new Map();
+  const retention = flow => flow.expiresAt + 5 * minute;
+  const flows = createAuthMap('native-flows', authStorage, retention, {
+    clock: now,
+    encode: ({verifying: _verifying, webAccess, confirmedReceipt, identity, ...flow}) => {
+      // Browser-facing terminal status stays pollable after expiry. Credentials
+      // and profile data are stored separately with the earlier flow deadline.
+      if (webAccess || confirmedReceipt || identity) {
+        authStorage.set('native-secrets', flow.id, {webAccess, confirmedReceipt, identity}, flow.expiresAt);
+      } else {
+        authStorage.delete('native-secrets', flow.id);
+      }
+      for (const field of digestFields) if (flow[field]) flow[field] = flow[field].toString('base64url');
+      return flow;
+    },
+    decode: flow => {
+      for (const field of digestFields) if (flow[field]) flow[field] = Buffer.from(flow[field], 'base64url');
+      if (flow.expiresAt > now()) Object.assign(flow, authStorage.get('native-secrets', flow.id));
+      return flow;
+    },
+  });
+  const tickets = createAuthMap('native-tickets', authStorage, () => Infinity);
+  const browsers = createAuthMap('native-browsers', authStorage, () => Infinity);
   const admit = createLoginAdmission({ now });
-  const key = randomBytes(32);
+  const storedKey = authStorage?.get('keys', 'native-receipt');
+  if (storedKey !== undefined && !canonicalToken(storedKey)) throw new Error('Invalid native receipt key');
+  const key = storedKey === undefined ? randomBytes(32) : Buffer.from(storedKey, 'base64url');
+  if (storedKey === undefined) authStorage?.set('keys', 'native-receipt', key.toString('base64url'), null);
   const secure = new URL(publicOrigin).protocol === 'https:';
   const cookieName = secure ? '__Host-vv-native' : 'vv-local-native';
   const cookie = value => cookieName + '=' + value + '; Max-Age=300; Path=/; HttpOnly; SameSite=Lax' + (secure ? '; Secure' : '');
@@ -63,11 +90,18 @@ export function createNativeLogin({ publicOrigin, accountOrigin, supabaseOrigin,
   function expire(flow) {
     if (flow.expiresAt <= now() && !terminal.has(flow.status)) {
       flow.status = 'expired'; clearSecrets(flow);
+      flows.save(flow.id, flow);
     }
     return flow;
   }
 
   function prune() {
+    if (authStorage) {
+      const current = now();
+      flows.prune(current); tickets.prune(current); browsers.prune(current);
+      authStorage.prune('native-secrets', current);
+      return;
+    }
     for (const [id, flow] of flows) {
       expire(flow);
       if (flow.expiresAt + 5 * minute <= now()) {
@@ -75,8 +109,8 @@ export function createNativeLogin({ publicOrigin, accountOrigin, supabaseOrigin,
       }
     }
   }
-  const purge = setInterval(prune, minute);
-  purge.unref();
+  const purge = authStorage ? null : setInterval(prune, minute);
+  purge?.unref();
 
   function sealReceipt(outcome, flow) {
     const iv = randomBytes(ivBytes), cipher = createCipheriv('aes-256-gcm', key, iv, { authTagLength: tagBytes });
@@ -121,7 +155,7 @@ export function createNativeLogin({ publicOrigin, accountOrigin, supabaseOrigin,
   }
 
   function browserFlow(req, binding = req.headers['x-vonvon-native-tab']) {
-    const browser = browserKey(req), flow = flows.get(browsers.get(browser));
+    const browser = browserKey(req), flow = flows.get(browsers.get(lookupKey(browser)));
     if (!flow || !same(browser, flow.browserDigest) || !canonicalToken(binding) || !same(binding, flow.tabDigest)) {
       throw new WebError(401, 'invalid_browser_flow');
     }
@@ -143,10 +177,15 @@ export function createNativeLogin({ publicOrigin, accountOrigin, supabaseOrigin,
     live(flow);
     if (flow.status !== 'selected') throw new WebError(409, 'flow_conflict');
     flow.authorizeUrl = value; flow.status = 'authorized';
+    flows.save(flow.id, flow);
   }
 
   return {
-    stop() { clearInterval(purge); for(const flow of flows.values()){flow.status='cancelled';clearSecrets(flow);} flows.clear(); tickets.clear(); browsers.clear(); key.fill(0); },
+    stop() {
+      clearInterval(purge);
+      if (!authStorage) for(const flow of flows.values()){flow.status='cancelled';clearSecrets(flow);}
+      flows.clear(); tickets.clear(); browsers.clear(); key.fill(0);
+    },
     async handle(req, res, url, fromAccount = false) {
       const route = flowRoute.exec(url.pathname), create = url.pathname === '/auth/native/flows';
       if (route || create) {
@@ -164,7 +203,7 @@ export function createNativeLogin({ publicOrigin, accountOrigin, supabaseOrigin,
           if (flows.size >= 1024) throw new WebError(429, 'busy');
           const id = random(), ticket = random(), pollToken = random(), ticketHash = digest(ticket).toString('hex');
           const flow = { id, state: data.state, status: 'issued', pollDigest: digest(pollToken), ticket: ticketHash, expiresAt: now() + 5 * minute };
-          flows.set(id, flow); tickets.set(ticketHash, id);
+          flows.set(id, flow); tickets.set(ticketHash, id, flow.expiresAt);
           const loginPage = req.headers['x-vonvon-login-page'] === 'unified-v1' ? '/login?mode=app' : '/auth/native';
           json(res, { flowId: id, launchUrl: publicOrigin + loginPage + '#ticket=' + ticket, pollToken,
             expiresAt: flow.expiresAt, confirmation: 'identity-v1', supabaseUrl: supabaseOrigin, publishableKey }, 201);
@@ -205,6 +244,7 @@ export function createNativeLogin({ publicOrigin, accountOrigin, supabaseOrigin,
                 if (flow.status !== 'ready' || flow.verifying !== attempt) throw new WebError(409,'flow_conflict');
                 if ([401,403].includes(error?.status)) {
                   flow.status = 'failed'; clearSecrets(flow);
+                  flows.save(flow.id, flow);
                   throw new WebError(error.status,'identity_rejected');
                 }
                 throw new WebError(503,'identity_unavailable');
@@ -221,6 +261,7 @@ export function createNativeLogin({ publicOrigin, accountOrigin, supabaseOrigin,
               if (confirmWebSession) flow.webAccess = input.accessToken;
               flow.identity = identity; flow.tokenDigest = tokenDigest; flow.status = 'confirming';
               delete flow.confirmedReceipt; delete flow.authorizeUrl;
+              flows.save(flow.id, flow);
             } finally {clearTimeout(timer);controller.abort();if(flow.verifying===attempt)delete flow.verifying;}
           })();
           await attempt.promise; live(flow); json(res,view(flow)); return true;
@@ -232,17 +273,20 @@ export function createNativeLogin({ publicOrigin, accountOrigin, supabaseOrigin,
             live(flow);
             if (flow.status !== 'confirmed') throw new WebError(409, 'flow_conflict');
             flow.status = 'acknowledged'; clearSecrets(flow);
+            flows.save(flow.id, flow);
           }
           json(res, view(flow)); return true;
         }
         if (req.method === 'DELETE' && !action) {
-          if (!terminal.has(flow.status)) { flow.status = 'cancelled'; clearSecrets(flow); }
+          if (!terminal.has(flow.status)) {
+            flow.status = 'cancelled'; clearSecrets(flow); flows.save(flow.id, flow);
+          }
           json(res, view(flow)); return true;
         }
         throw new WebError(404, 'not_found');
       }
       if (req.method === 'GET' && url.pathname === '/auth/native/callback') {
-        const flow = flows.get(browsers.get(browserKey(req)));
+        const flow = flows.get(browsers.get(lookupKey(browserKey(req))));
         const result = oauthCallback(url);
         let location = '/login?mode=app&complete=1#';
         if (flow?.status === 'authorized' && flow.expiresAt > now()) {
@@ -261,8 +305,10 @@ export function createNativeLogin({ publicOrigin, accountOrigin, supabaseOrigin,
         if (flow.status !== 'issued') throw new WebError(409, 'flow_conflict');
         tickets.delete(hash); delete flow.ticket;
         const browser = random();
-        flow.browser = browser; flow.browserDigest = digest(browser); flow.tabDigest = digest(data.binding); flow.status = 'choosing';
-        browsers.set(browser, flow.id); res.setHeader('Set-Cookie', cookie(browser));
+        flow.browserDigest = digest(browser); flow.browser = flow.browserDigest.toString('hex');
+        flow.tabDigest = digest(data.binding); flow.status = 'choosing';
+        browsers.set(flow.browser, flow.id, retention(flow));
+        flows.save(flow.id, flow); res.setHeader('Set-Cookie', cookie(browser));
         json(res, browserView(flow)); return true;
       }
       const flow = browserFlow(req);
@@ -272,7 +318,9 @@ export function createNativeLogin({ publicOrigin, accountOrigin, supabaseOrigin,
         live(flow);
         if (!available.includes(data.provider)) throw new WebError(400, 'provider_unavailable');
         if (flow.provider && flow.provider !== data.provider) throw new WebError(409, 'flow_conflict');
-        if (flow.status === 'choosing') { flow.provider = data.provider; flow.status = 'selected'; }
+        if (flow.status === 'choosing') {
+          flow.provider = data.provider; flow.status = 'selected'; flows.save(flow.id, flow);
+        }
         json(res, browserView(flow)); return true;
       }
       if (url.pathname === '/auth/native/complete' && req.method === 'POST') {
@@ -284,6 +332,7 @@ export function createNativeLogin({ publicOrigin, accountOrigin, supabaseOrigin,
           } else {
             flow.status = outcome.kind; clearSecrets(flow); flow.terminalReceiptDigest = digest(receipt);
           }
+          flows.save(flow.id, flow);
         } else if (!(['ready','confirming','confirmed'].includes(flow.status) && same(receipt,flow.receiptDigest)) &&
             !(['cancelled','failed'].includes(flow.status) && same(receipt,flow.terminalReceiptDigest))) throw new WebError(401, 'invalid_receipt');
         json(res, browserView(flow)); return true;
@@ -295,18 +344,20 @@ export function createNativeLogin({ publicOrigin, accountOrigin, supabaseOrigin,
           confirmWebSession(req, res, flow.webAccess, flow.identity, flow.provider);
           delete flow.webAccess;
         }
-        flow.status = 'confirmed'; json(res,browserView(flow)); return true;
+        flow.status = 'confirmed'; flows.save(flow.id, flow); json(res,browserView(flow)); return true;
       }
       if (url.pathname === '/auth/native/switch' && req.method === 'POST') {
         await object(req, []); live(flow);
         if (flow.status !== 'confirming') throw new WebError(409,'flow_conflict');
-        flow.status = 'switching'; clearSecrets(flow); json(res,browserView(flow)); return true;
+        flow.status = 'switching'; clearSecrets(flow); flows.save(flow.id, flow); json(res,browserView(flow)); return true;
       }
       if (url.pathname === '/auth/native/cancel' && req.method === 'POST') {
         await object(req, []);
         expire(flow);
         if (['confirmed','acknowledged'].includes(flow.status)) throw new WebError(409,'flow_conflict');
-        if (!terminal.has(flow.status)) { flow.status = 'cancelled'; clearSecrets(flow); }
+        if (!terminal.has(flow.status)) {
+          flow.status = 'cancelled'; clearSecrets(flow); flows.save(flow.id, flow);
+        }
         json(res, browserView(flow)); return true;
       }
       throw new WebError(404, 'not_found');

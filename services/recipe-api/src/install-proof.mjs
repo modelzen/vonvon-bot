@@ -2,7 +2,7 @@ import { createHash, createHmac, createPublicKey, diffieHellman, generateKeyPair
 import { badInput } from './errors.mjs';
 
 const domain = Buffer.from('vonvon.recipe.installBoundRole.v1\0');
-const keyInfo = Buffer.from('vonvon.recipe.installBoundRole.proof-key.v1\0');
+export const installProofKeyInfo = Buffer.from('vonvon.recipe.installBoundRole.proof-key.v1\0');
 const spki = Buffer.from('302a300506032b656e032100', 'hex');
 export const sha256 = bytes => createHash('sha256').update(bytes).digest();
 
@@ -28,7 +28,7 @@ export function installProof(privateKey, binding) {
   const publicKey = createPublicKey({ key: Buffer.concat([spki, binary32(binding.serverPublicKey)]), format:'der', type:'spki' });
   const shared = diffieHellman({ privateKey, publicKey });
   try {
-    const key = Buffer.from(hkdfSync('sha256', shared, binary32(binding.nonceCommitment), keyInfo, 32));
+    const key = Buffer.from(hkdfSync('sha256', shared, binary32(binding.nonceCommitment), installProofKeyInfo, 32));
     try { return createHmac('sha256', key).update(installTranscript(binding)).digest(); }
     finally { key.fill(0); }
   } finally { shared.fill(0); }
@@ -43,7 +43,7 @@ export function authorizationMaterial(binding) {
     const shared = diffieHellman({ privateKey,
       publicKey:createPublicKey({ key:Buffer.concat([spki, binary32(binding.targetPublicKey)]), format:'der', type:'spki' }) });
     try {
-      const key = Buffer.from(hkdfSync('sha256', shared, binary32(binding.nonceCommitment), keyInfo, 32));
+      const key = Buffer.from(hkdfSync('sha256', shared, binary32(binding.nonceCommitment), installProofKeyInfo, 32));
       try { expected = createHmac('sha256', key).update(installTranscript(complete)).digest(); }
       finally { key.fill(0); }
     } finally { shared.fill(0); }

@@ -12,10 +12,10 @@ import {createObjectStore} from './object-store.mjs';
 import {createPrivateStorage} from './object-storage.mjs';
 import {makePool} from './database.mjs';
 const singleton=(req,k)=>{const x=req.headersDistinct[k];if(x?.length!==1)throw badInput();return x[0];};
-export function createRichBrokerServer({verify,store,storage,admit=false}) {
-  const broker=createObjectBroker({store,storage,recordTextChecks:true,validateCanonicalManifest:b=>decodeRichRecipeContent(b),
+export function createRichBrokerRequestHandler({verify,store,storage,admit=false,normalizeLogo,verifyNormalizedLogo}) {
+  const broker=createObjectBroker({store,storage,normalizeLogo,verifyNormalizedLogo,recordTextChecks:true,validateCanonicalManifest:b=>decodeRichRecipeContent(b),
     authorizeRead:({identity,scope,target,obj,proof})=>scope==='displayLogo'?store.call('display_logo',target):proof?store.call('install_descriptor',target,...proof,obj):store.call('read_descriptor',identity?.issuer??null,identity?.subject??null,scope,target,obj)});
-  return createServer({requestTimeout:20000,headersTimeout:10000,maxHeaderSize:16384},async(req,res)=>{
+  return async(req,res)=>{
     res.setHeader('Cache-Control','private, no-store');res.setHeader('X-Content-Type-Options','nosniff');
     try{
       const put=/^(?:\/api)?\/v2\/objects\/([^/]+)\/members\/(0|[1-9]\d?)$/.exec(req.url);
@@ -53,7 +53,11 @@ export function createRichBrokerServer({verify,store,storage,admit=false}) {
       res.statusCode=err.status;res.setHeader('Content-Type','application/json');if(!req.complete)res.setHeader('Connection','close');
       res.end(JSON.stringify({error:{code:err.code}}));
     }
-  });
+  };
+}
+export function createRichBrokerServer(options) {
+  return createServer({requestTimeout:20000,headersTimeout:10000,maxHeaderSize:16384},
+    createRichBrokerRequestHandler(options));
 }
 export async function startRichBroker(env=process.env) {
   const verify=createVerifier(env.RECIPE_AUTH_ISSUER),pool=makePool(env.RECIPE_VERIFIER_DATABASE_URL);

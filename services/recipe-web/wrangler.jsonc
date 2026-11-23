@@ -1,0 +1,18 @@
+{
+  "name": "vonvon-community-worker-preview",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-11-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "assets": {
+    "directory": "./dist/worker-assets",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "html_handling": "none"
+  },
+  "durable_objects": {
+    "bindings": [{"name": "COMMUNITY_AUTH", "class_name": "CommunityAuth"}]
+  },
+  "migrations": [{"tag": "v1", "new_sqlite_classes": ["CommunityAuth"]}]
+}

@@ -3,7 +3,7 @@ import { binary32, sha256 } from './install-proof.mjs';
 import { badInput } from './errors.mjs';
 
 const domain = Buffer.from('vonvon.recipe.authoring.v1\0');
-const keyInfo = Buffer.from('vonvon.recipe.authoring.proof-key.v1\0');
+export const authoringProofKeyInfo = Buffer.from('vonvon.recipe.authoring.proof-key.v1\0');
 const spki = Buffer.from('302a300506032b656e032100', 'hex');
 export const DISPATCH_DIGEST = sha256(Buffer.alloc(0)).toString('hex');
 
@@ -24,7 +24,7 @@ export function authoringTranscript(binding) {
 function proof(privateKey, publicKey, binding) {
   const shared = diffieHellman({privateKey, publicKey});
   try {
-    const key = Buffer.from(hkdfSync('sha256', shared, binary32(binding.nonceCommitment), keyInfo, 32));
+    const key = Buffer.from(hkdfSync('sha256', shared, binary32(binding.nonceCommitment), authoringProofKeyInfo, 32));
     try { return createHmac('sha256', key).update(authoringTranscript(binding)).digest(); }
     finally { key.fill(0); }
   } finally { shared.fill(0); }

@@ -10,10 +10,13 @@ export function richInstallTranscript(b,stage='redeem') {
     ...(b.purpose==='updateDirectRichRecipe'?[uuidBytes(b.fromVersionId),Buffer.from(b.localPlanSha256,'hex')]:[]),
     ...(stage==='redeem'?[]:[Buffer.from('\0complete:'+stage)])]);
 }
+export function richInstallProofKeyInfo(purpose) {
+  return Buffer.from('vonvon.recipe.'+purpose+'.proof-key.v2\0');
+}
 function compute(privateKey,publicKey,b) {
   const shared=diffieHellman({privateKey,publicKey});
   try{
-    const key=Buffer.from(hkdfSync('sha256',shared,binary32(b.nonceCommitment),Buffer.from('vonvon.recipe.'+b.purpose+'.proof-key.v2\0'),32));
+    const key=Buffer.from(hkdfSync('sha256',shared,binary32(b.nonceCommitment),richInstallProofKeyInfo(b.purpose),32));
     try{return ['redeem','applied','rejected'].map(s=>createHmac('sha256',key).update(richInstallTranscript(b,s)).digest());}
     finally{key.fill(0);}
   }finally{shared.fill(0);}

@@ -13,7 +13,7 @@ export function createPublicationReader(origin='http://127.0.0.1:4318',fetchImpl
   return async({draftId,descriptor,authorization,signal})=>{
     try{
       const response=await fetchImpl(`${base.origin}/v2/drafts/${draftId}/objects/${descriptor.objectId}`,{
-        headers:{authorization},redirect:'error',cache:'no-store',signal,
+        headers:{authorization},redirect:'manual',cache:'no-store',signal,
       });
       if(!response.ok||!response.body){await response.body?.cancel();throw unavailable();}
       const reader=response.body.getReader(),chunks=[];let bytes=0;

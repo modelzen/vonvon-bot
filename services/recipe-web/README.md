@@ -16,11 +16,13 @@ npm start
 
 开发入口为 `http://127.0.0.1:49151/`。服务监听本机端口。Web 到 API 的默认连接是 `http://127.0.0.1:4317`，到 broker 的默认连接是 `http://127.0.0.1:4318`。`RECIPE_API_ORIGIN` 和 `RECIPE_BROKER_ORIGIN` 只接受固定 loopback origin。若修改 `RECIPE_WEB_PORT`，相应设置 `RECIPE_WEB_ORIGIN`；从 Nginx 暴露时，后者必须等于浏览器实际打开的 HTTPS origin。
 
-当前生产社区使用 `https://recipes.vonvon.cc`，登录及账号设置使用 `https://account.vonvon.cc`。新域名计划为 `https://community.vonvon.bot` 和 `https://account.vonvon.bot`，两者在托管环境验收通过后一起切换。共用 Web 服务的 `RECIPE_WEB_ORIGIN` 和 `RECIPE_COMMUNITY_ORIGIN` 设为社区 origin，`RECIPE_ACCOUNT_ORIGIN` 设为账号 origin。保持两个入口同站，以便账号页使用社区的 host-only 会话 cookie。Supabase 登记社区 origin 下网页及 App 的精确回程。
+生产社区使用 `https://market.vonvon.bot`，登录及账号设置使用 `https://account.vonvon.bot`。共用 Web 服务的 `RECIPE_WEB_ORIGIN` 和 `RECIPE_COMMUNITY_ORIGIN` 设为社区 origin，`RECIPE_ACCOUNT_ORIGIN` 设为账号 origin。保持两个入口同站，以便账号页使用社区的 host-only 会话 cookie。Supabase 登记新旧社区 origin 下网页及 App 的精确回程。
 
-切换后，旧 `recipes.vonvon.cc` 上的普通网页链接跳转至新社区，并保留路径和查询参数。仍固定使用旧 origin 的 App 通过旧地址访问必要的 API 及原生登录流程，包括对应的 OAuth 回程。客户端迁移完成后再撤掉这些兼容路由。
+旧 `community.vonvon.bot` 的普通网页链接直接跳转至新社区，并保留路径和查询参数。Worker 的 `RECIPE_LEGACY_WEB_ORIGIN` 保留该域名的机器 API、原生登录、账号链接票据和 OAuth 回程。原 `recipes.vonvon.cc` 已退役，固定使用该地址的客户端需要改用 Market。浏览器在新社区使用独立的 host-only 会话。
 
 登录需设置 `SUPABASE_URL`、`SUPABASE_PUBLISHABLE_KEY`，并在 Supabase 控制台给该环境登记精确回程 `<RECIPE_WEB_ORIGIN>/auth/callback`。测试和生产各用自己的应用配置。本轮 UI 仅提供 GitHub 与 Google，用 `RECIPE_WEB_PROVIDERS=github,google` 按该项目实际启用情况配置；缺少凭据的方式必须保持禁用。通用协议仍保留 Apple 的历史兼容，本轮不展示或接入。缺少配置时网页提供公开浏览，真实登录按钮会提示当前不可用。社交认证走 PKCE，浏览器持有 HttpOnly 会话 cookie。一次性票据与上游会话保存在服务进程内存，部署时仅运行一个实例。重启此服务后，用户需要再次登录。Nginx 对 `/auth/` 关闭带查询串的访问日志。
+
+生产 Web 在 Cloudflare Workers 上使用 `worker.mjs`，`wrangler.jsonc` 是部署配置模板。使用 `npm run build:worker` 打包受路由表控制的静态资源。生产配置通过独立环境设置社区、账号及 Supabase origin，提供 `SUPABASE_PUBLISHABLE_KEY`，并绑定独立的 `RECIPE_API` 和 `RECIPE_BROKER` 服务。API 通过验证 TLS 的 Hyperdrive 连接现有生产 Supabase。私有附件 Worker 使用独立服务密钥 `RECIPE_BROKER_RELAY_SECRET` 访问现有生产站点的 HTTPS 附件入口，继续由原附件服务执行用户鉴权、存储校验和数据库会话锁。两个站点共享一个 SQLite Durable Object 保存限时的 PKCE、浏览器会话和 App 登录状态。SQLite 闹钟清理过期记录，凭据不进入资源包。测试环境使用隔离的 Supabase，两套环境均提供 GitHub 和 Google 登录。
 
 浏览器在同一 origin 发起 `/api/v1/…` 和 `/api/v2/…` 请求。公开入口必须将两个前缀都交给这个 Web BFF，由它检查会话、Origin 和 CSRF 绑定，再转交 API。原生 App 的 `/v2/…` Bearer 请求继续路由到 API 或 broker；不能把浏览器的 `/api/v2/…` 直接转到它们。
 

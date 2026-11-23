@@ -2,7 +2,8 @@ import {createHmac,createPublicKey,diffieHellman,generateKeyPairSync,hkdfSync,ra
 import {authoringTranscript} from './authoring-proof.mjs';
 import {binary32,sha256} from './install-proof.mjs';
 import {badInput} from './errors.mjs';
-const domain=Buffer.from('vonvon.recipe.authoring.v2\0'), keyInfo=Buffer.from('vonvon.recipe.authoring.proof-key.v2\0');
+const domain=Buffer.from('vonvon.recipe.authoring.v2\0');
+export const richAuthoringProofKeyInfo = Buffer.from('vonvon.recipe.authoring.proof-key.v2\0');
 const publicKey=wire=>createPublicKey({key:Buffer.concat([Buffer.from('302a300506032b656e032100','hex'),binary32(wire)]),format:'der',type:'spki'});
 export function richTranscript(b) {
   if(b.format!=='rich-v2')throw badInput();
@@ -11,7 +12,7 @@ export function richTranscript(b) {
 }
 function proof(priv,pub,b) {
   const shared=diffieHellman({privateKey:priv,publicKey:pub});
-  try {const key=Buffer.from(hkdfSync('sha256',shared,binary32(b.nonceCommitment),keyInfo,32));
+  try {const key=Buffer.from(hkdfSync('sha256',shared,binary32(b.nonceCommitment),richAuthoringProofKeyInfo,32));
     try{return createHmac('sha256',key).update(richTranscript(b)).digest();} finally{key.fill(0);}
   }finally{shared.fill(0);}
 }

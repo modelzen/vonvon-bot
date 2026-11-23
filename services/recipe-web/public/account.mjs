@@ -11,6 +11,8 @@ const identity = $('account-identity'), accountIdInput = $('account-id'), copyFe
 const providerNames = new Map([['github', 'GitHub'], ['google', 'Google'], ['apple', 'Apple']]);
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const expectedStorage = 'vv-account-login-expected';
+const legacyMarkers = new URLSearchParams(location.search).getAll('legacy');
+const cleanAccountPath = location.pathname + (legacyMarkers.length === 1 && legacyMarkers[0] === '1' ? '?legacy=1' : '');
 let expectedAccount, invalidExpected = false;
 function readExpectedAccount() {
   expectedAccount = undefined; invalidExpected = false;
@@ -20,7 +22,7 @@ function readExpectedAccount() {
       const value = fragment.get('account');
       if (fragment.size !== 1 || !uuid.test(value || '')) invalidExpected = true;
       else expectedAccount = value.toLowerCase();
-      history.replaceState({...history.state, accountExpected: expectedAccount, invalidAccountExpected: invalidExpected}, '', location.pathname);
+      history.replaceState({...history.state, accountExpected: expectedAccount, invalidAccountExpected: invalidExpected}, '', cleanAccountPath);
       try {sessionStorage.removeItem(expectedStorage);} catch {}
     } else {
       expectedAccount = history.state?.accountExpected;
@@ -32,10 +34,10 @@ function readExpectedAccount() {
         try {pending = JSON.parse(raw);} catch {}
         if (typeof pending?.expiresAt !== 'number' || !Number.isFinite(pending.expiresAt) || pending.expiresAt <= Date.now() || !uuid.test(pending.accountId || '')) {
           invalidExpected = true;
-          history.replaceState({...history.state, invalidAccountExpected: true}, '', location.pathname);
+          history.replaceState({...history.state, invalidAccountExpected: true}, '', cleanAccountPath);
         } else {
           expectedAccount = pending.accountId.toLowerCase();
-          history.replaceState({...history.state, accountExpected: expectedAccount}, '', location.pathname);
+          history.replaceState({...history.state, accountExpected: expectedAccount}, '', cleanAccountPath);
         }
         sessionStorage.removeItem(expectedStorage);
       }
@@ -43,7 +45,7 @@ function readExpectedAccount() {
   } catch {invalidExpected = true;}
 }
 const accountLink = new URLSearchParams(location.hash.slice(1)).get('link');
-if (accountLink) history.replaceState(null, '', location.pathname);
+if (accountLink) history.replaceState(null, '', cleanAccountPath);
 readExpectedAccount();
 let session, profile, generation = 0, owner = new AbortController(), busy = false;
 let avatarChange = {kind: 'keep'}, avatarPreview;
@@ -331,7 +333,7 @@ async function connectAppAccount(ticket) {
       if (value.accountId !== offer.accountId) throw new AccountError('session_changed');
       confirm.remove();
       expectedAccount = value.accountId;
-      history.replaceState({accountExpected: expectedAccount}, '', location.pathname);
+      history.replaceState({accountExpected: expectedAccount}, '', cleanAccountPath);
       events?.postMessage('check'); await load();
     } catch {confirm.remove(); status.textContent = '这个连接已失效，请回到 App 重新打开账号设置。';}
   }, {once: true});
