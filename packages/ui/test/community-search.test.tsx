@@ -104,9 +104,9 @@ it('keeps the loaded search range and scroll when returning from a recipe', asyn
 
 it('offers one preparation action and keeps existing drafts accessible without manual creation', async () => {
   const draftId = '55555555-5555-4555-8555-555555555555';
-  h.request.mockResolvedValueOnce({items: [{format: 'rich-v2', draftId, recipeId: null, revision: 1, public: recipe.public}]}).mockResolvedValueOnce({items: []});
-  await act(async () => root.render(<Harness initial={{kind: 'workspace'}}/>));
-  expect([...document.querySelectorAll('button')].filter(button => button.textContent === '分享配方')).toHaveLength(1);
+  h.request.mockResolvedValueOnce({items: [{format: 'rich-v2', draftId, recipeId: null, revision: 1, public: recipe.public}]});
+  await act(async () => root.render(<Harness initial={{kind: 'workspace', tab: 'drafts'}}/>));
+  expect([...document.querySelectorAll('button')].filter(button => button.textContent === '创作配方')).toHaveLength(1);
   expect(document.body.textContent).not.toContain('手动');
   await click('查看配方');
   expect(document.body.textContent).toContain('只读配方 ' + draftId);
@@ -128,11 +128,11 @@ it('does not append an old load-more response to a new search', async () => {
 
 it('keeps the empty studio focused on preparation without a blank-draft shortcut', async () => {
   h.request.mockResolvedValue({items: []});
-  await act(async () => root.render(<Harness initial={{kind: 'workspace'}}/>));
-  expect(document.body.textContent).toContain('可以直接在 Bot 私聊中开始，或从群聊分享配置。');
+  await act(async () => root.render(<Harness initial={{kind: 'workspace', tab: 'drafts'}}/>));
+  expect(document.body.textContent).toContain('点击「创作配方」，选择已有 Bot 和群聊，在私聊中开始。');
   expect(document.body.textContent).not.toContain('手动');
-  expect([...document.querySelectorAll('button')].filter(button => button.textContent === '分享配方')).toHaveLength(1);
-  expect(h.request.mock.calls.map(([request]) => request.type)).toEqual(['drafts', 'publications']);
+  expect([...document.querySelectorAll('button')].filter(button => button.textContent === '创作配方')).toHaveLength(1);
+  expect(h.request.mock.calls.map(([request]) => request.type)).toEqual(['drafts']);
 });
 
 it.each(['featured', 'latest'] as const)('labels committed search results once and restores the %s catalog heading after clearing', async heroKind => {

@@ -1,7 +1,7 @@
 import {isDeepStrictEqual} from 'node:util';
 import {randomUUID} from 'node:crypto';
 import {z} from 'zod';
-import {deviceReplySchema,recipeAuthoringReplySchema,type DesktopAuthoringReply,type DesktopAuthoringRequest,type RecipeAuthoringRequest,type RecipeAuthoringReply,type RecipeDraft,type CreatorWork,type CreatorAnswer,type CreatorJob,type GroupId} from '@vonvon/protocol';
+import {creatorChatTargetSchema,deviceReplySchema,recipeAuthoringReplySchema,type DesktopAuthoringReply,type DesktopAuthoringRequest,type RecipeAuthoringRequest,type RecipeAuthoringReply,type RecipeDraft,type CreatorWork,type CreatorAnswer,type CreatorJob,type GroupId} from '@vonvon/protocol';
 import type {NativeAccount} from './account-session.js';
 import type {RecipeDeviceLease} from './recipe-use.js';
 import {RecipeAuthoringController} from './recipe-authoring.js';
@@ -354,6 +354,9 @@ export class RecipeCreatorSupervisor {
     }
     if(selected&&input.source&&(selected.viewId!==input.source.viewId||selected.botId!==input.source.botId))throw unavailable();
     selected??=input.source;
+    // A lost reply from a legacy selection cannot establish which formerly available Bot received it.
+    check();
+    if(!selected&&input.recover)return {kind:'creatorUnverified',accountId:input.accountId,retryId:input.retryId};
     if(!selected){
       await this.restoring;
       const options=[...this.workers.values()].filter(worker=>worker.association.accountId===input.accountId).flatMap(worker=>{
@@ -365,14 +368,29 @@ export class RecipeCreatorSupervisor {
     const worker=await this.open(input.accountId,selected.viewId,selected.botId,expected);if(!worker)throw unavailable();
     check();
     worker.context.check();
-    const creatorHandle=worker.contextHandle;
+    const snapshot=await worker.source.client.snapshot();
+    worker.context.check();
+    const bot=snapshot.agents.find(bot=>bot.id===worker.association.botId);
+    if(snapshot.stale||snapshot.host.kind!=='connected'||!bot?.running||bot.connection!=='connected'||!bot.tenant)throw unavailable();
+    if(input.entry.kind==='source'){
+      const entry=input.entry;
+      const binding=snapshot.memberships.find(row=>row.agentId===bot.id&&row.groupId===entry.groupId);
+      if(!binding?.enabled||binding.stale||!snapshot.groups.some(group=>group.id===entry.groupId)||
+        bot.registrationId!==entry.registrationId||bot.registeredAt!==entry.registeredAt||binding.bindingIncarnation!==entry.bindingIncarnation)throw unavailable();
+    }
+    const target=creatorChatTargetSchema.parse({accountId:input.accountId,viewId:selected.viewId,botId:selected.botId,tenant:bot.tenant,botName:bot.name});
     if(roleDraft){
+      if(input.recover)return {kind:'creatorContinuing',...target,retryId:input.retryId,delivery:'unverified'};
       expect(await worker.context.rpc({type:'creatorContinue',botId:worker.association.botId,session:worker.session,
         selection:{kind:'draft',work:{draftId:roleDraft.draftId,source:null},name:roleDraft.name,version:roleDraft.version}}),'creatorAck');
-    }else await this.authoring.creatorBegin(creatorHandle,input.entry);
+      worker.context.check();
+      return {kind:'creatorContinuing',...target,retryId:input.retryId,delivery:'queued'};
+    }
+    const result=await this.authoring.creatorBegin(worker.contextHandle,input,target);
     worker.context.check();
-    if(input.entry.kind==='version')this.journal.rememberVersion(worker.association,input.entry.versionId);
-    return {kind:'creatorContinuing',accountId:input.accountId,viewId:selected.viewId,botId:selected.botId};
+    if(result.kind!=='creatorContinuing')throw unavailable();
+    if(input.entry.kind==='version'&&result.delivery==='delivered')this.journal.rememberVersion(worker.association,input.entry.versionId);
+    return result;
   }
   dispose(){if(this.stop.signal.aborted)return;this.invalidateReviews();this.stop.abort();clearInterval(this.reconnect);this.unsubscribe();for(const worker of this.workers.values())worker.stop();}
 }

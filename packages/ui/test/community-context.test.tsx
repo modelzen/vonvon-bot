@@ -30,7 +30,7 @@ it('clears an author route and private source snapshot immediately on account sw
   expect(render().route).toEqual({kind: 'catalog'});
   h.account = a;
   expect(render().route).toEqual({kind: 'catalog'});
-  render().open({kind: 'workspace'});
+  render().open({kind: 'workspace', tab: 'drafts'});
   h.account = {kind: 'signedOut'};
   expect(render().route).toEqual({kind: 'catalog'});
 });
@@ -46,4 +46,18 @@ it('keeps public search, loaded range and scroll position when closing or switch
   render().open(); render().close(); h.account = b;
   expect(render().catalog).toEqual({query: '用法', search: '用法', result: {hero: null, items: [], nextCursor: a.accountId}, scrollTop: 240});
   expect(render().isOpen).toBe(false);
+});
+
+it.each(['acquired', 'drafts', 'published'] as const)('does not retain the %s workspace tab through an account switch', tab => {
+  render().open({kind: 'workspace', tab});
+  expect(render().route).toEqual({kind: 'workspace', tab});
+  h.account = b;
+  expect(render().route).toEqual({kind: 'catalog'});
+  h.account = a;
+  expect(render().route).toEqual({kind: 'catalog'});
+});
+it('clears an account-owned detail origin rather than carrying its workspace tab into another account', () => {
+  render().open({kind: 'detail', recipe: {recipeId: a.accountId, versionId: b.accountId}, from: 'acquired'});
+  h.account = b;
+  expect(render().route).toEqual({kind: 'catalog'});
 });

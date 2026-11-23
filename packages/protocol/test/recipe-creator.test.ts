@@ -52,3 +52,10 @@ it('keeps cold publication recovery readonly and its absence distinct from a con
     expect(desktopAuthoringReplySchema.safeParse({kind:'publicationRecovery',result}).success).toBe(true);
   expect(desktopAuthoringReplySchema.safeParse({kind:'publicationRecovery',result:{kind:'published'}}).success).toBe(false);
 });
+
+it('requires an explicit original Bot tenant and display name before the App opens a creator chat',()=>{
+  const continuation={kind:'creatorContinuing',retryId:id,delivery:'delivered',accountId:id,viewId:'local',botId,tenant:'lark',botName:'原来源 Bot'};
+  expect(desktopAuthoringReplySchema.safeParse(continuation).success).toBe(true);
+  for(const metadata of [{delivery:undefined},{delivery:'success'},{retryId:undefined},{tenant:undefined},{tenant:'unknown'},{botName:undefined},{botName:''}])
+    expect(desktopAuthoringReplySchema.safeParse({...continuation,...metadata}).success).toBe(false);
+});

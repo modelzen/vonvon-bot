@@ -111,7 +111,7 @@ export class AuthoringSession {
   private readonly botKey: string;
   private readonly now: () => number;
   private readonly origin?: string;
-  constructor(private readonly opts: AuthoringOptions) {
+  constructor(private readonly opts: AuthoringOptions,canRefreshPreview:(p:Presence,delivery:string)=>boolean) {
     this.now = opts.now ?? Date.now;
     this.botKey = authoringBotKey(opts.bot);
     this.im = new AuthoringIm(opts.channel);
@@ -122,6 +122,7 @@ export class AuthoringSession {
       this.present(this.p);
     });
     this.creator = new PrivateCreator(opts,this.ledger,this.im,this.now,{
+      canRefreshPreview,
       guard:(p,recipient)=>this.allowed(p,recipient),
       live:p=>this.present(p),
       interact:p=>this.interact(p),
@@ -1153,5 +1154,5 @@ export class AuthoringSession {
 }
 
 export class AuthoringService extends AuthoringRouter {
-  constructor(opts:AuthoringOptions) { super(opts,()=>new AuthoringSession(opts)); }
+  constructor(opts:AuthoringOptions) { super(opts,canRefreshPreview=>new AuthoringSession(opts,canRefreshPreview)); }
 }

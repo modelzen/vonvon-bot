@@ -44,6 +44,8 @@ let cloudCalls: CommunityRequest[];
 let sessions: Map<string,Session>;
 let nextHandle: number;
 let linked: boolean;
+let externalCalls: string[];
+let externalFailure: boolean;
 let recipient: boolean;
 let operations: DesktopAuthoringOperation[];
 let draft: RecipeDraft;
@@ -69,16 +71,16 @@ async function fill(label: string,value: string) {
   return input!;
 }
 async function chooseSource() {
-  await click('社区'); await click('我的配方'); await click('分享配方');
+  await click('社区'); await click('我的配方'); await click('创作配方');
   const selects = document.querySelectorAll('select');
   expect(Array.from(selects).map(select => select.selectedOptions[0]?.textContent)).toEqual(['Bot A', '群聊 A']);
-  await click('在飞书继续');
+  await click('前往私聊创作');
 }
 async function openDraft() {
-  await draw(); await click('社区'); await click('我的配方'); await click('查看配方');
+  await draw(); await click('社区'); await click('我的配方'); await click('创作中'); await click('查看配方');
 }
 async function defaultAuthoring(request: DesktopAuthoringRequest): Promise<DesktopAuthoringReply> {
-  if (request.type === 'creatorContinue') return {kind: 'creatorContinuing', accountId: request.accountId, viewId: request.source?.viewId ?? (request.entry.kind === 'source' ? request.entry.viewId : A), botId: request.source?.botId ?? (request.entry.kind === 'source' ? request.entry.botId : botA)};
+  if (request.type === 'creatorContinue') return {kind: 'creatorContinuing', delivery: request.entry.kind === 'draft' ? 'queued' : 'delivered', retryId: request.retryId, accountId: request.accountId, viewId: request.source?.viewId ?? (request.entry.kind === 'source' ? request.entry.viewId : A), botId: request.source?.botId ?? (request.entry.kind === 'source' ? request.entry.botId : botA), tenant: 'feishu', botName: 'Bot A'};
   if (request.type === 'open') {
     const handle = `00000000-0000-4000-8000-${String(++nextHandle).padStart(12, '0')}`;
     const session = {kind: 'session', handle, target: {accountId: request.accountId, accountName: '作者', viewId: request.viewId, botId: request.botId, botName: 'Bot A'}, linked, operations: []} satisfies Session;
@@ -99,11 +101,12 @@ beforeEach(() => {
   HTMLElement.prototype.scrollIntoView=vi.fn();
   Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:vi.fn(async()=>{})}});
   document.body.innerHTML='<div id="root"></div>';root=createRoot(document.getElementById('root')!);
-  localStorage.clear();deviceSnapshot=snapshot;currentHandoff=undefined;status=signedIn();sourceRecord=null;calls=[];cloudCalls=[];sessions=new Map();nextHandle=0;linked=false;recipient=false;operations=[];
+  localStorage.clear();deviceSnapshot=snapshot;currentHandoff=undefined;status=signedIn();sourceRecord=null;calls=[];cloudCalls=[];sessions=new Map();nextHandle=0;linked=false;recipient=false;operations=[];externalCalls=[];externalFailure=false;
   draft={draftId,recipeId:null,revision:1,public:{name:'同一份私人草稿',summary:'本人填写的公开简介',overview:'',version:'1',access:'direct'},config:{role:'只整理公开资料'}};
   authoring=defaultAuthoring;
   cloud=async request=>{
     if(request.type==='catalog')return {hero:null,items:[],nextCursor:null};
+    if(request.type==='library')return {items:[],nextCursor:null};
     if(request.type==='drafts')return {items:[draft]};
     if(request.type==='publications')return {items:[]};
     if(request.type==='draft')return draft;
@@ -125,6 +128,7 @@ beforeEach(() => {
       if(channel===desktopChannels.community){const request=communityRequestSchema.parse(args[0]);cloudCalls.push(request);return success(await cloud(request));}
       if(channel===desktopChannels.recipeSource)return success({source:sourceRecord});
       if(channel===desktopChannels.collaboration)return success({kind:'project',project:{name:'群聊 A',chatId:groupA,cwd:'/tmp/synthetic-authoring',kind:'multi',backend:'codex-appserver',enabled:true,revision:'1'}});
+      if(channel===desktopChannels.external) {externalCalls.push(String(args[0])); if (externalFailure) throw new Error('Synthetic browser failure'); return success(undefined);}
       if(channel===desktopChannels.close)return success(undefined);
       throw new Error('Unexpected desktop channel '+channel);
     }catch(error){return {ok:false,error:{kind:'rpc',message:error instanceof Error?error.message:'Fixture failed'}};}
@@ -142,13 +146,13 @@ it('keeps My Recipes readonly and starts known draft continuation directly witho
   expect(document.querySelector('h1')?.textContent).toBe(draft.public.name);
   expect(document.querySelectorAll('.community-detail-layout nav button')).toHaveLength(5);
   expect(document.querySelector('input, textarea')).toBeNull();
-  expect(text()).not.toMatch(/预览发布|编辑发布信息|发布到社区|编辑草稿/);
-  await click('在飞书继续创作');
-  expect(calls).toEqual([{type: 'creatorContinue', accountId: accountA, entry: {kind: 'draft', draftId, revision: 1}}]);
-  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('可以回到 Bot 私聊继续创作');
-  expect(document.body.textContent).not.toContain('已发送');
+  expect(text()).not.toMatch(/预览发布|编辑发布信息|编辑草稿/);
+  await click('继续创作');
+  expect(calls).toEqual([{type: 'creatorContinue', retryId: expect.any(String), accountId: accountA, entry: {kind: 'draft', draftId, revision: 1}}]);
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Bot 已接收继续创作请求');
+  expect(document.body.textContent).not.toContain('Bot 已发送');
   expect(localStorage.getItem('recipe-private-handoff:old')).toBe('keep-existing-user-data');
-  expect(cloudCalls.map(request => request.type)).toEqual(['catalog', 'drafts', 'publications', 'draft']);
+  expect(cloudCalls.map(request => request.type)).toEqual(['catalog', 'library', 'drafts', 'draft']);
 });
 
 it('chooses actual source once and associates the private recipient before exact source continuation', async () => {
@@ -160,7 +164,7 @@ it('chooses actual source once and associates the private recipient before exact
   await click('我已发送，核对收件人');
   expect(document.body.textContent).toContain('ou_verified');
   await click('确认是我的私聊');
-  expect(calls.filter(request => request.type === 'creatorContinue')).toEqual([{type: 'creatorContinue', accountId: accountA, entry: {kind: 'source', viewId: A, botId: botA, groupId: groupA}}]);
+  expect(calls.filter(request => request.type === 'creatorContinue')).toEqual([{type: 'creatorContinue', retryId: expect.any(String), accountId: accountA, entry: {kind: 'source', viewId: A, botId: botA, groupId: groupA}}]);
   expect(calls.filter(request => ['beginHandoff', 'beginDraftHandoff', 'restoreHandoff'].includes(request.type))).toEqual([]);
   expect(calls.filter(request => request.type === 'open')).toHaveLength(1);
   expect(calls.at(-1)?.type).toBe('detach');
@@ -172,7 +176,7 @@ it('shows finite ambiguous sources without inferring a Bot from the active devic
   authoring = async request => request.type === 'creatorContinue' && !request.source
     ? {kind: 'creatorSourceRequired', options: [{viewId: B, botId: 'cli_author_b', botName: '相同名称'}, {viewId: A, botId: botA, botName: '相同名称'}]}
     : normal(request);
-  await openDraft(); await click('在飞书继续创作');
+  await openDraft(); await click('继续创作');
   expect(calls).toHaveLength(1);
   expect(document.querySelectorAll('.authoring-source-list button')).toHaveLength(2);
   expect(document.querySelector('.authoring-source-list')?.textContent).toContain('家里');
@@ -198,11 +202,12 @@ it('ignores an association opened after the device switches and detaches only it
 it('ignores an old account continuation receipt after another account takes over', async () => {
   let finish!: (value: DesktopAuthoringReply) => void;
   authoring = async () => new Promise(resolve => {finish = resolve;});
-  await openDraft(); await click('在飞书继续创作');
+  await openDraft(); await click('继续创作');
   status = signedIn(accountB); await draw();
-  await act(async () => finish({kind: 'creatorContinuing', accountId: accountA, viewId: A, botId: botA}));
+  await act(async () => finish({kind: 'creatorContinuing', delivery: 'delivered', retryId: challengeId, accountId: accountA, viewId: A, botId: botA, tenant: 'feishu', botName: 'Bot A'}));
   expect(document.querySelector('[role="dialog"]')).toBeNull();
   expect(text()).not.toContain(draft.public.name);
+  expect(externalCalls).toEqual([]);
 });
 
 it('routes only the current account and draft publication to the exact owned immutable version', async () => {
@@ -216,14 +221,14 @@ it('routes only the current account and draft publication to the exact owned imm
   expect(document.querySelector('.recipe-draft-page')).toBeNull();
   expect(document.querySelector('h1')?.textContent).toBe(draft.public.name);
   await click('创作新版本');
-  expect(calls).toEqual([{type: 'creatorContinue', accountId: accountA, entry: {kind: 'version', recipeId: A, versionId: B}}]);
+  expect(calls).toEqual([{type: 'creatorContinue', retryId: expect.any(String), accountId: accountA, entry: {kind: 'version', recipeId: A, versionId: B}}]);
 });
 
 it('does not let a mismatched creator receipt claim that another account or source is ready', async () => {
-  authoring = async () => ({kind: 'creatorContinuing', accountId: accountB, viewId: B, botId: 'cli_author_b'});
-  await openDraft(); await click('在飞书继续创作');
+  authoring = async () => ({kind: 'creatorContinuing', retryId: challengeId, delivery: 'delivered', accountId: accountB, viewId: B, botId: 'cli_author_b', tenant: 'lark', botName: 'Bot B'});
+  await openDraft(); await click('继续创作');
   expect(document.querySelector('[role="alert"]')?.textContent).toContain('来源已变化');
-  expect(document.body.textContent).not.toContain('可以回到 Bot 私聊');
+  expect(document.body.textContent).not.toContain('Bot 已发送');
 });
 
 it('expires a challenge before either recipient inspection or confirmation and keeps the work private', async () => {
@@ -236,35 +241,204 @@ it('expires a challenge before either recipient inspection or confirmation and k
   expect(calls.filter(request => request.type === 'beginLink')).toHaveLength(2);
 });
 
-it('opens group Share with its exact Bot and group and preserves another author original share link', async () => {
-  linked = true;
+it('keeps group settings free of recipe creation and source-version controls', async () => {
   sourceRecord = {recipeId: A, versionId: B, revision: 1, authorId: accountB, installedAt: 1, sourceToken: evidence};
-  const normal = cloud;
-  cloud = async request => {
-    if (request.type === 'detail') return {recipeId: A, versionId: B, revision: 1, public: {...draft.public, name: '原作者作品', access: 'coded'}, owned: false, acquired: true, config: draft.config};
-    if (request.type === 'shareLink') return {url: 'https://community.example/recipes/' + A + '/versions/' + B};
-    return normal(request);
-  };
   await draw(); await click('群组');
   await act(async () => document.querySelector<HTMLButtonElement>('.group-directory-identity')!.click());
   await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="设置 群聊 A 中的 Bot A"]')!.click());
-  await click('分享');
-  expect(text()).toContain('这是其他作者的作品');
-  await click('从本群准备配方');
-  expect(document.querySelector('[role="dialog"] select')).toBeNull();
-  expect(calls.filter(request => request.type === 'creatorContinue')).toEqual([{type: 'creatorContinue', accountId: accountA, entry: {kind: 'source', viewId: A, botId: botA, groupId: groupA}}]);
-  await click('完成');
-  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
-  await click('分享链接');
-  expect(navigator.clipboard.writeText).toHaveBeenCalledWith('https://community.example/recipes/' + A + '/versions/' + B);
+  expect([...document.querySelectorAll('.group-design-tabs button')].map(button => button.textContent)).not.toContain('分享');
+  expect(text()).not.toMatch(/配方来源|检查新版|忽略此版本|从本群准备配方|创作配方/);
+  expect(calls.filter(request => request.type === 'creatorContinue')).toEqual([]);
 });
 
 it('closes a continuation for an older draft revision when chat saves newer content', async () => {
-  await openDraft(); await click('在飞书继续创作');
+  await openDraft(); await click('继续创作');
   draft = {...draft, revision: 2, public: {...draft.public, name: '新内容'}};
   await act(async () => emit({type: 'authoringSaved', value: {accountId: accountA, draftId, revision: 2}}));
   await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
   expect(document.querySelector('h1')?.textContent).toBe('新内容');
-  await click('在飞书继续创作');
+  await click('继续创作');
   expect(calls.filter(request => request.type === 'creatorContinue').at(-1)).toMatchObject({entry: {kind: 'draft', draftId, revision: 2}});
+});
+
+it('opens the verified original private chat after sending the guide and retries opening without sending another card', async () => {
+  linked = true;
+  externalFailure = true;
+  await draw(); await chooseSource();
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Bot 已发送创作引导卡');
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain('Synthetic browser failure');
+  expect(externalCalls).toEqual(['https://applink.feishu.cn/client/bot/open?appId=cli_author_a']);
+  const sent = calls.filter(request => request.type === 'creatorContinue');
+  expect(sent).toHaveLength(1);
+  expect(document.querySelector('[aria-label="私聊关联命令"]')).toBeNull();
+  externalFailure = false;
+  await click('打开 Bot 私聊');
+  expect(externalCalls).toHaveLength(2);
+  expect(calls.filter(request => request.type === 'creatorContinue')).toEqual(sent);
+  expect(document.querySelector('[role="alert"]')).toBeNull();
+});
+it('continues a saved draft in its original Lark Bot even while another device is active', async () => {
+  authoring = async request => request.type === 'creatorContinue'
+    ? {kind: 'creatorContinuing', delivery: 'restored', retryId: request.retryId, accountId: accountA, viewId: B, botId: 'cli_author_b', botName: '原来源 Bot', tenant: 'lark'}
+    : defaultAuthoring(request);
+  await openDraft();
+  await click('继续创作');
+  expect(document.querySelector('[role="dialog"] select')).toBeNull();
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('原来源 Bot');
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain(draft.public.name);
+  expect(externalCalls).toEqual(['https://applink.larksuite.com/client/bot/open?appId=cli_author_b']);
+  expect(calls).toEqual([{type: 'creatorContinue', retryId: expect.any(String), accountId: accountA, entry: {kind: 'draft', draftId, revision: 1}}]);
+});
+
+it('keeps a saved draft continuation and chat-open retry bound to its source when the selected device changes', async () => {
+  await openDraft(); await click('继续创作'); await click('打开 Bot 私聊');
+  await draw(B);
+  expect(calls.filter(request => request.type === 'creatorContinue')).toHaveLength(1);
+  expect(externalCalls).toEqual(['https://applink.feishu.cn/client/bot/open?appId=cli_author_a']);
+  await click('打开 Bot 私聊');
+  expect(calls.filter(request => request.type === 'creatorContinue')).toHaveLength(1);
+  expect(externalCalls).toEqual(['https://applink.feishu.cn/client/bot/open?appId=cli_author_a', 'https://applink.feishu.cn/client/bot/open?appId=cli_author_a']);
+});
+
+it('refreshes the draft list after successful deletion', async () => {
+  const prior = cloud;
+  let deleted = false;
+  cloud = async request => {
+    if (request.type === 'deleteDraft') {deleted = true; return {draftId, deleted};}
+    if (request.type === 'drafts' && deleted) return {items: []};
+    return prior(request);
+  };
+  await openDraft(); await click('删除未发布配方'); await click('删除');
+  expect(deleted).toBe(true);
+  expect(cloudCalls.filter(r => r.type === 'drafts')).toHaveLength(2);
+  expect(document.querySelector('.community-workspace-tabs [aria-current]')?.textContent).toBe('创作中');
+  expect(document.querySelector('.community-studio-row strong')).toBeNull();
+});
+
+it('retains the original continuation across a transient stale membership read', async () => {
+  linked = true;
+  await draw(); await chooseSource();
+  expect(calls.filter(r=>r.type==='creatorContinue')).toHaveLength(1);
+  const first = snapshot(A);
+  await act(async () => emit({type:'snapshot', view:A, value:{...first,revision:2, memberships:first.memberships.map(item=>({...item,stale:true}))}}));
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Bot 已发送');
+  await act(async () => emit({type:'snapshot', view:A, value:{...first,revision:3}}));
+  expect(calls.filter(r=>r.type==='creatorContinue')).toHaveLength(1);
+  expect(externalCalls).toHaveLength(1);
+});
+
+it('preserves acquired pagination on a separate draft save', async () => {
+ const prior=cloud;
+ cloud=async request=>{
+   if(request.type==='library'){
+     const id=request.cursor?B:A;
+     return {items:[{recipeId:id,versionId:id,revision:1,public:{...draft.public,name:request.cursor?'第二页':'第一页'}}],nextCursor:request.cursor?null:B};
+   }
+   return prior(request);
+ };
+ await draw(); await click('社区'); await click('我的配方'); await click('加载更多');
+ expect(document.querySelectorAll('.community-card')).toHaveLength(2);
+ await act(async()=>emit({type:'authoringSaved',value:{accountId:accountA,draftId,revision:2}}));
+ expect(document.querySelectorAll('.community-card')).toHaveLength(2);
+ const main=document.getElementById('main-content')!;
+ main.scrollTop=320;
+ await click('创作中');
+ expect(main.scrollTop).toBe(0);
+ await click('已获取');
+ expect(main.scrollTop).toBe(320);
+ expect(document.querySelectorAll('.community-card')).toHaveLength(2);
+ expect(cloudCalls.filter(row=>row.type==='library').map(row=>row.cursor)).toEqual([undefined,B]);
+});
+
+it.each(['deliveryUnknown','lostReply'] as const)('preserves the request key and separates chat-open from send recovery after %s',async fault=>{
+  linked=true;
+  authoring=async request=>{
+    const reply=await defaultAuthoring(request);
+    if(request.type!=='creatorContinue'||reply.kind!=='creatorContinuing'||request.recover)return reply;
+    if(fault==='lostReply')throw Error('fixture lost reply');
+    return {...reply,delivery:'deliveryUnknown'};
+  };
+  await draw();await chooseSource();
+  expect(document.body.textContent).not.toContain('Bot 已发送');
+  expect(externalCalls).toEqual([]);
+  if(fault==='deliveryUnknown'){
+    await click('打开 Bot 私聊');
+    expect(calls.filter(row=>row.type==='creatorContinue')).toHaveLength(1);
+    await click('核对并重试发卡');
+  }else await click('核对上次请求');
+  const [original,recovery]=calls.filter(row=>row.type==='creatorContinue');
+  expect(original?.retryId).toEqual(expect.any(String));
+  expect(recovery).toEqual({...original,recover:fault==='deliveryUnknown'?'handoff':'request'});
+  expect(document.body.textContent).toContain('Bot 已发送');
+  expect(externalCalls).toHaveLength(fault==='deliveryUnknown'?2:1);
+});
+it('invalidates an in-flight continuation when the real group binding changes and never restarts it on another snapshot',async()=>{
+  linked=true;
+  let finish!:()=>void;
+  authoring=async request=>{
+    if(request.type==='creatorContinue')await new Promise<void>(resolve=>{finish=resolve;});
+    return defaultAuthoring(request);
+  };
+  await draw();await chooseSource();
+  const first=snapshot(A);
+  await act(async()=>emit({type:'snapshot',view:A,value:{...first,revision:2,memberships:first.memberships.map(row=>({...row,bindingIncarnation:B}))}}));
+  await act(async()=>{finish();});
+  await act(async()=>emit({type:'snapshot',view:A,value:{...first,revision:3}}));
+  expect(externalCalls).toEqual([]);
+  expect(calls.filter(row=>row.type==='creatorContinue')).toHaveLength(1);
+  expect(document.querySelector('[role="dialog"] select')).not.toBeNull();
+});
+
+it.each(['queued','restored'] as const)('distinguishes a %s draft continuation from a newly sent card',async delivery=>{
+  authoring=async request=>{
+    const reply=await defaultAuthoring(request);
+    return reply.kind==='creatorContinuing'?{...reply,delivery}:reply;
+  };
+  await openDraft();await click('继续创作');
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain(delivery==='queued'?'正在准备草稿':'已恢复原私聊中的创作卡片');
+  expect(document.body.textContent).not.toContain('Bot 已发送');
+  expect(externalCalls).toHaveLength(delivery==='queued'?0:1);
+  await click('打开 Bot 私聊');
+  expect(calls.filter(row=>row.type==='creatorContinue')).toHaveLength(1);
+});
+
+it('recovers the original handoff after the confirmation succeeded but its continuation reply was lost',async()=>{
+  let first=true;
+  authoring=async request=>{
+    if(request.type==='creatorContinue'&&first){first=false;throw Error('fixture lost reply');}
+    return defaultAuthoring(request);
+  };
+  await draw();await chooseSource();recipient=true;
+  await click('我已发送，核对收件人');await click('确认是我的私聊');
+  await click('核对上次请求');
+  const [initial,recovery]=calls.filter(row=>row.type==='creatorContinue');
+  expect(recovery).toEqual({...initial,recover:'request'});
+  expect(calls.filter(row=>row.type==='confirmLink')).toHaveLength(1);
+  expect(externalCalls).toHaveLength(1);
+});
+
+it('does not send or open again while snapshots refresh an unconfirmed handoff',async()=>{
+  linked=true;
+  authoring=async request=>{
+    const reply=await defaultAuthoring(request);
+    return reply.kind==='creatorContinuing'?{...reply,delivery:'deliveryUnknown'}:reply;
+  };
+  await draw();await chooseSource();
+  const first=snapshot(A);
+  for(const [i,stale] of [true,false,false].entries())await act(async()=>emit({type:'snapshot',view:A,value:{...first,revision:2+i,memberships:first.memberships.map(row=>({...row,stale}))}}));
+  expect(calls.filter(row=>row.type==='creatorContinue')).toHaveLength(1);
+  expect(externalCalls).toHaveLength(0);
+  expect(document.body.textContent).toContain('核对并重试发卡');
+});
+
+it('does not open a newly inferred chat when a legacy request lost both its reply and its original source',async()=>{
+  authoring=async request=>{
+    if(request.type!=='creatorContinue')return defaultAuthoring(request);
+    if(!request.recover)throw Error('fixture lost reply');
+    return {kind:'creatorUnverified',retryId:request.retryId,accountId:request.accountId};
+  };
+  await openDraft();await click('继续创作');await click('核对上次请求');
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('之前创作的私聊');
+  expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain('打开 Bot 私聊');
+  expect(externalCalls).toHaveLength(0);
 });
