@@ -8,7 +8,12 @@ import type { AccountStore } from './account-store.js';
 type PublicIdentity = Awaited<ReturnType<typeof verifyAccount>>;
 type Access = { token: string; expiresAt: number };
 type Persistence = 'secure' | 'memory';
-type Avatar = { accountId: string; url: string; dataUrl?: string; retryAt?: number };
+type Avatar = {
+  accountId: string; url: string; dataUrl?: string; retryAt?: number;
+  attempts: number; loading: boolean; controller: AbortController;
+};
+const avatarRetryDelays = [5000, 30_000] as const;
+const avatarAttemptLimit = avatarRetryDelays.length + 1;
 
 const uuidSegment = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const publicDetail = new RegExp('^/v[12]/recipes/' + uuidSegment + '/versions/' + uuidSegment + '$');
@@ -55,8 +60,10 @@ export function createAccountSession(options: {
   let writes = Promise.resolve();
   let loginActive = false;
   let avatar: Avatar | undefined;
+  let avatarTimer: ReturnType<typeof setTimeout> | undefined;
 
   function publish(next: AccountStatus) {
+    if (next.kind !== 'signedIn') clearAvatarTimer();
     if (view.kind==='signedIn' && (next.kind!=='signedIn' || next.accountId!==view.accountId)) {
       leaseOwner.abort(); leaseOwner=new AbortController();
     }
@@ -71,6 +78,15 @@ export function createAccountSession(options: {
     writes = run.then(() => {}, () => {});
     return run;
   }
+  function clearAvatarTimer() {
+    clearTimeout(avatarTimer);
+    avatarTimer = undefined;
+  }
+  function discardAvatar() {
+    clearAvatarTimer();
+    avatar?.controller.abort();
+    avatar = undefined;
+  }
   function invalidate() {
     leaseOwner.abort(); leaseOwner=new AbortController();
     owner.abort();
@@ -80,7 +96,7 @@ export function createAccountSession(options: {
     access = undefined;
     refreshing = undefined;
     loginActive = false;
-    avatar = undefined;
+    discardAvatar();
     return owner.signal;
   }
   function schedule(signal: AbortSignal, ms: number) {
@@ -88,22 +104,58 @@ export function createAccountSession(options: {
     timer = setTimeout(() => { if (!signal.aborted) void refresh(signal); }, Math.min(2_147_483_647, Math.max(1000, ms)));
     timer.unref();
   }
+  function currentAvatar(current: Avatar, signal: AbortSignal) {
+    return !signal.aborted && avatar === current && credential?.accountId === current.accountId &&
+      view.kind === 'signedIn' && view.accountId === current.accountId;
+  }
+  function scheduleAvatar(current: Avatar, signal: AbortSignal, ms: number) {
+    clearAvatarTimer();
+    if (!currentAvatar(current, signal) || current.attempts >= avatarAttemptLimit) return;
+    const scheduled = setTimeout(() => {
+      if (avatarTimer !== scheduled) return;
+      avatarTimer = undefined;
+      if (currentAvatar(current, signal)) loadAvatar(current, signal);
+    }, Math.min(2_147_483_647, Math.max(0, ms)));
+    avatarTimer = scheduled;
+    avatarTimer.unref();
+  }
+  function loadAvatar(current: Avatar, signal: AbortSignal) {
+    if (!currentAvatar(current, signal) || current.loading || current.dataUrl) return;
+    clearAvatarTimer();
+    current.loading = true;
+    current.attempts++;
+    void fetchAccountAvatar(current.url, AbortSignal.any([signal, current.controller.signal]), transport).then(dataUrl => {
+      current.loading = false;
+      if (signal.aborted || avatar !== current) return;
+      if (!dataUrl) {
+        const delay = avatarRetryDelays[current.attempts - 1] ?? 60_000;
+        current.retryAt = Date.now() + delay;
+        scheduleAvatar(current, signal, delay);
+        return;
+      }
+      current.retryAt = undefined;
+      current.dataUrl = dataUrl;
+      if (view.kind === 'signedIn' && currentAvatar(current, signal)) publish({ ...view, avatarDataUrl: dataUrl });
+    });
+  }
   function ready(record: AccountCredential, verified: PublicIdentity, token: Access, persistence: Persistence, signal: AbortSignal) {
     credential = record;
     access = token;
     schedule(signal, token.expiresAt - Date.now() - 60_000);
-    if (avatar?.accountId !== verified.accountId || avatar?.url !== verified.avatarUrl) avatar = undefined;
+    if (avatar?.accountId !== verified.accountId || avatar?.url !== verified.avatarUrl) discardAvatar();
     publish({ kind: 'signedIn', ...verified, provider: record.provider, persistence,
       ...(avatar?.dataUrl ? { avatarDataUrl: avatar.dataUrl } : {}) });
-    if (!verified.avatarUrl || (avatar && (avatar.retryAt === undefined || avatar.retryAt > Date.now()))) return;
-    const current: Avatar = { accountId: verified.accountId, url: verified.avatarUrl };
-    avatar = current;
-    void fetchAccountAvatar(current.url, signal, transport).then(dataUrl => {
-      if (signal.aborted || avatar !== current) return;
-      if (!dataUrl) { current.retryAt = Date.now() + 60_000; return; }
-      current.dataUrl = dataUrl;
-      if (view.kind === 'signedIn' && view.accountId === current.accountId) publish({ ...view, avatarDataUrl: dataUrl });
-    });
+    if (signal.aborted || !verified.avatarUrl) return;
+    const current = avatar ??= { accountId: verified.accountId, url: verified.avatarUrl,
+      attempts: 0, loading: false, controller: new AbortController() };
+    if (current.dataUrl || current.loading) return;
+    if (current.retryAt !== undefined && current.retryAt > Date.now()) {
+      scheduleAvatar(current, signal, current.retryAt - Date.now());
+      return;
+    }
+    // A later verified refresh can begin another bounded attempt series after its cooldown.
+    if (current.attempts >= avatarAttemptLimit) current.attempts = 0;
+    loadAvatar(current, signal);
   }
 
   function refresh(signal: AbortSignal): Promise<void> {
