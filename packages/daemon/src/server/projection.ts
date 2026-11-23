@@ -6,7 +6,7 @@ import type { AdminState } from './state';
 
 /** One project row as a client reads it: a group's binding, or the private chat beside them. */
 function membershipOf(agentId: Agent['id'], project: AdminProject): Membership {
-  return { id: membershipIdSchema.parse(JSON.stringify([agentId, project.chatId])), agentId, groupId: groupIdSchema.parse(project.chatId), name: project.name, directory: project.cwd, ...(projectIdSchema.safeParse(project.projectId).success ? { projectId: projectIdSchema.parse(project.projectId) } : {}), ...(project.directoryProblem ? { directoryProblem: project.directoryProblem } : {}), backend: project.backend, ...(project.enabled === undefined ? {} : { enabled: project.enabled }), conversation: modeToConversation(project.kind), effectMode: groupPermission(project).effect.mode, response: project.noMention ? 'all' : 'mention', permission: { administrator: project.mode, member: project.mode, network: project.network }, stale: false };
+  return { id: membershipIdSchema.parse(JSON.stringify([agentId, project.chatId])), agentId, groupId: groupIdSchema.parse(project.chatId), name: project.name, directory: project.cwd, ...(project.bindingIncarnation && {bindingIncarnation:project.bindingIncarnation}), ...(projectIdSchema.safeParse(project.projectId).success ? { projectId: projectIdSchema.parse(project.projectId) } : {}), ...(project.directoryProblem ? { directoryProblem: project.directoryProblem } : {}), backend: project.backend, ...(project.enabled === undefined ? {} : { enabled: project.enabled }), conversation: modeToConversation(project.kind), effectMode: groupPermission(project).effect.mode, response: project.noMention ? 'all' : 'mention', permission: { administrator: project.mode, member: project.mode, network: project.network }, stale: false };
 }
 
 // Ported from desktop/main/projection.ts at fab5237.
@@ -27,6 +27,7 @@ export function projectState(state: AdminState, previous: DesktopSnapshot, pendi
     agents.push({
       id: agentId, name: bot.botName || bot.name,
       ...(bot.badgeNumber ? { badgeNumber: bot.badgeNumber } : {}),
+      ...(bot.registrationId && {registrationId:bot.registrationId}),
       ...(bot.registeredAt !== undefined ? { registeredAt: bot.registeredAt } : {}),
       ...(bot.ownerName ? { ownerName: bot.ownerName } : {}),
       ...(bot.tenant ? { tenant: bot.tenant } : {}),

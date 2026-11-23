@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir, networkInterfaces } from 'node:os';
-import { CLOSE_CODES, DRAIN_KINDS, PROTOCOL_VERSION, rpcKindOf, serverInfoSessionSchema, serverInfoV1Schema, serverInfoV2Schema, type Request, type Response } from '@vonvon/protocol';
+import { recipeAuthoringReplySchema, CLOSE_CODES, DRAIN_KINDS, PROTOCOL_VERSION, rpcKindOf, serverInfoSessionSchema, serverInfoV1Schema, serverInfoV2Schema, type Request, type Response } from '@vonvon/protocol';
 import type { AdminService } from '../admin/service';
 import type { ShutdownControl } from '../host/lifecycle';
 import { createServiceActionLauncher } from '../host/service-action';
@@ -53,6 +53,9 @@ import { getPidLockInfo, type PidLockInfo } from './pid-lock';
 import { runtimeDistribution } from '../service/distribution';
 import { EnvironmentService, type EnvironmentServiceOptions } from '../environment/service';
 import { refreshCodexResolution } from '../agent/codex-appserver/locate';
+import { RecipeInstaller } from '../recipe/installer';
+import { recipeInstallRpc } from './rpc/recipe-install';
+import { configuredRecipeApiOrigin } from '../config/account-deployment';
 
 export interface ApiLifetime {
   beginDrain(): Promise<void>;
@@ -119,7 +122,7 @@ export const viewFor = (tokens: Pick<SessionTokens, 'active'>): PeerView => (pee
  * `askBot`: a session's Bot process, asked about a ★ request (devices-4b 4.3); without it those are refused. `distribution`:
  * how this daemon was installed, for serverInfo's `update.*` (devices-ui-2 4.11).
  */
-export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl; environmentOptions?: EnvironmentServiceOptions; serviceActions?: ServiceSeams; bridgeImport?: BridgeImporter; diagnostics?: Parameters<typeof createSnapshotStore>[0]['diagnostics']; crashes?: Parameters<typeof createSnapshotStore>[0]['crashes']; startedAt?: number; sessionTokens?: SessionTokens; askBot?: AuthzDeps['askBot']; remote?: RemoteSeams; distribution?: () => Promise<{ kind: string }> }): Promise<DaemonApi> {
+export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl; environmentOptions?: EnvironmentServiceOptions; serviceActions?: ServiceSeams; bridgeImport?: BridgeImporter; diagnostics?: Parameters<typeof createSnapshotStore>[0]['diagnostics']; crashes?: Parameters<typeof createSnapshotStore>[0]['crashes']; startedAt?: number; sessionTokens?: SessionTokens; askBot?: AuthzDeps['askBot']; remote?: RemoteSeams; distribution?: () => Promise<{ kind: string }>; recipeInstall?: {brokerOrigin?:string; apiOrigin: string; allowLoopbackForTests?: boolean} }): Promise<DaemonApi> {
   const startedAt = options.startedAt ?? Math.round(performance.timeOrigin);
   // How this daemon was installed, read once (it may ask npm) and kept; until it is known the server info says nothing of updates.
   let distribution: string | undefined;
@@ -242,6 +245,17 @@ export async function startApi(options: { service: AdminService; port?: number; 
     });
     const { credential, machineId } = await createLocalIdentity(paths.appDir);
     const identity = holdDevice(paths.appDir, await loadOrCreateDevice(paths.appDir, machineId));
+    const recipeOrigin = options.recipeInstall?.apiOrigin ?? configuredRecipeApiOrigin();
+    const recipes = recipeOrigin && !options.service.readonlyPreview ? new RecipeInstaller({
+      ...(options.service.richRecipe ? {rich: {brokerOrigin: options.recipeInstall?.brokerOrigin ?? recipeOrigin, bot: options.service.richRecipe}} : {}),
+      apiOrigin: recipeOrigin, allowLoopbackForTests: options.recipeInstall?.allowLoopbackForTests, device: identity.current,
+      isInChat: async (botId, chatId, identity) => {
+        if (!options.service.assertGroupMembership) throw new Error('无法确认 Bot 群成员身份');
+        await options.service.assertGroupMembership(botId, chatId, identity);
+      },
+    }) : undefined;
+    const authoringBots = new WeakMap<Peer, Set<string>>();
+    const authoringPeer = (peer: Peer) => ({id: peer.id, device: identity.current.deviceId + '/' + identity.current.keypair.publicKey});
     const clients = acquiredClients = await createClientRegistry(paths.appDir);
     const invites = createInviteBook();
     const directory = acquiredDirectory = await createDirectoryBrowser();
@@ -302,6 +316,17 @@ export async function startApi(options: { service: AdminService; port?: number; 
           origin: peer.clientKind === 'cli' ? 'cli' : 'ui', session: peer.principal.kind === 'bot-session', ...(decision.grant?.memory ? { landing: decision.grant.memory } : {}),
         }), payload => ({ type: 'response', id, method: 'memory', payload: shown(payload) }));
         case 'contextPreview': return finish(peer, await contextPreviewRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'contextPreview', payload }));
+        case 'recipeAuthoring': {
+          if (peer.principal.kind !== 'owner' || peer.clientKind !== 'desktop' || !peer.open) throw new RpcError('permission_denied', '请从已连接设备的 Vonvon App 操作配方草稿。');
+          if (options.service.readonlyPreview || !options.service.recipeAuthoring) throw new RpcError('unsupported', '此设备尚未配置配方草稿。');
+          const bots = authoringBots.get(peer) ?? new Set<string>();
+          if (!bots.has(request.payload.botId) && bots.size >= 64) throw new RpcError('invalid_request', '这个连接已达到 Bot 数量上限。');
+          if (request.payload.type === 'open') { bots.add(request.payload.botId); authoringBots.set(peer,bots); }
+          const value = await options.service.recipeAuthoring(request.payload.botId, {kind:'recipeAuthoring',peer:authoringPeer(peer),request:request.payload});
+          peer.send({type:'response',id,method:'recipeAuthoring',payload:recipeAuthoringReplySchema.parse(value)});
+          return;
+        }
+        case 'recipeInstall': return finish(peer, await recipeInstallRpc(recipes, peer.principal, request.payload), payload => ({type: 'response', id, method: 'recipeInstall', payload}));
         // The owner's hello says who asks: the task records it as made from the desktop or the terminal. A Bot session's
         // runs as the turn its Bot process named (devices-4b 4.4), and never as the owner.
         case 'schedule': {
@@ -382,7 +407,10 @@ export async function startApi(options: { service: AdminService; port?: number; 
     // devices-ui-3 4.2: whose a scan is, so the same client coming back on a new connection keeps it (`attached`).
     const ownerOf = (peer: Peer) => peerOwner(peer, clients, identity.current.name);
     const hub = createPeerHub({
-      detached: peer => { jobs.detach(peer); logs.detach(peer); if (hub.state === 'open') bundled.shellDetached(peer); },
+      detached: peer => {
+        for (const botId of authoringBots.get(peer) ?? []) void options.service.recipeAuthoring?.(botId, {kind:'recipeAuthoringDisconnect',peer:authoringPeer(peer)}).catch(() => undefined);
+        authoringBots.delete(peer);
+        jobs.detach(peer); logs.detach(peer); if (hub.state === 'open') bundled.shellDetached(peer); },
       attached: peer => { jobs.attach(peer, ownerOf(peer)); },
       view: viewFor(sessionTokens),
     });

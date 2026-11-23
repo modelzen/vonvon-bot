@@ -105,6 +105,7 @@ export function nextRunAfterFailure(job: ScheduledJob): boolean {
 }
 
 export function createScheduler(deps: {
+  acquireTask?:(task:StoredTask)=>(()=>void);
   store: ScheduleStore; now: () => number; timers: Timers;
   run: (job: ScheduledJob) => Promise<ScheduledOutcome>;
   gate: (chatId: string, task: Pick<StoredTask, 'createdBy'>) => Gate;
@@ -571,6 +572,9 @@ export function createScheduler(deps: {
 
   /** Writes `inflight` (and, for a scheduled slot, the cursor) in one write; run() is called only after it is on disk. */
   async function claim(task: StoredTask, slot: number, runId: string, trigger: Trigger): Promise<void> {
+    const release=deps.acquireTask?.(task);
+    let launched=false;
+    try {
     const isManual = trigger === 'manual';
     const job = await write((draft): ScheduledJob | undefined => {
       const current = draft.tasks.find(t => t.id === task.id);
@@ -591,7 +595,8 @@ export function createScheduler(deps: {
     if (isManual && manual.get(task.id)?.runId === runId) manual.delete(task.id);
     lastLaunch = now();
     executing.add(runId);
-    track(execute(job));
+    track(execute(job).finally(()=>release?.()));launched=true;
+    } finally {if(!launched)release?.();}
   }
 
   /** A manual run the gate refuses: recorded like a run that ended at once (skipped, or a counted failure). */
