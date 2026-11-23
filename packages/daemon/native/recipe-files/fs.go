@@ -22,6 +22,7 @@ type held struct {
 	meta   metadata
 	name   string
 	parent *held
+	digest string
 }
 type access int
 
@@ -40,7 +41,15 @@ func adopt(f *os.File, name string, parent *held, mode access) (*held, error) {
 		f.Close()
 		return nil, refused
 	}
-	return &held{f, m, name, parent}, nil
+	h := &held{file: f, meta: m, name: name, parent: parent}
+	if mode == read {
+		h.digest, e = h.contentDigest()
+		if e != nil || h.check() != nil {
+			f.Close()
+			return nil, refused
+		}
+	}
+	return h, nil
 }
 func child(parent *held, name string, mode access) (*held, error) {
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\:\x00") {
@@ -57,6 +66,12 @@ func (h *held) check() error {
 	if e != nil || m.id != h.meta.id || (!m.directory && m != h.meta) {
 		return refused
 	}
+	if h.digest != "" {
+		digest, e := h.contentDigest()
+		if e != nil || digest != h.digest {
+			return refused
+		}
+	}
 	if h.parent != nil {
 		if !sameEntry(h.parent.file, h.name, h.meta) {
 			return refused
@@ -65,13 +80,24 @@ func (h *held) check() error {
 	}
 	return nil
 }
+func (h *held) contentDigest() (string, error) {
+	if h.meta.directory || h.meta.size < 0 || h.meta.size > logicalCap {
+		return "", refused
+	}
+	digest := sha256.New()
+	n, e := io.Copy(digest, io.NewSectionReader(h.file, 0, h.meta.size+1))
+	if e != nil || n != h.meta.size {
+		return "", refused
+	}
+	return fmt.Sprintf("%x", digest.Sum(nil)), nil
+}
 func (h *held) close() { h.file.Close() }
 func (h *held) bytes(limit int64) ([]byte, error) {
 	if h.meta.directory || h.meta.size > limit || h.meta.size < 0 {
 		return nil, refused
 	}
-	b, e := io.ReadAll(io.LimitReader(h.file, h.meta.size+1))
-	if e != nil || int64(len(b)) != h.meta.size {
+	b, e := io.ReadAll(io.NewSectionReader(h.file, 0, h.meta.size+1))
+	if e != nil || int64(len(b)) != h.meta.size || hash(b) != h.digest {
 		return nil, refused
 	}
 	return b, h.check()
