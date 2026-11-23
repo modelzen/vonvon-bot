@@ -76,7 +76,10 @@ it('reconciles a committed save whose response was lost and permits reverting it
   await draw(); await fill('想撤回的署名'); await click('保存署名');
   expect(cloud).toBe('想撤回的署名');
   expect(requests.map(request => request.type)).toEqual(['profile', 'saveProfile', 'profile']);
-  expect(document.body.textContent).toContain('已重新核对云端署名');
+  expect(document.body.textContent).toContain('当前读到的云端署名');
+  expect(document.body.textContent).toContain('保存结果尚未确认');
+  expect(button('重新读取').disabled).toBe(false);
+  expect(button('保存署名').disabled).toBe(false);
   await fill('旧署名'); expect(button('保存署名').disabled).toBe(false);
   await click('保存署名'); expect(cloud).toBe('旧署名');
 });
@@ -89,12 +92,18 @@ it('allows explicit overwrite of an uncertain remote value and read-only retry',
   };
   await draw(); await fill('新署名'); await click('保存署名');
   expect(document.body.textContent).toContain('保存结果尚未确认');
+  await click('重新读取');
+  expect(document.body.textContent).toContain('暂时无法读取云端署名');
+  expect(document.body.textContent).toContain('保存结果尚未确认');
+  expect(document.querySelector('input')!.value).toBe('新署名');
+  expect(button('重新读取').disabled).toBe(false);
   await fill('旧署名'); expect(button('保存署名').disabled).toBe(false);
   await click('保存署名'); expect(cloud).toBe('旧署名');
   expect(requests.filter(request => request.type === 'saveProfile')).toHaveLength(2);
   offline = false; await click('重新读取');
-  expect(document.body.textContent).not.toContain('保存结果尚未确认');
-  expect(button('保存署名').disabled).toBe(true);
+  expect(document.body.textContent).toContain('保存结果尚未确认');
+  expect(button('保存署名').disabled).toBe(false);
+  expect(document.querySelector('input')!.value).toBe('旧署名');
   expect(requests.filter(request => request.type === 'saveProfile')).toHaveLength(2);
 });
 it('discards late reconciliation after switching accounts', async () => {
@@ -105,4 +114,37 @@ it('discards late reconciliation after switching accounts', async () => {
   await act(async () => check.resolve({authorId: accountId, displayName: '迟到署名'}));
   expect(document.querySelector('input')!.value).toBe('另一署名');
   expect(document.body.textContent).not.toContain('已重新核对');
+});
+
+it('keeps recovery available when a lost save commits after the follow-up read', async () => {
+  let cloud = '旧署名';
+  let commit = () => {};
+  handle = async request => {
+    if (request.type === 'saveProfile') {
+      commit = () => {cloud = request.displayName;};
+      throw new Error('connection closed after request was accepted');
+    }
+    return {authorId: accountId, displayName: cloud};
+  };
+  await draw(); await fill('想撤回的署名'); await click('保存署名');
+  expect(cloud).toBe('旧署名');
+  expect(document.body.textContent).toContain('当前读到的云端署名为「旧署名」');
+  commit();
+  await fill('旧署名');
+  expect(button('保存署名').disabled).toBe(false);
+  expect(button('重新读取').disabled).toBe(false);
+  await click('重新读取');
+  expect(document.body.textContent).toContain('当前读到的云端署名为「想撤回的署名」');
+  expect(document.body.textContent).toContain('保存结果尚未确认');
+  expect(document.querySelector('input')!.value).toBe('旧署名');
+  handle = async request => {
+    if (request.type === 'saveProfile') cloud = request.displayName;
+    return {authorId: accountId, displayName: cloud};
+  };
+  await click('保存署名');
+  expect(cloud).toBe('旧署名');
+  expect(document.body.textContent).toContain('公开署名已保存');
+  expect(document.body.textContent).not.toContain('保存结果尚未确认');
+  expect(button('保存署名').disabled).toBe(true);
+  expect(requests.map(request => request.type)).toEqual(['profile', 'saveProfile', 'profile', 'profile', 'saveProfile']);
 });

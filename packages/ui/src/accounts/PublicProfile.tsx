@@ -31,21 +31,20 @@ export function PublicProfile({accountId, shell}: {accountId: string; shell: Com
   }, [accountId, shell, attempt]);
   const parsed = publicDisplayNameSchema.safeParse(name);
   const invalid = !parsed.success ? '请输入 1–60 个字，不含 @ 或控制字符。' : undefined;
-  async function confirmSaved(generation: number) {
+  async function readUncertainProfile(generation: number) {
     try {
       const profile = await shell.request({type: 'profile', accountId});
       if (active.current !== generation) return;
-      setState({kind: 'ready', saved: profile.displayName});
-      setFeedback(`已重新核对云端署名为「${profile.displayName}」。当前输入与云端不同时，可以保存覆盖。`);
+      setFeedback(`当前读到的云端署名为「${profile.displayName}」。原保存请求仍可能完成，请明确保存希望使用的署名。`);
     } catch {
-      if (active.current === generation) setState({kind: 'unknown'});
+      if (active.current === generation) setFeedback('暂时无法读取云端署名。可以重新读取，或明确保存当前输入。');
     }
   }
   async function reread() {
     if (saving.current) return;
     const generation = active.current;
     saving.current = true; setPending(true);
-    try {await confirmSaved(generation);}
+    try {await readUncertainProfile(generation);}
     finally {if (active.current === generation) {saving.current = false; setPending(false);}}
   }
   async function save() {
@@ -59,7 +58,7 @@ export function PublicProfile({accountId, shell}: {accountId: string; shell: Com
     } catch {
       if (active.current !== generation) return;
       setState({kind: 'unknown'}); setFeedback(undefined);
-      await confirmSaved(generation);
+      await readUncertainProfile(generation);
     }
     finally {if (active.current === generation) {saving.current = false; setPending(false);}}
   }
