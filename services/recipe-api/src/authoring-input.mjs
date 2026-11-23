@@ -66,7 +66,7 @@ export function authoringInput(action, id, body) {
     } else if (Object.hasOwn(body,'draftId') || Object.hasOwn(body,'baseRevision')) throw badInput();
     return [id,body];
   }
-  if (action === 'getAuthoring' || action === 'cancelAuthoring') { objectKeys(body,[]); return [id]; }
+  if (action === 'recoverAuthoring' || action === 'getAuthoring' || action === 'cancelAuthoring') { objectKeys(body,[]); return [id]; }
   if (action === 'authorizeAuthoring') {
     objectKeys(body,['stage','payloadDigest','stateRevision']);
     if (!['dispatch','accept'].includes(body.stage) || !/^[0-9a-f]{64}$/.test(body.payloadDigest) ||
