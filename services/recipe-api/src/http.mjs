@@ -140,53 +140,57 @@ function discardBody(req) {
   });
 }
 
-export function createRecipeServer({ verify, execute, admitRich=false, attempts = codeAttempts(), publicationRead }) {
-  const server = createServer({ maxHeaderSize: 16 * 1024, requestTimeout: 15_000, headersTimeout: 10_000 },
-    async (req, res) => {
-      res.setHeader('Cache-Control', 'private, no-store');
-      res.setHeader('Content-Type', 'application/json; charset=utf-8');
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      let finishAttempt;
-      try {
-        if (!req.url.startsWith('/') || req.url.startsWith('//')) throw badInput();
-        const url = new URL(req.url, 'http://localhost');
-        const receipt=receiptRoute(req.method,url.pathname);
-        const creator=creatorRoute(req.method,url.pathname);
-        const rich=/^(?:\/api)?\/v2\//.test(url.pathname);
-        const v2=rich ? await import('./rich-http.mjs') : null;
-        const reader = rich ? readerRoute(req.method,url.pathname) : undefined;
-        const route = receipt ?? creator ?? reader ?? (rich ? v2.richRoute(req.method,url.pathname,admitRich) : identify(req, url));
-        if (route.isPublic === 'possession' && req.headersDistinct.authorization) throw badInput();
-        const identity = route.isPublic === 'possession' ? null : await identityFromRequest(req, route.isPublic, verify);
-        const [operation, args] = await (receipt?receiptInput:creator?creatorInput:reader?readerInput:rich?v2.richInput:inputFor)(req, url, route);
-        if(operation==='richPublish'||operation==='richPublishInto'){
-          const descriptions=await publicationDescriptions(args,{authorization:req.headersDistinct.authorization[0],read:publicationRead,
-            committed:({draftId,revision,requestId,contentSha256})=>execute(identity,'publicationReceipt',['rich-v2',requestId,draftId,revision,contentSha256]),
-            currentDraft:draftId=>execute(identity,'richDraft',[draftId])});
-          if(descriptions)args.push(descriptions);
-        }
-        if (['redeem','readerRedeem'].includes(route.action)) finishAttempt = attempts.begin(identity.issuer + '\0' + identity.subject);
-        const result = readerOutput(req,operation,await execute(identity, operation, args));
-        const response = JSON.stringify(result);
-        finishAttempt?.(false);
-        finishAttempt = undefined;
-        res.end(response);
-      } catch (err) {
-        finishAttempt?.(err.code === 'invalid_code');
-        const problem = err instanceof ApiError ? err : new ApiError(500, 'internal_error');
-        if (problem.status === 401) res.setHeader('WWW-Authenticate', 'Bearer');
-        if (problem.status === 413 || !req.complete) res.setHeader('Connection', 'close');
-        if (problem.retryAfter) res.setHeader('Retry-After', problem.retryAfter);
-        const response = JSON.stringify({ error: { code: problem.code, field: problem.field } });
-        res.setHeader('Content-Length', Buffer.byteLength(response));
-        res.writeHead(problem.status);
-        if (problem.status === 413) {
-          res.write(response);
-          await discardBody(req);
-          res.end();
-        } else res.end(response);
+export function createRecipeRequestHandler({ verify, execute, admitRich=false, attempts = codeAttempts(), publicationRead, normalizeAvatar }) {
+  return async (req, res) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    let finishAttempt;
+    try {
+      if (!req.url.startsWith('/') || req.url.startsWith('//')) throw badInput();
+      const url = new URL(req.url, 'http://localhost');
+      const receipt=receiptRoute(req.method,url.pathname);
+      const creator=creatorRoute(req.method,url.pathname);
+      const rich=/^(?:\/api)?\/v2\//.test(url.pathname);
+      const v2=rich ? await import('./rich-http.mjs') : null;
+      const reader = rich ? readerRoute(req.method,url.pathname) : undefined;
+      const route = receipt ?? creator ?? reader ?? (rich ? v2.richRoute(req.method,url.pathname,admitRich) : identify(req, url));
+      if (route.isPublic === 'possession' && req.headersDistinct.authorization) throw badInput();
+      const identity = route.isPublic === 'possession' ? null : await identityFromRequest(req, route.isPublic, verify);
+      const [operation, args] = await (receipt?receiptInput:creator?creatorInput:reader?readerInput:rich?v2.richInput:inputFor)(req, url, route, normalizeAvatar);
+      if(operation==='richPublish'||operation==='richPublishInto'){
+        const descriptions=await publicationDescriptions(args,{authorization:req.headersDistinct.authorization[0],read:publicationRead,
+          committed:({draftId,revision,requestId,contentSha256})=>execute(identity,'publicationReceipt',['rich-v2',requestId,draftId,revision,contentSha256]),
+          currentDraft:draftId=>execute(identity,'richDraft',[draftId])});
+        if(descriptions)args.push(descriptions);
       }
-    });
+      if (['redeem','readerRedeem'].includes(route.action)) finishAttempt = attempts.begin(identity.issuer + '\0' + identity.subject);
+      const result = readerOutput(req,operation,await execute(identity, operation, args));
+      const response = JSON.stringify(result);
+      finishAttempt?.(false);
+      finishAttempt = undefined;
+      res.end(response);
+    } catch (err) {
+      finishAttempt?.(err.code === 'invalid_code');
+      const problem = err instanceof ApiError ? err : new ApiError(500, 'internal_error');
+      if (problem.status === 401) res.setHeader('WWW-Authenticate', 'Bearer');
+      if (problem.status === 413 || !req.complete) res.setHeader('Connection', 'close');
+      if (problem.retryAfter) res.setHeader('Retry-After', problem.retryAfter);
+      const response = JSON.stringify({ error: { code: problem.code, field: problem.field } });
+      res.setHeader('Content-Length', Buffer.byteLength(response));
+      res.writeHead(problem.status);
+      if (problem.status === 413) {
+        res.write(response);
+        await discardBody(req);
+        res.end();
+      } else res.end(response);
+    }
+  };
+}
+
+export function createRecipeServer(options) {
+  const server = createServer({ maxHeaderSize: 16 * 1024, requestTimeout: 15_000, headersTimeout: 10_000 },
+    createRecipeRequestHandler(options));
   server.keepAliveTimeout = 5_000;
   return server;
 }

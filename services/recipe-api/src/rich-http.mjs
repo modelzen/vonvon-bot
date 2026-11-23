@@ -4,7 +4,6 @@ import {ApiError,badInput} from './errors.mjs';
 import {publicationDestination,bodyJson,expectedRevision,objectKeys,queryParams,requestKey,uuid} from './input.mjs';
 import {binary32} from './install-proof.mjs';
 import {operationId} from './operation-input.mjs';
-import {normalizeLogo} from './logo.mjs';
 import {richWireBytes,parseRichPayload} from './rich-document.mjs';
 
 const routes=[
@@ -38,7 +37,12 @@ function wireBytes(raw,max=1048576) {
 export function readDocument(raw) {
   try{return decodeRichRecipeContent(wireBytes(raw));}catch{throw badInput();}
 }
-export async function richInput(req,url,{action,ids:[id,...other]}) {
+async function decodeAccountAvatar(bytes) {
+  const { normalizeLogo } = await import('./logo.mjs');
+  return normalizeLogo(bytes);
+}
+
+export async function richInput(req,url,{action,ids:[id,...other]},normalizeAvatar=decodeAccountAvatar) {
   if(action==='richAuthorRecipes'){
     const {cursor}=queryParams(url,['cursor']);return [action,[id,cursor]];
   }
@@ -115,7 +119,7 @@ export async function richInput(req,url,{action,ids:[id,...other]}) {
     if(avatar.data.kind==='replace'){
       const bytes=Buffer.from(avatar.data.base64,'base64');
       if(bytes.toString('base64')!==avatar.data.base64||bytes.length>2097152)throw badInput();
-      data='data:image/webp;base64,'+(await normalizeLogo(bytes)).toString('base64');
+      data='data:image/webp;base64,'+(await normalizeAvatar(bytes)).toString('base64');
     }
     return ['richAccountProfile',[name.data,avatar.data.kind,data,b.revision??null]];
   }

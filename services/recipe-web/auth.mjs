@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { AuthClient } from '@supabase/auth-js';
+import { createAuthMap } from './auth-state.mjs';
 import {oauthCallback, oauthProviders, validOAuthAuthorizeUrl} from './oauth-provider.mjs';
 
 const minute = 60_000;
@@ -74,9 +75,13 @@ export function createLoginAdmission({ now = Date.now } = {}) {
   };
 }
 
-export function createLogin({ publicOrigin, accountOrigin, supabaseOrigin, publishableKey, providerNames, verifyIdentity }) {
+export function createLogin({ publicOrigin, accountOrigin, supabaseOrigin, publishableKey, providerNames, verifyIdentity, authStorage, authFetch = globalThis.fetch }) {
   const available = supabaseOrigin && publishableKey ? oauthProviders(providerNames) : [];
-  const flows = new Map(), sessions = new Map(), links = new Map();
+  const flows = createAuthMap('web-flows', authStorage, value => value.deadline);
+  const sessions = createAuthMap('web-sessions', authStorage, value => value.deadline, {
+    encode: ({refreshing: _refreshing, ...session}) => session,
+  });
+  const links = createAuthMap('account-links', authStorage, value => value.deadline);
   const admit = createLoginAdmission();
   const secure = new URL(publicOrigin).protocol === 'https:';
   const flowName = secure ? '__Host-vv-flow' : 'vv-local-flow';
@@ -89,21 +94,27 @@ export function createLogin({ publicOrigin, accountOrigin, supabaseOrigin, publi
     if (session && session.deadline > Date.now()) return session;
     sessions.delete(key);
   };
-  const purge = setInterval(() => {
-    for (const map of [flows, sessions, links]) {
-      for (const [key, value] of map) if (value.deadline <= Date.now()) map.delete(key);
-    }
-  }, minute);
-  purge.unref();
+  const prune = () => {
+    const now = Date.now();
+    for (const map of [flows, sessions, links]) map.prune(now);
+  };
+  const purge = authStorage ? null : setInterval(prune, minute);
+  purge?.unref();
 
-  function authClient(deadline) {
+  function authClient(deadline, sdkValues, storageKey) {
+    const storage = sdkValues && {
+      getItem: key => sdkValues[key] ?? null,
+      setItem: (key, value) => { sdkValues[key] = value; },
+      removeItem: key => { delete sdkValues[key]; },
+    };
     return new AuthClient({
       url: supabaseOrigin + '/auth/v1', headers: {apikey: publishableKey},
-      flowType: 'pkce', persistSession: false, detectSessionInUrl: false, autoRefreshToken: false, skipAutoInitialize: true,
+      flowType: 'pkce', persistSession: Boolean(storage), ...(storage && {storage, storageKey}),
+      detectSessionInUrl: false, autoRefreshToken: false, skipAutoInitialize: true,
       fetch: (url, options) => {
         // A timed-out refresh may still be in the SDK's retry delay. Don't send it again.
         if (deadline?.aborted) return Promise.resolve(Response.json({message: 'Login request timed out'}, {status: 408}));
-        return fetch(url, {...options, redirect: 'error', credentials: 'omit', cache: 'no-store',
+        return authFetch(url, {...options, redirect: 'error', credentials: 'omit', cache: 'no-store',
           signal: deadline ?? AbortSignal.timeout(tokenRequestTimeout)});
       },
     });
@@ -145,6 +156,7 @@ export function createLogin({ publicOrigin, accountOrigin, supabaseOrigin, publi
   function attachSession(req, res, access, identity, accessUntil, provider) {
     const previous = getSession(req);
     if (previous?.accountId === identity.accountId && previous.deadline >= accessUntil - 15000) return;
+    if (authStorage && sessions.size >= 4096) prune();
     if (sessions.size >= 4096) throw new WebError(429, 'busy');
     const id = random(), deadline = accessUntil - 15000;
     sessions.delete(cookieValue(req, sessionName));
@@ -164,6 +176,7 @@ export function createLogin({ publicOrigin, accountOrigin, supabaseOrigin, publi
     },
     accountLink(access, identity) {
       admit();
+      if (authStorage) prune();
       if (links.size >= 1024) throw new WebError(429, 'busy');
       // The API verified this JWT before the link was issued. Its expiry also bounds the browser session.
       const accessUntil = Math.min(verifiedExpiry(access), Date.now() + 15 * minute);
@@ -178,6 +191,7 @@ export function createLogin({ publicOrigin, accountOrigin, supabaseOrigin, publi
       if (!input.confirm) return {displayName: item.identity.displayName, accountId: item.identity.accountId,
         displaySession: previous?.displaySession ?? null};
       if (input.displaySession !== (previous?.displaySession ?? null)) throw new WebError(409, 'session_changed');
+      if (authStorage && sessions.size >= 4096) prune();
       if (sessions.size >= 4096) throw new WebError(429, 'busy');
       const identity = await verifyIdentity(item.access);
       if (identity.accountId !== item.identity.accountId || links.get(input.ticket) !== item ||
@@ -192,12 +206,14 @@ export function createLogin({ publicOrigin, accountOrigin, supabaseOrigin, publi
       if (!detailPath.test(path) || session.continuation !== path || session.continuationNonce !== nonce) return { consumed: false };
       delete session.continuation;
       delete session.continuationNonce;
+      sessions.save(cookieValue(req, sessionName), session);
       return { consumed: true };
     },
     async start(req, res, form) {
       const provider = form.get('provider');
       if (!available.includes(provider)) throw new WebError(400, 'provider_unavailable');
       admit();
+      if (authStorage) prune();
       if (flows.size >= 1024) throw new WebError(429, 'busy');
       const key = random();
       flows.delete(cookieValue(req, flowName));
@@ -206,9 +222,10 @@ export function createLogin({ publicOrigin, accountOrigin, supabaseOrigin, publi
       const continuationNonce = form.get('continuationNonce');
       const destinationPath = new URL(returnTo, publicOrigin).pathname;
       const continuation = form.get('continuation') === 'acquire' && detailPath.test(destinationPath) && /^[a-f0-9]{64}$/.test(continuationNonce || '') ? destinationPath : undefined;
-      // Each flow has its own SDK memory store for its PKCE verifier. Only the opaque key leaves the server.
-      const auth = authClient();
-      const flow = {auth, provider, returnTo, backTo, continuation, continuationNonce: continuation ? continuationNonce : undefined, deadline: Date.now() + 10 * minute};
+      // Persist the SDK verifier slots with their one-time flow, never in the cookie.
+      const sdkValues = Object.create(null);
+      const auth = authClient(undefined, sdkValues, key);
+      const flow = {sdkValues, provider, returnTo, backTo, continuation, continuationNonce: continuation ? continuationNonce : undefined, deadline: Date.now() + 10 * minute};
       flows.set(key, flow);
       try {
         const callbackUrl = publicOrigin + '/auth/callback';
@@ -221,6 +238,7 @@ export function createLogin({ publicOrigin, accountOrigin, supabaseOrigin, publi
           throw new WebError(503, 'login_unavailable');
         }
         flow.sdkFlowId = data.flowId;
+        flows.save(key, flow);
         res.writeHead(303, { Location: data.url, 'Set-Cookie': cookie(flowName, key, 600) });
         res.end();
       } catch (error) {
@@ -239,8 +257,11 @@ export function createLogin({ publicOrigin, accountOrigin, supabaseOrigin, publi
       let location = '/login?' + new URLSearchParams({ returnTo: returnPath(flow?.returnTo), ...(flow?.backTo && flow.backTo !== flow.returnTo && {backTo: flow.backTo}), auth: 'failed' });
       if (flow?.deadline > Date.now() && !flow.exchanging && result.kind === 'code') {
         flow.exchanging = true;
+        flows.save(key, flow);
         try {
-          const token = sessionTokens(await flow.auth.exchangeCodeForSession(result.code, {flowId: flow.sdkFlowId}));
+          const auth = authClient(undefined, flow.sdkValues, key);
+          const token = sessionTokens(await auth.exchangeCodeForSession(result.code, {flowId: flow.sdkFlowId}));
+          if (authStorage && sessions.size >= 4096) prune();
           if (flow.deadline > Date.now() && consume() && sessions.size < 4096) {
             sessions.delete(cookieValue(req, sessionName));
             const id = random();
@@ -251,7 +272,10 @@ export function createLogin({ publicOrigin, accountOrigin, supabaseOrigin, publi
               try {
                 const profile = await verifyIdentity(token.access, AbortSignal.timeout(9000));
                 const session = sessions.get(id);
-                if (session) session.accountId = profile.accountId;
+                if (session) {
+                  session.accountId = profile.accountId;
+                  sessions.save(id, session);
+                }
                 if (profile.revision === 0) {
                   location = '/account?' + new URLSearchParams({after: flow.returnTo});
                 }
@@ -278,7 +302,9 @@ export function createLogin({ publicOrigin, accountOrigin, supabaseOrigin, publi
         session.refreshing = refreshSession(session.refresh)
           .then(values => {
             if (getSession(req) !== session) throw new WebError(409, 'session_changed');
-            Object.assign(session, values); return session.access;
+            Object.assign(session, values);
+            sessions.save(cookieValue(req, sessionName), session);
+            return session.access;
           })
           .catch(error => {
             if (error.status === 401 && getSession(req) === session) sessions.delete(cookieValue(req, sessionName));

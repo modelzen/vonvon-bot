@@ -49,9 +49,14 @@ export function createPrivateStorage({origin, bucket, apiKey, bearer, verifyAbse
       headers['content-type'] = 'application/octet-stream';
     }
     try {
-      return await fetchImpl(url, {
-        method, headers, body:data, redirect:'error', cache:'no-store', signal:AbortSignal.timeout(15000),
+      const response = await fetchImpl(url, {
+        method, headers, body:data, redirect:'manual', cache:'no-store', signal:AbortSignal.timeout(15000),
       });
+      if (response.status >= 300 && response.status < 400) {
+        await response.body?.cancel();
+        throw failure();
+      }
+      return response;
     } catch { throw failure(); }
   }
   async function missing(response) {

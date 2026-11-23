@@ -24,7 +24,7 @@ const calls={
 async function metadataBinding(revision,input){
   return {revision,baseManifestSha256:input.baseManifestSha256,transformVersion:input.transformVersion,inputSha256:await richMetadataInputDigest(input)};
 }
-export async function richExecute(client,op,args) {
+export async function richExecute(client,op,args,materials) {
   const call=async(expr,params)=>(await client.query('select recipe_api.'+expr+' as result',params)).rows[0].result;
   if(Object.hasOwn(calls,op))return call(calls[op],args);
   if(op==='richReserveMetadata'){
@@ -56,11 +56,12 @@ export async function richExecute(client,op,args) {
   }
   if(op==='richInstallAuthorize'){
     const ctx=await call('operation_context()',[]),[id,req]=args;
-    const m=richInstallMaterial({...req,...ctx,operationId:id});
+    const m=await (materials?.richInstallMaterial ?? richInstallMaterial)({...req,...ctx,operationId:id});
     return call('rich_install_authorize($1,$2,$3,$4,$5,$6,$7,$8)',[id,req,m.server,m.ticket,...m.hashes,ctx.deadline]);
   }
   if(op==='richAuthorize') {
-    const context=await call("rich_op_context($1,'context',$2)",args),m=richMaterial(context);
+    const context=await call("rich_op_context($1,'context',$2)",args);
+    const m=await (materials?.richMaterial ?? richMaterial)(context);
     return call('rich_authorize($1,$2,$3,$4,$5,$6)',[...args,m.key,m.ticket,m.hash,context.deadline]);
   }
   if(op==='richPublishInto'){

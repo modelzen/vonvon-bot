@@ -91,26 +91,30 @@ export function makePool(connectionString) {
   return pool;
 }
 
+export async function verifyRecipeDatabaseRole(client) {
+  const { rows: [role] } = await client.query(`
+    SELECT NOT r.rolsuper AND NOT r.rolbypassrls AND NOT r.rolcreaterole
+           AND NOT r.rolcreatedb AND NOT r.rolreplication
+           AND NOT pg_has_role(session_user, d.datdba, 'MEMBER')
+           AND pg_has_role(session_user, 'recipe_api', 'MEMBER')
+           AND NOT api.rolsuper AND NOT api.rolbypassrls AND NOT api.rolcreaterole
+           AND NOT api.rolcreatedb AND NOT api.rolreplication AND NOT api.rolcanlogin
+           AND NOT EXISTS (
+             SELECT FROM pg_roles AS inherited
+             WHERE inherited.rolname NOT IN (session_user, 'recipe_api')
+               AND pg_has_role(session_user, inherited.oid, 'MEMBER')
+           ) AS ok
+    FROM pg_roles r JOIN pg_database d ON d.datname=current_database()
+    JOIN pg_roles api ON api.rolname='recipe_api'
+    WHERE r.rolname=session_user`);
+  if (!role?.ok) throw new Error('Database login must be dedicated to recipe_api');
+}
+
 export async function openDatabase(url, codeKey, issuer) {
   if (!/^[0-9a-f]{64}$/i.test(codeKey)) throw new Error('Invalid RECIPE_CODE_KEY');
   const pool = makePool(url);
   try {
-    const { rows: [role] } = await pool.query(`
-      SELECT NOT r.rolsuper AND NOT r.rolbypassrls AND NOT r.rolcreaterole
-             AND NOT r.rolcreatedb AND NOT r.rolreplication
-             AND NOT pg_has_role(session_user, d.datdba, 'MEMBER')
-             AND pg_has_role(session_user, 'recipe_api', 'MEMBER')
-             AND NOT api.rolsuper AND NOT api.rolbypassrls AND NOT api.rolcreaterole
-             AND NOT api.rolcreatedb AND NOT api.rolreplication AND NOT api.rolcanlogin
-             AND NOT EXISTS (
-               SELECT FROM pg_roles AS inherited
-               WHERE inherited.rolname NOT IN (session_user, 'recipe_api')
-                 AND pg_has_role(session_user, inherited.oid, 'MEMBER')
-             ) AS ok
-      FROM pg_roles r JOIN pg_database d ON d.datname=current_database()
-      JOIN pg_roles api ON api.rolname='recipe_api'
-      WHERE r.rolname=session_user`);
-    if (!role?.ok) throw new Error('Database login must be dedicated to recipe_api');
+    await verifyRecipeDatabaseRole(pool);
     const client = await pool.connect();
     try {
       await client.query("BEGIN; SET LOCAL ROLE recipe_api; SET LOCAL statement_timeout = '5s'");
@@ -127,6 +131,11 @@ export async function openDatabase(url, codeKey, issuer) {
     throw err;
   }
 
+  return { execute: createRecipeExecutor(pool, codeKey), close: () => pool.end() };
+}
+
+export function createRecipeExecutor(pool, codeKey, materials) {
+  if (!/^[0-9a-f]{64}$/i.test(codeKey)) throw new Error('Invalid RECIPE_CODE_KEY');
   async function execute(identity, operation, args = []) {
     if (pool.waitingCount >= 32) throw new ApiError(503, 'database_unavailable', 1);
     let client;
@@ -141,20 +150,20 @@ export async function openDatabase(url, codeKey, issuer) {
       }
       if (operation.startsWith('rich')) {
         const {richExecute}=await import('./rich-database.mjs');
-        const result=await richExecute(client,operation,args);
+        const result=await richExecute(client,operation,args,materials);
         await client.query('COMMIT');return result;
       }
       if (operation === 'authorizeOperation') {
         const { rows:[context] } = await client.query('SELECT recipe_api.operation_context() AS result');
         const [operationId, request] = args;
         const { accountId, deadline } = context.result;
-        const material = authorizationMaterial({ ...request, operationId, accountId, deadline });
+        const material = await (materials?.authorizationMaterial ?? authorizationMaterial)({ ...request, operationId, accountId, deadline });
         args = [operationId, request, binary32(material.serverPublicKey), material.ticket, material.proofHash, deadline];
       }
       if (operation === 'authorizeAuthoring') {
         const [operationId, request] = args;
         const { rows:[context] } = await client.query('SELECT recipe_api.authoring_context($1::uuid,$2::jsonb) AS result', args);
-        const material = authoringMaterial(context.result);
+        const material = await (materials?.authoringMaterial ?? authoringMaterial)(context.result);
         args = [operationId, request, binary32(material.serverPublicKey), material.ticket, material.proofHash, context.result.deadline];
       }
       const { rows } = await client.query('SELECT ' + calls[operation] + ' AS result', args);
@@ -178,8 +187,8 @@ export async function openDatabase(url, codeKey, issuer) {
       // Database internals and rejected query parameters can contain private text or codes.
       throw new ApiError(503, 'database_unavailable');
     } finally {
-      if (client) client.release(discard);
+      if (client) await client.release(discard);
     }
   }
-  return { execute, close: () => pool.end() };
+  return execute;
 }

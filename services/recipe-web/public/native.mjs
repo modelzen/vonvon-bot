@@ -7,10 +7,12 @@ const names = { github: 'GitHub', google: 'Google' };
 const fragment = new URLSearchParams(location.hash.slice(1));
 const ticket = fragment.get('ticket'), receipt = fragment.get('receipt');
 const query = new URLSearchParams(location.search);
+const legacy = query.getAll('legacy').length === 1 && query.get('legacy') === '1';
 const completionMarker = query.getAll('complete').length === 1 && query.get('complete') === '1';
 const completing = receipt !== null || completionMarker || location.pathname === '/auth/native/complete';
 const completionStates = new Set(['ready','confirming','confirmed','acknowledged','switching','cancelled','expired','failed']);
-history.replaceState(null, '', completing ? '/login?mode=app&complete=1' : '/login?mode=app');
+const loginPath = completing ? '/login?mode=app&complete=1' : '/login?mode=app';
+history.replaceState(null, '', loginPath + (legacy ? '&legacy=1' : ''));
 const identity = document.querySelector('#native-identity'), confirm = document.querySelector('#native-confirm'), change = document.querySelector('#native-switch');
 let binding, active = true, deadline = 0, deciding = false;
 
@@ -66,7 +68,7 @@ function render(view) {
   }
   if (view.status === 'acknowledged') {
     finish('App 已确认登录，正在打开账号管理…');
-    location.replace('/account');
+    location.replace(legacy ? '/account?legacy=1' : '/account');
     return;
   }
   if (view.status === 'switching') return finish('正在重新选择账号，请在新的登录页继续。');

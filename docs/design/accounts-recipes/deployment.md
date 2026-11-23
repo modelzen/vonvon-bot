@@ -7,7 +7,7 @@
 | 运行在哪 | 需要交付什么 | 不在那里做什么 |
 | --- | --- | --- |
 | 一个独立的 Supabase 托管项目／环境 | Auth（三种社交登录）、PostgreSQL（目录、授权、草稿、幂等回执）、Storage 私有桶（暂存、已验证清单、正文和 Logo）、由受限数据库角色执行发布、兑换和版本授权事务；用库内定时作业清理过期工单与无引用资产。不另起 Redis、消息队列或常驻 LLM 服务。 | 不把 service-role 凭证发给网页、桌面或用户设备；云不保存飞书应用密钥、整群聊天记录、未选本机记忆。 |
-| Vonvon 自有 HTTPS Web 入口 | 登录选择/完成页、公开分享落地页。现有生产社区和账号分别使用 `recipes.vonvon.cc`、`account.vonvon.cc`。新域名计划为 `community.vonvon.bot` 和 `account.vonvon.bot`，测试环境使用独立 host。两个 HTTPS 入口由同一个 recipe-web 处理网页登录、分享页与同源会话。recipe-web 经固定回环地址访问生产 API 和 broker；recipe-api 验证 JWT 后访问 Supabase。账号和数据库仍托管，首片不另上一套 Edge Functions。配置独立 TLS、Origin、CSRF 和精确 redirect allowlist。 | 不把私有 API 响应混入静态站或 CDN 公共缓存；现有下载、stable 与 bridge 服务不动。无需为本期另租一台 Bot 主机。 |
+| Vonvon 自有 HTTPS Web 入口 | 登录选择和完成页、公开分享页。生产社区使用 `market.vonvon.bot`，账号使用 `account.vonvon.bot`，测试环境使用独立域名。两个生产域名共用一个 Cloudflare Worker 和社区会话。私有服务绑定连接 Recipe API 与附件转发，继续用现有的生产 Supabase 和附件服务。配置精确 OAuth 回程、Origin 和 CSRF 检查。 | 私有 API 响应禁用共享缓存。 |
 | 用户已安装的桌面／目标设备 daemon | 桌面在浏览器发起登录，目标 daemon 走**已有授权的设备连接**、持本地 Bot 身份，通过飞书发送/接收、挑本机内容，在本机安装/更新。飞书长连接仍使用现有链路。 | 安装 App 不替用户启用远程管理；租用的 Bot、运营服务器、他人的账号不是本机操作凭据。 |
 
 正式域名的配置及旧地址兼容范围见 [Web 服务部署说明](../../../services/recipe-web/README.md)。

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import sharp from 'sharp';
 import { normalizeLogo, verifyNormalizedLogo } from '../src/logo.mjs';
+import { normalizeWorkerAvatar } from '../src/worker-avatar.mjs';
 
 const image = (width,height,color='red') => sharp({create:{width,height,channels:4,background:color}});
 const invalid = input => assert.rejects(normalizeLogo(input),e=>e.code === 'invalid_logo');
@@ -73,4 +74,47 @@ test('Logo rejects animation chunks, multiples, damaged images, document formats
   await invalid(png.subarray(0,-4));
   await assert.rejects(verifyNormalizedLogo(await image(192,192).withMetadata().webp().toBuffer()));
   await assert.rejects(verifyNormalizedLogo(await image(191,192).webp().toBuffer()));
+});
+
+function imagesFixture(output, type='image/webp') {
+  return {
+    async info(stream) {
+      const bytes = Buffer.from(await new Response(stream).arrayBuffer());
+      const {format,width,height} = await sharp(bytes).metadata();
+      return {format:'image/'+format,width,height};
+    },
+    input() {
+      return {
+        transform(options) {
+          assert.deepEqual(options,{width:192,height:192,fit:'cover'});
+          return {
+            async output(options) {
+              assert.deepEqual(options,{format:'image/webp',quality:85,anim:false});
+              return {response:()=>new Response(output,{headers:{'content-type':type}})};
+            }
+          };
+        }
+      };
+    }
+  };
+}
+
+test('Worker avatar keeps input policy and only returns 192px static WebP from the image binding', async () => {
+  const jpeg = await image(240,120).jpeg().toBuffer();
+  const output = await image(192,192).webp().toBuffer();
+  const binding = imagesFixture(output);
+  assert.deepEqual(await normalizeWorkerAvatar(binding,jpeg),output);
+  const invalid = bytes => assert.rejects(normalizeWorkerAvatar(binding,bytes), e=>e.code==='invalid_logo');
+  await invalid(await animatedPng());
+  await invalid(await image(2049,1).png().toBuffer());
+  await invalid(Buffer.concat([jpeg,jpeg]));
+  await invalid(Buffer.from('<svg/>'));
+  await invalid(Buffer.alloc(2*1024*1024+1));
+
+  const unavailable = provider => assert.rejects(normalizeWorkerAvatar(provider,jpeg), e=>e.code==='logo_decoder_unavailable');
+  await unavailable(undefined);
+  await unavailable(imagesFixture(output,'text/html'));
+  await unavailable(imagesFixture(Buffer.alloc(128*1024+1)));
+  await unavailable(imagesFixture(await image(191,192).webp().toBuffer()));
+  await unavailable(imagesFixture(await image(192,192).withMetadata().webp().toBuffer()));
 });

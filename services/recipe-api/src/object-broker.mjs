@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { ApiError, UUID } from './errors.mjs';
 import {credentialField} from './credential-shapes.mjs';
-import { normalizeLogo, verifyNormalizedLogo } from './logo.mjs';
 import { boundedObjectBytes } from './object-storage.mjs';
 import { objectMemberScope, objectPackageScope } from './object-store.mjs';
 
@@ -16,7 +15,18 @@ function sameBytes(data, size, expected) {
   if (data === null || data.length !== size || hash(data) !== expected) throw new ApiError(409,'object_integrity');
 }
 
-export function createObjectBroker({store,storage,validateCanonicalManifest,authorizeRead,recordTextChecks=false}) {
+async function decodeLogo(bytes) {
+  return (await import('./logo.mjs')).normalizeLogo(bytes);
+}
+
+async function checkLogo(bytes) {
+  return (await import('./logo.mjs')).verifyNormalizedLogo(bytes);
+}
+
+export function createObjectBroker({
+  store, storage, validateCanonicalManifest, authorizeRead, recordTextChecks = false,
+  normalizeLogo = decodeLogo, verifyNormalizedLogo = checkLogo,
+}) {
   async function checkFinal(kind,bytes) {
     if (kind === 'finalLogo') return verifyNormalizedLogo(bytes);
     if (kind === 'manifest') {
