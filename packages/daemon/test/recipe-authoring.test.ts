@@ -1182,8 +1182,8 @@ function privateChoice(label:string,messageId?:string){
   if(!button)throw new Error('卡片没有 '+label+' '+JSON.stringify(body));
   return {messageId:m.message_id,value:button.behaviors![0]!.value};
 }
-async function tap(button:ReturnType<typeof privateChoice>,by=owner,chat=chatId,org=tenant){
-  await dispatchAuthoring({operator:{openId:by},raw:{operator:{open_id:by,tenant_key:org}},
+async function tap(button:ReturnType<typeof privateChoice>,by=owner,chat=chatId,org=tenant,eventId?:string){
+  await dispatchAuthoring({operator:{openId:by},raw:{event_id:eventId,operator:{open_id:by,tenant_key:org}},
     chatId:chat,messageId:button.messageId,action:{tag:'button',value:button.value}});
 }
 const beginInput=()=>({retryId:randomUUID(),groupId,groupName:'周报群'});
@@ -2012,9 +2012,9 @@ it('keeps two original peer and account presences independent and never exports 
   expect(await rpc('status')).toMatchObject({operations:[{operationId:privateWork.operationId}]});
 });
 
-async function attachCreator(){
+async function attachCreator(nativePreview=true){
   const association=kind(await service.request(peer,recipeAuthoringRequestSchema.parse({type:'creatorDiscover',botId:appId,accountId:account})),'creatorBinding').association!;
-  session=kind(await service.request(peer,recipeAuthoringRequestSchema.parse({type:'creatorOpen',botId:appId,accountId:account,binding:association.binding,scope:association.scope,wakeId:null})),'creatorSession').session;
+  session=kind(await service.request(peer,recipeAuthoringRequestSchema.parse({type:'creatorOpen',botId:appId,accountId:account,binding:association.binding,scope:association.scope,wakeId:null,...(nativePreview&&{nativePreview:true})})),'creatorSession').session;
 }
 it('rejects an old creator session and adopted workflow after the same account is linked to another private author',async()=>{
   await link();
@@ -3226,6 +3226,7 @@ async function nativePreviewFixture(){
   const native={status:()=>state,lease:(id:string)=>id===account?controller.signal:undefined,onStatus:()=>()=>{},login:async()=>state,logout:async()=>state,cancelLogin:async()=>state,dispose:async()=>{},
     recipeLink:(r:string,v:string)=>`https://vonvon.cc/recipes/${r}/versions/${v}`,request:async(id:string,path:string,init?:RequestInit,beforeSend?:()=>void|Promise<void>)=>{
       await beforeSend?.();expect(id).toBe(account);requests.push({path,method:init?.method??'GET'});
+      if(path==='/v1/me')return Response.json({accountId:account});
       if(path==='/v2/drafts/'+work.draftId)return Response.json({error:{code:'not_found'}},{status:404});
       if(path==='/v1/drafts/'+work.draftId)return Response.json(draft);
       if(path.startsWith('/v1/drafts/'+work.draftId+'/creator-context?'))return Response.json({draftId:work.draftId,format:'role-v1',revision:draft.revision,sourceIntentId:null,parent:null});
@@ -3242,7 +3243,7 @@ async function nativePreviewFixture(){
   await executor.run(context,initial.job);
   const offer=kind(await rpc('creatorPreview',{work,revision:2}),'creatorPreview');
   const choice=privateChoice('在 App 中预览'),messageCount=messages.size;
-  return {work,draft,ledger,history,journal,association,nativeAssociation,controller,requests,answers,navigation,opened,published,saved,executor,context,offer,choice,messageCount};
+  return {work,draft,ledger,history,journal,association,nativeAssociation,native,controller,requests,answers,navigation,opened,published,saved,executor,context,offer,choice,messageCount};
 }
 
 it('NATIVE PREVIEW sends the physical card through one durable readonly job into the existing native queue without approval or publication',async()=>{
@@ -3265,8 +3266,8 @@ it('NATIVE PREVIEW sends the physical card through one durable readonly job into
     const finished=await f.ledger.run(db=>Object.values(db.links).find(l=>l.binding===f.association.binding)!.creator!.jobs[job.id]);
     expect(finished).toMatchObject({state:'finished',answerDigest:expect.any(String)});expect(finished?.result).toBeUndefined();
     f.navigation.acknowledge(f.navigation.pending()[0]!.navigationId);
-    await tap(f.choice);expect((await creatorJobs()).map(j=>j.id)).toEqual([job.id]);
-    await f.executor.run(f.context,job);expect(f.navigation.pending()).toHaveLength(1);
+    await tap(f.choice);const [next]=await creatorJobs();expect(next!.id).not.toBe(job.id);
+    await f.executor.run(f.context,next!);expect(f.navigation.pending()).toHaveLength(1);
   }finally{f.history.history.close();}
 });
 
@@ -3303,6 +3304,7 @@ it.each(['work','snapshot','generation','card','identity','expired','account','r
       if(fault==='identity')row.originWork={...f.work,source:{preparationId:randomUUID(),groupId,identity:'f'.repeat(64)}};
     });
     await f.executor.run(f.context,job).catch(()=>{});
+    if(fault==='revision')expect([...cards.values()].at(-1)).toContain('重新读取当前草稿');
     expect(f.opened).not.toHaveBeenCalled();expect(f.navigation.pending()).toEqual([]);expect(f.published).not.toHaveBeenCalled();
     expect(f.requests.every(r=>r.method==='GET')).toBe(true);
   }finally{f.history.history.close();}
@@ -3333,5 +3335,187 @@ it('NATIVE PREVIEW asks the original recipient to open App when its creator sess
     await tap(f.choice,stranger);expect(textSend).not.toHaveBeenCalled();
     await tap(f.choice);expect(JSON.stringify(textSend.mock.calls)).toContain('请先打开 App 再点击预览');
     expect(f.opened).not.toHaveBeenCalled();expect(f.published).not.toHaveBeenCalled();
+  }finally{f.history.history.close();}
+});
+
+it.each(['role','rich','rich-paired'] as const)('APP PREPARE INTEGRATION drives real supervisor controller executor and daemon to readonly publicationReady for %s',async format=>{
+  await link();
+  const {RecipeCreatorSupervisor}=await import(new URL('../../desktop/src/recipe-creator-supervisor.ts',import.meta.url).href);
+  const {RecipeCreatorExecutor}=await import(new URL('../../desktop/src/recipe-creator.ts',import.meta.url).href);
+  const {RecipeCreatorJournal}=await import(new URL('../../desktop/src/recipe-creator-journal.ts',import.meta.url).href);
+  const {RecipeAuthoringController}=await import(new URL('../../desktop/src/recipe-authoring.ts',import.meta.url).href);
+  const {MetadataJournal}=await import(new URL('../../desktop/src/community-metadata-journal.ts',import.meta.url).href);
+  const {AuthoringJournal:NativeHistory}=await import(new URL('../../desktop/src/recipe-authoring-journal.ts',import.meta.url).href);
+  const {recipeAuthoringReplySchema}=await import('@vonvon/protocol');
+  const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
+  const work:{draftId:string;source:null|{preparationId:string;groupId:typeof groupId;identity:string}}={draftId:randomUUID(),source:null};
+  if(format!=='role'){
+    const op=await prepare();
+    await rpc('settle',{operationId:op.operationId,receipt:{operationId:op.operationId,status:'accepted',stateRevision:3,draftId:work.draftId,revision:1}});
+    const identity=kind(await rpc('operationSourceIdentity',{operationId:op.operationId}),'operationSourceIdentity').identity!;
+    work.source={preparationId:op.operationId,groupId,identity};
+  }
+  const field=(value:string)=>({itemId:randomUUID(),originId:randomUUID(),value});
+  const fileParts=Array.from({length:3},(_,i)=>({itemId:randomUUID(),objectId:randomUUID(),bytes:Buffer.from('模拟文件正文 '+i)}));
+  const logoPart={objectId:randomUUID(),bytes:Buffer.alloc(7224,4)};
+  const texts=Object.fromEntries(fileParts.map(part=>[part.objectId,part.bytes.toString()]));
+  const objects=new Map([...fileParts,logoPart].map(part=>[part.objectId,part.bytes]));
+  const document=canonicalizeRichRecipeContent({format:'rich-v2',schemaVersion:2,public:{name:field('原生发布准备联调'),summary:field(''),overview:field('完整内容'),version:field('2')},
+    role:{itemId:randomUUID(),originId:randomUUID(),text:{kind:'inline',value:'完整群角色'}},
+    settings:[],rules:[],skills:[{itemId:randomUUID(),originId:randomUUID(),name:'模拟技能',entryFileId:fileParts[0]!.itemId,fileIds:fileParts.map(part=>part.itemId)}],files:fileParts.map((part,i)=>({itemId:part.itemId,originId:randomUUID(),name:i===0?'SKILL.md':'reference-'+i+'.md',use:i===0?'skillDescription':'reference',text:{kind:'part',objectId:part.objectId}})),
+    tasks:[],memories:[],setup:[],parts:[...fileParts.map(part=>({objectId:part.objectId,kind:'text',sha256:digest(part.bytes),bytes:part.bytes.length,mediaType:'text/plain;charset=utf-8'})),
+      {objectId:logoPart.objectId,kind:'finalLogo',sha256:digest(logoPart.bytes),bytes:logoPart.bytes.length,mediaType:'image/webp'}],finalLogo:{itemId:randomUUID(),originId:randomUUID(),objectId:logoPart.objectId}});
+  const manifest={objectId:randomUUID(),kind:'manifest',sha256:digest(document.canonicalUTF8),bytes:document.canonicalUTF8.length,mediaType:'application/json'};
+  const publicFields={name:'原生发布准备联调',summary:'',overview:'完整内容',version:'2',access:'direct' as const};
+  const draft=format!=='role'?{draftId:work.draftId,recipeId:null,revision:2,public:publicFields,format:'rich-v2' as const,sourceIntentId:work.source!.preparationId,
+    rich:{content:document.content,texts,canonical:Buffer.from(document.canonicalUTF8).toString('base64url')},logo:'data:image/webp;base64,'+logoPart.bytes.toString('base64')}:
+    {draftId:work.draftId,recipeId:null,revision:2,public:publicFields,config:{role:'完整群角色'}};
+  const controller=new AbortController(),state={kind:'signedIn' as const,accountId:account,displayName:'本人',provider:'google' as const,persistence:'memory' as const};
+  const requests:Array<{path:string;method:string}>=[],trace:Array<{type:string;kind?:string;error?:string}>=[];
+  const native={status:()=>state,lease:(id:string)=>id===account?controller.signal:undefined,onStatus:()=>()=>{},login:async()=>state,logout:async()=>state,cancelLogin:async()=>state,dispose:async()=>{},
+    recipeLink:(r:string,v:string)=>`https://vonvon.cc/recipes/${r}/versions/${v}`,request:async(id:string,path:string,init?:RequestInit,beforeSend?:()=>void|Promise<void>)=>{
+      await beforeSend?.();expect(id).toBe(account);requests.push({path,method:init?.method??'GET'});
+      if(path==='/v1/me')return Response.json({accountId:account});
+      if(path==='/v2/drafts/'+work.draftId)return format!=='role'?Response.json({format:'rich-v2',draftId:work.draftId,recipeId:null,revision:2,access:'direct',sourceIntentId:work.source!.preparationId,
+        manifest,sourceManifest:manifest,logicalBytes:document.logicalBytes,retainedCandidateBytes:0}):Response.json({error:{code:'not_found'}},{status:404});
+      if(path==='/v2/drafts/'+work.draftId+'/objects/'+manifest.objectId)return new Response(document.canonical);
+      const object=objects.get(path.split('/').at(-1)!);if(object)return new Response(object);
+      if(path==='/v1/drafts/'+work.draftId)return Response.json(draft);
+      if(path.includes('/drafts/'+work.draftId+'/creator-context?'))return Response.json({draftId:work.draftId,format:format!=='role'?'rich-v2':'role-v1',revision:draft.revision,sourceIntentId:work.source?.preparationId??null,parent:null});
+      throw Error(path);
+    }};
+  const deviceKey=Buffer.alloc(32,7).toString('base64url');
+  const client={recipeAuthoring:async(input:Parameters<typeof service.request>[1])=>{
+    try{const reply=recipeAuthoringReplySchema.parse(await service.request(peer,input));trace.push({type:input.type,kind:reply.kind});return reply;}
+    catch(error){trace.push({type:input.type,error:String(error)});throw error;}
+  },device:async()=>({kind:'deviceStatus',status:{device:{id:peer.device,name:'原设备',publicKey:deviceKey},remote:{addresses:[],port:3000},clients:{active:1,total:1}}}),
+    snapshot:async()=>({agents:[{id:agentIdSchema.parse(appId),name:'原 Bot',running:true}],memberships:[{agentId:appId,groupId}],groups:[{id:groupId,name:'原群'}]})};
+  const retain=async(viewId:string,signal:AbortSignal)=>({viewId,client,signal,pairedKey:deviceKey,release(){},check(){signal.throwIfAborted();}});
+  const journal=new RecipeCreatorJournal(),history=new NativeHistory(),authoring=new RecipeAuthoringController(native,()=>{throw Error('must adopt');},history);
+  const executor=new RecipeCreatorExecutor(native,journal,new MetadataJournal(),history),supervisor=new RecipeCreatorSupervisor(native,retain,()=>[],journal,history,authoring,executor);
+  try{
+    await supervisor.associated(account,format==='rich-paired'?peer.device:'local',agentIdSchema.parse(appId));
+    if(work.source)history.history.remember(journal.associations(account)[0]!,work.source.preparationId,work.source.identity,groupId);
+    const {desktopAuthoringRequestSchema}=await import('@vonvon/protocol');
+    const input=desktopAuthoringRequestSchema.parse(JSON.parse(JSON.stringify({type:'preparePublication',accountId:account,draft})));
+    if(input.type!=='preparePublication')throw Error('prepare request');
+    const ready=await supervisor.preparePublication(input);
+    expect(await supervisor.preparePublication(input)).toEqual(ready);
+    expect(ready).toMatchObject({kind:'publicationReady',draftId:work.draftId,revision:2});
+    expect(requests.every(r=>r.method==='GET')).toBe(true);
+    expect(trace.some(r=>r.type==='creatorAppConfirm')).toBe(false);
+  }catch(error){console.log('APP PREPARE diagnostics',JSON.stringify({trace,requests}));throw error;}
+  finally{supervisor.dispose();authoring.closeAll();history.history.close();}
+});
+
+it('NATIVE PREVIEW keeps session delivery isolated and old polling batches compatible',async()=>{
+  const f=await nativePreviewFixture();
+  try{
+    const legacyPeer={id:randomUUID(),device:peer.device};
+    const legacy=kind(await service.request(legacyPeer,recipeAuthoringRequestSchema.parse({type:'creatorOpen',botId:appId,accountId:account,binding:f.association.binding,scope:f.association.scope,wakeId:null})),'creatorSession');
+    await tap(f.choice);
+    const [job]=await creatorJobs();
+    const other=kind(await rpc('creatorPreview',{work:{draftId:randomUUID(),source:null},revision:1}),'creatorPreview');
+    const batch=kind(await service.request(legacyPeer,recipeAuthoringRequestSchema.parse({type:'creatorPoll',botId:appId,session:legacy.session})),'creatorJobs');
+    expect(batch.jobs).toContainEqual(other.job);
+    expect(batch.jobs.map(j=>j.id)).not.toContain(job!.id);
+    await expect(service.request(legacyPeer,recipeAuthoringRequestSchema.parse({type:'creatorCheck',botId:appId,session:legacy.session,id:job!.id}))).rejects.toThrow();
+    expect((await creatorJobs()).map(j=>j.id)).toContain(job!.id);
+    await f.executor.run(f.context,job!);expect(f.opened).toHaveBeenCalledOnce();
+  }finally{f.history.history.close();}
+});
+
+it('NATIVE PREVIEW reopens the same physical card after reconnection to its exact association',async()=>{
+  const f=await nativePreviewFixture();
+  try{
+    const original=session;
+    service.disconnect(peer.id);await attachCreator();expect(session).not.toBe(original);
+    await tap(f.choice);
+    const [job]=await creatorJobs();expect(job?.task).toMatchObject({kind:'read',read:{kind:'openPreview'}});
+    await f.executor.run({...f.context,session},job!);
+    expect(f.opened).toHaveBeenCalledOnce();
+    expect(await rpc('creatorCheck',{id:f.offer.job.id})).toMatchObject({mode:'preview'});
+  }finally{f.history.history.close();}
+});
+
+it('NATIVE PREVIEW retries only the acknowledgement, ignores an SDK redelivery, and opens a new deliberate click',async()=>{
+  const f=await nativePreviewFixture();
+  try{
+    const click=(id:string)=>tap(f.choice,owner,chatId,tenant,id);
+    await click('first-click');
+    const [job]=await creatorJobs();
+    const failed={...f.context,rpc:(req:RecipeAuthoringRequest)=>req.type==='creatorAnswer'?Promise.reject(Error('receipt offline')):f.context.rpc(req)};
+    await expect(f.executor.run(failed,job!)).rejects.toThrow('receipt offline');
+    f.navigation.acknowledge(f.navigation.pending()[0]!.navigationId);
+    const reads=f.requests.length;
+    await f.executor.run(f.context,(await creatorJobs())[0]!);
+    expect(f.requests).toHaveLength(reads);
+    await click('first-click');expect(await creatorJobs()).toEqual([]);
+    expect(f.navigation.pending()).toEqual([]);expect(f.opened).toHaveBeenCalledOnce();
+    await click('next-click');
+    const [next]=await creatorJobs();expect(next!.id).not.toBe(job!.id);
+    await f.executor.run(f.context,next!);expect(f.opened).toHaveBeenCalledTimes(2);
+  }finally{f.history.history.close();}
+});
+
+it('NATIVE PREVIEW reads the daemon status through the real supervisor and controller without advancing unrelated saves',async()=>{
+  const f=await nativePreviewFixture();
+  const {RecipeCreatorSupervisor}=await import(new URL('../../desktop/src/recipe-creator-supervisor.ts',import.meta.url).href);
+  const {RecipeAuthoringController}=await import(new URL('../../desktop/src/recipe-authoring.ts',import.meta.url).href);
+  const authoring=new RecipeAuthoringController(f.native,()=>{throw Error('unexpected source capture');},f.history);
+  const rpcs:RecipeAuthoringRequest[]=[];
+  const client={device:async()=>({kind:'deviceStatus',status:{device:{id:peer.device,name:'来源设备',publicKey:f.nativeAssociation.deviceKey},remote:{addresses:[],port:3000},clients:{active:1,total:1}}}),
+    snapshot:async()=>({agents:[{id:appId,name:'作者 Bot'}],groups:[],memberships:[]}),
+    recipeAuthoring:async(req:RecipeAuthoringRequest)=>{rpcs.push(req);return service.request(peer,req);}};
+  const supervisor=new RecipeCreatorSupervisor(f.native,async(_view:string,signal:AbortSignal)=>({viewId:'local',client,signal,release(){},check:()=>signal.throwIfAborted()}),()=>[],f.journal,f.history,authoring,f.executor);
+  try{
+    const worker=await supervisor.associated(account,'local',appId);expect(worker?.session).toBe(session);
+    await worker!.queue;
+    const waiting=kind(await rpc('edit',{draftId:randomUUID(),baseRevision:1}),'operation').operation;
+    const unrelated=kind(await rpc('cancel',{operationId:waiting.operationId}),'operation').operation;
+    expect(unrelated.state).toBe('cancelPending');
+    await tap(f.choice);
+    const [job]=await creatorJobs();rpcs.length=0;f.requests.length=0;
+    await f.executor.run(worker!.context,job!);
+    expect(f.opened).toHaveBeenCalledOnce();
+    expect(rpcs.some(req=>req.type==='status')).toBe(true);
+    expect(rpcs.every(req=>['status','creatorCheck','creatorAnswer'].includes(req.type))).toBe(true);
+    expect(f.requests.every(req=>req.method==='GET')).toBe(true);
+    expect(kind(await rpc('status'),'status').operations).toContainEqual(unrelated);
+    const edit=kind(await rpc('edit',{draftId:f.work.draftId,baseRevision:2}),'operation').operation;
+    const settled=()=>worker!.context.settled(f.work.draftId);
+    await expect(settled()).rejects.toThrow('保存结果尚未确认');
+    await f.ledger.run(db=>{db.operations[edit.operationId]!.revoked=true;});
+    expect(kind(await rpc('status'),'status').reconciliation).toContainEqual(expect.objectContaining({operationId:edit.operationId}));
+    await expect(settled()).rejects.toThrow('保存结果尚未确认');
+    await f.ledger.run(db=>{db.operations[edit.operationId]!.view.receipt={operationId:edit.operationId,status:'cancelled',stateRevision:2};});
+    await expect(settled()).resolves.toBeUndefined();
+  }finally{supervisor.dispose();authoring.closeAll();}
+});
+
+it('NATIVE PREVIEW prepares a fresh readonly offer if the prior unapproved offer has expired before polling',async()=>{
+  const f=await nativePreviewFixture();
+  try{
+    await f.ledger.run(db=>{Object.values(db.links).find(l=>l.binding===f.association.binding)!.creator!.jobs[f.offer.job.id]!.expiresAt=clock-1;});
+    f.draft.revision++;
+    const request={work:f.work,revision:f.draft.revision};
+    const fresh=kind(await rpc('creatorPreview',request),'creatorPreview');expect(fresh.state).toBe('preparing');
+    await f.executor.run(f.context,fresh.job);
+    const ready=kind(await rpc('creatorPreview',request),'creatorPreview');
+    expect(ready.job.id).not.toBe(f.offer.job.id);expect(ready.state).toBe('offer');
+    expect(await rpc('creatorCheck',{id:ready.job.id})).toMatchObject({mode:'preview',job:{task:{approval:'0'.repeat(64)}}});
+  }finally{f.history.history.close();}
+});
+
+
+it('NATIVE PREVIEW keeps an existing publication readable for an App without the callback capability',async()=>{
+  const f=await nativePreviewFixture();
+  try{
+    service.disconnect(peer.id);await attachCreator(false);
+    const result=kind(await rpc('creatorPreview',{work:f.work,revision:2}),'creatorPreview');
+    expect(result.job.id).toBe(f.offer.job.id);expect(result.state).toBe('offer');
+    const rendered=[...cards.values()].at(-1)!;
+    expect(rendered).toContain('open_url');expect(rendered).toContain('确认发布 2');expect(rendered).toContain('继续修改内容');
+    await tap(f.choice);expect(await creatorJobs()).toEqual([]);
   }finally{f.history.history.close();}
 });

@@ -398,7 +398,7 @@ describe('the bot-session column (unit)', () => {
       'recipeInstall.source', 'recipeInstall.createdGroup', 'recipeInstall.ignoreVersion',
       'recipeInstall.prepare', 'recipeInstall.commit', 'recipeInstall.status', 'recipeInstall.cancel',
       'recipeInstall.issuing', 'recipeInstall.reconcile',
-      ...'advance answerField beginLink cancel close confirmLink deliver edit groupSourceIdentity inspectCandidate inspectLink open operationSourceIdentity prepare reconcile resend resumeContext reviewSource settle status updateCard workflow beginHandoff beginDraftHandoff handoffStatus cancelHandoff answerHandoff richSourceOptions richInventory richPrepare richEdit richReadMember richMembers richBindMembers richInspect richAdvance'
+      ...'creatorAnswer creatorAppConfirm creatorCheck creatorContinue creatorDeliver creatorDiscover creatorLogo creatorOpen creatorPoll creatorPreview advance answerField beginLink cancel close confirmLink deliver edit groupSourceIdentity inspectCandidate inspectLink open operationSourceIdentity prepare reconcile resend resumeContext reviewSource settle status updateCard workflow beginHandoff beginDraftHandoff restoreHandoff handoffStatus cancelHandoff answerHandoff richSourceOptions richInventory richPrepare richEdit richReadMember richMembers richBindMembers richInspect richAdvance'
         .split(' ').map(type => 'recipeAuthoring.' + type),
     ]);
     const onHost = new Set(['snapshot.get', 'admin.negotiate', 'admin.daemonStatus']);

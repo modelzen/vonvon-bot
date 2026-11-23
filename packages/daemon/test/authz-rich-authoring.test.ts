@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from 'vitest';
-import { agentIdSchema, groupIdSchema, PROTOCOL_VERSION, recipeAuthoringRequestSchema, type Request } from '@vonvon/protocol';
+import { agentIdSchema, groupIdSchema, PROTOCOL_VERSION, recipeAuthoringRequestSchema, rpcKinds, type Request } from '@vonvon/protocol';
 import { RpcError } from '../src/server/errors';
 import { fakeService, socketClient, startFixture } from './server-fixture';
 
@@ -37,6 +37,8 @@ const payloads = [
   {type:'creatorAnswer',botId,session,id:operationId,answer:{kind:'unknown'}},
   {type:'creatorDeliver',botId,session,id:operationId,items:[{codeId:draftId,status:'redeemed'}]},
   {type:'creatorLogo',botId,session,id:operationId},
+  {type:'creatorPreview',botId,session,work:{draftId,source:null},revision:1},
+  {type:'creatorAppConfirm',botId,session,id:operationId,snapshotDigest:digest,confirmationId:randomUUID()},
 ].map(payload=>recipeAuthoringRequestSchema.parse(payload)));
 const request = (payload: typeof payloads[number]): Request => ({ type: 'request', id: randomUUID(), method: 'recipeAuthoring', payload });
 const handler = vi.fn(async () => { throw new RpcError('conflict', 'authoring business handler reached'); });
@@ -50,6 +52,12 @@ beforeAll(async () => {
 });
 beforeEach(() => { handler.mockClear(); });
 afterAll(async () => { await owner?.close(); await fixture?.close(); });
+
+test('exercises every rich and creator authoring RPC through the socket permission matrix', () => {
+  const kinds = rpcKinds().filter(({ kind }) => /^recipeAuthoring\.(rich|creator)/.test(kind)).map(({ kind }) => kind).sort();
+  const covered = payloads.map(payload => `recipeAuthoring.${payload.type}`).filter(kind => /^recipeAuthoring\.(rich|creator)/.test(kind)).sort();
+  expect(covered).toEqual(kinds);
+});
 
 test.each(payloads)('owner desktop dispatches $type to the authoring business handler', async payload => {
   expect(await owner.call(request(payload))).toMatchObject({ type: 'error', code: 'conflict', message: 'authoring business handler reached' });

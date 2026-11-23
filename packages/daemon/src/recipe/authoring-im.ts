@@ -12,7 +12,7 @@ const copy: Record<CardMode, string> = {
   edit: '在此私聊发送 /recipe name 名称、/recipe summary 简介、/recipe overview 概览、/recipe version 版本或 /recipe role 角色。需要运行 setup 时，请把说明写在概览中。',
   confirm: '请核对每个字段的实际新值。模型可能理解有误，确认后才保存到私人草稿。',
   pending: '已确认，正在等待 App 同步。', saved: '私人草稿已保存。可以在 App 查看或继续编辑。',
-  cancelled: '已取消本次草稿操作。', expired: '这次操作已到期。若之前已经保存，请到 App 创作中心查看。',
+  cancelled: '已取消本次草稿操作。', expired: '这次操作已到期。若之前已经保存，请到 App 的「我的配方」查看。',
   review: '来源或授权已经改变，请回到 App 核对。',
 };
 const plain = (content: string) => ({tag:'div', text:{tag:'plain_text',content}});

@@ -82,7 +82,7 @@ function SourcePicker(props: Props & {title: string; shell: RecipeAuthoringShell
   return <SourceDialog title={title} onBack={onBack} footer={<><Button onClick={onBack}>取消</Button>{problem && ready ? <GlowButton variant="dark" onClick={() => {onBack(); window.dispatchEvent(new CustomEvent(OPEN_SETTING_EVENT, {detail: {page: 'collaboration', view: bots.length ? 'groups' : 'agents'}}));}}>前往{bots.length ? '群组' : 'Bot'}</GlowButton> : <GlowButton variant="dark" disabled={!chosen || Boolean(problem)} onClick={() => {if (chosen) setSelection({entry: chosen, incarnation});}}>在飞书继续</GlowButton>}</>}>
     <p>选择要在私聊中整理和分享的群内 Bot 配置。</p>
     {problem ? <p role="status">{problem}</p> : <div className="recipe-source-fields"><label>Bot<select aria-label="配方来源 Bot" value={bot?.id ?? ''} onChange={event => {setBotId(availableBots.find(bot => bot.id === event.target.value)?.id); setGroupId(undefined);}}><option value="">选择 Bot</option>{availableBots.map(bot => <option key={bot.id} value={bot.id}>{bot.name}</option>)}</select></label><label>群聊<select aria-label="配方来源群聊" value={group?.id ?? ''} onChange={event => setGroupId(memberships.find(binding => binding.groupId === event.target.value)?.groupId)}><option value="">选择群聊</option>{memberships.map(binding => <option key={binding.groupId} value={binding.groupId}>{snapshot?.groups.find(group => group.id === binding.groupId)?.name}</option>)}</select></label></div>}
-    <p className="recipe-source-help">创作内容仅自己可见。修改、完整预览和确认发布都可以在私聊中完成。</p>
+    <p className="recipe-source-help">创作内容仅自己可见。在私聊中修改，再从卡片打开 App 预览，或直接确认发布。</p>
   </SourceDialog>;
 }
 
@@ -177,7 +177,7 @@ function ContinueFlow({shell, accountId, entry, title, onBack, onWorkspace, view
     {flow.kind === 'pending' && <p role="status">{busy ? '正在连接私聊创作…' : '私聊连接尚未完成。'}</p>}
     {flow.kind === 'creatorContinuing' && <>
       <p>可以回到 Bot 私聊继续创作。</p>
-      <p className="recipe-source-help">在私聊中修改内容、查看完整预览，并由你最后确认发布。未发布内容会保存在「我的配方」。</p>
+      <p className="recipe-source-help">在私聊中修改内容，再从卡片打开 App 查看完整预览，或直接确认发布。App 预览页也可以发布。未发布内容会保存在「我的配方」。</p>
     </>}
     {flow.kind === 'creatorSourceRequired' && <>
       <p>这份作品尚未找到确切的来源。请选择已关联的 Bot，继续由本人核对。</p>

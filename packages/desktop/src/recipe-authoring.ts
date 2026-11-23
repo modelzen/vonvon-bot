@@ -85,7 +85,7 @@ const changed = () => new AuthoringError('账号或设备连接已改变，请�
 const recheck = () => new AuthoringError('本次选择已改变，请重新核对来源或草稿。');
 const terminal = (op: AuthoringOperation) => ['completed', 'cancelled', 'expired'].includes(op.state);
 function expiryNotice(receipt?: AuthoringReceipt) {
-  return receipt && 'outcome' in receipt ? {syncMessage:'这次操作已到期，无法确认之前是否保存。若已保存，请到创作中心查看。'} : {};
+  return receipt && 'outcome' in receipt ? {syncMessage:'这次操作已到期，无法确认之前是否保存。若已保存，请到 App 的「我的配方」查看。'} : {};
 }
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
@@ -229,8 +229,10 @@ export class RecipeAuthoringController {
   async creatorSettled(handle:string,draftId:string){
     const h=this.handles.get(handle);if(!h?.creator)throw changed();
     await this.enqueue(h,async()=>{
-      await this.workflow(h);await this.refresh(h);
-      if([...h.operations.values()].some(op=>op.purpose==='editDraft'&&op.draftId===draftId&&!terminal(op)))
+      const status=expectKind(await this.daemon(h,{type:'status'}),'status');
+      if(!status.linked)throw changed();
+      if(status.operations.some(op=>op.purpose==='editDraft'&&op.draftId===draftId&&!terminal(op))||
+        status.reconciliation.some(op=>op.purpose==='editDraft'&&op.draftId===draftId&&!op.receipt))
         throw new AuthoringError('这份草稿的保存结果尚未确认，请稍后再查看。');
       return {kind:'closed'};
     });

@@ -3,6 +3,7 @@ import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {afterEach,expect,it,vi} from 'vitest';
+import {z} from 'zod';
 import {agentIdSchema,groupIdSchema,canonicalizeRichRecipeContent,type AccountStatus,type AuthoringOperation,type CreatorJob,type CreatorAnswer,type RecipeAuthoringRequest,type RecipeAuthoringReply} from '@vonvon/protocol';
 import type {VonvonClient} from '@vonvon/client/browser';
 import {RecipeCreatorSupervisor,type CreatorSourceLease} from '../src/recipe-creator-supervisor.js';
@@ -288,6 +289,36 @@ it('APP PUBLICATION prepares exact readonly bytes without publishing and confirm
   expect(f.request.mock.calls.filter(([,path])=>path.endsWith('/publish'))).toHaveLength(1);
   expect(f.journal.command(f.accountId,f.current()!.id)?.grant.confirmation?.kind).toBe('app');
   expect(f.rpcs.filter(r=>r.type==='creatorAppConfirm')).toHaveLength(1);
+});
+
+it('APP PUBLICATION diagnostics identify a failed stage without logging error messages or arbitrary names',async()=>{
+  const f=await publicationFixture(),warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
+  try{
+    const prior=f.rpc.getMockImplementation()!;
+    f.rpc.mockImplementation(async input=>{
+      if(input.type==='creatorPreview')throw Object.assign(new Error('secret-message-token-draft-body'),{name:'secret-error-name'});
+      return prior(input);
+    });
+    await expect(f.prepare()).rejects.toThrow('发布准备尚未完成');
+    expect(warn).toHaveBeenCalledWith('recipe.publication.prepare.failed',{code:'prepare_failed',stage:'daemonPreview',errorName:'UnknownError'});
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('secret');
+  }finally{warn.mockRestore();}
+});
+
+it('APP PUBLICATION diagnostics preserve structural Zod paths and hide dynamic path values and messages',async()=>{
+  const f=await publicationFixture(),warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
+  try{
+    const prior=f.rpc.getMockImplementation()!;
+    f.rpc.mockImplementation(async input=>{
+      if(input.type==='creatorPreview')throw new z.ZodError([{code:'invalid_type',expected:'string',received:'number',
+        path:['job','task','snapshot','secret-draft-id',0,'revision'],message:'secret-zod-message'}]);
+      return prior(input);
+    });
+    await expect(f.prepare()).rejects.toThrow('发布准备尚未完成');
+    expect(warn).toHaveBeenCalledWith('recipe.publication.prepare.failed',{code:'prepare_failed',stage:'daemonPreview',errorName:'ZodError',
+      issues:[{code:'invalid_type',path:['job','task','snapshot','*',0,'revision']}]});
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('secret');
+  }finally{warn.mockRestore();}
 });
 
 it.each(['account','revision','content','review','saved'] as const)('APP PUBLICATION refuses changed %s before authorization',async(change)=>{

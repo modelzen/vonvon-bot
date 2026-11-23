@@ -208,3 +208,18 @@ it('delivers the negotiated attention model even when an initial legacy event ha
   expect(seen).toEqual([undefined, 'group']);
   stop(); await client.close();
 });
+
+it.each([false,true])('sends only the supported creator open fields on the wire (native preview: %s)',async supported=>{
+  const session=randomUUID(),binding=randomUUID(),scope='f'.repeat(64);
+  const input={type:'creatorOpen' as const,botId:'cli_creator',accountId:randomUUID(),binding,scope,wakeId:null};
+  const payloads:unknown[]=[];
+  const options=await fixture((socket,frame)=>{
+    payloads.push(frame.payload);
+    socket.send(JSON.stringify({type:'response',id:frame.id,method:'recipeAuthoring',payload:{kind:'creatorSession',session,binding,scope,leaseMs:45000}}));
+  },supported?['recipe.native-preview']:[]);
+  const {client}=await connectLocal(options);
+  const {recipeAuthoringRequestSchema}=await import('@vonvon/protocol');
+  await client.recipeAuthoring!(recipeAuthoringRequestSchema.parse({...input,nativePreview:true}));
+  expect(payloads).toEqual([supported?{...input,nativePreview:true}:input]);
+  await client.close();
+});

@@ -33,10 +33,12 @@ let commands: CommandInfo[] = [];
 beforeAll(async () => { commands = await loadCommands(); });
 
 describe('CLI parity with the RPC kinds (devices 8.5)', () => {
-  it('keeps every rich authoring RPC on the signed-in desktop', () => {
+  it('keeps every rich and creator authoring RPC on the signed-in desktop', () => {
     const richAuthoring = kinds.filter(kind => kind.startsWith('recipeAuthoring.rich'));
     expect(richAuthoring).toHaveLength(9);
-    for (const kind of richAuthoring) expect(CLI_PARITY_ALLOWLIST[kind], kind).toMatchObject({ reason: 'desktop-only' });
+    const creatorAuthoring = kinds.filter(kind => kind.startsWith('recipeAuthoring.creator'));
+    expect(creatorAuthoring).toEqual(expect.arrayContaining(['recipeAuthoring.creatorPreview', 'recipeAuthoring.creatorAppConfirm']));
+    for (const kind of [...richAuthoring, ...creatorAuthoring]) expect(CLI_PARITY_ALLOWLIST[kind], kind).toMatchObject({ reason: 'desktop-only' });
   });
 
   // main 必败: there was no covers metadata and no allowlist

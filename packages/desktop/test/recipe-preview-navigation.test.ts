@@ -31,7 +31,7 @@ describe('draft preview navigation', () => {
     expect(show).toContain('app.dock.show()');
     const bridge = readFileSync(new URL('../src/bridge.ts', import.meta.url), 'utf8');
     expect(bridge).toContain("current.kind!=='signedIn'||current.accountId!==value.accountId");
-    expect(bridge).toContain('recipePreview.request({draftId:value.draftId,revision:value.revision})');
+    expect(bridge).toContain('recipePreview.request({draftId:value.draftId,revision:value.revision},value.accountId)');
   });
   it('resolved packager configuration isolates preview and stable protocol handlers', async () => {
     const project = fileURLToPath(new URL('../', import.meta.url));
@@ -100,4 +100,14 @@ describe('draft preview navigation', () => {
     expect(nav.pending()).toHaveLength(3);
     expect(event.preventDefault).toHaveBeenCalledOnce();
   });
+});
+
+it('keeps authenticated callbacks separate from URL launches and cancels them on account switch',()=>{
+  const nav=new RecipePreviewNavigation('vonvon-preview'),owner='11111111-1111-4111-8111-111111111111',other='22222222-2222-4222-8222-222222222222';
+  nav.request({draftId,revision:2},owner);
+  nav.open(link);
+  const [bound,external]=nav.pending();
+  expect(bound.accountId).toBe(owner);expect(external.accountId).toBeUndefined();
+  nav.acknowledge(bound.navigationId,other);expect(nav.pending()).toHaveLength(2);
+  nav.retainAccount(other);expect(nav.pending()).toEqual([external]);
 });
