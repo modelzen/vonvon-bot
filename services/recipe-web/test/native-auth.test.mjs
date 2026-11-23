@@ -103,6 +103,31 @@ test('native login transfers only a repeatable authorization code until acknowle
   assert.equal((await f.browser('complete', flow, { body: { receipt } })).status, 401);
 });
 
+test('late native cancellation preserves completion and acknowledgement retries', async t => {
+  let now = Date.now();
+  const f = await fixture(t, { now: () => now }), flow = await f.launch(await f.create());
+  await f.authorize(flow);
+  const { receipt } = await f.callback(flow);
+  assert.equal((await f.browser('complete', flow, { body: { receipt } })).status, 200);
+  const ack = () => f.native('/' + flow.flowId + '/ack', { method: 'POST', token: flow.pollToken, body: {} });
+  assert.equal((await ack().then(data)).status, 'completed');
+  for (let i = 0; i < 2; i++) {
+    const cancelled = await f.native('/' + flow.flowId, { method: 'DELETE', token: flow.pollToken });
+    assert.equal(cancelled.status, 200);
+    assert.equal((await data(cancelled)).status, 'completed');
+    const retried = await ack();
+    assert.equal(retried.status, 200);
+    assert.equal((await data(retried)).status, 'completed');
+  }
+  assert.equal((await f.browser('cancel', flow).then(data)).status, 'acknowledged');
+  now += 300_001;
+  const completed = await f.native('/' + flow.flowId, { token: flow.pollToken }).then(data);
+  assert.equal(completed.status, 'completed'); assert.equal(completed.code, undefined);
+  assert.equal((await ack()).status, 200);
+  assert.equal((await f.browser('complete', flow, { body: { receipt } })).status, 401);
+  assert.equal((await f.callback(flow)).receipt, '');
+});
+
 test('native credentials reject browser ambient authority and malformed JSON', async t => {
   const f = await fixture(t), flow = await f.create();
   for (const headers of [{ Origin: origin }, { Origin: 'null' }, { Cookie: '' }]) {
@@ -175,15 +200,68 @@ test('a late cancelled tab cannot assign its callback code to a newer cookie flo
   await f.authorize(a);
   assert.equal((await f.native('/' + a.flowId, { method: 'DELETE', token: a.pollToken })).status, 200);
   const b = await f.launch(await f.create()); await f.authorize(b);
-  const late = await f.callback({ ...a, cookie: b.cookie }, 'late-code-from-a');
-  assert.ok(late.receipt);
-  assert.equal((await f.browser('complete', { ...a, cookie: b.cookie }, { body: { receipt: late.receipt } })).status, 401);
+  for (let i = 0; i < 8; i++) {
+    const late = await f.callback({ ...a, cookie: b.cookie }, 'late-code-from-a-' + i);
+    assert.ok(late.receipt);
+    assert.equal((await f.browser('complete', { ...a, cookie: b.cookie }, { body: { receipt: late.receipt } })).status, 401);
+  }
   const result = await f.native('/' + b.flowId, { token: b.pollToken }).then(data);
   assert.equal(result.status, 'provider'); assert.equal(result.code, undefined);
   const current = await f.callback(b, 'current-code-from-b');
+  assert.ok(current.receipt);
+  assert.equal((await f.browser('complete', b, { body: { receipt: current.receipt } })).status, 200);
   assert.equal((await f.browser('complete', b, { body: { receipt: current.receipt } })).status, 200);
   assert.equal((await f.native('/' + b.flowId, { token: b.pollToken }).then(data)).code, 'current-code-from-b');
   assert.equal((await f.native('/' + a.flowId, { token: a.pollToken }).then(data)).status, 'cancelled');
+});
+
+test('callback redelivery replaces bounded pending receipts and preserves confirmed retries', async t => {
+  const f = await fixture(t), flow = await f.launch(await f.create());
+  await f.authorize(flow);
+  const receipts = [];
+  for (let i = 0; i < 8; i++) {
+    const callback = await f.callback(flow, 'synthetic-code-' + i);
+    assert.ok(callback.receipt);
+    receipts.push(callback.receipt);
+  }
+  for (const receipt of receipts.slice(0, 4)) {
+    assert.equal((await f.browser('complete', flow, { body: { receipt } })).status, 401);
+  }
+  const receipt = receipts.at(-1);
+  for (let i = 0; i < 2; i++) {
+    assert.equal((await f.browser('complete', flow, { body: { receipt } })).status, 200);
+    const ready = await f.native('/' + flow.flowId, { token: flow.pollToken }).then(data);
+    assert.equal(ready.status, 'code'); assert.equal(ready.code, 'synthetic-code-7');
+  }
+  for (const orphan of receipts.slice(4, -1)) {
+    assert.equal((await f.browser('complete', flow, { body: { receipt: orphan } })).status, 401);
+  }
+  assert.equal((await f.callback(flow)).receipt, '');
+});
+
+test('cancelled and expired native flows reject old callbacks and cannot revive', async t => {
+  let now = Date.now();
+  const f = await fixture(t, { now: () => now });
+  for (const terminal of ['cancelled', 'expired']) {
+    const flow = await f.launch(await f.create()); await f.authorize(flow);
+    const { receipt } = await f.callback(flow);
+    if (terminal === 'cancelled') {
+      assert.equal((await f.native('/' + flow.flowId, { method: 'DELETE', token: flow.pollToken }).then(data)).status, terminal);
+    } else now += 300_001;
+    for (let i = 0; i < 2; i++) {
+      assert.equal((await f.native('/' + flow.flowId, { method: 'DELETE', token: flow.pollToken }).then(data)).status, terminal);
+      assert.equal((await f.browser('cancel', flow).then(data)).status, terminal);
+      assert.equal((await f.browser('complete', flow, { body: { receipt } })).status, 401);
+      assert.equal((await f.callback(flow)).receipt, '');
+      const ack = await f.native('/' + flow.flowId + '/ack', { method: 'POST', token: flow.pollToken, body: {} });
+      assert.equal(ack.status, terminal === 'expired' ? 410 : 409);
+      const authorize = await f.native('/' + flow.flowId + '/authorize', { method: 'PUT', token: flow.pollToken, body: { url: f.authorizeUrl() } });
+      assert.equal(authorize.status, terminal === 'expired' ? 410 : 409);
+      assert.equal((await f.browser('select', flow, { body: { provider: 'github' } })).status, terminal === 'expired' ? 410 : 409);
+      const result = await f.native('/' + flow.flowId, { token: flow.pollToken }).then(data);
+      assert.equal(result.status, terminal); assert.equal(result.code, undefined);
+    }
+  }
 });
 
 test('cancel and expiry destroy tickets, codes, and receipts without revival', async t => {
