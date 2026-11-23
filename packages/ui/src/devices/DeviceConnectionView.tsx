@@ -5,6 +5,11 @@ import {Button} from '../reference/components/ui';
 import {addBlockedReason, failureCopy, networkFailure, rowView, routeHints} from './devices-presentation';
 import {CopyText, DeviceTile, OutsideWindow, platformIcon, StatusDot, StatusPill, TailscaleAdvice, useNow} from './device-bits';
 import {AddDeviceDialog, Problem} from './AddDeviceDialog';
+import {useCommunity} from '../community/community-context';
+import {useAccount} from '../account-context';
+import {AccountMenuItem} from '../accounts/AccountMenuItem';
+import {AccountPanel} from '../accounts/AccountPanel';
+import {useAccountPage} from '../accounts/account-page';
 
 const reportSwitchFailure = (error: unknown) => console.error('Device switch failed', error);
 
@@ -12,6 +17,9 @@ const reportSwitchFailure = (error: unknown) => console.error('Device switch fai
 export function DeviceOutsideFrame({title, children}: {title: string; children: (openAdd: (repairOf?: DeviceRow) => void) => ReactNode}) {
   const shell = useShellCapabilities();
   const state = useDevicesState();
+  const account = useAccount();
+  const accountPage = useAccountPage();
+  const community = useCommunity();
   const [dialog, setDialog] = useState<{repairOf?: DeviceRow}>();
   const now = useNow(60_000);
   const switchTo = (id: string) => void shell?.devices?.switchTo(id).catch(reportSwitchFailure);
@@ -20,21 +28,31 @@ export function DeviceOutsideFrame({title, children}: {title: string; children: 
   const others = state?.devices.filter(row => row.id !== 'local' && !row.current) ?? [];
   const blocked = state && addBlockedReason(state);
   return <OutsideWindow shell={shell}>
-    {current && view && <div className="device-outside-head"><DeviceTile large icon={platformIcon(current.platform)}/>
-      <span className="device-outside-head__copy"><strong title={view.title}>{view.title}</strong><StatusPill tone={view.tone}>{view.status}</StatusPill></span>
-    </div>}
-    <h1>{title}</h1>
-    {children(repairOf => setDialog(repairOf ? {repairOf} : {}))}
+    {accountPage?.isOpen ? <>
+      <div className="device-actions"><Button variant="ghost" onClick={accountPage.close}>返回设备连接</Button></div>
+      <AccountPanel/>
+    </> : <>
+      {current && view && <div className="device-outside-head"><DeviceTile large icon={platformIcon(current.platform)}/>
+        <span className="device-outside-head__copy"><strong title={view.title}>{view.title}</strong><StatusPill tone={view.tone}>{view.status}</StatusPill></span>
+      </div>}
+      <h1>{title}</h1>
+      {children(repairOf => setDialog(repairOf ? {repairOf} : {}))}
+    </>}
     <footer className="device-outside-foot">
-      <div className="device-actions">
+      {community && <div className="device-actions"><Button onClick={() => community.open()}>浏览社区</Button></div>}
+      {state && shell?.devices && <div className="device-actions">
         {current?.id !== 'local' && <Button onClick={() => switchTo('local')}>回到这台电脑</Button>}
         <Button variant="ghost" disabled={Boolean(blocked)} title={blocked} onClick={() => setDialog({})}>添加设备</Button>
-      </div>
+      </div>}
       {others.length > 0 && <section aria-label="其他设备"><h2>其他设备</h2>
         <ul className="device-compact-list">{others.map(row => <li key={row.id}>
           <button type="button" title={row.name} onClick={() => switchTo(row.id)}><StatusDot tone={rowView(row, now).tone}/><span>{row.name}</span></button>
         </li>)}</ul>
       </section>}
+      {accountPage && <div className="device-outside-account">
+        <AccountMenuItem account={{...account, onLogin: () => void account.login(), onManage: accountPage.open}}/>
+        {!accountPage.isOpen && <Button variant="ghost" onClick={accountPage.open}>账号设置</Button>}
+      </div>}
     </footer>
     {dialog && <AddDeviceDialog repairOf={dialog.repairOf} onClose={() => setDialog(undefined)} onSwitch={switchTo}/>}
   </OutsideWindow>;
@@ -78,9 +96,12 @@ export function SnapshotPendingView() {
   const state = useDevicesState();
   const device = useActiveDevice();
   const shell = useShellCapabilities();
+  const account = useAccount();
   const local = state?.devices.find(row => row.id === 'local');
-  if (!state || !shell?.devices || (!device.isRemote && local?.status === 'online'))
+  if (!state || !shell?.devices || (!device.isRemote && local?.status === 'online')) {
+    if (account.supported) return <DeviceOutsideFrame title="正在打开 Vonvon Bot…">{() => null}</DeviceOutsideFrame>;
     return <div className="desktop-loading" role="status">正在打开 Vonvon Bot…</div>;
+  }
   const name = deviceCopyName(device);
   const retry = () => void shell.devices?.retry().catch(reportSwitchFailure);
   if (device.isRemote) return <DeviceOutsideFrame title={`正在打开${name}…`}>{() => <>

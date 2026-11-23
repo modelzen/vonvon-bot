@@ -13,6 +13,9 @@ import { contextPreviewRequestSchema, contextPreviewReplySchema } from "./contex
 import { scheduleRequestSchema, scheduleReplySchema } from "./schedule.js";
 import { agentIdSchema } from "./domain.js";
 import { deviceRequestSchema, deviceReplySchema } from "./device.js";
+import { recipeInstallRequestSchema, recipeInstallReplySchema } from './recipe-install.js';
+
+import { recipeAuthoringRequestSchema, recipeAuthoringReplySchema } from './recipe-authoring.js';
 
 const id = z.string().min(1);
 export const requestSchema = z.discriminatedUnion("method", [
@@ -29,6 +32,8 @@ export const requestSchema = z.discriminatedUnion("method", [
   z.object({type:z.literal("request"),id,method:z.literal("contextPreview"),payload:contextPreviewRequestSchema}).strict(),
   z.object({type:z.literal("request"),id,method:z.literal("schedule"),payload:z.object({botId:agentIdSchema,request:scheduleRequestSchema}).strict()}).strict(),
   z.object({type:z.literal("request"),id,method:z.literal("device"),payload:deviceRequestSchema}).strict(),
+  z.object({type:z.literal('request'),id,method:z.literal('recipeAuthoring'),payload:recipeAuthoringRequestSchema}).strict(),
+  z.object({type:z.literal('request'),id,method:z.literal('recipeInstall'),payload:recipeInstallRequestSchema}).strict(),
 ]);
 export type Request = z.infer<typeof requestSchema>;
 // One const per method so the declaration emit names each part; the inline union grew past what tsc will serialize (TS7056).
@@ -45,8 +50,10 @@ const memoryResponse = z.object({type:z.literal("response"),id,method:z.literal(
 const contextPreviewResponse = z.object({type:z.literal("response"),id,method:z.literal("contextPreview"),payload:contextPreviewReplySchema}).strict();
 const scheduleResponse = z.object({type:z.literal("response"),id,method:z.literal("schedule"),payload:scheduleReplySchema}).strict();
 const deviceResponse = z.object({type:z.literal("response"),id,method:z.literal("device"),payload:deviceReplySchema}).strict();
-export const responseSchema: z.ZodDiscriminatedUnion<"method", [typeof snapshotResponse, typeof commandResponse, typeof settingsResponse, typeof collaborationResponse, typeof environmentResponse, typeof machineResponse, typeof adminResponse, typeof directoryResponse, typeof libraryResponse, typeof memoryResponse, typeof contextPreviewResponse, typeof scheduleResponse, typeof deviceResponse]> = z.discriminatedUnion("method", [
-  snapshotResponse, commandResponse, settingsResponse, collaborationResponse, environmentResponse, machineResponse, adminResponse, directoryResponse, libraryResponse, memoryResponse, contextPreviewResponse, scheduleResponse, deviceResponse,
+const recipeAuthoringResponse = z.object({type:z.literal('response'),id,method:z.literal('recipeAuthoring'),payload:recipeAuthoringReplySchema}).strict();
+const recipeInstallResponse = z.object({type:z.literal('response'),id,method:z.literal('recipeInstall'),payload:recipeInstallReplySchema}).strict();
+export const responseSchema: z.ZodDiscriminatedUnion<"method", [typeof snapshotResponse, typeof commandResponse, typeof settingsResponse, typeof collaborationResponse, typeof environmentResponse, typeof machineResponse, typeof adminResponse, typeof directoryResponse, typeof libraryResponse, typeof memoryResponse, typeof contextPreviewResponse, typeof scheduleResponse, typeof deviceResponse, typeof recipeInstallResponse, typeof recipeAuthoringResponse]> = z.discriminatedUnion("method", [
+  snapshotResponse, commandResponse, settingsResponse, collaborationResponse, environmentResponse, machineResponse, adminResponse, directoryResponse, libraryResponse, memoryResponse, contextPreviewResponse, scheduleResponse, deviceResponse, recipeInstallResponse, recipeAuthoringResponse,
 ]);
 export type Response = z.infer<typeof responseSchema>;
 /** `details`: what a refusal adds for a program to read, e.g. both versions of a `protocol_mismatch` (devices 4.5). */

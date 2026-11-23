@@ -1,8 +1,9 @@
+import { RecipePreviewNavigation, captureRecipePreviewLaunches } from './recipe-preview-navigation.js';
 import { mkdirSync, realpathSync } from 'node:fs';
 import { homedir, release } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, autoUpdater, BrowserWindow, dialog, Menu, net, powerMonitor, safeStorage, type WebContents } from 'electron';
+import { app, autoUpdater, BrowserWindow, dialog, Menu, net, powerMonitor, safeStorage, shell, type WebContents } from 'electron';
 import { resolveDataRoot } from '../../daemon/src/config/data-root.js';
 import { attachExisting, AttachError } from './attach.js';
 import { installBridge, openAllowedExternal } from './bridge.js';
@@ -20,12 +21,22 @@ import { desktopCliOptions, observeCli, registerCli } from './cli-registration.j
 import { liveServiceActionRecord } from '../../daemon/src/service/action-report.js';
 import { changeLoginItem, followServiceHelper, repairServiceAtStartup, type LoginItemHooks, type ServiceRuntime } from './login-item.js';
 import { desktopUpdateNotice, PROTOCOL_VERSION, type CommandResult, type DesktopUpdate, type MachineReply } from '@vonvon/protocol';
+import { accountDeployment } from './account-auth.js';
+import { createAccountSession, type NativeAccount } from './account-session.js';
+import { accountStore } from './account-store.js';
 import { electronSecretBox, openDeviceRegistry } from './device-registry.js';
 import { createDeviceConnections, type DeviceConnections } from './connections.js';
 import { secureConnector } from './remote-transport.js';
 import { createDeviceLog } from './device-log.js';
 import { REMOTE_UPDATE_TEXT, startRemoteSelfUpdate, type RemoteSelfUpdate } from './remote-self-update.js';
 import { ConnectionError, RpcError } from '@vonvon/client/browser';
+
+declare const __VONVON_ACCOUNT_WEB_ORIGIN__: string | undefined;
+declare const __VONVON_ACCOUNT_API_ORIGIN__: string | undefined;
+declare const __VONVON_DESKTOP_PREVIEW__: boolean | undefined;
+
+const previewBuild = typeof __VONVON_DESKTOP_PREVIEW__ !== 'undefined' && __VONVON_DESKTOP_PREVIEW__;
+const previewIntegrationMessage = '预览版不注册命令行工具或登录启动服务，请在应用中手动启动。';
 
 /** 应用内更新没生效时给用户的手动下载地址，和设置页里的链接一致。 */
 const downloadPage = 'https://vonvon.cc/get/';
@@ -80,6 +91,7 @@ export async function startDesktop(): Promise<void> {
   let stopUpdateChecks: (() => void) | undefined;
   let owner: AttachedDaemon | null = null;
   let bridge: DesktopBridge | null = null;
+  let account: NativeAccount | undefined;
   let devices: DeviceConnections | null = null;
   const onResume = (): void => { devices?.wake(); };
   let quitting = false;
@@ -158,6 +170,7 @@ export async function startDesktop(): Promise<void> {
     powerMonitor.off('resume', onResume);
     remoteUpdate?.dispose();
     try {
+      await account?.dispose();
       if (starting) await starting.catch(() => {});
       // Remote connections first, so no reconnect fires while the rest closes; the remote daemons are left alone.
       await devices?.dispose();
@@ -225,7 +238,15 @@ export async function startDesktop(): Promise<void> {
     }
   })();
 
-  app.on('second-instance', show);
+  const recipePreviewScheme = previewBuild ? 'vonvon-preview' : 'vonvon';
+  const recipePreview = new RecipePreviewNavigation(recipePreviewScheme);
+  recipePreview.onOpen(show);
+  captureRecipePreviewLaunches(recipePreview, {
+    onOpenUrl: listener => { app.on('open-url', listener); },
+    onSecondInstance: listener => { app.on('second-instance', (_event, argv) => listener(argv)); },
+    argv: process.argv,
+    reveal: show,
+  });
   app.on('activate', show);
   app.on('before-quit', event => {
     if (!quitting) {
@@ -237,6 +258,7 @@ export async function startDesktop(): Promise<void> {
   try {
     await app.whenReady();
     if (terminating) return;
+    if (app.isPackaged && (previewBuild || !testHome)) app.setAsDefaultProtocolClient(recipePreviewScheme);
     const paths = desktopResources(app.getAppPath(), app.isPackaged);
     const uiIndex = realpathSync(paths.uiIndex);
     // Use the same padded, transparent icon as the bundle, including in dev mode.
@@ -299,7 +321,7 @@ export async function startDesktop(): Promise<void> {
       platform: process.platform, packaged: app.isPackaged, root, home: homedir(),
       executable: process.execPath, resources: process.resourcesPath,
     };
-    const managerDependencies = createDaemonDependencies(serviceRuntime);
+    const managerDependencies = createDaemonDependencies({ ...serviceRuntime, allowRegisteredService: !previewBuild });
     const manager = createDaemonManager(managerDependencies);
     // devices 7.4: a server installed and registered on its own, and not the one this app carries, stays on quit.
     const keepOnQuit = (owner: VerifiedDaemon): Promise<boolean> =>
@@ -314,9 +336,9 @@ export async function startDesktop(): Promise<void> {
     });
     const cliOptions = desktopCliOptions({ platform: process.platform, executable: process.execPath,
       resources: process.resourcesPath, packaged: app.isPackaged });
-    if (app.isPackaged && !process.env.VONVON_DESKTOP_TEST_HOME) await registerCli(cliOptions);
+    if (!previewBuild && app.isPackaged && !process.env.VONVON_DESKTOP_TEST_HOME) await registerCli(cliOptions);
     // A moved or updated app points its service at itself first. If the desktop then cannot attach, that is the cause.
-    const repairNotice = await repairServiceAtStartup(serviceRuntime, managerDependencies);
+    const repairNotice = previewBuild ? undefined : await repairServiceAtStartup(serviceRuntime, managerDependencies);
     try { await manager.ensureReady(0); }
     catch (error) { throw repairNotice ? new Error(repairNotice) : error; }
     owner = await attachExisting(root);
@@ -525,6 +547,7 @@ export async function startDesktop(): Promise<void> {
 
     /** The bundled helper changes the service; the window expects the daemon to go and reattaches to its successor. */
     function setLoginItem(enabled: boolean, previous?: AttachedDaemon['identity'] | null): Promise<void> {
+      if (previewBuild) throw new StartHostRefusal(previewIntegrationMessage);
       return guardedService(() => changeLoginItem(serviceRuntime, enabled, previous, loginItemHooks));
     }
 
@@ -612,6 +635,19 @@ export async function startDesktop(): Promise<void> {
     // devices-ui-1a 4.8: the devices this computer manages; the list never stops the app from starting.
     const deviceLog = createDeviceLog<string>(join(app.getPath('userData'), 'devices.log'));
     const box = electronSecretBox(safeStorage);
+    const webOrigin = typeof __VONVON_ACCOUNT_WEB_ORIGIN__ !== 'undefined' ? __VONVON_ACCOUNT_WEB_ORIGIN__ : undefined;
+    const apiOrigin = typeof __VONVON_ACCOUNT_API_ORIGIN__ !== 'undefined' ? __VONVON_ACCOUNT_API_ORIGIN__ : undefined;
+    const allowDev = !app.isPackaged;
+    const deployment = accountDeployment(webOrigin ?? (allowDev ? process.env.VONVON_ACCOUNT_WEB_ORIGIN : undefined),
+      apiOrigin ?? (allowDev ? process.env.VONVON_ACCOUNT_API_ORIGIN : undefined), allowDev);
+    const accountBox = {
+      ...box,
+      available: () => box.available() && (process.platform !== 'linux' || safeStorage.getSelectedStorageBackend() !== 'basic_text'),
+    };
+    account = createAccountSession({
+      deployment, store: accountStore(join(app.getPath('userData'), 'account.session'), accountBox),
+      openBrowser: url => shell.openExternal(url),
+    });
     const registry = await openDeviceRegistry(join(app.getPath('userData'), 'devices.json'), box);
     devices = createDeviceConnections({
       registry, connector: secureConnector(), box,
@@ -625,6 +661,7 @@ export async function startDesktop(): Promise<void> {
     bridge = installBridge(owner, current, paths, {
       observeCli: () => observeCli(cliOptions),
       repairCli: async () => {
+        if (previewBuild) throw new StartHostRefusal(previewIntegrationMessage);
         const result = await registerCli(cliOptions);
         if (result.kind === 'error') throw new StartHostRefusal(result.message);
         return { type: 'done', message: result.message };
@@ -649,6 +686,7 @@ export async function startDesktop(): Promise<void> {
       recoverConnection,
       setLoginItem,
       service: async (action, previous) => {
+        if (previewBuild) throw new StartHostRefusal(previewIntegrationMessage);
         if (action === 'install' || action === 'uninstall') {
           await setLoginItem(action === 'install', previous);
           return { type: 'done', message: action === 'install' ? '已打开登录时启动。' : '已关闭登录时启动。' };
@@ -694,7 +732,8 @@ export async function startDesktop(): Promise<void> {
         return verified ? keepOnQuit(verified) : false;
       },
       connectionLost: showConnectionLost,
-    }, devices);
+    }, devices, account, join(app.getPath('userData'),'recipe-install-journal.json'),
+      join(app.getPath('userData'),'recipe-authoring-journal.json'), recipePreview);
     tray = createDesktopTray(icon, show, requestQuit);
     // U4: the daemon this app carries asks it to update when another device says so. Windows' app is updated on that
     // computer for 0.9.0 (owner 2026-11-02): its shell does not declare it can, as its daemon does not offer it.

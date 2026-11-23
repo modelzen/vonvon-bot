@@ -1,0 +1,24 @@
+extends: ./electron-builder.yml
+appId: com.vonvon.bot.preview
+productName: Vonvon Bot Preview
+beforePack: ../../scripts/desktop-preview-policy.mjs
+publish: null
+mac:
+  identity: "-"
+  notarize: false
+directories:
+  output: dist/preview
+files:
+  - desktop/**
+  - dist/update-config.json
+  - dist/windows-update-config.json
+  - dist/preview-config.json
+  - ui/**
+  - assets/**
+  - package.json
+  - "!node_modules/**"
+
+# A single object replaces the inherited array. Two arrays would merge stable into Preview.
+protocols:
+  name: Vonvon draft preview
+  schemes: [vonvon-preview]
