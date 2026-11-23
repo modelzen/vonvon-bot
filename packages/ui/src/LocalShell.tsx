@@ -1,7 +1,8 @@
 import type {ReactNode} from 'react';
-import {ArrowLeft, Search, Settings} from 'lucide-react';
+import {Search, Settings} from 'lucide-react';
 import type {CollaborationView, Page} from './collaboration-model';
 import {uiFeatures} from './features';
+import {BackButton} from './BackButton';
 import {NavigationIndicator} from './NavigationIndicator';
 
 export function AppShell(props: {page: Page; view: CollaborationView; title: string; children: ReactNode; firstUse?: boolean; newCounts?: {bots: number; projects: number}; updateNotice?: string; updateAction?: ReactNode; onNavigate: (page: Page) => void; onOpenList: (view: CollaborationView) => void; onBack?: () => void; backLabel?: string; onSearch?: () => void; deviceSwitcher?: ReactNode; selectedFeature?: string; onFeatureNavigate?: (id: string) => void}) {
@@ -27,8 +28,8 @@ export function AppShell(props: {page: Page; view: CollaborationView; title: str
       </div>
     </header>
     <main className="settings-main-pane" aria-label={props.title}>
-      {props.onBack ? <div className="today-back"><button type="button" onClick={props.onBack} aria-label={props.backLabel}><ArrowLeft size={14}/><span>{props.backLabel?.replace(/^返回\s*/, '') ?? '返回'}</span></button></div> : isSettings && props.page !== 'settings' ? <div className="today-back"><button type="button" onClick={() => props.onNavigate('settings')}><ArrowLeft size={14}/>设置</button></div>
-        : homeBack ? <div className="today-back"><button type="button" onClick={() => props.onNavigate('home')}><ArrowLeft size={14}/>此刻</button></div> : null}
+      {props.onBack ? <BackButton onClick={props.onBack} label={props.backLabel}/> : isSettings && props.page !== 'settings' ? <BackButton onClick={() => props.onNavigate('settings')} label="返回设置"/>
+        : homeBack ? <BackButton onClick={() => props.onNavigate('home')} label="返回此刻"/> : null}
       {uiFeatures.filter(item => item.slot === 'toolbar').map(item => {const Feature = item.component;return <Feature key={item.id}/>;})}
       <div className="settings-content-scroll" id="main-content"><div className="settings-content-page">{props.children}</div></div>
     </main>

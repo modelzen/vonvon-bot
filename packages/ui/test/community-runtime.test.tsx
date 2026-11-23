@@ -30,11 +30,12 @@ const draw = async (state = devicesState({id: 'local'})) => {
   await act(async () => {root.render(<DesktopRootView state={state} fallback={client} shell={shell} renderApp={() => <Host/>}/>);});
 };
 async function click(text: string) {
-  const button = [...document.querySelectorAll('button')].find(button => button.textContent === text);
+  const button = [...document.querySelectorAll('[role="dialog"] button'), ...document.querySelectorAll('button')].find(button => (button.getAttribute('aria-label') ?? button.textContent) === text);
   expect(button, text).toBeDefined();
   await act(async () => {button!.click();});
 }
 async function fill(label: string, value: string) {
+  if (label === '分享码' && !document.querySelector('[aria-label="分享码"]')) await click('获取配方');
   const input = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[aria-label="${label}"]`)!;
   expect(input, label).not.toBeNull();
   const prototype = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -81,6 +82,9 @@ it('uses only immutable IDs when opening a just-published receipt', async () => 
   expect(calls.filter(request => request.type === 'detail' || request.type === 'shareLink')).toEqual([
     {type: 'detail', accountId, recipeId: A, versionId: B}, {type: 'shareLink', recipeId: A, versionId: B},
   ]);
+  const catalogs=calls.filter(request=>request.type==='catalog').length;
+  await click('返回 Bot 配方');
+  expect(calls.filter(request=>request.type==='catalog')).toHaveLength(catalogs+1);
 });
 it('keeps the actual editor DOM, caret, unsaved text and uncertain request key across reconnects and device switches', async () => {
   let attempts = 0;
@@ -135,7 +139,9 @@ it('recovers a lost code-batch receipt using the same key while retaining only s
   await click('重试上一批');
   const issues = calls.filter(request => request.type === 'issueCodes');
   expect(issues).toHaveLength(2); expect(issues[1]).toEqual(issues[0]);
-  expect(document.querySelector('.community-code-text')?.textContent).toBe(available.code);
+  expect(document.querySelector('.community-code-text')).toBeNull();
+  expect(document.querySelector('.community-codes')?.textContent).not.toContain(available.code);
+  expect(document.querySelector('.community-codes')?.textContent).toContain('复制分享码');
   expect(document.querySelector('.community-codes')?.textContent).toContain('已兑换');
   expect(document.querySelector('.community-codes')?.textContent).toContain('已停用');
 });
@@ -336,4 +342,71 @@ it('retains edited text and reconciles an uncertain submission across a native d
   await click('获取配方');expect(attempts()).toHaveLength(2);
   expect(attempts()[1]!.requestId).not.toBe(attempts()[0]!.requestId);
   expect(attempts()[1]!.code).toBe('New-Code');
+});
+
+it('renders complete rich configuration through the strict facade and hides every private tab in coded introductions',async()=>{
+  const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
+  const {readFileSync}=await import('node:fs');const {resolve}=await import('node:path');
+  const content=JSON.parse(readFileSync(resolve(process.cwd(),'../protocol/test/fixtures/recipe-rich-v2.content.json'),'utf8'));
+  content.parts=[];content.memories=[];delete content.finalLogo;
+  const doc=canonicalizeRichRecipeContent(content);
+  const normal=handle;let acquired=false;
+  handle=async request=>{
+    if(request.type==='detail')return {...summary,format:'rich-v2',public:{...recipe.public,access:'coded'},owned:false,acquired,...(acquired?{rich:{content:doc.content,texts:{},canonical:Buffer.from(doc.canonicalUTF8).toString('base64url')}}:{})};
+    if(request.type==='acquire'){acquired=true;return {recipeId:A,versionId:B,owned:false,acquired:true};}
+    return normal(request);
+  };
+  await draw();await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());
+  expect(document.querySelector('[aria-label="配方详细信息"]')?.textContent).toBe('概览');
+  expect(document.querySelector('.community-detail')?.textContent).not.toContain(content.role.text.value);
+  await fill('分享码','VALID');await click('获取配方');
+  for(const section of ['模型与权限','能力','沟通方式','记忆','任务','使用前准备']){
+    await click(section);expect(document.querySelector('.community-detail-content h2')?.textContent).toBe(section==='能力'?'角色':section);
+  }
+  await click('记忆');expect(document.querySelector('.community-config')?.textContent).toBe('记忆');
+  await click('能力');expect(document.querySelector('.community-detail-content')?.textContent).toContain(content.role.text.value);
+});
+
+it('opens coded acquisition in a focused dialog and keeps an uncertain retry bound to the same request', async () => {
+  const normal = handle;
+  let acquired = false, attempts = 0;
+  handle = async request => {
+    if (request.type === 'detail') {const {config, ...intro} = recipe; return {...intro, public: {...recipe.public, access: 'coded'}, acquired, ...(acquired ? {config} : {})};}
+    if (request.type === 'acquire') {
+      if (++attempts === 1) throw new Error('receipt lost');
+      acquired = true;
+      return {recipeId: A, versionId: B, owned: false, acquired: true};
+    }
+    return normal(request);
+  };
+  await draw(); await click('打开已发布版本');
+  expect(document.querySelector('[aria-label="分享码"]')).toBeNull();
+  const trigger = [...document.querySelectorAll('button')].find(button => button.textContent === '获取配方')!;
+  expect(trigger.disabled).toBe(false);
+  await click('获取配方');
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('分享码');
+  expect(calls.filter(request => request.type === 'acquire')).toHaveLength(0);
+  await fill('分享码', 'VALID'); await click('获取配方');
+  expect(document.querySelector('[role="dialog"] [aria-label="分享码"]')).not.toBeNull();
+  await click('获取配方');
+  const requests = calls.filter(request => request.type === 'acquire');
+  expect(requests).toHaveLength(2); expect(requests[1]).toEqual(requests[0]);
+  expect(document.body.textContent).toContain('已获取，已保存在你的账号中');
+});
+
+
+it('keeps rental content distinct and explicitly returns other routes to recipes', async () => {
+  const normal = handle;
+  handle = async request => request.type === 'drafts' || request.type === 'publications' ? {items: []} : normal(request);
+  await draw();
+  const rental = [...document.querySelectorAll('button')].find(button => button.textContent?.startsWith('Bot 租赁'))!;
+  await act(async () => rental.click());
+  expect(document.querySelector('.community-section-heading')).toBeNull();
+  expect(document.querySelector('.community-empty h2')?.textContent).toBe('Bot 租赁');
+  expect(document.body.textContent?.match(/敬请期待/g)).toHaveLength(1);
+  await click('打开已发布版本');
+  await click('返回 Bot 配方');
+  expect(document.querySelector('.community-tabs button[aria-current="page"]')?.textContent).toBe('Bot 配方');
+  expect(document.querySelector('.community-card')).not.toBeNull();
+  expect(document.querySelector('.community-empty')).toBeNull();
 });

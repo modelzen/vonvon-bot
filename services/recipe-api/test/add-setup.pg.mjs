@@ -154,7 +154,8 @@ try{
   const detail=await req('/v2/recipes/'+published.recipeId+'/versions/'+published.versionId,a);assert.equal(detail.release.contentSha256,plan.contentSha256);
   const coded=await start(a),codedPlan=await coded.freeze(body(next,'coded')),codedSaved=await coded.commit(codedPlan);
   const codedVersion=await req('/v2/drafts/'+codedSaved.draftId+'/publish',a,{canonical:codedPlan.canonical},{key:randomUUID(),rev:1});
-  await req('/v1/versions/'+codedVersion.versionId+'/redeem',b,{code:codedVersion.firstCode},{key:'a2.'+opId()});
+  await req('/v1/versions/'+codedVersion.versionId+'/redeem',b,{code:codedVersion.firstCode},{key:'a2.'+opId(),status:409});
+  await req('/v2/versions/'+codedVersion.versionId+'/redeem',b,{code:codedVersion.firstCode},{key:'a2.'+opId()});
   const mixed=await start(b,{purpose:'editDraft',draftId:readerSaved.draftId,baseRevision:2});
   const codedMember=inventory(JSON.parse(Buffer.from(codedPlan.canonical,'base64url'))).find(x=>x.kind==='rule');
   const mixedInput={...derived,baseCanonical:derivedPlan.canonical,payload:{...derived.payload,baseRevision:2,requestId:randomUUID(),changes:[{op:'addSetup',value,source:{kind:'releaseItems',parents:[...derived.payload.changes[0].source.parents,{versionId:codedVersion.versionId,itemId:codedMember.itemId,baselineSha256:codedMember.baselineSha256}]}}]}};

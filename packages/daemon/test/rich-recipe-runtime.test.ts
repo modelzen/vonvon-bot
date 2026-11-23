@@ -86,6 +86,8 @@ test('a redeemed install drains existing work and commits only the selected slot
         placement: 'follow',
         timeZone: { kind: 'targetChoice' },
       },
+      {...identity(),name:'Tokyo explicit',instruction:text('explicit zone'),spec:{kind:'daily',time:'09:00'},placement:'follow',timeZone:{kind:'recommended',iana:'Asia/Tokyo'}},
+      {...identity(),name:'Tokyo once',instruction:text('fixed instant'),spec:{kind:'once',at:Date.parse('2027-01-02T00:00:00Z')},placement:'follow',timeZone:{kind:'recommended',iana:'Asia/Tokyo'}},
     ],
     memories: [{ ...identity(), text: text('selected') }],
     skills: [],
@@ -167,8 +169,8 @@ test('a redeemed install drains existing work and commits only the selected slot
       bytes: encoded.canonicalUTF8,
     };
   };
-  async function prepare(choices?: Record<string, string>) {
-    const { request, bytes } = await preview();
+  async function prepare(choices?: Record<string, string>,authority?:'exactVersion'|'directUpdate',actorAccount=accountId) {
+    const { request, bytes } = await preview();Object.assign(request,{...(authority?{authority}:{})});request.preview.accountId=actorAccount;
     const first = await installer().request(recipeInstallRequestSchema.parse(request));
     if (first.kind !== 'richReview') throw Error('missing review');
     const next = await installer().request(
@@ -182,7 +184,7 @@ test('a redeemed install drains existing work and commits only the selected slot
     const auth = {
       ...next.intent,
       operationId: next.operationId,
-      accountId,
+      accountId:actorAccount,
       ticket: Buffer.alloc(32, 1).toString('base64url'),
       deadline: Date.now() + 60000,
       serverPublicKey: keys.publicKey.export({ format: 'jwk' }).x!,
@@ -229,10 +231,19 @@ test('a redeemed install drains existing work and commits only the selected slot
     status: 'applied',
     settled: true,
   });
+  const source = await installer().request(recipeInstallRequestSchema.parse({type:'source',botId,groupId}));
+  expect(source).toMatchObject({kind:'source',source:{format:'rich-v2',recipeId}});
+  if(source.kind!=='source'||!source.source)throw new Error('Missing installed source');
+  const ignoredVersionId=randomUUID();
+  const ignored=await installer().request(recipeInstallRequestSchema.parse({type:'ignoreVersion',botId,groupId,recipeId,sourceToken:source.source.sourceToken,installedVersionId:source.source.versionId,versionId:ignoredVersionId}));
+  expect(ignored).toMatchObject({source:{ignoredVersionId}});
+  await expect(installer().request(recipeInstallRequestSchema.parse({type:'ignoreVersion',botId,groupId,recipeId,sourceToken:source.source.sourceToken,installedVersionId:source.source.versionId,versionId:randomUUID()}))).rejects.toThrow('来源已改变');
   const ordinary = await readFile(dir.schedulesFile, 'utf8').catch(() => '{"tasks":[]}');
   expect(JSON.parse(ordinary).tasks).toEqual([]);
   const taskId = store.all()[0]!.id;
   expect(store.all()[0]!.state).toBe('paused');
+  expect(store.all()[0]!.timeZone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  expect(store.all()[1]!.timeZone).toBe('Asia/Tokyo');
   let observedNoMention = true;
   const setup = (action: object) =>
     richSetup(
@@ -248,6 +259,7 @@ test('a redeemed install drains existing work and commits only the selected slot
         }),
       } as never,
       () => true,
+      'ou_fixture',
     ) as Promise<Extract<RecipeInstallReply, { kind: 'richSetup' }>>;
   const shown = await setup({ kind: 'read' });
   const done = await setup({ kind: 'acknowledge', stepId: step.itemId, token: shown.token });
@@ -256,8 +268,17 @@ test('a redeemed install drains existing work and commits only the selected slot
   expect(observed.steps[1]!.readiness).toBe('observed');
   observedNoMention = false;
   expect((await setup({ kind: 'read' })).steps[1]!.readiness).toBe('pending');
-  await setup({ kind: 'enableTask', taskId, actor: 'ou_fixture', timeZone: 'Asia/Shanghai', token: observed.token });
+  expect(()=>recipeInstallRequestSchema.parse({type:'richSetup',botId,groupId,action:{kind:'enableTask',taskId,actor:'ou_untrusted',taskToken:observed.tasks[0]!.token,timeZone:'Asia/Shanghai',token:observed.token}})).toThrow();
+  await expect(setup({kind:'enableTask',taskId,taskToken:'f'.repeat(64),timeZone:'Asia/Shanghai',token:observed.token})).rejects.toThrow('管理员身份');
+  await setup({ kind: 'enableTask', taskId,taskToken:observed.tasks[0]!.token, timeZone: 'Asia/Shanghai', token: observed.token });
   expect(store.all()[0]?.state).toBe('active');
+  const once=observed.tasks.find(task=>task.name==='Tokyo once')!;
+  await setup({kind:'enableTask',taskId:once.id,taskToken:once.token,timeZone:'Asia/Shanghai',token:observed.token});
+  expect(store.all().find(task=>task.id===once.id)).toMatchObject({timeZone:'Asia/Shanghai',spec:{kind:'once',at:Date.parse('2027-01-02T00:00:00Z')}});
+  expect((await setup({kind:'read'})).tasks[0]).toMatchObject({timeZone:'Asia/Shanghai',spec:{kind:'daily',time:'12:00'}});
+  const unchanged=await prepare();
+  await installer().request(unchanged.commit);
+  expect(store.all()[0]).toMatchObject({state:'active',timeZone:'Asia/Shanghai'});
   await mutateProjectByChatId(
     groupId,
     (p) => {
@@ -274,6 +295,7 @@ test('a redeemed install drains existing work and commits only the selected slot
   expect((await group())?.supplement).toBe('local');
   expect(store.all()[0]).toMatchObject({ id: taskId, state: 'paused', instruction: 'changed schedule' });
   expect((await setup({ kind: 'read' })).steps[0]!.readiness).toBe('acknowledged');
+  const exactFromOtherAccount=await prepare(undefined,'exactVersion',randomUUID());expect(exactFromOtherAccount.kind).toBe('installRichRecipe');await expect(installer().request(exactFromOtherAccount.commit)).resolves.toMatchObject({status:'applied'});expect((await group())?.supplement).toBe('local');
   expect(JSON.parse(await readFile(join(root, 'bots.json'), 'utf8')).allocations.format).toBe('bot-allocations-v2');
   expect(JSON.parse(await readFile(join(root, 'bots.before-recipe-v2.json'), 'utf8')).recipeRegistryFormat).toBeUndefined();
 });

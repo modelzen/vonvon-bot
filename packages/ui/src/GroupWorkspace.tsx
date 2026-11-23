@@ -43,7 +43,8 @@ export function groupTabForSection(section?: string): GroupDesignTab {
     case '执行权限':
     case '群设置':
     case '模型与权限':
-    case '可用模型': return 'model';
+    case '可用模型':
+    case '模型设置': return 'model';
     case '权限':
     case '工作目录权限':
     case '能挡到什么':
