@@ -509,3 +509,48 @@ it.each(['rules', 'files', 'tasks', 'memories', 'setup'])('keeps %s prose and na
   expect(document.querySelector('fieldset')!.textContent).not.toContain('默认');
   if (['files', 'tasks', 'setup'].includes(kind)) expect(document.querySelector('fieldset')!.textContent).toContain('constructor');
 });
+
+it('distinguishes a real parent-only card order conflict and retains the chosen order', async () => {
+  const {defaultCardDisplay} = await import('@vonvon/protocol');
+  const {recipeSnapshot, mergeRecipeItems} = await import('../../daemon/src/recipe/rich-merge');
+  const {localRecipeItems, applyNativeRecipeFields} = await import('../../daemon/src/recipe/rich-settings');
+  const id = (n: number) => `0000000${n}-1111-4111-8111-111111111111`;
+  const native = defaultCardDisplay().blocks.slice(0, 3);
+  const portable = native.map(({source: _source, language: _language, sample: _sample, script: _script, ...block}, index) => ({...block, itemId: id(index + 1), originId: id(index + 1)}));
+  const snapshotFor = (order: number[]) => recipeSnapshot({format: 'rich-v2', schemaVersion: 2, public: {name: '排序', summary: '', overview: '', version: '1'}, rules: [], skills: [], files: [], tasks: [], memories: [], setup: [], settings: [{itemId: id(4), originId: id(4), field: 'presentation.cardDisplay', value: {version: 1, blocks: order.map(index => portable[index]!)}}]}, () => '');
+  const base = snapshotFor([0, 1, 2]);
+  const row = {richRecipe: {resolved: base}, presentation: {cardDisplay: {version: 1, blocks: [1, 0, 2].map(index => native[index]!)}}} as unknown as import('../../daemon/src/project/registry').Project;
+  const incoming = snapshotFor([0, 2, 1]);
+  const local = localRecipeItems(row, incoming);
+  const {conflicts} = mergeRecipeItems(base, local, incoming);
+  expect(conflicts).toHaveLength(1);
+  const review = {kind: 'richReview' as const, handle, groupId, reviewToken: token, conflicts: conflicts.map(item => ({itemId: item.itemId, kind: item.local!.kind, base: JSON.stringify(item.base!.value), local: JSON.stringify(item.local!.value), incoming: JSON.stringify(item.incoming!.value)}))};
+  for (const side of ['local', 'incoming'] as const) {
+    const destination = structuredClone(row);
+    applyNativeRecipeFields(destination, mergeRecipeItems(base, local, incoming, {[id(4)]: side}).resolved, base);
+    expect(destination.presentation?.cardDisplay?.blocks.map(block => block.name)).toEqual((side === 'local' ? [1, 0, 2] : [0, 2, 1]).map(index => native[index]!.name));
+  }
+  useReply = request => request.type === 'richResolve' ? {kind: 'richPrepared', handle, groupId, reviewToken: token} : review;
+  await draw(); await click('预览已知群');
+  const sides = [...document.querySelectorAll('.recipe-use-compare')];
+  expect(sides[0]?.textContent).toContain('卡片块2 → 卡片块1 → 卡片块3');
+  expect(sides[1]?.textContent).toContain('卡片块1 → 卡片块3 → 卡片块2');
+  expect(document.body.textContent).not.toContain(id(1));
+  await pick(`input[name="${id(4)}"]`); await click('预览所选内容');
+  expect(document.querySelector('.recipe-use-retained')?.textContent).toContain('卡片块2 → 卡片块1 → 卡片块3');
+});
+
+it('uses the same card block numbers after a missing block and in the retained summary', async () => {
+  const ids = ['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'];
+  const setting = (order: string[]) => JSON.stringify({field: 'presentation.cardDisplay', value: {version: 1, blocks: order}});
+  useReply = request => request.type === 'richResolve' ? {kind: 'richPrepared', handle, groupId, reviewToken: token} : {kind: 'richReview', handle, groupId, reviewToken: token, conflicts: [{itemId: versionId, kind: 'settings', base: setting(ids), local: setting([ids[2]!, ids[0]!]), incoming: setting([ids[1]!, ids[2]!, ids[0]!])}]};
+  await draw(); await click('预览已知群');
+  expect(document.querySelectorAll('.recipe-use-compare')[0]?.textContent).toContain('卡片块3 → 卡片块1');
+  expect(document.querySelectorAll('.recipe-use-compare')[1]?.textContent).toContain('卡片块2 → 卡片块3 → 卡片块1');
+  await pick(`input[name="${versionId}"]`); await click('预览所选内容');
+  expect(document.querySelector('.recipe-use-retained')?.textContent).toContain('卡片块3 → 卡片块1');
+  for (const id of ids) expect(document.body.textContent).not.toContain(id);
+  await act(async () => accountListener!({...status as Extract<AccountStatus, {kind: 'signedIn'}>, accountId: otherAccount}));
+  expect(document.querySelector('.recipe-use-retained')).toBeNull();
+  expect(button('确认应用到这个群')).toBeUndefined();
+});

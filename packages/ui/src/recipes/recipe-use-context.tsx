@@ -137,7 +137,7 @@ function RecipeUseSessionView({session, visible, currentAccountId, currentDevice
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [acceptedResolution, setAcceptedResolution] = useState<Extract<RecipeUseRequest, {type: 'resolve'}>['resolution']>();
-  const [retainedSettings, setRetainedSettings] = useState<{kind: string; local: string | null}[]>();
+  const [retainedSettings, setRetainedSettings] = useState<{kind: string; local: string | null; base: string | null; incoming: string | null}[]>();
   const inFlight = useRef(false);
   const mounted = useRef(true);
   const begunTarget = useRef<string | undefined>(undefined);
@@ -159,7 +159,7 @@ function RecipeUseSessionView({session, visible, currentAccountId, currentDevice
       const result = await request(input);
       if (!mounted.current || !isCurrent() || lease.current.epoch !== epoch) return;
       if (result.kind === 'closed') {onFinished(); return;}
-      if (input.type === 'richResolve' && result.kind === 'richPrepared' && reply?.kind === 'richReview') setRetainedSettings(reply.conflicts.filter(item => input.choices[item.itemId] === 'local').map(({kind, local}) => ({kind, local})));
+      if (input.type === 'richResolve' && result.kind === 'richPrepared' && reply?.kind === 'richReview') setRetainedSettings(reply.conflicts.filter(item => input.choices[item.itemId] === 'local').map(({kind, local, base, incoming}) => ({kind, local, base, incoming})));
       if (result.kind === 'richReview') setRetainedSettings(undefined);
       setReply(result); lease.current.state = 'ready';
       setAcceptedResolution(input.type === 'resolve' && result.kind === 'prepared' ? input.resolution : undefined);
