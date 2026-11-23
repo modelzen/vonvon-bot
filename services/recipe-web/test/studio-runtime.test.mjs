@@ -39,7 +39,7 @@ function assertGuide(document) {
   assert.equal(main.querySelectorAll('form,input,textarea,select,[contenteditable="true"]').length, 0, 'website studio must not expose manual authoring controls');
   assert.equal(main.querySelector('h1')?.textContent, '在 Bot 私聊中创作');
   assert.match(main.textContent, /Bot 私聊里说「把周报群的配置做成配方」/);
-  assert.match(main.textContent, /App 点「创作配方」.*选好 Bot 和群聊/s);
+  assert.match(main.textContent, /App 点「创作配方」.*选好 Bot 后前往私聊.*教程.*链接/s);
   assert.match(main.textContent, /本地 App 的「我的配方 → 创作中」/);
   assert.match(main.textContent, /点「发布到社区」.*发布为新配方.*已有的配方发布新版本/s);
   assert.doesNotMatch(main.textContent, /按卡片选择|确认来源/);

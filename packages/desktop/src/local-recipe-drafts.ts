@@ -73,7 +73,7 @@ function checkedRecord(raw:unknown){
     };
     let contentSha256:string;
     if(draft.format==='rich-v2'){
-      if(!record.work.source||record.work.source.preparationId!==draft.sourceIntentId)throw invalid();
+      if((record.work.source?.preparationId??record.work.draftId)!==draft.sourceIntentId)throw invalid();
       const decoded=decodeCanonical(draft.rich.canonical);
       validateWritableRichRecipeContent(decoded.content);
       if(!isDeepStrictEqual(decoded.content,draft.rich.content))throw invalid();

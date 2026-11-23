@@ -19,7 +19,7 @@ if (typeof document !== 'undefined') {
     const text = document.createElement('p');
     if (kind === 'data-create-recipe') {
       title.textContent = '在 App 中准备发布';
-      text.textContent = 'App 会打开「创作配方」。选择已有 Bot 和群聊，在本地整理和预览，确认发布后才上传。你可以免费分享，也可以自行售卖分享码。';
+      text.textContent = 'App 会打开「创作配方」。选择 Bot，在私聊里提供链接、文档或教程，也可以选取已有群配置。草稿保存在本地，确认发布后才上传。你可以免费分享，也可以自行售卖分享码。';
     } else if (kind === 'data-app-drafts') {
       title.textContent = '在 App 中继续创作';
       text.textContent = 'App 会打开本地「创作中」。尚未发布的内容保存在本地，确认发布后才同步到社区。';

@@ -3,7 +3,7 @@ import {mkdtempSync,readFileSync,readdirSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {afterEach,expect,it,vi} from 'vitest';
-import {agentIdSchema,groupIdSchema,canonicalizeRichRecipeContent,creatorReplies,creatorSnapshotSchema,inheritedPublicationSchema,recipeAuthoringRequestSchema,newRichMetadataRequestId,type CreatorJob,type CreatorAnswer,type RecipeAuthoringRequest,type RecipeAuthoringReply,type AccountStatus} from '@vonvon/protocol';
+import {agentIdSchema,groupIdSchema,recipeRichContentSchema,canonicalizeRichRecipeContent,creatorReplies,creatorSnapshotSchema,inheritedPublicationSchema,recipeAuthoringRequestSchema,newRichMetadataRequestId,type CreatorJob,type CreatorAnswer,type RecipeAuthoringRequest,type RecipeAuthoringReply,type AccountStatus} from '@vonvon/protocol';
 import {createClient,type ClientConnection} from '../../client/src/client.js';
 import {RecipeCreatorExecutor,type CreatorContext} from '../src/recipe-creator.js';
 import {RecipeCreatorJournal,creatorSha,creatorSnapshotDigest} from '../src/recipe-creator-journal.js';
@@ -526,4 +526,26 @@ it('APP PUBLICATION preserves explicit App grant and exact receipt recovery in t
   f.mode('receipt');recovered=true;await f.build(durable).run(f.context,job);
   expect(posted).toBe(1);expect(f.answers.at(-1)).toMatchObject({kind:'published',draftId:f.draftId,draftRevision:3});
   expect(f.publications).toHaveBeenCalledOnce();
+});
+
+
+it('creates material locally once and exposes a group-independent rich draft through normal read and preview snapshots',async()=>{
+  const f=fixture();f.setLocal();
+  const content=recipeRichContentSchema.parse(JSON.parse(readFileSync(new URL('../../protocol/test/fixtures/recipe-rich-v2.content.json',import.meta.url),'utf8')));
+  content.parts=[];content.memories=[];delete content.finalLogo;
+  content.files=[];content.skills=[];
+  const draftId=randomUUID(),id=randomUUID(),work={draftId,source:null};
+  const job=f.set({kind:'materialCreate',draftId,content,access:'direct'},'execute',id);
+  await f.build().run(f.context,job);
+  expect(f.answers.at(-1)).toEqual({kind:'saved',work,revision:1});
+  f.mode('receipt');await f.build().run(f.context,job);
+  expect(f.local().list(f.accountId)).toHaveLength(1);
+  await f.build().run(f.context,f.set({kind:'read',read:{kind:'works',offset:0,draftsOnly:true}},'read'));
+  expect(f.answers.at(-1)).toEqual({kind:'works',items:[{kind:'draft',work,name:content.public.name.value,version:content.public.version.value}],nextOffset:null});
+  await f.build().run(f.context,f.set({kind:'read',read:{kind:'draft',work}},'read'));
+  const answer=f.answers.at(-1);expect(answer?.kind).toBe('snapshot');
+  if(answer?.kind!=='snapshot')throw Error('snapshot');
+  expect(answer.snapshot.format).toBe('rich-v2');expect(answer.snapshot.work.source).toBeNull();
+  await f.build().run(f.context,f.set({kind:'read',read:{kind:'edit',work,revision:1}},'read'));
+  expect(f.answers.at(-1)?.kind).toBe('edit');expect(f.cloud).not.toHaveBeenCalled();
 });

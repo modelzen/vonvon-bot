@@ -61,8 +61,8 @@ const realUserHome=homedir();
 const live=process.env.VONVON_RECIPE_LIVE_MODEL==='1';
 const liveRename=live&&process.env.VONVON_RECIPE_TEST_RENAME==='1';
 const publication=live&&!liveRename||process.env.VONVON_RECIPE_TEST_PG==='1';
-const routes:('private chat'|'App source handoff'|'desktop reconnect')[]=live?['private chat']:['private chat','App source handoff','desktop reconnect'];
-it.each(routes)('saves the selected group and actual skill bytes only on the linked machine from %s',async entry=>{
+const routes:('private chat'|'App source handoff'|'desktop reconnect'|'App materials')[]=live?['private chat']:['private chat','App source handoff','desktop reconnect','App materials'];
+it.each(routes)('saves the approved private recipe and actual skill bytes on the linked machine from %s',async entry=>{
   isolate();vi.resetModules(); // Each orchestrator shuts down its process registry.
   const skillsRead:string[]=[];
   async function rolloutReadSkill(home:string){
@@ -124,7 +124,7 @@ it.each(routes)('saves the selected group and actual skill bytes only on the lin
     vi.stubEnv('CODEX_HOME',profile);
   }
   const wire=live?undefined:codexToolsFixture(), botId=agentIdSchema.parse({
-    'private chat':'cli_recipe_private','App source handoff':'cli_recipe_handoff','desktop reconnect':'cli_recipe_reconnect',
+    'private chat':'cli_recipe_private','App source handoff':'cli_recipe_handoff','desktop reconnect':'cli_recipe_reconnect','App materials':'cli_recipe_materials',
   }[entry]);
   const groupId=groupIdSchema.parse('oc_group_source'), chatId='oc_private_author', owner='ou_author';
   const pg=publication&&entry!=='desktop reconnect'?await (await import(new URL('../../../services/recipe-api/test/local-recipe-publication-fixture.mjs',import.meta.url).href)).startPublicationFixture():undefined;
@@ -144,7 +144,8 @@ it.each(routes)('saves the selected group and actual skill bytes only on the lin
   await writeFile(paths.botsFile,JSON.stringify({version:1,bots:[{...bot,name:entry==='private chat'?'private':'handoff',botName:'周报 Bot'}]}));
   const cfg:AppConfig={accounts:{app:{id:botId,secret:'fixture',tenant:'feishu'}},preferences:{access:{ownerOpenId:owner,admins:[owner]},completionReminder:{mode:'manual'}}};
   await saveConfig(cfg);
-  await addProject({chatId:groupId,name:'周报组',createdAt:1,cwd:source,blank:false,bindingIncarnation,
+  const fromMaterials=entry==='App materials';
+  if(!fromMaterials)await addProject({chatId:groupId,name:'周报组',createdAt:1,cwd:source,blank:false,bindingIncarnation,
     supplement:role,workRules:rule,noMention:true,skills:{disabledPaths:[disabled]},profile:{persona:role,memory:privateMemory,inheritPersona:false,inheritMemory:false}});
   const {channel,card,send,button,plainTexts}=privateTransport();
   const cloud=vi.fn(async()=>{throw Error('Cloud content transport must not be used by local authoring.');});
@@ -194,10 +195,10 @@ it.each(routes)('saves the selected group and actual skill bytes only on the lin
   orchestrator=createOrchestrator(channel,cfg,root,undefined,{entries,authoring:service,bot});
   const lease=new AbortController(),peer={id:randomUUID(),device:randomUUID()};
   const rpcTrace:string[]=[];
-  const client={supportsResourceContext:true,device:async()=>({kind:'deviceStatus',status:{device:{id:peer.device,name:'Mac',publicKey:Buffer.alloc(32,7).toString('base64url')},
+  const client={supportsResourceContext:true,supportsMaterialAuthor:true,device:async()=>({kind:'deviceStatus',status:{device:{id:peer.device,name:'Mac',publicKey:Buffer.alloc(32,7).toString('base64url')},
     remote:{addresses:[],port:3000},clients:{active:1,total:1}}}),
     snapshot:async()=>({host:{kind:'connected'},agents:[{id:botId,name:'周报 Bot',running:true,connection:'connected',tenant:'feishu',registeredAt:bot.createdAt,registrationId:bot.registrationId}],
-      memberships:[{agentId:botId,groupId,enabled:true,bindingIncarnation}],groups:[{id:groupId,name:'周报组'}]}),
+      memberships:fromMaterials?[]:[{agentId:botId,groupId,enabled:true,bindingIncarnation}],groups:fromMaterials?[]:[{id:groupId,name:'周报组'}]}),
     recipeAuthoring:async(req:RecipeAuthoringRequest)=>{
       if(disconnected&&req.type==='localDraftAdvance')throw Error('Test desktop went offline before the approved operation was dispatched.');
       try{const reply=await service.request(peer,req);
@@ -260,9 +261,11 @@ it.each(routes)('saves the selected group and actual skill bytes only on the lin
     await orchestrator.initialize?.();
     await vi.waitFor(async()=>expect(await dmProject()).toBeDefined());
     await mutateProjectByChatId(dmChatId(botId),project=>{project.smart=false;if(live&&process.env.VONVON_RECIPE_TEST_MODEL)project.defaultModel=process.env.VONVON_RECIPE_TEST_MODEL;});
-    const scheduled=await orchestrator.scheduleAs({kind:'local',via:'desktop'},{action:'create',chatId:groupId,name:'每周复核任务',
+    if(!fromMaterials){
+      const scheduled=await orchestrator.scheduleAs({kind:'local',via:'desktop'},{action:'create',chatId:groupId,name:'每周复核任务',
       instruction:'读取本周记录并复核。',spec:{kind:'once',at:Date.now()+86400_000},placement:{kind:'follow'},timeZone:'Asia/Shanghai'});
-    expect(scheduled.kind).toBe('task');
+      expect(scheduled.kind).toBe('task');
+    }
     const linked=await controller.request({type:'open',accountId,viewId:'local',botId});if(linked.kind!=='session')throw Error('desktop session');
     const challenge=await controller.request({type:'beginLink',handle:linked.handle});if(challenge.kind!=='challenge')throw Error('link challenge');
     await dm('/recipe link '+challenge.code);
@@ -272,6 +275,47 @@ it.each(routes)('saves the selected group and actual skill bytes only on the lin
       new RecipeCreatorExecutor(account,creators,new MetadataJournal(),journal,published,saved,undefined,drafts,publisher),drafts);
     supervisor=startSupervisor();
     const worker=await supervisor.associated(accountId,'local',botId);if(!worker)throw Error('linked creator worker');
+    if(fromMaterials){
+      const delivered=await supervisor.continue({type:'creatorContinue',accountId,retryId:randomUUID(),retryStartedAt:Date.now(),entry:{
+        kind:'materials',viewId:'local',botId,registeredAt:bot.createdAt,registrationId:bot.registrationId,
+      }});
+      expect(delivered).toMatchObject({kind:'creatorContinuing',delivery:'delivered'});
+      const skill='---\nname: reading-notes\ndescription: 整理阅读笔记\n---\n按参考文档中的问题写阅读笔记。';
+      const reference='写下作者的结论，以及支撑结论的原文。';
+      const material={public:{name:'阅读笔记',summary:'按教程整理读书笔记',overview:'把每篇文章的主要结论和原文放在一起。',version:'1.0'},
+        skills:[{name:'reading-notes',body:skill,references:[{name:'references/questions.md',text:reference}]}],
+        settings:[{field:'presentation.voiceEnabled',value:true}],
+        tasks:[{name:'周五回顾',instruction:{kind:'inline',value:'回顾本周阅读笔记。'},spec:{kind:'weekly',days:[5],time:'17:00'},
+          timeZone:{kind:'recommended',iana:'Asia/Shanghai'},placement:'newTopic'}]};
+      const offer=await turn('阅读教程：做读书笔记时，写下作者结论和支撑结论的原文。可以用语音记录，每周五复习。',
+        [{tool:'recipe_author_material',args:{action:'propose',material}}],'material');
+      expect(offer).toMatchObject({state:'awaitingConfirmation',proposalId:expect.any(String)});
+      expect(plainTexts.join('\n')).toContain(reference);
+      expect(drafts.list(accountId)).toEqual([]);
+      await turn('确认这个范围，保存草稿',[{tool:'recipe_author_material',args:{action:'create',proposalId:offer.proposalId}}],'material');
+      await vi.waitFor(()=>expect(drafts.list(accountId),JSON.stringify(rpcTrace.slice(-15))).toHaveLength(1),wait);
+      const record=drafts.list(accountId)[0]!,id=record.draft.draftId;
+      expect(record.work.source).toBeNull();
+      const folder=drafts.directory(accountId,id)!;
+      expect(await readFile(join(folder,'skills','reading-notes','SKILL.md'),'utf8')).toBe(skill);
+      expect(await readFile(join(folder,'skills','reading-notes','references','questions.md'),'utf8')).toBe(reference);
+      const manifest=JSON.parse(await readFile(join(folder,'manifest.json'),'utf8'));
+      expect(manifest.config.settings).toEqual([expect.objectContaining(material.settings[0]!)]);
+      expect(manifest.config.tasks).toEqual([expect.objectContaining(material.tasks[0]!)]);
+      const list=await turn('列出我保存的配方草稿。',[{tool:'recipe_author_draft',args:{action:'list'}}],'draft','list');
+      expect(list.savedDrafts).toContainEqual({draftId:id,name:'阅读笔记',version:'1.0'});
+      expect(trace.some(row=>row.kind==='sources'||row.kind==='inventory')).toBe(false);
+      if(pg){
+        await turn('请预览发布这份阅读笔记配方。',[{tool:'recipe_author_draft',args:{action:'publish',draftId:id}}],'draft','publish');
+        await click('确认发布','草稿修订 1');
+        await vi.waitFor(()=>expect(published,JSON.stringify(rpcTrace.slice(-20))).toHaveBeenCalledTimes(1),wait);
+        const [receipt]=published.mock.calls[0]!;
+        const download=await pg.download(receipt.recipeId,receipt.versionId);
+        expect(download.manifest.skills.map((item:{name:string})=>item.name)).toEqual(['reading-notes']);
+        expect(download.manifest.tasks.map((item:{name:string})=>item.name)).toEqual(['周五回顾']);
+      }
+      return;
+    }
     if(entry==='App source handoff'){
       const handed=await supervisor.continue({type:'creatorContinue',accountId,retryId:randomUUID(),entry:{kind:'source',viewId:'local',botId,groupId,
         registrationId:bot.registrationId,registeredAt:bot.createdAt,bindingIncarnation}});

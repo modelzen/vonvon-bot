@@ -7,7 +7,7 @@ import {contentItems} from './authoring-handoff-menu';
 import {AuthoringIm} from './authoring-im';
 import {linkKey,sameRecipient,type AuthoringJournal,type AuthoringLedger,type Link,type Recipient} from './authoring-journal';
 import {conversationSource} from './authoring-rich-flow';
-import {itemsOf,selectedRichContent,wireDigest} from './authoring-rich-snapshot';
+import {itemsOf,selectedRichContent,wireDigest,type SourceEvidence} from './authoring-rich-snapshot';
 import type {AuthoringOptions,Presence} from './authoring-service';
 import {sourceIdentityOf} from './authoring-source';
 
@@ -27,7 +27,7 @@ const ttl=30*60_000;
 const changed=()=>new Error('草稿、来源群或当前修改提案已变化，请重新盘点原草稿。');
 function requireLink(c:Context,db:AuthoringLedger){
   c.guard();const link=c.check(db),source=link.creator?.sources?.[c.work.draftId];
-  if(!c.work.source||link.binding!==c.p.binding||!sameRecipient(c.recipient,link.recipient)||source!==undefined&&!isDeepStrictEqual(source,c.work.source))throw changed();
+  if(link.binding!==c.p.binding||!sameRecipient(c.recipient,link.recipient)||source!==undefined&&!isDeepStrictEqual(source,c.work.source))throw changed();
   return link;
 }
 async function waitJob(c:Context,id:string){
@@ -40,7 +40,16 @@ async function waitJob(c:Context,id:string){
   }while(true);
 }
 async function loadSource(c:Context){
-  const source=c.work.source;if(!source)throw changed();
+  const source=c.work.source;
+  if(!source){
+    const head=await c.journal.run(db=>{
+      const link=requireLink(c,db),id=link.conversationEdit?.readId;
+      const result=id?link.conversationEditJobs?.[id]?.result:undefined;
+      if(result?.kind!=='draftScopeHead'||!isDeepStrictEqual(result.work,c.work)||!result.head.materialSource)throw changed();
+      return result.head.materialSource;
+    });
+    return {content:head.content,lease:head.lease,evidence:new Map(itemsOf(head.content).map(i=>[i.itemId,{kind:'native'} satisfies SourceEvidence]))};
+  }
   const {inventory,row}=await conversationSource(c.opts,c.p.scope,c.p.account,source.groupId);
   if(sourceIdentityOf(c.p.scope,row)!==source.identity)throw changed();
   c.guard();
@@ -53,7 +62,6 @@ function queue(link:Link,id:string,task:Task,expires:number,p:Presence){
 }
 export async function conversationDraftEdit(c:Context,q:Query){
   if(!c.p.draftScope)throw new Error('请更新当前 Vonvon App 和来源设备，再在私聊修改草稿范围。');
-  if(!c.work.source)throw changed();
   if(q.action==='apply'){
     const proposal=await c.journal.run(db=>{
       const link=requireLink(c,db),offer=link.conversationEdit?.proposal;
@@ -160,6 +168,7 @@ export async function editJobRequest(journal:AuthoringJournal,p:Presence,req:Req
     let mode:'read'|'execute'|'receipt'=task.kind==='draftScopeRead'?'read':'execute';
     if(task.kind==='draftScopeApply'){
       mode='receipt';
+      if(!row.result&&!task.work.source)mode='execute';
       if(!row.result&&task.work.source){
         try{
           const {row:source,inventory}=await conversationSource(opts,p.scope,p.account,task.work.source.groupId);

@@ -37,7 +37,7 @@ export const creatorSnapshotSchema = z.object({
       (url.protocol==='https:'||url.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(url.hostname))&&
       url.pathname==='/open/draft'&&/^#[0-9a-f-]{36}\?revision=[1-9][0-9]*$/.test(url.hash);
   }).optional(),
-}).strict().refine(s => s.format === 'role-v1' || s.work.source !== null);
+}).strict();
 export type CreatorSnapshot = z.infer<typeof creatorSnapshotSchema>;
 const read = z.discriminatedUnion('kind', [
   z.object({kind:z.literal('works'),offset:ordinal,draftsOnly:z.literal(true).optional()}).strict(),
@@ -77,7 +77,7 @@ export const DRAFT_SCOPE_EDIT_CAPABILITY='recipe.draft-scope.v1';
 export const RESOURCE_CONTEXT_CAPABILITY = 'recipe.resource-context.v2';
 export const resourceDeliverySchema=z.enum(['sent','pending','unknown','unavailable']);
 export const draftScopeItemSchema=z.object({id:uuid,kind:z.enum(['role','setting','rule','skill','task','file']),label:z.string().min(1).max(360),parent:uuid.optional()}).strict();
-export const draftScopeHeadSchema=z.object({revision:positive,baseSha256:digest,items:draftScopeItemSchema.array().max(512)}).strict();
+export const draftScopeHeadSchema=z.object({revision:positive,baseSha256:digest,items:draftScopeItemSchema.array().max(512),materialSource:z.object({content:recipeRichContentSchema,lease:digest}).strict().optional()}).strict();
 export type DraftScopeHead=z.infer<typeof draftScopeHeadSchema>;
 const evidence=z.discriminatedUnion('kind',[
   z.object({kind:z.literal('native')}).strict(),
@@ -86,8 +86,10 @@ const evidence=z.discriminatedUnion('kind',[
 const draftScopeApply=z.object({kind:z.literal('draftScopeApply'),work:creatorWorkSchema,revision:positive,baseSha256:digest,
   lease:digest,addIds:uuid.array().max(512),removeIds:uuid.array().max(512),donor:recipeRichContentSchema,evidence:z.record(uuid,evidence)}).strict();
 export type DraftScopeApply=z.infer<typeof draftScopeApply>;
+export const MATERIAL_AUTHOR_CAPABILITY='recipe.material-author.v1';
+export const materialCreateTaskSchema=z.object({kind:z.literal('materialCreate'),draftId:uuid,content:recipeRichContentSchema,access:z.enum(['direct','coded'])}).strict();
 const task = z.discriminatedUnion('kind', [
-  ...resourceReadTaskSchema.options, resourceAcquireTaskSchema,
+  ...resourceReadTaskSchema.options, resourceAcquireTaskSchema, materialCreateTaskSchema,
   z.object({kind:z.literal('draftScopeRead'),work:creatorWorkSchema}).strict(), draftScopeApply,
   z.object({kind:z.literal('read'),read}).strict(),
   z.object({kind:z.literal('command'),command:creatorCommandSchema,expiresAt:z.number().int().safe().nonnegative(),approval:digest,confirmation:creatorConfirmationSchema.optional()}).strict(),
@@ -130,7 +132,8 @@ const bot = {botId:agentIdSchema};
 const session = {...bot,session:uuid};
 export const creatorRequests = [
   z.object({type:z.literal('creatorDiscover'),...bot,accountId:uuid}).strict(),
-  z.object({type:z.literal('creatorOpen'),...bot,accountId:uuid,binding:uuid,scope:digest,wakeId:uuid.nullable(),nativePreview:z.literal(true).optional(),resourceContext:z.literal(true).optional(),draftScope:z.literal(true).optional()}).strict(),
+  z.object({type:z.literal('creatorOpen'),...bot,accountId:uuid,binding:uuid,scope:digest,wakeId:uuid.nullable(),nativePreview:z.literal(true).optional(),resourceContext:z.literal(true).optional(),draftScope:z.literal(true).optional(),materialAuthor:z.literal(true).optional()}).strict(),
+  z.object({type:z.literal('creatorMaterialEntry'),...session,retryId:uuid,issuedAt:z.number().int().safe().nonnegative()}).strict(),
   z.object({type:z.literal('creatorContinue'),...session,selection,conversationRevision:positive.optional(),conversationRetryId:uuid.optional()}).strict(),
   z.object({type:z.literal('creatorPoll'),...session}).strict(),
   z.object({type:z.literal('creatorCheck'),...session,id:uuid}).strict(),

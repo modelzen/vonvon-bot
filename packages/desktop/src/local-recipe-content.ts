@@ -106,14 +106,13 @@ export function buildLocalRichRecord(input:{association:LocalRecipeDraftRecord['
   request:RichFreezeInput;frozen:RichFrozenResponse;members:Member[];sourceCanonical?:string;sourceOrigins?:Origin[];selected?:string[];
   parent?:LocalRecipeDraftRecord['parent'];base?:LocalRecipeDraftRecord}):LocalRecipeDraftRecord{
   const association=creatorAssociationSchema.parse(input.association),work=creatorWorkSchema.parse(input.work),revision=revisionSchema.parse(input.revision);
-  if(!work.source)throw fail();
   const request=richFreezeInputSchema.parse(input.request),base=input.base&&localRecipeDraftRecordSchema.parse(input.base);
   if(base&&(!isDeepStrictEqual(base.association,association)||!isDeepStrictEqual(base.work,work)||base.draft.format!=='rich-v2'))throw fail();
   if('payload'in request){
     if(!base||request.payload.draftId!==work.draftId||request.payload.baseRevision!==base.draft.revision||revision!==base.draft.revision+1||
       base.draft.format!=='rich-v2'||request.baseCanonical!==base.draft.rich.canonical)throw fail();
   }else if(base||revision!==1)throw fail();
-  const frozen=verifyFrozenRich(work.source.preparationId,work.draftId,request,input.frozen),content=contentOf(frozen.canonical);
+  const frozen=verifyFrozenRich(work.source?.preparationId??work.draftId,work.draftId,request,input.frozen),content=contentOf(frozen.canonical);
   validateWritableRichRecipeContent(content);
   const members=mergeMembers(base?.members??[],input.members);
   const current=view(content,members);
@@ -150,7 +149,7 @@ export function buildLocalRichRecord(input:{association:LocalRecipeDraftRecord['
   if(base&&!isDeepStrictEqual(parent??null,base.parent??null))throw fail();
   if('content'in request&&request.sourceVersionId&&parent?.versionId!==request.sourceVersionId)throw fail();
   return localRecipeDraftRecordSchema.parse({association,work,sourceCanonical,sourceOrigins,origins,selected:selected.filter(itemId=>ids.includes(itemId)),members,
-    ...(parent!==undefined&&{parent}),draft:{format:'rich-v2',draftId:work.draftId,recipeId:base?.draft.recipeId??parent?.recipeId??null,revision,sourceIntentId:work.source.preparationId,
+    ...(parent!==undefined&&{parent}),draft:{format:'rich-v2',draftId:work.draftId,recipeId:base?.draft.recipeId??parent?.recipeId??null,revision,sourceIntentId:work.source?.preparationId??work.draftId,
       public:{name:content.public.name.value,summary:content.public.summary.value,overview:content.public.overview.value,version:content.public.version.value,
         access:request.access??base?.draft.public.access??'direct'},rich:{content,canonical:frozen.canonical,texts:current.texts},...(current.image&&{logo:current.image})}});
 }

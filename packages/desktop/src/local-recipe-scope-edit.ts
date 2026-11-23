@@ -1,8 +1,8 @@
 import {createHash} from 'node:crypto';
 import {isDeepStrictEqual} from 'node:util';
-import {draftScopeHeadSchema,validateWritableRichRecipeContent,type DraftScopeApply,type DraftScopeHead,type RecipeRichContent} from '@vonvon/protocol';
+import {decodeRichRecipeContent,draftScopeHeadSchema,validateWritableRichRecipeContent,type DraftScopeApply,type DraftScopeHead,type RecipeRichContent} from '@vonvon/protocol';
 import {contentItems} from '../../daemon/src/recipe/authoring-handoff-menu.js';
-import {itemsOf,selectRichSnapshot,type AttestedSourceItem} from '../../daemon/src/recipe/authoring-rich-snapshot.js';
+import {itemsOf,selectRichSnapshot,selectedRichContent,wireDigest,type AttestedSourceItem} from '../../daemon/src/recipe/authoring-rich-snapshot.js';
 import type {LocalRecipeDraftRecord} from './local-recipe-drafts.js';
 
 const changed=()=>new Error('私人草稿的修订、所选范围或来源已变化，请重新盘点。');
@@ -12,7 +12,8 @@ export function draftScopeHead(record:LocalRecipeDraftRecord):DraftScopeHead{
   const entries=new Set(draft.rich.content.skills.map(s=>s.entryFileId));
   const items=contentItems(draft.rich.content).filter(i=>['role','setting','rule','skill','task'].includes(i.kind)||i.kind==='file'&&!entries.has(i.id))
     .map(({id,kind,label,parent})=>({id,kind,label,...(parent&&{parent})}));
-  return draftScopeHeadSchema.parse({revision:draft.revision,baseSha256:createHash('sha256').update(Buffer.from(draft.rich.canonical,'base64url')).digest('hex'),items});
+  const materialSource=!record.work.source&&record.sourceCanonical?{content:decodeRichRecipeContent(Buffer.from(record.sourceCanonical,'base64url')).content,lease:wireDigest(record.sourceCanonical)}:undefined;
+  return draftScopeHeadSchema.parse({materialSource,revision:draft.revision,baseSha256:createHash('sha256').update(Buffer.from(draft.rich.canonical,'base64url')).digest('hex'),items});
 }
 function references(content:RecipeRichContent){
   const ids=new Set<string>();
@@ -28,6 +29,13 @@ export function editLocalDraftScope(record:LocalRecipeDraftRecord,input:DraftSco
   const remove=new Set(input.removeIds),existing=new Set(head.items.map(i=>i.id));
   if(remove.size!==input.removeIds.length||input.removeIds.some(id=>!existing.has(id)))throw changed();
   const donor=input.donor,donorIds=itemsOf(donor).map(i=>i.itemId);
+  if(!record.work.source){
+    const source=head.materialSource;
+    if(!source||source.lease!==input.lease||!isDeepStrictEqual(selectedRichContent(source.content,donorIds),donor)||
+      Object.values(input.evidence).some(value=>value.kind!=='native'))throw changed();
+    const origins=new Map(record.sourceOrigins?.map(row=>[row.itemId,row.source]));
+    if(donorIds.some(id=>origins.get(id)?.kind!=='accountClaim'))throw changed();
+  }
   const approved=selectRichSnapshot({inventory:donor,selected:donorIds,evidence:new Map(Object.entries(input.evidence)),
     account:record.association.accountId,ownershipClaim:true,access:draft.public.access,attested});
   if(donor.finalLogo||donor.memories.length||donor.setup.length||donor.parts.length||donor.files.some(f=>f.text.kind!=='inline'))throw changed();

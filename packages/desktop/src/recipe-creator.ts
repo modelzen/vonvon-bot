@@ -1,3 +1,5 @@
+import {buildLocalRichRecord,freezeLocalRich} from './local-recipe-content.js';
+import {itemsOf} from '../../daemon/src/recipe/authoring-rich-snapshot.js';
 import {draftScopeHead,editLocalDraftScope} from './local-recipe-scope-edit.js';
 import {richAuthoringCloud} from './recipe-authoring-rich-cloud.js';
 import {wireDigest,type AttestedSourceItem} from '../../daemon/src/recipe/authoring-rich-snapshot.js';
@@ -110,7 +112,7 @@ export class RecipeCreatorExecutor {
     const account=this.transport(context,job,modes),record=this.drafts.read(context.association.accountId,work.draftId);
     if(!record||!sameCreatorSource(record.association,context.association)||!isDeepStrictEqual(record.work,work))throw invalid();
     const draft=record.draft;
-    if(draft.format==='rich-v2'?(draft.sourceIntentId!==work.source?.preparationId):work.source!==null)throw invalid();
+    if(draft.format==='rich-v2'?(draft.sourceIntentId!==(work.source?.preparationId??work.draftId)):work.source!==null)throw invalid();
     return {account,draft,record};
   }
   private async parentContext(account:NativeAccount,accountId:string,draft:RecipeDraft){
@@ -125,7 +127,7 @@ export class RecipeCreatorExecutor {
     const encoded=draft.format==='rich-v2'?draft.rich.canonical:Buffer.from(canonical(draft.config)).toString('base64url');
     const sections=[{title:'配方、来源与版本',text:[draft.public.name+' · '+draft.public.version,draft.public.summary,draft.public.overview,
       draft.public.access==='coded'?'凭分享码获取':'直接获取','草稿修订 '+draft.revision,
-      work.source?'来源群的本地配置':'本人账号的旧格式作品',...(parent?['基于已选的历史版本创作']:[])].join('\n')}];
+      work.source?'来源群的本地配置':'本人账号的原创作品',...(parent?['基于已选的历史版本创作']:[])].join('\n')}];
     if(draft.format==='rich-v2'){
       for(const key of ['role','settings','rules','skills','files','tasks','setup','parts','finalLogo'] as const){
         sections.push({title:key,text:JSON.stringify(draft.rich.content[key]??null,null,2)});
@@ -214,7 +216,6 @@ export class RecipeCreatorExecutor {
             const local=this.drafts.read(accountId,item.draftId),draft=local?.draft;
             if(!draft)throw invalid();
             if(draft.format!=='rich-v2')throw invalid();
-            if(!local.work.source)continue;
             items.push({kind:'draft',work:local.work,name:item.public.name,version:item.public.version});
           }else items.push({kind:'draft',work:{draftId:item.draftId,source:null},name:item.public.name,version:item.public.version});
         }
@@ -261,7 +262,7 @@ export class RecipeCreatorExecutor {
       }
       case 'edit': {
         const {draft,record}=await this.workDraft(context,job,read.work);
-        if(draft.format!=='rich-v2'||draft.revision!==read.revision||!read.work.source)throw invalid();
+        if(draft.format!=='rich-v2'||draft.revision!==read.revision)throw invalid();
         if(!record.sourceCanonical)throw invalid();
         return {kind:'edit',work:read.work,revision:read.revision,canonical:draft.rich.canonical,sourceCanonical:record.sourceCanonical};
       }
@@ -489,6 +490,33 @@ export class RecipeCreatorExecutor {
   }
   async run(context:CreatorContext,job:CreatorJob){
     const checked=await this.checked(context,job);
+    if(job.task.kind==='materialCreate'){
+      const task=job.task,accountId=context.association.accountId,work={draftId:task.draftId,source:null};
+      let answer:CreatorAnswer;
+      try{
+        if(!['execute','receipt'].includes(checked.mode))throw invalid();
+        const requestSha256=wireDigest(task),saved=this.drafts.receipt(accountId,task.draftId,job.id);
+        if(saved){
+          const record=this.drafts.read(accountId,task.draftId);
+          if(saved.deleted||saved.revision!==1||saved.requestSha256!==requestSha256||!record||!sameCreatorSource(record.association,context.association)||!isDeepStrictEqual(record.work,work))throw invalid();
+        }
+        else{
+          if(checked.mode!=='execute')throw invalid();
+          const content=validateWritableRichRecipeContent(task.content).content;
+          // Authored material carries no remote bytes or unverified ancestry.
+          if(content.parts.length||content.finalLogo)throw invalid();
+          const request={format:'rich-v2' as const,
+            content,access:task.access,origins:itemsOf(content).map(item=>({itemId:item.itemId,source:{kind:'accountClaim' as const}}))};
+          const frozen=freezeLocalRich(task.draftId,task.draftId,request);
+          const record=buildLocalRichRecord({association:context.association,work,revision:1,request,frozen,members:[]});
+          if((await this.checked(context,job)).mode!=='execute')throw invalid();
+          context.check();this.drafts.commit({requestId:job.id,expectedRevision:null,record,requestSha256});
+        }
+        answer={kind:'saved',work,revision:1};this.onSaved?.({accountId,draftId:work.draftId,revision:1});
+      }catch{context.check();answer={kind:'rejected',reason:'changed'};}
+      expect(await context.rpc({type:'creatorAnswer',botId:context.association.botId,session:context.session,id:job.id,answer}),'creatorAck');
+      context.check();return;
+    }
     if(job.task.kind==='draftScopeRead'||job.task.kind==='draftScopeApply'){
       const task=job.task;
       if(task.kind==='draftScopeRead'?checked.mode!=='read':!['execute','receipt'].includes(checked.mode))throw invalid();

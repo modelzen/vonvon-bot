@@ -35,7 +35,7 @@ function seedDraft(store:LocalRecipeDrafts,record:LocalRecipeDraftRecord){
     store.commit({requestId:randomUUID(),expectedRevision:revision===1?null:revision-1,record:next});
   }
 }
-function fixture(journal=new RecipeCreatorJournal(),localDrafts=new LocalRecipeDrafts(),publisher=new LocalRecipePublisher()){
+function fixture(journal=new RecipeCreatorJournal(),localDrafts=new LocalRecipeDrafts(),publisher=new LocalRecipePublisher(),materialAuthor=true){
   cleanup.push(()=>localDrafts.close());
   cleanup.push(()=>publisher.close());
   const accountId=randomUUID(),other=randomUUID(),deviceId=randomUUID(),deviceKey=Buffer.alloc(32,3).toString('base64url'),botId=agentIdSchema.parse('cli_creator'),groupId=groupIdSchema.parse('oc_source');
@@ -49,7 +49,7 @@ function fixture(journal=new RecipeCreatorJournal(),localDrafts=new LocalRecipeD
     switch(input.type){
       case 'creatorDiscover':return {kind:'creatorBinding',association:{binding:bindings.get(input.accountId)!,scope:'c'.repeat(64),recipient:{openId:'ou_author',chatId:groupId,tenantKey:'tenant'}},wakeId:null};
       case 'creatorOpen':{const session=sessions.get(input.accountId)??randomUUID();sessions.set(input.accountId,session);return {kind:'creatorSession',session,binding:input.binding,scope:input.scope,leaseMs:45000};}
-      case 'creatorContinue':return {kind:'creatorAck'};
+      case 'creatorMaterialEntry':case 'creatorContinue':return {kind:'creatorAck'};
       case 'creatorPoll':return {kind:'creatorJobs',jobs:[]};
       case 'close':return {kind:'closed'};
       case 'workflow':return {kind:'workflow',activity:1,ageMs:0,pausedContexts:[],...(handoff&&{handoff})};
@@ -69,7 +69,7 @@ function fixture(journal=new RecipeCreatorJournal(),localDrafts=new LocalRecipeD
     }
   });
   const snapshot=vi.fn(async()=>({stale:false,host:{kind:'connected'},agents:[{id:botId,name:'原 Bot',running:true,connection:'connected',tenant:'feishu'}],memberships:[{agentId:botId,groupId,enabled:true,stale:false}],groups:[{id:groupId,name:'原群'}]}));
-  const client={recipeAuthoring:rpc,device:async()=>({kind:'deviceStatus',status:{device:{id:deviceId,name:'原设备',publicKey:deviceKey},remote:{addresses:[],port:3000},clients:{active:1,total:1}}}),
+  const client={recipeAuthoring:rpc,supportsMaterialAuthor:materialAuthor,device:async()=>({kind:'deviceStatus',status:{device:{id:deviceId,name:'原设备',publicKey:deviceKey},remote:{addresses:[],port:3000},clients:{active:1,total:1}}}),
     snapshot} as unknown as VonvonClient;
   const references:Array<{owner:AbortController;release:ReturnType<typeof vi.fn>}> = [];
   const retain=vi.fn(async(viewId:string,signal:AbortSignal):Promise<CreatorSourceLease>=>{
@@ -96,15 +96,15 @@ function fixture(journal=new RecipeCreatorJournal(),localDrafts=new LocalRecipeD
     switchAccount(){signals.get(active)!.abort();active=other;for(const listener of listeners)listener();},
   };
 }
-function saveRichDraft(f:ReturnType<typeof fixture>){
+function saveRichDraft(f:ReturnType<typeof fixture>,materials=false){
   const draftId=randomUUID(),preparationId=randomUUID();
   const value=(value:string)=>({itemId:randomUUID(),originId:randomUUID(),value});
   const document=canonicalizeRichRecipeContent({format:'rich-v2',schemaVersion:2,public:{name:value('原草稿'),summary:value(''),overview:value(''),version:value('1.1')},
     settings:[],rules:[],skills:[],files:[],tasks:[],memories:[],setup:[],parts:[]});
   const sourceContent=structuredClone(document.content);sourceContent.public.name.value='原始来源内容';
   const source=canonicalizeRichRecipeContent(sourceContent);
-  const record:LocalRecipeDraftRecord={association:f.journal.associations(f.accountId)[0]!,work:{draftId,source:{preparationId,groupId:f.groupId,identity:'d'.repeat(64)}},
-    draft:{format:'rich-v2',draftId,recipeId:null,revision:2,sourceIntentId:preparationId,public:{name:'原草稿',summary:'',overview:'',version:'1.1',access:'direct'},
+  const record:LocalRecipeDraftRecord={association:f.journal.associations(f.accountId)[0]!,work:{draftId,source:materials?null:{preparationId,groupId:f.groupId,identity:'d'.repeat(64)}},
+    draft:{format:'rich-v2',draftId,recipeId:null,revision:2,sourceIntentId:materials?draftId:preparationId,public:{name:'原草稿',summary:'',overview:'',version:'1.1',access:'direct'},
       rich:{content:document.content,canonical:Buffer.from(document.canonicalUTF8).toString('base64url'),texts:{}}},
     sourceCanonical:Buffer.from(source.canonicalUTF8).toString('base64url'),parent:null,origins:[],selected:[],members:[]};
   seedDraft(f.localDrafts,record);return record;
@@ -622,4 +622,38 @@ it.each(['acknowledged','unverifiedPrepared','neverArrived'] as const)('checks a
   if(evidence==='neverArrived')await expect(recovery).resolves.toMatchObject({delivery:'delivered',retryId});
   else await expect(recovery).rejects.toThrow();
   expect(f.rpc.mock.calls.filter(([r])=>r.type==='beginHandoff').map(([r])=>'retryId' in r&&r.retryId)).toEqual(evidence==='acknowledged'?[]:[retryId]);
+});
+
+it('hands a materials entry to the exact Bot without selecting any group and retains retry identity',async()=>{
+  const f=fixture(),supervisor=f.build(),retryId=randomUUID(),retryStartedAt=Date.now();
+  const entry={kind:'materials' as const,viewId:'local',botId:f.botId};
+  expect(await supervisor.continue({type:'creatorContinue',accountId:f.accountId,retryId,retryStartedAt,entry})).toMatchObject({delivery:'delivered',botId:f.botId,retryId});
+  expect(await supervisor.continue({type:'creatorContinue',accountId:f.accountId,retryId,retryStartedAt,entry,recover:'request'})).toMatchObject({delivery:'delivered',retryId});
+  expect(f.rpcs.filter(r=>r.type==='creatorMaterialEntry')).toHaveLength(2);
+  expect(f.rpcs.filter(r=>r.type==='beginHandoff'||r.type==='groupSourceIdentity')).toEqual([]);
+  expect(f.rpcs.find(r=>r.type==='creatorOpen')).toMatchObject({materialAuthor:true});
+});
+it('rejects materials entry after Bot registration identity changes',async()=>{
+  const f=fixture(),supervisor=f.build();
+  await expect(supervisor.continue({type:'creatorContinue',accountId:f.accountId,retryId:randomUUID(),entry:{kind:'materials',viewId:'local',botId:f.botId,registrationId:randomUUID()}})).rejects.toThrow();
+  expect(f.rpcs.filter(r=>r.type==='creatorMaterialEntry')).toEqual([]);
+});
+
+it('continues an exact materials rich draft with no group source or handoff',async()=>{
+  const f=fixture(),supervisor=f.build();
+  await supervisor.associated(f.accountId,'local',f.botId);
+  const record=saveRichDraft(f,true),retryId=randomUUID();f.rpcs.length=0;
+  const input={type:'creatorContinue' as const,accountId:f.accountId,retryId,entry:{kind:'draft' as const,draftId:record.draft.draftId,revision:2}};
+  expect(await supervisor.continue(input)).toMatchObject({delivery:'delivered',retryId,botId:f.botId});
+  expect(await supervisor.continue({...input,recover:'request'})).toMatchObject({delivery:'delivered',retryId});
+  expect(f.rpcs.find(r=>r.type==='creatorContinue')).toMatchObject({conversationRevision:2,conversationRetryId:retryId,selection:{work:{draftId:record.draft.draftId,source:null}}});
+  expect(f.rpcs.filter(r=>r.type==='groupSourceIdentity'||r.type==='beginDraftHandoff')).toEqual([]);
+});
+
+it('continues group creation on a prior daemon and requires upgrade only for materials',async()=>{
+  const f=fixture(undefined,undefined,undefined,false),supervisor=f.build();
+  expect(await supervisor.continue({type:'creatorContinue',accountId:f.accountId,retryId:randomUUID(),entry:{kind:'source',viewId:'local',botId:f.botId,groupId:f.groupId}})).toMatchObject({delivery:'delivered'});
+  expect(f.rpcs.find(r=>r.type==='creatorOpen')).not.toHaveProperty('materialAuthor');
+  await expect(supervisor.continue({type:'creatorContinue',accountId:f.accountId,retryId:randomUUID(),retryStartedAt:Date.now(),entry:{kind:'materials',viewId:'local',botId:f.botId}})).rejects.toThrow('请更新来源设备');
+  expect(f.rpcs.filter(r=>r.type==='creatorMaterialEntry')).toEqual([]);
 });

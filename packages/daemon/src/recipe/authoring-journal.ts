@@ -27,7 +27,7 @@ function nextSelectionOrder(now:number){return lastSelectionOrder=Math.max(lastS
 /** Preserve the inbound event's order across account checks, source validation and the per-session queue. */
 export function atRecipeIntake<T>(now:number,run:()=>Promise<T>){return selectionIntake.run(nextSelectionOrder(now),run);}
 export function recipeSelectionOrder(now:number){return selectionIntake.getStore()??nextSelectionOrder(now);}
-export interface Link { conversationEdit?:import('./conversation-draft-edit').ConversationEditState;conversationEditJobs?:Record<string,import('./conversation-draft-edit').EditJob>; conversationProposal?:import('./conversation-inventory').ConversationProposal; selectionOrder?:number; wake?: import('./private-creator').CreatorWake; creator?: import('./private-creator').CreatorLedger; bot: string; binding: string; recipient: Recipient; sources: Source[]; context?: {operationId: string; until: number} }
+export interface Link { materialProposal?:import('./conversation-material').MaterialProposal; conversationEdit?:import('./conversation-draft-edit').ConversationEditState;conversationEditJobs?:Record<string,import('./conversation-draft-edit').EditJob>; conversationProposal?:import('./conversation-inventory').ConversationProposal; selectionOrder?:number; wake?: import('./private-creator').CreatorWake; creator?: import('./private-creator').CreatorLedger; bot: string; binding: string; recipient: Recipient; sources: Source[]; context?: {operationId: string; until: number} }
 export interface Carrier {
   ref: string; sendUuid: string; generation: number; seq: number; mode: CardMode; dirty: boolean;
   cardId?: string; messageId?: string; firstSend?: number; createdAt?: number;
@@ -137,6 +137,7 @@ export function maintain(ledger: AuthoringLedger, now: number) {
     for(const [id,job] of Object.entries(link.conversationEditJobs??{}))if(job.expires<=now)delete link.conversationEditJobs![id];
   }
   for(const link of Object.values(ledger.links))if(link.conversationProposal&&link.conversationProposal.expiresAt<=now)delete link.conversationProposal;
+  for(const link of Object.values(ledger.links))if(link.materialProposal&&link.materialProposal.expiresAt<=now)delete link.materialProposal;
   for(const link of Object.values(ledger.links))if(link.wake&&link.wake.expiresAt<=now){
     const creator=link.creator,wake=link.wake;
     if(creator&&wake.cardRef&&!Object.values(creator.jobs).some(job=>job.receiptCard&&job.resultCard===wake.cardRef))delete creator.cards[wake.cardRef];

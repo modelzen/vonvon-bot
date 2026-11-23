@@ -1,10 +1,11 @@
 import {recipePublicSchema} from '@vonvon/protocol';
 import {z} from 'zod';
+import {materialInputSchema} from '../../recipe/conversation-material';
 import type {RecipeCreationQuery} from '../../recipe/conversation-authoring';
 import type {ResourceCaller} from '../../recipe/resource-context';
 import type {AgentTool} from './tools';
 
-export const recipeCreationToolNames = ['recipe_author_sources','recipe_author_inventory','recipe_author_propose','recipe_author_create','recipe_author_status','recipe_author_draft'] as const;
+export const recipeCreationToolNames = ['recipe_author_material','recipe_author_sources','recipe_author_inventory','recipe_author_propose','recipe_author_create','recipe_author_status','recipe_author_draft'] as const;
 const group=z.string().regex(/^oc_[A-Za-z0-9_-]{1,200}$/);
 const publicFields=z.object({name:z.string().max(120),summary:z.string().max(480),overview:z.string().max(32768),version:z.string().max(80)}).strict();
 const sources=z.object({offset:z.number().int().min(0).optional()}).strict();
@@ -20,7 +21,11 @@ const draft=z.object({action:z.enum(['list','inspect','preview','edit','publish'
   change:z.object({field:z.enum(['name','summary','overview','version','access']),value:z.string().max(32768)}).strict().optional()}).strict();
 
 export function recipeCreationTools(call:(get:()=>ResourceCaller|undefined,query:RecipeCreationQuery)=>Promise<unknown>):AgentTool[] {
+  const material=z.object({action:z.enum(['propose','create']),material:materialInputSchema.optional(),proposalId:z.string().uuid().optional()}).strict();
   return [
+    {name:'recipe_author_material',class:'resource',places:['p2p'],input:material,
+      description:'从作者给出的资料整理新配方，无需来源群。先用正常工具阅读资料，生成 public、role、rules 和 skills（body 是完整 SKILL.md，references 是引用文件）。propose 在本人私聊展示全部实际内容；后续独立真人确认保存范围后，以原 proposalId 调 create。saved 才代表私人草稿已落盘。',
+      run(args,ctx){const input=material.parse(args);if(input.action==='propose'){if(!input.material||input.proposalId)throw new Error('请提交拟保存的资料内容。');return call(ctx.resourceCaller??(()=>undefined),{kind:'material',action:'propose',material:input.material,wait:ctx});}if(!input.proposalId||input.material)throw new Error('请使用已展示的提案编号保存。');return call(ctx.resourceCaller??(()=>undefined),{kind:'material',action:'create',proposalId:input.proposalId,wait:ctx});}},
     {name:'recipe_author_sources',class:'resource',places:['p2p'],input:sources,
       description:'找到本人 App 已选来源群和其他可创作群。selected 是 App 选定的群，nextOffset 可用于翻页。',
       run(args,ctx){return call(ctx.resourceCaller??(()=>undefined),{kind:'sources',...sources.parse(args),wait:ctx});}},

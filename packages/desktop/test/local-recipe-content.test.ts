@@ -1,7 +1,9 @@
 import {draftScopeHead,editLocalDraftScope} from '../src/local-recipe-scope-edit';
 import {itemsOf} from '../../daemon/src/recipe/authoring-rich-snapshot';
 import {createHash,randomUUID} from 'node:crypto';
-import {readFileSync} from 'node:fs';
+import {readFileSync,mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {afterEach,expect,it,vi} from 'vitest';
 import {groupIdSchema,newRichMetadataRequestId,recipeRichContentSchema,type RichFreezeInput,type RichMetadataRequest} from '@vonvon/protocol';
 import {bindRichMembers} from '../../daemon/src/recipe/authoring-rich-flow';
@@ -14,7 +16,8 @@ import {freezeSnapshot,inventory} from '../../../services/recipe-api/src/rich-do
 const sha=(value:string|Uint8Array)=>createHash('sha256').update(value).digest('hex');
 const webp=Buffer.from('UklGRjwAAABXRUJQVlA4IDAAAADQAQCdASoCAAIAAgA0JaACdLoB+AADsAD+8Oj3/yC5YXXI1/8gP+QH/ID/+PIAAAA=','base64');
 const stores:LocalRecipeDrafts[]=[];
-afterEach(()=>{for(const store of stores.splice(0))store.close();vi.restoreAllMocks();});
+const directories:string[]=[];
+afterEach(()=>{for(const store of stores.splice(0))store.close();for(const path of directories.splice(0))rmSync(path,{recursive:true,force:true});vi.restoreAllMocks();});
 function store(){const value=new LocalRecipeDrafts();stores.push(value);return value;}
 function fixture(){
   const content=recipeRichContentSchema.parse(JSON.parse(readFileSync(new URL('../../protocol/test/fixtures/recipe-rich-v2.content.json',import.meta.url),'utf8')));
@@ -202,4 +205,50 @@ it('saves scope changes as exact revisions while preserving metadata, image, pri
   expect(without.draft.rich.content.files).toContainEqual(entry);expect(without.draft.logo).toBe(original.logo);
   expect(()=>editLocalDraftScope(without,make(without,roleOnly,[],[entry.itemId]),new Map())).toThrow();
   expect(editLocalDraftScope(without,make(without,fileSource,[reference.itemId],[]),new Map()).draft.rich.content.files).toContainEqual(reference);
+});
+
+
+it('saves authored rich material without a group, reopens its Skill directory and retains the original through editing',async()=>{
+  const f=fixture(),work={draftId:f.draftId,source:null};
+  const request=f.request;
+  const frozen=freezeLocalRich(f.draftId,f.draftId,request);
+  const record=buildLocalRichRecord({association:f.association,work,revision:1,request,frozen,members:[]});
+  const root=mkdtempSync(join(tmpdir(),'vonvon-material-')),db=new LocalRecipeDrafts(root);stores.push(db);directories.push(root);
+  const requestId=randomUUID(),commit={requestId,expectedRevision:null,record,requestSha256:sha('material-input')};
+  const receipt=db.commit(commit);
+  expect(db.commit(commit)).toEqual(receipt);
+  expect(record.draft.sourceIntentId).toBe(f.draftId);
+  const path=db.directory(f.association.accountId,f.draftId)!;
+  expect(readFileSync(join(path,'skills','local-helper','SKILL.md'),'utf8')).toBe(f.file.text.value);
+  db.close();
+  const reopened=new LocalRecipeDrafts(root);stores.push(reopened);
+  const original=reopened.read(f.association.accountId,f.draftId)!;
+  expect(original).toEqual(record);
+  const edited=await applyLocalMetadata(original,metadata(original));
+  reopened.commit({requestId:randomUUID(),expectedRevision:1,record:edited});
+  expect(reopened.read(f.association.accountId,f.draftId)?.sourceCanonical).toBe(frozen.canonical);
+  expect(reopened.read(f.association.accountId,f.draftId)?.work.source).toBeNull();
+  expect(()=>reopened.commit({...commit,requestSha256:sha('changed-input')})).toThrow();
+});
+
+it('removes and restores original material Skills using the native inventory without consulting a donor group',()=>{
+  const f=fixture(),work={draftId:f.draftId,source:null},request=f.request;
+  const record=buildLocalRichRecord({association:f.association,work,revision:1,request,
+    frozen:freezeLocalRich(f.draftId,f.draftId,request),members:[]});
+  const head=draftScopeHead(record),source=head.materialSource!;
+  const blank=structuredClone(source.content);delete blank.role;blank.skills=[];blank.files=[];blank.settings=[];blank.rules=[];blank.tasks=[];blank.setup=[];
+  const evidence=Object.fromEntries(itemsOf(blank).map(i=>[i.itemId,{kind:'native' as const}]));
+  const remove={kind:'draftScopeApply' as const,work,revision:1,baseSha256:head.baseSha256,lease:source.lease,
+    addIds:[],removeIds:[f.skill.itemId],donor:blank,evidence};
+  const removed=editLocalDraftScope(record,remove,new Map());
+  expect(removed.draft.format==='rich-v2'&&removed.draft.rich.content.skills).toEqual([]);
+  const restoreHead=draftScopeHead(removed),donor=structuredClone(blank);
+  if(!('content' in request))throw Error('content');
+  donor.skills=request.content.skills;donor.files=request.content.files;
+  const restore={...remove,revision:2,baseSha256:restoreHead.baseSha256,removeIds:[],addIds:[f.skill.itemId,f.file.itemId],donor,
+    evidence:Object.fromEntries(itemsOf(donor).map(i=>[i.itemId,{kind:'native' as const}]))};
+  const restored=editLocalDraftScope(removed,restore,new Map());
+  expect(restored.draft.format==='rich-v2'&&restored.draft.rich.content.skills).toEqual(donor.skills);
+  const forged=structuredClone(restore);forged.donor.files[0]!.text={kind:'inline',value:'different, unapproved instructions'};
+  expect(()=>editLocalDraftScope(removed,forged,new Map())).toThrow();
 });

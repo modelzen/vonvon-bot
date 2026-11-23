@@ -1,5 +1,5 @@
 import {
-  DRAFT_SCOPE_EDIT_CAPABILITY, RESOURCE_CONTEXT_CAPABILITY, NATIVE_RECIPE_PREVIEW_CAPABILITY, adminReplySchema, collaborationReplySchema, commandResultSchema,
+  MATERIAL_AUTHOR_CAPABILITY, DRAFT_SCOPE_EDIT_CAPABILITY, RESOURCE_CONTEXT_CAPABILITY, NATIVE_RECIPE_PREVIEW_CAPABILITY, adminReplySchema, collaborationReplySchema, commandResultSchema,
   desktopSnapshotSchema, directoryReplySchema, environmentReplySchema, memoryReplySchema, contextPreviewReplySchema,
   errorEnvelopeSchema, eventSchema, machineReplySchema, requestSchema,
   libraryReplySchema, scheduleReplySchema, settingsReplySchema, deviceReplySchema, recipeInstallReplySchema,
@@ -51,6 +51,7 @@ export interface VonvonClient {
   schedule(botId: string, request: ScheduleRequest): Promise<ScheduleReply>;
   device(request: DeviceRequest): Promise<DeviceReply>;
   readonly supportsResourceContext?:boolean;
+  readonly supportsMaterialAuthor?:boolean;
   recipeAuthoring?(request: RecipeAuthoringRequest): Promise<RecipeAuthoringReply>;
   recipeInstall?(request: RecipeInstallRequest): Promise<RecipeInstallReply>;
   onLog(listener: (payload: LogEventPayload) => void): () => void;
@@ -187,6 +188,7 @@ export function createClient(socket: ClientConnection, capabilities: readonly st
   return {
     snapshot,
     supportsResourceContext:capabilities.includes(RESOURCE_CONTEXT_CAPABILITY),
+    supportsMaterialAuthor:capabilities.includes(MATERIAL_AUTHOR_CAPABILITY),
     watchSnapshots(listener) {
       let active = true;
       let revision = -1;
@@ -219,10 +221,11 @@ export function createClient(socket: ClientConnection, capabilities: readonly st
     recipeAuthoring: request => {
       if (request.type === 'resourceHandoff' && !capabilities.includes(RESOURCE_CONTEXT_CAPABILITY)) return Promise.reject(new Error('此设备尚不支持配方资源交付。'));
       if (request.type === 'creatorOpen') {
-        const {nativePreview, resourceContext, draftScope, ...base} = request;
+        const {nativePreview, resourceContext, draftScope, materialAuthor, ...base} = request;
         return send('recipeAuthoring', {...base, ...(nativePreview && capabilities.includes(NATIVE_RECIPE_PREVIEW_CAPABILITY) && {nativePreview}),
           ...(resourceContext && capabilities.includes(RESOURCE_CONTEXT_CAPABILITY) && {resourceContext}),
-          ...(draftScope && capabilities.includes(DRAFT_SCOPE_EDIT_CAPABILITY) && {draftScope})});
+          ...(draftScope && capabilities.includes(DRAFT_SCOPE_EDIT_CAPABILITY) && {draftScope}),
+          ...(materialAuthor && capabilities.includes(MATERIAL_AUTHOR_CAPABILITY) && {materialAuthor})});
       }
       return send('recipeAuthoring', request);
     },

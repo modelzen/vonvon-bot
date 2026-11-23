@@ -39,7 +39,7 @@ function directImage(msg:NormalizedMessage){
   if(content?.[resource.type==='image'?'image_key':'file_key']!==resource.fileKey)throw denied();
   return {type:raw.message_type,key:resource.fileKey};
 }
-type CreatorJob=Omit<WireJob,'task'>&{task:Extract<WireJob['task'],{kind:'read'|'command'|'deliverCodes'}>};
+type CreatorJob=Omit<WireJob,'task'>&{task:Extract<WireJob['task'],{kind:'read'|'command'|'deliverCodes'|'materialCreate'}>};
 export type JobRecord={
   job:CreatorJob;state:'offer'|'active'|'unknown'|'finished';created:number;expiresAt:number;messageId?:string;originalCardId?:string;approvalGeneration?:number;
   conversationEntry?:{retryId:string;revision:number;order:number;text?:string;delivered?:true};
@@ -47,6 +47,7 @@ export type JobRecord={
   rename?:{order:number;threadId?:string;previousName:string};
   inspected?:{name:string;revision:number};
   conversationList?:{order:number;messageId:string};
+  materialCreate?:{order:number;proposalId:string};
   workName?:string;botName?:string;groupName?:string;version?:VersionSelection;codeLabel?:string;
   preview?:{ref?:string;readId?:string;position?:string};previewOwner?:string;
   previewRequest?:{session:string;cardSession:string;eventId?:string};
@@ -55,6 +56,7 @@ export type JobRecord={
 type DraftSelection={kind:'draft';snapshot:CreatorSnapshot};
 export type VersionSelection={kind:'version';target:CreatorVersion;name:string;version:string};
 export interface CreatorLedger {
+  materialEntries?:Record<string,{order:number;issuedAt:number;delivered?:true}>;
   conversationFocus?:{draftId:string;order:number};
   versionOrigins?:Record<string,CreatorWork>;observed?:Record<string,number>;sources?:Record<string,CreatorWork['source']>;
   jobs:Record<string,JobRecord>;cards:Record<string,Card>;chosenUntil?:number;seen?:string[];focusDraft?:string;focusUntil?:number;
@@ -184,6 +186,24 @@ export class PrivateCreator{
     const target=task.kind==='read'&&'target'in task.read?task.read.target:task.kind==='command'?versionOf(task.command):task.kind==='deliverCodes'?task.target:undefined;
     const row:JobRecord={job:{id,binding:link.binding,scope:p.scope,task},state:status,created:this.now(),expiresAt:this.now()+ttl,originWork:originWork??(target&&s.versionOrigins?.[target.versionId])};
     s.jobs[id]=row;return row;
+  }
+  async conversationMaterial(p:Presence,recipient:Recipient,offer:import('./conversation-material').MaterialProposal,messageId:string,check:(db:AuthoringLedger)=>Link){
+    if(!p.materialAuthor)throw denied();
+    const link=await this.hooks.guard(p,recipient);
+    return this.run(p,link,(s,actual,db)=>{
+      check(db);
+      const current=actual.materialProposal;
+      if(current?.id!==offer.id||current.order!==actual.selectionOrder||current.binding!==actual.binding||current.expiresAt<=this.now())throw denied();
+      if(current.jobId){
+        const row=s.jobs[current.jobId];
+        if(!row||row.materialCreate?.proposalId!==current.id||row.materialCreate.order!==current.order)throw denied();
+        return row.job.id;
+      }
+      current.acceptedBy??=messageId;
+      const row=this.addJob(p,actual,s,{kind:'materialCreate',draftId:current.draftId,content:current.content,access:current.input.access});
+      row.materialCreate={order:current.order,proposalId:current.id};current.jobId=row.job.id;
+      return row.job.id;
+    });
   }
   async conversationList(p:Presence,recipient:Recipient,messageId:string,offset:number,check:(db:AuthoringLedger)=>Link){
     const link=await this.hooks.guard(p,recipient);
@@ -878,6 +898,10 @@ export class PrivateCreator{
         return {kind:'creatorChecked',job,mode:'preview'};
       }
       switch(job.task.kind){
+        case 'materialCreate':
+          if(!p.materialAuthor||!r.materialCreate||r.materialCreate.order!==_l.selectionOrder||
+            _l.materialProposal?.id!==r.materialCreate.proposalId||_l.materialProposal.jobId!==id||!_l.materialProposal.acceptedBy||r.expiresAt<=this.now())throw denied();
+          return {kind:'creatorChecked',job,mode:'execute'};
         case 'read':
           if(r.expiresAt<=this.now())throw denied();
           if(job.task.read.kind==='openPreview'){
@@ -907,6 +931,30 @@ export class PrivateCreator{
     if(!this.enabled)throw denied();
     const link=await this.hooks.guard(p);
     switch(req.type){
+      case 'creatorMaterialEntry':{
+        this.hooks.interact(p);
+        const fresh=await this.run(p,link,(s,l,db)=>{
+          if(!p.materialAuthor||req.issuedAt>this.now()+60_000||req.issuedAt<this.now()-ttl)throw denied();
+          for(const [id,row] of Object.entries(s.materialEntries??{}))if(row.issuedAt<this.now()-ttl)delete s.materialEntries![id];
+          const prior=s.materialEntries?.[req.retryId];
+          if(prior){
+            if(prior.order!==l.selectionOrder||prior.issuedAt!==req.issuedAt)throw denied();
+            return !prior.delivered;
+          }
+          selectCreatorBinding(db,l,this.now());
+          delete l.conversationProposal;delete l.materialProposal;delete l.context;
+          for(const op of Object.values(db.operations))if(op.accountId===p.account&&op.scope===p.scope&&op.binding===l.binding){op.contextOpen=false;op.contextUntil=0;}
+          for(const h of Object.values(db.handoffs??{}))if(h.conversation&&h.scope===p.scope&&h.account===p.account&&h.binding===l.binding&&h.phase.state==='selecting'&&!h.capture)h.phase={state:'cancelled'};
+          delete s.current;delete s.focusDraft;delete s.conversationFocus;delete s.awaitLogo;
+          s.focusUntil=this.now()+ttl;(s.materialEntries??={})[req.retryId]={order:l.selectionOrder!,issuedAt:req.issuedAt};
+          return true;
+        });
+        if(fresh){
+          await this.im.sendText(link.recipient.chatId,'可以从资料开始创作配方。请发送要整理的文字或说明你的目标；我会先整理成本地草稿，再由你确认。',req.retryId);
+          await this.run(p,link,s=>{const entry=s.materialEntries?.[req.retryId];if(entry)entry.delivered=true;});
+        }
+        break;
+      }
       case 'creatorPreview':return this.publicationPreview(p,link,req.work,req.revision);
       case 'creatorAppConfirm':await this.appConfirm(p,link,req);break;
       case 'creatorContinue':{
@@ -926,7 +974,7 @@ export class PrivateCreator{
           if(this.selectionState(db,l)!==before)throw denied();
           this.noPendingSave(db,p,l,work);
           selectCreatorBinding(db,l,this.now());
-          delete l.conversationProposal;
+          delete l.conversationProposal;delete l.materialProposal;
           for(const h of Object.values(db.handoffs??{}))if(h.conversation&&h.scope===p.scope&&h.account===p.account&&h.binding===l.binding&&h.phase.state==='selecting'&&!h.capture)h.phase={state:'cancelled'};
           delete s.current;delete s.conversationFocus;s.focusDraft=work.draftId;s.focusUntil=this.now()+ttl;
           const row=this.addJob(p,l,s,{kind:'read',read:{kind:'draft',work}},'active',work);
@@ -1058,13 +1106,19 @@ export class PrivateCreator{
       return;
     }
     const checked=await this.allowedJob(p,link,id),task=checked.job.task;
-    if(task.kind!=='read'&&task.kind!=='command')throw denied();
+    if(task.kind!=='read'&&task.kind!=='command'&&task.kind!=='materialCreate')throw denied();
     if(task.kind==='read'&&task.read.kind==='edit'&&a.kind==='edit'){
       const q=task.read,src=a.work.source;
-      if(!same(q.work,a.work)||q.revision!==a.revision||!src)throw denied();
-      await this.hooks.begin(p,link,{type:'beginDraftHandoff',botId:agentIdSchema.parse(this.opts.bot.appId),session:p.session,
-        retryId:id,groupName:src.groupId,groupId:src.groupId,identity:src.identity,draftId:q.work.draftId,baseRevision:q.revision,canonical:a.canonical,
-        source:{sourceIntentId:src.preparationId,canonical:a.sourceCanonical}});
+      if(!same(q.work,a.work)||q.revision!==a.revision)throw denied();
+      if(src){
+        await this.hooks.begin(p,link,{type:'beginDraftHandoff',botId:agentIdSchema.parse(this.opts.bot.appId),session:p.session,
+          retryId:id,groupName:src.groupId,groupId:src.groupId,identity:src.identity,draftId:q.work.draftId,baseRevision:q.revision,canonical:a.canonical,
+          source:{sourceIntentId:src.preparationId,canonical:a.sourceCanonical}});
+      }else{
+        if(!p.materialAuthor)throw denied();
+        await this.run(p,link,(s,l)=>{s.conversationFocus={draftId:q.work.draftId,order:l.selectionOrder??0};s.focusDraft=q.work.draftId;s.focusUntil=this.now()+ttl;});
+        await this.im.sendText(link.recipient.chatId,'已选中这份资料创作的本地草稿。请在本私聊说明要修改的名称、简介或内容；增删范围会先展示给你确认。',id);
+      }
     }
     if(task.kind==='read'&&task.read.kind==='parent'&&a.kind==='parent'){
       if(!same(task.read.target,a.target)||a.inherited.accountId!==p.account||a.inherited.versionId!==task.read.target.versionId)throw denied();
@@ -1075,6 +1129,15 @@ export class PrivateCreator{
       const r=s.jobs[id];
       if(!r||!['active','unknown'].includes(r.state))throw denied();
       let card:Card|undefined,refresh:Card|undefined;
+      if(task.kind==='materialCreate'){
+        if(!r.materialCreate||r.materialCreate.order!==_l.selectionOrder||_l.materialProposal?.id!==r.materialCreate.proposalId||_l.materialProposal.jobId!==id)throw denied();
+        if(a.kind==='saved'){
+          if(a.work.draftId!==task.draftId||a.work.source!==null||a.revision!==1)throw denied();
+          (s.sources??={})[a.work.draftId]=null;s.conversationFocus={draftId:a.work.draftId,order:r.materialCreate.order};
+          s.focusDraft=a.work.draftId;s.focusUntil=this.now()+ttl;
+        }else if(a.kind!=='rejected')throw denied();
+        r.result=a;r.state='finished';r.answerDigest=answerDigest;return;
+      }
       if(a.kind==='unknown'){
         if(task.kind!=='command')throw denied();
         if(r.state==='unknown'&&r.resultCard&&s.cards[r.resultCard]?.session===p.session)return;

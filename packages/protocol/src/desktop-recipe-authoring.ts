@@ -21,7 +21,8 @@ export const desktopAuthoringRequestSchema = z.discriminatedUnion('type', [
   z.object({type:z.literal('preparePublication'),accountId:uuid,draft:recipeDraftSchema}).strict(),
   z.object({type:z.literal('confirmPublication'),accountId:uuid,reviewId:uuid,destination:exactResourceVersionSchema.nullable().optional()}).strict(),
   z.object({type:z.literal('recoverPublication'),accountId:uuid,draftId:uuid}).strict(),
-  z.object({type:z.literal('creatorContinue'),accountId:uuid,retryId:uuid,recover:z.enum(['request','handoff']).optional(),entry:z.discriminatedUnion('kind',[
+  z.object({type:z.literal('creatorContinue'),accountId:uuid,retryId:uuid,retryStartedAt:z.number().int().safe().nonnegative().optional(),recover:z.enum(['request','handoff']).optional(),entry:z.discriminatedUnion('kind',[
+    z.object({kind:z.literal('materials'),viewId:viewIdSchema,botId:agentIdSchema,registrationId:agentSchema.shape.registrationId,registeredAt:agentSchema.shape.registeredAt}).strict(),
     z.object({kind:z.literal('source'),viewId:viewIdSchema,botId:agentIdSchema,groupId:groupIdSchema,
       registrationId:agentSchema.shape.registrationId,registeredAt:agentSchema.shape.registeredAt,bindingIncarnation:membershipSchema.shape.bindingIncarnation,
       parent:z.object({recipeId:uuid,versionId:uuid}).strict().optional()}).strict(),
