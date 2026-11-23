@@ -77,6 +77,11 @@ export class CreatorCards {
       text=[(pub.name||'未命名配方')+' · '+(pub.version||'未指定版本'),pub.access==='coded'?'凭分享码获取':'直接获取','草稿修订 '+snap.revision,...(incomplete?[incomplete]:[]),
         ...(!p.nativePreview&&!snap.appPreviewUrl?['请打开 App 的「我的配方」查看完整内容。']:[])].join('\n');
       if(!retry||incomplete)choices.push({label:'继续修改内容',choice:{kind:'edit',id:row.job.id}});
+      if(!retry&&row.state==='offer')choices.push({
+        label:pub.access==='coded'?'改为直接获取':'改为凭分享码获取',
+        choice:{kind:'offer',command:{kind:'metadata',work:snap.work,revision:snap.revision,baseSha256:snap.contentSha256,
+          change:{field:'access',value:pub.access==='coded'?'direct':'coded'}}},
+      });
     }else if(c.kind==='metadata'){
       title='采用公开信息修改';label='采用修改';
       const field={name:'名称',summary:'简介',overview:'概览',version:'显示版本',access:'获取方式',logo:'Logo'}[c.change.field];
