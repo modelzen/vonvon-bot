@@ -891,6 +891,12 @@ export class AuthoringSession {
         return true;
       }
       if (!selected || !selected.contextOpen || (selected.contextUntil ?? 0) <= this.now()) { await reply(selected ? expiredContext : appChoose); return true; }
+      if(!msg.replyToMessageId){
+        const current=link.creator?.current,focusDraft=link.creator?.focusDraft;
+        const currentDraft=current?.kind==='draft'?current.snapshot.work.draftId:undefined;
+        const operationDraft=selected.view.draftId??selected.rich?.destinationDraftId??(selected.view.receipt?.status==='accepted'?selected.view.receipt.draftId:undefined);
+        if(current?.kind==='version'||focusDraft&&focusDraft!==operationDraft||currentDraft&&currentDraft!==operationDraft){await reply('请等待所选作品读取完成，或从原配方卡重新选择本次编辑。');return true;}
+      }
       if (selected.seenInstructions?.includes(msg.messageId) || selected.instructionId === msg.messageId) return true;
       if(msg.replyToMessageId&&(!selected.carrier.cardId||!await this.im.matches(msg.replyToMessageId,recipient.chatId,selected.carrier.cardId))){await reply(appChoose);return true;}
       if(selected.view.format==='rich-v2'){

@@ -1046,7 +1046,7 @@ const replies=()=>JSON.stringify(textSend.mock.calls);
 
 const versionCandidateInstruction='请把正在准备的新版版本设为「0.2.0-test」。名称、简介和群角色都保留。把概览润色成简洁的 Markdown 使用说明，保留原来的三步流程，并增加一句说明这次同时验证飞书直接发布。只生成这份配方的待确认候选，不要保存或发布，不要修改原群配置。';
 
-it.each(['natural','command'] as const)('routes candidate generation language to the selected rich creation without saving or publishing: %s',async mode=>{
+it.each([{mode:'natural',focus:false},{mode:'command',focus:false},{mode:'natural',focus:true},{mode:'command',focus:true}] as const)('routes candidate generation language to the selected rich creation without saving or publishing: $mode focus=$focus',async ({mode,focus})=>{
   await link();
   const options={includeTasks:false,includeBotMemories:false,skills:[]};
   const {inventory}=kind(await rpc('richInventory',{groupId,options}),'richInventory');
@@ -1054,8 +1054,8 @@ it.each(['natural','command'] as const)('routes candidate generation language to
     public:{name:'周报',summary:'每周整理',overview:'1. 选择来源\n2. 确认候选\n3. 保存',version:''},access:'direct',setup:[]};
   const op=kind(await rpc('richPrepare',{groupId,selection,attestations:[]}),'operation').operation;
   await rpc('richAdvance',{operationId:op.operationId,destinationDraftId:randomUUID(),authorization:{...await auth(op,'dispatch'),format:'rich-v2'}});
-  if(mode==='command'){
-    await attachCreator();
+  await attachCreator();
+  if(focus){
     const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
     await new AuthoringJournal(root,()=>clock).run(db=>{const link=Object.values(db.links)[0]!;link.creator!.focusUntil=clock+60_000;delete link.creator!.current;});
   }
@@ -2835,21 +2835,43 @@ it('keeps an explicitly selected version when an earlier draft snapshot arrives'
   expect(lastCard()).toContain('确认生成');
 });
 
-it('keeps an unquoted version command for completed draft A from editing a different waiting draft B',async()=>{
+it.each([
+  {purpose:'edit',mode:'command',ready:false},{purpose:'edit',mode:'natural',ready:false},
+  {purpose:'edit',mode:'command',ready:true},{purpose:'edit',mode:'natural',ready:true},
+  {purpose:'prepare',mode:'command',ready:false},{purpose:'prepare',mode:'natural',ready:false},
+  {purpose:'prepare',mode:'command',ready:true},{purpose:'prepare',mode:'natural',ready:true},
+] as const)('keeps an unquoted version command for completed draft A from editing a different waiting draft B: $purpose $mode snapshot=$ready',async({purpose,mode,ready})=>{
   const {content,draftId}=await richChatContext(['version'],true);
   const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
   const canonical=Buffer.from(canonicalizeRichRecipeContent(content).canonicalUTF8).toString('base64url');
   await attachCreator();
   const idB=randomUUID();
-  const b=kind(await rpc('richEdit',{draftId:idB,baseRevision:2,canonical,selected:[content.public.version.itemId]}),'operation').operation;
+  let b:AuthoringOperation;
+  if(purpose==='edit')b=kind(await rpc('richEdit',{draftId:idB,baseRevision:2,canonical,selected:[content.public.version.itemId]}),'operation').operation;
+  else{
+    const options={includeTasks:false,includeBotMemories:false,skills:[]};
+    const {inventory}=kind(await rpc('richInventory',{groupId,options}),'richInventory');
+    b=kind(await rpc('richPrepare',{groupId,selection:{options,reviewToken:inventory.reviewToken,selected:[inventory.content.role!.itemId],sourceAttested:true,
+      public:{name:'B',summary:'待确认作品',overview:'原始说明',version:'1'},access:'direct',setup:[]},attestations:[]}),'operation').operation;
+  }
   await rpc('richAdvance',{operationId:b.operationId,destinationDraftId:idB,authorization:{...await auth(b,'dispatch'),format:'rich-v2'}});
   await attachCreator();
-  await rpc('creatorContinue',{selection:{kind:'draft',work:{draftId,source:null},name:'A',version:'1'}});
-  expect((await status(b.operationId)).state).toBe('waiting');
-  await orch.onMessage(msg('/recipe version 8.2'));
+  const work={draftId,source:null};
+  await rpc('creatorContinue',{selection:{kind:'draft',work,name:'A',version:'1'}});
+  if(ready){
+    const read=(await creatorJobs()).find(j=>j.task.kind==='read'&&j.task.read.kind==='draft')!;
+    const snapshot={work,format:'role-v1',recipeId:null,parent:null,revision:3,public:{name:'A',summary:'已选择作品',overview:'说明',version:'1',access:'direct'},
+      contentSha256:digest('角色'),parts:[],sections:[{title:'角色',pageHashes:[digest('角色')]}]};
+    await rpc('creatorAnswer',{id:read.id,answer:{kind:'snapshot',snapshot}});
+  }
   const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
-  const result=await new AuthoringJournal(root,()=>clock).run(db=>({chosen:Object.values(db.links)[0]!.creator!.focusDraft===draftId,state:db.operations[b.operationId]!.view.state,request:db.operations[b.operationId]!.rich?.request}));
-  expect({chosen:result.chosen,state:result.state,mutation:result.request&&'payload'in result.request&&result.request.payload.changes}).toEqual({chosen:true,state:'waiting',mutation:undefined});
+  const ledger=new AuthoringJournal(root,()=>clock);
+  const before=await status(b.operationId),actions=cloud.map(c=>c.action),request=await ledger.run(db=>db.operations[b.operationId]!.rich?.request);
+  await orch.onMessage(msg(mode==='command'?'/recipe version 8.2':versionCandidateInstruction));
+  const result=await ledger.run(db=>({chosen:Object.values(db.links)[0]!.creator!.focusDraft===draftId,request:db.operations[b.operationId]!.rich?.request}));
+  expect(result.chosen).toBe(true);expect(await status(b.operationId)).toEqual(before);
+  expect(result.request).toEqual(request);expect(proposeRich).not.toHaveBeenCalled();
+  expect(cloud.map(c=>c.action)).toEqual(actions);
 });
 
 
@@ -3304,7 +3326,7 @@ async function nativePreviewFixture(){
   const ledger=new AuthoringJournal(root,()=>clock),history=new NativeHistory();
   const association=kind(await service.request(peer,recipeAuthoringRequestSchema.parse({type:'creatorDiscover',botId:appId,accountId:account})),'creatorBinding').association!;
   const nativeAssociation={accountId:account,viewId:'local',deviceId:peer.device,deviceKey:Buffer.alloc(32,7).toString('base64url'),botId:agentIdSchema.parse(appId),binding:association.binding,scope:association.scope};
-  const work={draftId:randomUUID(),source:null},draft={draftId:work.draftId,recipeId:null,revision:2,public:{name:'原生回调预览',summary:'',overview:'完整内容',version:'2',access:'direct' as const},config:{role:'完整群角色'}};
+  const work={draftId:randomUUID(),source:null},draft={draftId:work.draftId,recipeId:null,revision:2,public:{name:'原生回调预览',summary:'原生预览测试简介',overview:'完整内容',version:'2',access:'direct' as const},config:{role:'完整群角色'}};
   const controller=new AbortController(),state={kind:'signedIn' as const,accountId:account,displayName:'本人',provider:'google' as const,persistence:'memory' as const};
   const requests:Array<{path:string;method:string}>=[],answers:unknown[]=[],navigation=new RecipePreviewNavigation('vonvon-preview'),opened=vi.fn();
   const published=vi.fn(),saved=vi.fn();
@@ -3445,13 +3467,13 @@ it.each(['role','rich','rich-paired'] as const)('APP PREPARE INTEGRATION drives 
   const logoPart={objectId:randomUUID(),bytes:Buffer.alloc(7224,4)};
   const texts=Object.fromEntries(fileParts.map(part=>[part.objectId,part.bytes.toString()]));
   const objects=new Map<string,Buffer>([...fileParts,logoPart].map(part=>[part.objectId,part.bytes]));
-  const document=canonicalizeRichRecipeContent({format:'rich-v2',schemaVersion:2,public:{name:field('原生发布准备联调'),summary:field(''),overview:field('完整内容'),version:field('2')},
+  const document=canonicalizeRichRecipeContent({format:'rich-v2',schemaVersion:2,public:{name:field('原生发布准备联调'),summary:field('发布准备测试简介'),overview:field('完整内容'),version:field('2')},
     role:{itemId:randomUUID(),originId:randomUUID(),text:{kind:'inline',value:'完整群角色'}},
     settings:[],rules:[],skills:[{itemId:randomUUID(),originId:randomUUID(),name:'模拟技能',entryFileId:fileParts[0]!.itemId,fileIds:fileParts.map(part=>part.itemId)}],files:fileParts.map((part,i)=>({itemId:part.itemId,originId:randomUUID(),name:i===0?'SKILL.md':'reference-'+i+'.md',use:i===0?'skillDescription':'reference',text:{kind:'part',objectId:part.objectId}})),
     tasks:[],memories:[],setup:[],parts:[...fileParts.map(part=>({objectId:part.objectId,kind:'text',sha256:digest(part.bytes),bytes:part.bytes.length,mediaType:'text/plain;charset=utf-8'})),
       {objectId:logoPart.objectId,kind:'finalLogo',sha256:digest(logoPart.bytes),bytes:logoPart.bytes.length,mediaType:'image/webp'}],finalLogo:{itemId:randomUUID(),originId:randomUUID(),objectId:logoPart.objectId}});
   const manifest={objectId:randomUUID(),kind:'manifest',sha256:digest(Buffer.from(document.canonicalUTF8)),bytes:document.canonicalUTF8.length,mediaType:'application/json'};
-  const publicFields={name:'原生发布准备联调',summary:'',overview:'完整内容',version:'2',access:'direct' as const};
+  const publicFields={name:'原生发布准备联调',summary:'发布准备测试简介',overview:'完整内容',version:'2',access:'direct' as const};
   const draft=format!=='role'?{draftId:work.draftId,recipeId:null,revision:2,public:publicFields,format:'rich-v2' as const,sourceIntentId:work.source!.preparationId,
     rich:{content:document.content,texts,canonical:Buffer.from(document.canonicalUTF8).toString('base64url')},logo:'data:image/webp;base64,'+logoPart.bytes.toString('base64')}:
     {draftId:work.draftId,recipeId:null,revision:2,public:publicFields,config:{role:'完整群角色'}};

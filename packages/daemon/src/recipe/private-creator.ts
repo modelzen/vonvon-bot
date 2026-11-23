@@ -546,8 +546,9 @@ export class PrivateCreator{
         !o.revoked&&o.contextOpen&&(o.contextUntil??0)>this.now()&&(o.view.draftId===s.focusDraft||o.view.receipt?.status==='accepted'&&o.view.receipt.draftId===s.focusDraft));
       const openOperations=Object.values(db.operations).filter(o=>o.bot===this.botKey&&o.accountId===p.account&&o.scope===p.scope&&o.binding===link.binding&&sameRecipient(o.recipient,recipient)&&
         o.contextOpen&&(o.contextUntil??0)>this.now()&&o.terminalAt===undefined);
-      const commandOperation=!quoted&&!selected&&s.focusUntil&&s.focusUntil>this.now()&&openOperations.length===1?openOperations[0]:undefined;
-      const editableFocus=commandOperation&&!commandOperation.revoked&&(commandOperation.view.purpose==='prepareDraft'||commandOperation.view.purpose==='editDraft'&&commandOperation.view.draftId===s.focusDraft)&&
+      const commandOperation=!quoted&&!selected&&openOperations.length===1?openOperations[0]:undefined;
+      const operationDraft=commandOperation?.view.draftId??commandOperation?.rich?.destinationDraftId;
+      const editableFocus=commandOperation&&(!s.focusDraft||s.focusDraft===operationDraft)&&!commandOperation.revoked&&(commandOperation.view.purpose==='prepareDraft'||commandOperation.view.purpose==='editDraft')&&
         ['waiting','candidate'].includes(commandOperation.view.state);
       return {selected,quote:activeCard||undefined,logo:s.awaitLogo,duplicate:s.seen?.includes(msg.messageId),originalOp:Boolean(op),matching:matching||focusedOperation,editableFocus:Boolean(editableFocus),foreignQuote:Boolean(quoted&&!op&&!activeCard),active:Boolean(s.focusUntil&&s.focusUntil>this.now())};
     });
@@ -569,7 +570,7 @@ export class PrivateCreator{
     if(!current&&selection.editableFocus&&change&&/^(name|summary|overview|version)$/i.test(change[1]!))return false;
     if(!intent&&!photo&&!change&&!issue&&!retry){
       if(!selection.active)return false;
-      if(selection.matching)return false;
+      if(selection.matching||selection.editableFocus)return false;
       if(current?.kind==='draft'&&msg.rawContentType==='text'){
         const {work,revision}=current.snapshot;
         await this.run(p,link,(s,actual,db)=>{
