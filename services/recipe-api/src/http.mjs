@@ -3,7 +3,7 @@ import { identityFromRequest } from './auth.mjs';
 import { ApiError, badInput } from './errors.mjs';
 import { bodyJson, checkDraft, expectedRevision, objectKeys, queryParams, requestKey, uuid } from './input.mjs';
 import { codeAttempts } from './limiter.mjs';
-import { operationInput } from './operation-input.mjs';
+import { operationId, operationInput } from './operation-input.mjs';
 import { authoringInput, checkDraftPatch } from './authoring-input.mjs';
 
 const endpoints = [
@@ -32,7 +32,9 @@ const endpoints = [
   ['POST', '/operations/:o/cancel', 'cancelOperation'],
   ['POST', '/operations/:o/redeem', 'redeemOperation', 'possession'],
   ['POST', '/operations/:o/complete', 'completeOperation', 'possession'],
+  ['POST', '/authoring/source-history', 'sourceHistory'],
   ['POST', '/authoring/:o/register', 'registerAuthoring'],
+  ['GET', '/authoring/:o/recovery', 'recoverAuthoring'],
   ['GET', '/authoring/:o', 'getAuthoring'],
   ['POST', '/authoring/:o/cancel', 'cancelAuthoring'],
   ['POST', '/authoring/:o/authorize', 'authorizeAuthoring'],
@@ -52,6 +54,14 @@ function identify(req, url) {
 
 async function inputFor(req, url, {action, ids}) {
   const { q, cursor } = queryParams(url, action === 'catalog' ? ['q','cursor'] : ['listCodes','library'].includes(action) ? ['cursor'] : []);
+  if (action === 'sourceHistory') {
+    const body = await bodyJson(req, 2048);
+    objectKeys(body, ['operationIds']);
+    if (!Array.isArray(body.operationIds) || body.operationIds.length < 1 || body.operationIds.length > 32) throw badInput();
+    const operations = body.operationIds.map(operationId);
+    if (new Set(operations).size !== operations.length) throw badInput();
+    return [action, [operations]];
+  }
   if (action.endsWith('Authoring')) return [action, authoringInput(action, ids[0],
     req.method === 'GET' ? {} : await bodyJson(req, action === 'acceptAuthoring' ? 196608 : 2048))];
   if (req.method === 'GET') {
@@ -60,7 +70,7 @@ async function inputFor(req, url, {action, ids}) {
     return [action, ids];
   }
   if (action.endsWith('Operation')) return [action, operationInput(action, ids[0], await bodyJson(req, 2048))];
-  const key = requestKey(req);
+  const key = requestKey(req, action === 'direct' || action === 'redeem');
   const body = await bodyJson(req);
   if (action === 'patchDraft') {
     checkDraftPatch(body);

@@ -3,14 +3,17 @@ import { pathToFileURL } from 'node:url';
 import { shell, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron';
 import { ConnectionError, RpcError, type VonvonClient } from '@vonvon/client/browser';
 import {
-  desktopRecipeSourceRequestSchema, recipeUseRequestSchema, communityRequestSchema, accountStatusSchema, adminRequestSchema, agentIdSchema, collaborationRequestSchema, commandSchema, scheduleRequestSchema,
+  desktopAuthoringRequestSchema, desktopRecipeSourceRequestSchema, recipeUseRequestSchema, communityRequestSchema, accountStatusSchema, adminRequestSchema, agentIdSchema, collaborationRequestSchema, commandSchema, scheduleRequestSchema,
   directoryRequestSchema, environmentRequestSchema, libraryRequestSchema, machineRequestSchema, memoryRequestSchema, contextPreviewRequestSchema, deviceRequestSchema,
   settingsRequestSchema, machineReplySchema, addDeviceRequestSchema, viewIdSchema, LOCAL_VIEW,
   type DesktopSnapshot, type DesktopUpdate, type MachineReply, type ViewId,
 } from '@vonvon/protocol';
 import { DeviceConnectionsError, type DeviceConnections, type ViewChange, type ViewSession } from './connections.js';
 import { communityRequest, CommunityError } from './community-api.js';
-import {RecipeUseController} from './recipe-use.js';
+import {RecipeUseController, type RecipeDeviceLease} from './recipe-use.js';
+import {RecipeAuthoringController} from './recipe-authoring.js';
+import {AuthoringJournal} from './recipe-authoring-journal.js';
+import {AuthoringError} from './recipe-authoring-cloud.js';
 import {RecipeJournal} from './recipe-use-journal.js';
 import {RecipeUseError, changed} from './recipe-use-cloud.js';
 import type { NativeAccount } from './account-session.js';
@@ -123,7 +126,8 @@ function safeFailure(error: unknown): SafeFailure {
     const code = safeErrorCode(error.code);
     return { kind: 'rpc', message: sanitizeDaemonMessage(error.message), ...(code ? { code } : {}) };
   }
-  if (error instanceof RecipeUseError || error instanceof CommunityError) return {kind: 'validation', message: error.message};
+  if (error instanceof CommunityError) return {kind: 'validation', message: error.message, code: error.code, ...(error.retryAfter ? {retryAfter: error.retryAfter} : {})};
+  if (error instanceof AuthoringError || error instanceof RecipeUseError) return {kind: 'validation', message: error.message};
   if (error instanceof ConnectionError) return { kind: 'connection', message: '和后台的连接断开了。' };
   if (error instanceof DeviceUnavailable) return { kind: 'connection', code: 'device_unavailable', message: error.message };
   if (error instanceof DeviceSwitched) return { kind: 'connection', code: 'device_switched', message: error.message };
@@ -163,7 +167,7 @@ const remoteServiceToggle = (value: unknown): boolean => {
 };
 
 export function installBridge(
-  owner: AttachedDaemon, window: BrowserWindow, paths: DesktopResources, actions: ShellActions, devices: DeviceConnections, account: NativeAccount, recipeJournalPath?:string,
+  owner: AttachedDaemon, window: BrowserWindow, paths: DesktopResources, actions: ShellActions, devices: DeviceConnections, account: NativeAccount, recipeJournalPath?:string, authoringJournalPath?:string,
 ): DesktopBridge {
   const expectedUrl = pathToFileURL(realpathSync(paths.uiIndex)).href;
   let disposed = false;
@@ -416,7 +420,7 @@ export function installBridge(
     }, invoke);
   }
 
-  const recipes=new RecipeUseController(account, id=>{
+  const captureRecipeDevice = (id:string): RecipeDeviceLease => {
     if(id!==viewId() || view.kind==='waiting' || view.kind==='remote' && view.session.mode!=='full' || view.kind==='local' && localDown()) throw changed();
     const selected=view, seq=viewSeq, gen=localGen, connection=client(), pairedKey=selected.kind==='remote' ? devices.pairedPublicKey?.(id) : undefined;
     return {viewId:id,client:connection,pairedKey,check() {
@@ -424,9 +428,15 @@ export function installBridge(
         (selected.kind==='remote' && (!pairedKey || devices.pairedPublicKey?.(id)!==pairedKey)) ||
         (selected.kind==='local' && localDown())) throw changed();
     }};
-  },new RecipeJournal(recipeJournalPath));
+  };
+  const recipes = new RecipeUseController(account, captureRecipeDevice, new RecipeJournal(recipeJournalPath));
+  const authoring = new RecipeAuthoringController(account, captureRecipeDevice, new AuthoringJournal(authoringJournalPath), value => send({type:'authoringSaved',value}));
   const noArg = (_: unknown): undefined => undefined;
-  const onNavigation = (): void => { subscribed = false; };
+  const onNavigation = (event: Electron.WebContentsDidStartNavigationEventParams): void => {
+    if (!event.isMainFrame || event.isSameDocument) return;
+    subscribed = false;
+    if (event.url !== expectedUrl) authoring.closeAll();
+  };
   try {
     registerClient(desktopChannels.snapshot, 0, noArg, () => {
       if (view.kind === 'local' && localDown() && localSnapshot) return Promise.resolve(localSnapshot);
@@ -547,6 +557,7 @@ export function installBridge(
     register(desktopChannels.quit, 0, noArg, () => actions.confirmQuit());
     register(desktopChannels.quitKeepsDaemon, 0, () => { localOnly(); }, () => actions.quitKeepsDaemon());
     register(desktopChannels.recipeSource,1,value=>desktopRecipeSourceRequestSchema.parse(value),value=>recipes.source(value));
+    register(desktopChannels.recipeAuthoring, 1, value => desktopAuthoringRequestSchema.parse(value), value => authoring.request(value));
     register(desktopChannels.recipeUse,1,value=>recipeUseRequestSchema.parse(value),value=>recipes.request(value));
     register(desktopChannels.community, 1, value => communityRequestSchema.parse(value), value => communityRequest(account, value));
     register(desktopChannels.accountStatus, 0, noArg, async () => accountStatusSchema.parse(account.status()));
@@ -582,7 +593,7 @@ export function installBridge(
     registeredChannels.push(desktopChannels.subscribe);
     unsubscribers.push(account.onStatus(value => send({ type: 'account', value: accountStatusSchema.parse(value) })));
     unsubscribers.push(devices.onState(value => send({ type: 'devices', value })));
-    unsubscribers.push(devices.onView(change => { void onView(change); }));
+    unsubscribers.push(devices.onView(change => { void onView(change); authoring.invalidateStale(); }));
     window.webContents.on('did-start-navigation', onNavigation);
   } catch (error) {
     window.webContents.removeListener('did-start-navigation', onNavigation);
@@ -602,6 +613,7 @@ export function installBridge(
       candidate = next;
       replacing = (async () => {
         localGen++;
+        authoring.invalidateStale();
         localWatch?.();
         localWatch = null;
         // A remote view's binding is not this connection's.
@@ -671,6 +683,7 @@ export function installBridge(
     dispose() {
       disposal ??= (async () => {
         disposed = true;
+        authoring.closeAll();
         subscribed = false;
         for (const off of unsubscribers.splice(0)) off();
         window.webContents.removeListener('did-start-navigation', onNavigation);

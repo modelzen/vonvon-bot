@@ -34,6 +34,7 @@ export interface TypedInput {
   text: string;
   createTime?: number;
 }
+type DmReply = { openId: string; quoted?: string; createTime?: number };
 type EntryState = { kind: 'queued' } | { kind: 'sending' } | { kind: 'visible'; messageId: string; shownAt: number }
   | { kind: 'settled'; presentation: AskCardState };
 interface Entry {
@@ -264,22 +265,30 @@ export class AskCoordinator {
       { actor: this.names.peek(input.senderId) ?? `成员 …${input.senderId.slice(-6)}` });
     return 'answered';
   }
-  /**
-   * A reply to this person's own private copy of a question (dm-agent 5): only that counts as an answer. Whatever else
-   * they write there is for their own Agent.
-   */
-  dmText(input: { openId: string; text: string; quoted: string; createTime?: number }): boolean {
-    const found = this.carriers.get(input.quoted);
-    if (!found || found.dm !== input.openId) return false;
+  /** Match metadata only: audio addressed to this private card may be transcribed before a typed answer exists. */
+  private dmReplyCard(input: DmReply) {
+    const found = input.quoted ? this.carriers.get(input.quoted) : undefined;
+    if (!found || found.dm !== input.openId) return;
     const { turn, entry } = found;
-    if (entry.state.kind !== 'visible' || !turn.open) return false;
+    if (entry.state.kind !== 'visible' || !turn.open) return;
+    const dm = entry.dm?.get(input.openId);
+    if (dm?.kind !== 'visible' || !input.createTime || input.createTime < dm.shownAt
+      || !this.eligible(turn, entry.request).includes(input.openId)) return;
+    return found;
+  }
+  hasPendingDmReply(input: DmReply): boolean {
+    const found = this.dmReplyCard(input);
+    return Boolean(found && found.turn.run.askPending?.(found.entry.request.id) !== false);
+  }
+  /** Only a reply to this person's own private copy of a question can answer it (dm-agent 5). */
+  dmText(input: DmReply & { text: string }): boolean {
+    const found = this.dmReplyCard(input);
+    if (!found) return false;
+    const { turn, entry } = found;
     if (turn.run.askPending?.(entry.request.id) === false) {
       this.settle(turn, entry, { kind: 'unanswered', reason: 'turn-ended' }, { providerResolved: true });
       return false;
     }
-    const dm = entry.dm?.get(input.openId);
-    if (dm?.kind !== 'visible' || !input.createTime || input.createTime < dm.shownAt
-      || !this.eligible(turn, entry.request).includes(input.openId)) return false;
     const text = input.text.trim().slice(0, 4000);
     if (!text) return false;
     log.info('card', 'ask-dm-typed', { len: text.length });
