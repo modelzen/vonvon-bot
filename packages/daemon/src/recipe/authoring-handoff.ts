@@ -5,7 +5,7 @@ import {AuthoringJournal,sameRecipient,type AuthoringLedger,type Link,type Recip
 import {AuthoringIm,candidateConfirmation} from './authoring-im';
 import {groupSourceIdentity} from './authoring-source';
 import {preparedRich,readRichSource,richSkillOptions,typedRichEdit,richCardReview,type RichNativeOptions,type RichLocalDraft} from './authoring-rich-flow';
-import {candidateChanges,contentItems,emptySelection,handoffCard,selectedSource,setChoices,toggleChoice,viewHandoff,type PrivateHandoff,type handoffClick} from './authoring-handoff-menu';
+import {candidateChanges,contentItems,emptySelection,handoffCard,hasLegacyMemoryChoices,selectedSource,setChoices,toggleChoice,viewHandoff,type PrivateHandoff,type handoffClick} from './authoring-handoff-menu';
 import {wireDigest} from './authoring-rich-snapshot';
 
 type Begin=Extract<RecipeAuthoringRequest,{type:'beginHandoff'|'beginDraftHandoff'}>;
@@ -66,11 +66,11 @@ export class PrivateHandoffs {
     this.live(p);setChoices(h,inv,skills);
   }
   private async refresh(p:Presence,link:Link,h:PrivateHandoff){
-    if(!h.cardId||!h.messageId)return;
+    if(!h.cardId)return;
     this.live(p);
     const body=handoffCard(h);
     const result=await this.im.updateJson(h.cardId,h.generation,h.ref,body);
-    if(result==='updated'||result==='conflict'&&await this.im.showsJson(h.messageId,h.recipient.chatId,body)){
+    if(result==='updated'||result==='conflict'&&h.messageId&&await this.im.showsJson(h.messageId,h.recipient.chatId,body)){
       await this.transaction(p,link,h.retryId,row=>{if(row.ref===h.ref)delete row.cardDirty;});
       delete h.cardDirty;return;
     }
@@ -82,19 +82,24 @@ export class PrivateHandoffs {
     if(!h.cardId){
       const cardId=await this.im.createJson(handoffCard(h));
       h=await this.transaction(p,link,h.retryId,row=>{if(row.ref!==h.ref||!active(row))throw changed();row.cardId=cardId;return row;});
+    }else{
+      const before=h.ref;
+      rotate(h);h=await this.save(p,link,h,before);
+      await this.refresh(p,link,h);
     }
     h=await this.transaction(p,link,h.retryId,row=>{if(row.ref!==h.ref||!active(row))throw changed();row.sentAt??=this.now();return row;});
     let messageId:string;
     try{messageId=await this.im.send(h.recipient.chatId,h.cardId!,h.sendUuid);}catch{return h;}
     return this.transaction(p,link,h.retryId,row=>{if(row.ref!==h.ref||!active(row))throw changed();row.messageId=messageId;return row;});
   }
-  async begin(p:Presence,link:Link,r:Begin){
+  async begin(p:Presence,link:Link,r:Begin,creator=false){
     if(r.type==='beginHandoff'&&(!!r.sourceVersionId!==!!r.inherited||r.inherited&&(r.inherited.accountId!==p.account||r.inherited.versionId!==r.sourceVersionId||r.inherited.public.version!=='')))throw changed();
     const identity=await groupSourceIdentity(this.native.channel,this.native.bot,p.scope,r.groupId);
     if(r.type==='beginDraftHandoff'&&r.identity!==identity)throw changed();
     const edit=r.type==='beginDraftHandoff'?{draftId:r.draftId,baseRevision:r.baseRevision,canonical:r.canonical,source:r.source}:undefined;
     let h=await this.ledger.run(db=>{
       this.live(p);
+      if(!Object.values(db.links).some(l=>l.binding===link.binding&&sameRecipient(l.recipient,link.recipient)))throw changed();
       const slots=db.handoffs??={};
       const previous=slots[r.retryId];
       if(previous){
@@ -103,10 +108,10 @@ export class PrivateHandoffs {
         return previous;
       }
       if(Object.values(slots).filter(x=>x.account===p.account&&x.expiresAt>this.now()).length>=60)throw new Error('本次准备次数已到上限，请稍后再试。');
-      if(Object.values(slots).some(x=>bound(x,p,link)&&active(x)))throw new Error('同一私聊已有配方准备，请先完成或取消。');
+      if(Object.values(slots).some(x=>bound(x,p,link)&&active(x)&&(!creator||edit&&x.draftId===edit.draftId)))throw new Error('同一私聊已有配方准备，请先完成或取消。');
       if(Object.values(db.operations).some(op=>op.scope===p.scope&&op.accountId===p.account&&op.binding===link.binding&&op.terminalAt===undefined&&
-        (edit?op.view.draftId===edit.draftId:op.view.groupId===r.groupId)))throw new Error('这份配方已有进行中的私聊，请先在原卡片完成或取消。');
-      return slots[r.retryId]={account:p.account,scope:p.scope,groupId:r.groupId,groupName:r.groupName,identity,binding:link.binding,recipient:link.recipient,
+        (edit?op.view.draftId===edit.draftId:!creator&&op.view.groupId===r.groupId)))throw new Error('这份配方已有进行中的私聊，请先在原卡片完成或取消。');
+      return slots[r.retryId]={...(creator&&{creator:true as const}),account:p.account,scope:p.scope,groupId:r.groupId,groupName:r.groupName,identity,binding:link.binding,recipient:link.recipient,
         ref:randomUUID(),generation:1,sendUuid:randomUUID(),session:p.session,retryId:r.retryId,expiresAt:this.now()+30*60_000,selection:emptySelection(),phase:{state:'selecting'},
         ...(edit&&{edit,draftId:edit.draftId,baseRevision:edit.baseRevision}),...(r.type==='beginHandoff'&&r.sourceVersionId&&{sourceVersionId:r.sourceVersionId,inherited:structuredClone(r.inherited)})} satisfies PrivateHandoff;
     });
@@ -158,6 +163,13 @@ export class PrivateHandoffs {
   }
   private async resumeExisting(p:Presence,link:Link,h:PrivateHandoff){
     if(!active(h))return publicView(h);
+    if(hasLegacyMemoryChoices(h)){
+      const before=h.ref;
+      h.selection.options.includeBotMemories=false;
+      if(h.edit)setChoices(h);
+      else {h.phase={state:'needsReview'};h.selection.choices=[];}
+      rotate(h);h=await this.save(p,link,h,before);
+    }
     if(h.session!==p.session){
       if(!h.messageId&&h.sentAt!==undefined){h=await this.send(p,link,h);if(!h.messageId)return publicView(h);}
       const before=h.ref;
@@ -167,6 +179,11 @@ export class PrivateHandoffs {
       h=await this.save(p,link,h,before);
     }else if(!h.cardId){await this.choices(p,h);h=await this.save(p,link,h,h.ref);}
     return publicView(await this.send(p,link,h));
+  }
+  async continuePrivate(p:Presence,link:Link,id:string){
+    const row=await this.transaction(p,link,id,h=>{if(!h.creator||!active(h)||h.expiresAt<=this.now())throw changed();return h;});
+    await this.identity(p,row);
+    return this.resumeExisting(p,link,row);
   }
   async status(p:Presence,link:Link,id:string,cancel:boolean){
     const h=await this.transaction(p,link,id,row=>{
@@ -241,8 +258,8 @@ export class PrivateHandoffs {
       }
       if(click.action==='finish'&&h.edit){
         const edit=h.edit,changes=candidateChanges(h);
-        if(!h.selection.selected.length&&!changes.length)throw new Error('请先选择要修改的草稿内容。');
         const rich=typedRichEdit({type:'richEdit',botId:agentIdSchema.parse(this.native.bot.appId),session:p.session,...edit,selected:h.selection.selected,...(changes.length&&{changes})});
+        if(!h.selection.selected.length&&!changes.length&&!rich.request)throw new Error('请先选择要修改的草稿内容。');
         await this.start(p,link,h,rich,start);return;
       }
       if(click.action==='finish'){

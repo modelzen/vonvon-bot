@@ -19,6 +19,7 @@ import {richInstallProof} from '../src/rich-install-proof.mjs';
 import {installProof} from '../src/install-proof.mjs';
 import {richProof} from '../src/rich-proof.mjs';
 import {checkMetadataSaves} from './rich-metadata-flow.mjs';
+import {checkMemoryPolicy} from './rich-memory-policy-flow.mjs';
 import {inventory} from '../src/rich-document.mjs';
 import {authoringProof,DISPATCH_DIGEST} from '../src/authoring-proof.mjs';
 const root=fileURLToPath(new URL('../../../',import.meta.url)),folders=join(root,'supabase/migrations');
@@ -88,7 +89,8 @@ try{
   await req(lo+'/register',a,{purpose:'prepareDraft',...legacyDevice});
   const lc=await req(lo+'/authorize',a,{stage:'dispatch',stateRevision:1,payloadDigest:DISPATCH_DIGEST});
   sql('create role anon; create role authenticated');
-  files.slice(firstRich).forEach(apply);
+  const memoryPolicy=files.find(f=>f.endsWith('_recipe_memory_free_writes.sql'));assert.ok(memoryPolicy);
+  files.slice(firstRich).filter(f=>f!==memoryPolicy).forEach(apply);
   const profilesBefore=sql('select count(*) from recipe_private.creator_profiles');
   assert.deepEqual(await req('/v2/me/profile',a),{authorId:account,displayName:'配方作者'});
   assert.deepEqual(await req('/v2/me/profile',b),{authorId:reader,displayName:'配方作者'});
@@ -132,17 +134,31 @@ try{
       async prepareAccept(plan){
         const m=await upload(token,pkg,65,'manifest',Buffer.from(plan.canonical,'base64url'));
         const c=await cap('accept',plan.payloadDigest),msg={...possess(c),payload:plan.payload,canonical:plan.canonical,manifestId:m.objectId,packageId:pkg};
-        return (status=200)=>req(path+'/accept',null,msg,{status});
+        const post=(status=200)=>req(path+'/accept',null,msg,{status});
+        post.sqlArgs=[op,...['ticket','nonce','proof','payload','canonical'].map(key=>Buffer.from(msg[key],'base64url')),m.objectId,pkg];
+        return post;
       },
       async commit(plan){
         const post=await this.prepareAccept(plan),r=await post();assert.deepEqual(await post(),r);return r;
       }};
   }
-  const prep=await start(a);const privateBytes=Buffer.from('SELECTED PRIVATE MEMORY');
+  const policyBoundary=()=>sql(`select jsonb_build_object(
+    'memberships',(select jsonb_agg(to_jsonb(m) order by roleid,member,grantor) from pg_auth_members m),
+    'functions',(select jsonb_agg(jsonb_build_array(oid,proowner,proacl) order by oid) from pg_proc
+      where pronamespace='recipe_api'::regnamespace),
+    'tables',(select jsonb_agg(jsonb_build_array(oid,relname,relacl) order by oid) from pg_class
+      where relnamespace in ('recipe_api'::regnamespace,'recipe_private'::regnamespace)),
+    'origins',(select count(*) from recipe_private.rich_origins),
+    'objects',(select count(*) from recipe_private.object_attempts),
+    'drafts',(select count(*) from recipe_private.drafts),
+    'versions',(select count(*) from recipe_private.versions))`);
+  await checkMemoryPolicy({connectAdmin:()=>new pg.Client({user:'cloud_test',database:'postgres',host:sock,port:5432}),
+    req,upload,read,start,applyPolicy:()=>{const before=policyBoundary();apply(memoryPolicy);assert.equal(policyBoundary(),before);},fixture,body,token:jwt(randomUUID()),opId,collector});
+  const prep=await start(a);const privateBytes=Buffer.from('SELECTED PRIVATE RULE');
   const p=await upload(a,prep.pkg,0,'text',privateBytes);
   const png=await sharp({create:{width:20,height:30,channels:3,background:'#22aa33'}}).png().toBuffer();
   const logo=await upload(a,prep.pkg,64,'finalLogo',png);
-  fixture.finalLogo={itemId:randomUUID(),originId:randomUUID(),objectId:logo.objectId};fixture.parts=[p,logo];fixture.memories=[{itemId:randomUUID(),originId:randomUUID(),text:{kind:'part',objectId:p.objectId}}];
+  fixture.finalLogo={itemId:randomUUID(),originId:randomUUID(),objectId:logo.objectId};fixture.parts=[p,logo];fixture.rules[0].text={kind:'part',objectId:p.objectId};
   const input=body(fixture);
   await req(prep.path+'/freeze',a,{...input,logoUpload:{...input.logoUpload,inputSha256:'0'.repeat(64)}},{status:409});
   const missing={...input};delete missing.logoUpload;
@@ -160,9 +176,9 @@ try{
   const edit=await start(a,{purpose:'editDraft',draftId:draft.draftId,baseRevision:1});
   const patch={format:'rich-v2',purpose:'editDraft',draftId:draft.draftId,baseRevision:1,requestId:randomUUID(),schemaVersion:2,changes:[
     {op:'setRoleText',itemId:initial.role.itemId,value:{kind:'inline',value:'自动化验证的私有角色'}},
+    {op:'copyItem',source:{kind:'rule',itemId:initial.rules[0].itemId}},
     {op:'removeItem',kind:'rule',itemId:initial.rules[0].itemId},
-    {op:'includeCandidate',value:{kind:'rule',source:{sourceIntentId:prep.op,candidateId:initial.rules[0].itemId,expectedRevision:1}}},
-    {op:'copyItem',source:{kind:'memory',itemId:initial.memories[0].itemId}}]};
+    {op:'includeCandidate',value:{kind:'rule',source:{sourceIntentId:prep.op,candidateId:initial.rules[0].itemId,expectedRevision:1}}}]};
   const edited=await edit.freeze({format:'rich-v2',baseCanonical:plan.canonical,payload:patch}),updated=JSON.parse(Buffer.from(edited.canonical,'base64url'));
   assert.equal(updated.role.originId,initial.role.originId);assert.notEqual(updated.rules[0].originId,initial.rules[0].originId);
   assert.equal((await edit.commit(edited)).revision,2);
@@ -195,6 +211,7 @@ try{
   assert.equal((await req('/v1/authoring/source-history',a,{operationIds:[prep.op]})).entries[0].versionId,v.versionId);
   const thief=await start(b);const role=updated.role,baseline=inventory(updated).find(i=>i.itemId===role.itemId).baselineSha256;
   const copied=structuredClone(fixture);copied.role.text=structuredClone(role.text);copied.parts=[];copied.memories=[];delete copied.finalLogo;
+  copied.rules.forEach(rule=>{rule.text={kind:'inline',value:privateBytes.toString()};});
   const foreign=body(copied,'direct');foreign.origins.find(o=>o.itemId===copied.role.itemId).source={kind:'releaseItem',versionId:v.versionId,itemId:role.itemId,baselineSha256:baseline};
   await req(thief.path+'/freeze',b,foreign,{status:403});
   foreign.origins.find(o=>o.itemId===copied.role.itemId).source={kind:'accountClaim'};await req(thief.path+'/freeze',b,foreign,{status:403});
@@ -251,6 +268,7 @@ try{
   sql("select recipe_api.rich_moderate('feature','"+v.versionId+"','"+reader+"')");
   const featured=await req('/v2/community/recipes');assert.equal(featured.hero.versionId,v.versionId);assert.equal(featured.heroKind,'featured');
   const newer=structuredClone(updated);newer.public.version.value='2.0';newer.memories=[];newer.parts=[];delete newer.finalLogo;
+  newer.rules.forEach(rule=>{rule.text={kind:'inline',value:privateBytes.toString()};});
   const oldIndex=new Map(inventory(updated).map(i=>[i.itemId,i])),nextInput=body(newer,'direct');
   nextInput.sourceVersionId=v.versionId;
   nextInput.origins=nextInput.origins.map(({itemId})=>({itemId,source:{kind:'releaseItem',versionId:v.versionId,itemId,baselineSha256:oldIndex.get(itemId).baselineSha256}}));
@@ -263,7 +281,7 @@ try{
   assert.equal(nextDetail.visibility,'full');
   const newest=await req('/v2/recipes/'+v.recipeId+'/latest-install-version',b);assert.equal(newest.versionId,nextVersion.versionId);assert.equal(newest.format,'rich-v2');assert.equal(newest.entitled,true);assert.equal(newest.access,'direct');
   await req('/v2/versions/'+nextVersion.versionId+'/install-preview',b,undefined,{status:403});
-  const derivative=await start(b),derivedDoc=structuredClone(newer);derivedDoc.rules[0].text.value='重新组织的规则';
+  const derivative=await start(b),derivedDoc=structuredClone(newer);derivedDoc.rules.forEach((rule,index)=>{rule.text.value='重新组织的规则 '+index;});
   derivedDoc.role.text.value='自己的新角色';derivedDoc.public.name.value='来源校验';const derivedInput=body(derivedDoc,'direct');
   const newItems=(await req('/v2/versions/'+nextVersion.versionId+'/source-items',b)).items;
   const edge=(vid,item)=>({versionId:vid,itemId:item.itemId,baselineSha256:item.baselineSha256});

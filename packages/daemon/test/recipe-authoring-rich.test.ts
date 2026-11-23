@@ -83,7 +83,7 @@ it('edits an overview with setup instructions without manufacturing structured s
   const parser={proposeRich:vi.fn().mockResolvedValue({kind:'proposal',commands:[{action:'setPublicText',target:'T1',text:value}]})};
   const operation={view:{draftId,baseRevision:3},rich:{base:{canonical,selected:[selected,c.setup[0]!.itemId]}}};
   const result=await chatRichProposal(operation as Parameters<typeof chatRichProposal>[0],'把概览改为：'+value,new AbortController().signal,parser);
-  expect(result.kind==='proposal'&&'payload' in result.request&&result.request.payload.changes).toEqual([{op:'setPublicText',field:'overview',itemId:selected,value}]);
+  expect(result.kind==='proposal'&&'payload' in result.request&&result.request.payload.changes).toEqual([{op:'removeLegacyMemories'},{op:'setPublicText',field:'overview',itemId:selected,value}]);
   expect(parser.proposeRich.mock.calls[0]?.[0].selected).not.toEqual(expect.arrayContaining([expect.objectContaining({kind:'setup'})]));
 });
 

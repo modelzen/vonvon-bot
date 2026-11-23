@@ -321,7 +321,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
           if (options.service.readonlyPreview || !options.service.recipeAuthoring) throw new RpcError('unsupported', '此设备尚未配置配方草稿。');
           const bots = authoringBots.get(peer) ?? new Set<string>();
           if (!bots.has(request.payload.botId) && bots.size >= 64) throw new RpcError('invalid_request', '这个连接已达到 Bot 数量上限。');
-          if (request.payload.type === 'open') { bots.add(request.payload.botId); authoringBots.set(peer,bots); }
+          if (request.payload.type === 'open' || request.payload.type === 'creatorOpen') { bots.add(request.payload.botId); authoringBots.set(peer,bots); }
           const value = await options.service.recipeAuthoring(request.payload.botId, {kind:'recipeAuthoring',peer:authoringPeer(peer),request:request.payload});
           peer.send({type:'response',id,method:'recipeAuthoring',payload:recipeAuthoringReplySchema.parse(value)});
           return;

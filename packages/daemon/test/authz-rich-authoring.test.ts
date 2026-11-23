@@ -28,7 +28,16 @@ const payloads = [
     accountId: randomUUID(), purpose: 'prepareDraft', targetPublicKey: binary, nonceCommitment: binary,
     status: 'registered', stage: 'dispatch', stateRevision: 1, operationDeadline: 1, payloadDigest: digest,
     serverPublicKey: binary, ticket: binary, deadline: 1 } },
-].map(payload => recipeAuthoringRequestSchema.parse({ botId, session, ...payload }));
+].map(payload => recipeAuthoringRequestSchema.parse({ botId, session, ...payload })).concat([
+  {type:'creatorDiscover',botId,accountId:draftId},
+  {type:'creatorOpen',botId,accountId:draftId,binding:operationId,scope:digest,wakeId:null},
+  {type:'creatorContinue',botId,session,selection:{kind:'version',target:{recipeId:draftId,versionId:operationId},name:'示例',version:'1'}},
+  {type:'creatorPoll',botId,session},
+  {type:'creatorCheck',botId,session,id:operationId},
+  {type:'creatorAnswer',botId,session,id:operationId,answer:{kind:'unknown'}},
+  {type:'creatorDeliver',botId,session,id:operationId,items:[{codeId:draftId,status:'redeemed'}]},
+  {type:'creatorLogo',botId,session,id:operationId},
+].map(payload=>recipeAuthoringRequestSchema.parse(payload)));
 const request = (payload: typeof payloads[number]): Request => ({ type: 'request', id: randomUUID(), method: 'recipeAuthoring', payload });
 const handler = vi.fn(async () => { throw new RpcError('conflict', 'authoring business handler reached'); });
 let fixture: Awaited<ReturnType<typeof startFixture>>;

@@ -18,7 +18,7 @@ const nativePresentation = new Set([
   'completionTemplate',
 ]);
 export function localRecipeItems(row: Project, incoming: LocalRecipeItem[]): LocalRecipeItem[] {
-  const previous = row.richRecipe?.resolved ?? [],
+  const previous = row.richRecipe?.resolved.filter(item => item.kind !== 'memories') ?? [],
     present = new Set(previous.map((i) => i.itemId));
   const all = [
     ...previous,
