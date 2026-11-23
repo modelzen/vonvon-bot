@@ -63,6 +63,7 @@ function fakeDevices() {
     onState: (listener: (value: DevicesState) => void) => { stateListeners.add(listener); return () => { stateListeners.delete(listener); }; },
     onView: (listener: (change: ViewChange) => void) => { viewListeners.add(listener); return () => { viewListeners.delete(listener); }; },
     view: () => current,
+    retainSource: vi.fn(async () => { throw new Error('retained sources are outside this bridge fixture'); }),
     switchTo: vi.fn(async (_id: string) => {}),
     retry: vi.fn(), wake: vi.fn(),
     inspectLink: vi.fn((_text: string) => ({ ok: false as const, code: 'invalid_link' as const })),
@@ -1342,4 +1343,38 @@ it('preserves the real redeem HTTP limiter outcome through serialized main IPC a
     expect(await shell.community.request(request)).toEqual({ok:false,error:{code:'rate_limited',retryAfter:600}});
     expect(execute).toHaveBeenCalledTimes(10);expect(Object.keys(shell.community)).toEqual(['request']);
   } finally {await h.bridge.dispose();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
+});
+
+it('continues through the public shell IPC on its fixed local source after hide and another-device view',async()=>{
+  const h=harness(),accountId=REMOTE_A,session=REMOTE_B,botId=agentIdSchema.parse('cli_creator'),groupId=groupIdSchema.parse('oc_creator');
+  const signal=new AbortController(),calls:RecipeAuthoringRequest[]=[];
+  const state:AccountStatus={kind:'signedIn',accountId,displayName:'作者',provider:'google',persistence:'memory'};
+  Object.assign(h.account,{status:()=>state,lease:(id:string)=>id===accountId?signal.signal:undefined});
+  h.account.request.mockImplementation(async()=>Response.json({accountId}));
+  Object.assign(h.owner.client,{
+    device:async()=>({kind:'deviceStatus',status:{device:{id:REMOTE_A,name:'本机',publicKey:Buffer.alloc(32,4).toString('base64url')},remote:{addresses:[],port:3000},clients:{active:1,total:1}}}),
+    snapshot:async()=>({agents:[{id:botId,name:'原 Bot'}],groups:[{id:groupId,name:'原群'}],memberships:[{agentId:botId,groupId}]}),
+    recipeAuthoring:async(r:RecipeAuthoringRequest):Promise<RecipeAuthoringReply>=>{
+      calls.push(r);
+      switch(r.type){
+        case 'creatorDiscover':return {kind:'creatorBinding',association:{binding:REMOTE_A,scope:'a'.repeat(64),recipient:{openId:'ou_author',chatId:groupId,tenantKey:'test'}},wakeId:null};
+        case 'creatorOpen':return {kind:'creatorSession',session,binding:r.binding,scope:r.scope,leaseMs:45000};
+        case 'creatorPoll':return {kind:'creatorJobs',jobs:[]};
+        case 'workflow':return {kind:'workflow',activity:1,ageMs:0,pausedContexts:[]};
+        case 'status':return {kind:'status',linked:true,operations:[],reconciliation:[]};
+        case 'groupSourceIdentity':return {kind:'groupSourceIdentity',groupId,identity:'b'.repeat(64)};
+        case 'beginHandoff':return {kind:'handoff',handoff:{retryId:r.retryId,groupId,state:'selecting'}};
+        case 'close':return {kind:'closed'};
+        default:throw Error(r.type);
+      }
+    },
+  });
+  const {shell}=createDesktopFacades({invoke:(channel,...args)=>h.invoke(channel,...args),receive:()=>()=>{}});
+  const input={type:'creatorContinue' as const,accountId,entry:{kind:'source' as const,viewId:'local',botId,groupId}};
+  expect(await shell.recipeAuthoring.request(input)).toEqual({kind:'creatorContinuing',accountId,viewId:'local',botId});
+  await shell.hideWindow();await h.devs.show(remoteView(REMOTE_A,remoteClient()));
+  expect(await shell.recipeAuthoring.request(input)).toMatchObject({kind:'creatorContinuing',viewId:'local'});
+  expect(calls.filter(r=>r.type==='creatorOpen')).toHaveLength(1);
+  expect(calls.filter(r=>r.type==='open'||r.type==='close')).toEqual([]);
+  await h.bridge.dispose();expect(calls.filter(r=>r.type==='close')).toEqual([{type:'close',botId,session}]);
 });

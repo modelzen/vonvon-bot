@@ -1,3 +1,5 @@
+import {AuthoringRouter} from './authoring-router';
+import {PrivateCreator, invalidateWorkOffer,creatorClick} from './private-creator';
 import {PrivateHandoffs} from './authoring-handoff';
 import {handoffClick} from './authoring-handoff-menu';
 import {richSkillOptions,readRichSource,preparedRich,richReviewDigest,bindRichMembers,richMemberCap,richCardReview,typedRichEdit,chatRichProposal,richEditCardContext,type RichLocalDraft,type RichNativeOptions} from './authoring-rich-flow';
@@ -24,12 +26,12 @@ import { operationUuid } from './manifest';
 export interface AuthoringPeer {id: string; device: string}
 export type AuthoringIpc = {kind: 'recipeAuthoring'; peer: AuthoringPeer; request: RecipeAuthoringRequest} |
   {kind: 'recipeAuthoringDisconnect'; peer: AuthoringPeer};
-interface Presence {peer: AuthoringPeer; session: string; account: string; scope: string; until: number; activity: number; activeAt: number}
+export interface Presence {readonly peer: AuthoringPeer; readonly session: string; readonly account: string; readonly scope: string; readonly binding?: string; until: number; activity: number; activeAt: number}
 interface Challenge {
   id: string; session: string; hash: Buffer; expiresAt: number; attempts: number;
   recipient?: Recipient; messageId?: string; evidence?: string;
 }
-interface Options {
+export interface AuthoringOptions {
   bot: BotIdentity; cfg: AppConfig; channel: LarkChannel; root?: string; now?: () => number;
   origin?: string; fetch?: typeof fetch; loopback?: boolean; parser?: DraftInstructionParser & {proposeRich?(input:RichModelInput,signal:AbortSignal):Promise<unknown>}; tasks?:RichNativeOptions['tasks'];managedSources?:RichNativeOptions['managedSources']; readDraftField?: ReadDraftField;
   currentBot?: () => Promise<void>; source?: (scope: string, account: string, group: string) => Promise<ReviewedSource>;
@@ -54,7 +56,7 @@ interface SourceMenu {
   session: string; binding: string; recipient: Recipient; ref: string; cardId: string; messageId: string; createdAt: number; offered: Source[]; until: number; instructionId: string;
 }
 const click = z.object({a: z.literal('recipe.authoring'), ref: z.string().uuid(), verb: z.enum(['confirm','cancel'])}).strict();
-function fromMessage(msg: NormalizedMessage): Recipient | undefined {
+export function fromMessage(msg: NormalizedMessage): Recipient | undefined {
   const raw = messageSender.safeParse(msg.raw).data;
   if (msg.chatType !== 'p2p' || !physicalChat(msg.chatId) || !raw || raw.message.chat_id !== msg.chatId ||
       raw.message.message_id !== msg.messageId || raw.sender.sender_id.open_id !== msg.senderId) return;
@@ -89,7 +91,12 @@ function richInstructionReply(result:Exclude<Awaited<ReturnType<typeof chatRichP
   return reason+'，尚未生成新候选。请稍后重新发送，或使用以下命令。'+commandHelp;
 }
 
-export class AuthoringService {
+export class AuthoringSession {
+  readonly creator: PrivateCreator;
+  get presence() { return this.p; }
+  matchesChallenge(code: string) { return !!this.challenge && timingSafeEqual(Buffer.from(digest(code),'hex'),this.challenge.hash); }
+  ownsLegacyMenu(ref:unknown){return this.menu?.ref===ref&&Boolean(ref);}
+  get hasChallenge() { return !!this.challenge; }
   private p?: Presence;
   private challenge?: Challenge;
   private menu?: SourceMenu;
@@ -104,7 +111,7 @@ export class AuthoringService {
   private readonly botKey: string;
   private readonly now: () => number;
   private readonly origin?: string;
-  constructor(private readonly opts: Options) {
+  constructor(private readonly opts: AuthoringOptions) {
     this.now = opts.now ?? Date.now;
     this.botKey = authoringBotKey(opts.bot);
     this.im = new AuthoringIm(opts.channel);
@@ -113,6 +120,14 @@ export class AuthoringService {
     this.handoffs=new PrivateHandoffs(opts,this.ledger,this.im,this.now,p=>{
       if(this.p!==p)refusal();
       this.present(this.p);
+    });
+    this.creator = new PrivateCreator(opts,this.ledger,this.im,this.now,{
+      guard:(p,recipient)=>this.allowed(p,recipient),
+      live:p=>this.present(p),
+      interact:p=>this.interact(p),
+      begin:(p,link,req)=>this.handoffs.begin(p,link,req,true),
+      resume:(p,link,id)=>this.handoffs.continuePrivate(p,link,id),
+      edit:(p,link,work,revision)=>this.start(p,link.recipient,{draftId:work.draftId,baseRevision:revision}),
     });
   }
   private serial<T>(task: () => Promise<T>): Promise<T> {
@@ -150,10 +165,12 @@ export class AuthoringService {
   disconnect(id: string) {
     if (this.p?.peer.id === id) { this.parsing?.abort(); this.menu = undefined; this.p = undefined; this.challenge = undefined; }
   }
-  async adminRemoved(openId: string) {
+  clearAdminContext(openId: string, linked: boolean) {
     if (this.menu?.recipient.openId === openId) this.menu = undefined;
-    this.parsing?.abort();
+    if (linked) this.parsing?.abort();
     if (this.challenge?.recipient?.openId === openId) this.challenge = undefined;
+  }
+  async revokeAdminLinks(openId: string) {
     await this.ledger.run(db => {
       for (const [key,link] of Object.entries(db.links)) if (link.bot === this.botKey && link.recipient.openId === openId) {
         for(const h of Object.values(db.handoffs??{}))if(h.binding===link.binding){
@@ -168,6 +185,7 @@ export class AuthoringService {
   private liveLink(db: AuthoringLedger, p: Presence) {
     this.present(p);
     const key = linkKey(p.scope,p.account), link = db.links[key];
+    if (p.binding && link?.binding !== p.binding) refusal();
     if (link && !isAdmin(this.opts.cfg,link.recipient.openId)) {
       delete db.links[key];
       return undefined;
@@ -228,6 +246,14 @@ export class AuthoringService {
   async request(peer: AuthoringPeer, input: RecipeAuthoringRequest): Promise<RecipeAuthoringReply> {
     const req = recipeAuthoringRequestSchema.parse(input);
     if (req.botId !== this.opts.bot.appId || !this.origin || this.stopped) throw new Error('此 Bot 尚未启用配方草稿。');
+    if (req.type === 'creatorDiscover') return this.creator.discover(peer,req.accountId);
+    if (req.type === 'creatorOpen') {
+      const association = await this.creator.discover(peer,req.accountId);
+      if (association.association?.binding !== req.binding || association.association.scope !== req.scope) refusal();
+      const p = this.p = {peer,session:randomUUID(),account:req.accountId,scope:req.scope,binding:req.binding,until:this.now()+LEASE,activity:0,activeAt:this.now()};
+      await this.creator.open(p,req.binding,req.wakeId);
+      return {kind:'creatorSession',session:p.session,binding:req.binding,scope:p.scope,leaseMs:LEASE};
+    }
     if (req.type === 'close') {
       if (this.p?.peer.id === peer.id && this.p.session === req.session) this.disconnect(peer.id);
       return {kind:'closed'};
@@ -245,8 +271,16 @@ export class AuthoringService {
     if (!p || p.peer.id !== peer.id || p.peer.device !== peer.device || p.session !== req.session) refusal();
     this.present(p);
     p.until = this.now()+LEASE;
+    if (req.type === 'creatorContinue' || req.type === 'creatorPoll' || req.type === 'creatorCheck' || req.type === 'creatorAnswer' || req.type === 'creatorLogo' || req.type === 'creatorDeliver') {
+      return this.serial(()=>this.creator.request(p,req));
+    }
+    if (p.binding) {
+      if (req.type === 'beginLink' || req.type === 'inspectLink' || req.type === 'confirmLink') refusal();
+      await this.allowed(p);
+    }
     if (req.type === 'groupSourceIdentity') {
       const identity = await groupSourceIdentity(this.opts.channel,this.opts.bot,p.scope,req.groupId);
+      if(p.binding)await this.allowed(p);
       this.present(p);
       return {kind:'groupSourceIdentity',groupId:req.groupId,identity};
     }
@@ -277,7 +311,8 @@ export class AuthoringService {
         case 'beginHandoff':
         case 'beginDraftHandoff':{
           const link=await this.allowed(p);this.interact(p);
-          return {kind:'handoff',handoff:await this.handoffs.begin(p,link,req)};
+          if(req.type==='beginDraftHandoff') await this.ledger.run(db=>invalidateWorkOffer(db,p,link,req.draftId));
+          return {kind:'handoff',handoff:await this.handoffs.begin(p,link,req,this.creator.enabled)};
         }
         case 'restoreHandoff':{
           const link=await this.allowed(p);this.interact(p);
@@ -513,19 +548,20 @@ export class AuthoringService {
     this.menu = undefined;
     const op = await withRegisteredBot(this.opts.bot.appId, () => this.ledger.run(db => {
       this.present(p);
-      const link = db.links[linkKey(p.scope,p.account)];
+      const link = this.liveLink(db,p);
       if (!sameRecipient(link?.recipient, recipient) || !isAdmin(this.opts.cfg,recipient.openId)) refusal();
       const handoff=target.handoff&&db.handoffs?.[target.handoff.id];
       if(target.handoff&&(!handoff||handoff.ref!==target.handoff.ref||handoff.session!==p.session||handoff.scope!==p.scope||
         handoff.account!==p.account||handoff.binding!==link!.binding||!sameRecipient(handoff.recipient,recipient)||handoff.expiresAt<=this.now()||
         handoff.phase.state!==(target.draftId?'selecting':'awaitingAttestations')||handoff.identity!==target.sourceIdentity))refusal();
+      if(target.draftId) invalidateWorkOffer(db,p,link!,target.draftId);
       const done=(row:LocalOperation)=>{
         if(handoff){handoff.phase={state:'prepared',operationId:row.view.operationId};delete handoff.edit;}
         return row;
       };
       const current = Object.values(db.operations).filter(o => o.scope === p.scope && o.accountId === p.account && o.binding === link!.binding && sameRecipient(o.recipient,recipient));
       const prior = current.find(o => target.instructionId && (o.instructionId === target.instructionId || active(o) && o.seenInstructions?.includes(target.instructionId))) ??
-        current.find(o => active(o) && Boolean(o.view.format)===Boolean(target.rich) && (target.draftId ? o.view.draftId === target.draftId :
+        current.find(o => (!this.creator.enabled||target.draftId||!target.handoff)&&active(o) && Boolean(o.view.format)===Boolean(target.rich) && (target.draftId ? o.view.draftId === target.draftId :
           target.rich?.source ? o.rich?.source?.groupId===target.rich.source.groupId : o.source?.groupId === target.source?.groupId && o.source?.reviewToken === target.source?.reviewToken));
       if (prior) {
         if(target.rich&&active(prior)){
@@ -545,7 +581,7 @@ export class AuthoringService {
       reserve(db,p.account,this.now());
       const material = newAuthoringKey();
       const operationId = operationUuid(this.now());
-      const row: LocalOperation = {accountId:p.account, scope:p.scope, bot:this.botKey, binding:link!.binding, recipient, secret:material.secret, nonce:material.nonce,
+      const row: LocalOperation = {...(this.creator.enabled&&{creatorSave:true as const}),accountId:p.account, scope:p.scope, bot:this.botKey, binding:link!.binding, recipient, secret:material.secret, nonce:material.nonce,
         originalGroup:handoff?{groupId:handoff.groupId,identity:handoff.identity}:target.originalGroup,rich:target.rich, source:target.source, sourceIdentity:target.sourceIdentity, instructionId: target.instructionId, payload: target.payload, proposalDigest: target.proposalDigest,
         contextUntil:this.now()+CONTEXT, carrier:newCarrier(target.rich?.request ? 'confirm' : target.source ? 'prepare' : target.payload ? 'confirm' : target.rich?'richEdit':'edit'), dispatched:false, contextOpen:true,
         view:{operationId, targetPublicKey:material.targetPublicKey, nonceCommitment:material.nonceCommitment,
@@ -566,7 +602,7 @@ export class AuthoringService {
       if (target.source) {
         link!.sources = [target.source, ...link!.sources.filter(s => s.groupId !== target.source!.groupId)].slice(0,16);
       }
-      for (const prior of current) if (prior.view.state === 'completed') {prior.contextOpen = false;delete prior.richSaved;}
+      for (const prior of current) if (prior.view.state === 'completed' && (!this.creator.enabled || target.draftId&&prior.view.receipt?.status==='accepted'&&prior.view.receipt.draftId===target.draftId)) {prior.contextOpen = false;delete prior.richSaved;}
       link!.context = {operationId, until:this.now()+CONTEXT};
       db.operations[operationId] = row;
       return done(row);
@@ -633,23 +669,23 @@ export class AuthoringService {
       const c = op.carrier;
       if (cardUpdate(op,this.now()) !== 'pending') return;
       return {cardId:c.cardId!, messageId:c.messageId!, seq:c.seq, ref:c.ref, mode:c.mode, recipient:op.recipient, details:c.mode === 'confirm' ? editCandidate(op) : undefined,
-        editing:c.mode==='richEdit'?richEditCardContext(op):undefined};
+        creatorSave:op.creatorSave,editing:c.mode==='richEdit'?richEditCardContext(op):undefined};
     });
     if (!pending) return;
     this.present(p);
     if (!isAdmin(this.opts.cfg,pending.recipient.openId)) refusal();
     const {cardId,messageId,seq,ref,mode,recipient,details,editing} = pending;
-    let result = await this.im.update(cardId,seq,ref,mode,details,editing);
+    let result = await this.im.update(cardId,seq,ref,mode,details,editing,pending.creatorSave);
     if (result === 'conflict') {
       // A duplicate UUID or old sequence is not an acknowledgement of these bytes.
       const current = await this.change(p,id,op => op.carrier.cardId === cardId && op.carrier.ref === ref);
       this.present(p);
-      if (current && isAdmin(this.opts.cfg,recipient.openId) && await this.im.shows(messageId,recipient.chatId,ref,mode,details,editing).catch(() => false)) result = 'updated';
+      if (current && isAdmin(this.opts.cfg,recipient.openId) && await this.im.shows(messageId,recipient.chatId,ref,mode,details,editing,pending.creatorSave).catch(() => false)) result = 'updated';
     }
     await this.change(p,id,op => {
       const c = op.carrier;
       if (c.cardId !== cardId || c.ref !== ref || c.seq !== seq) return;
-      if (result === 'updated') { c.dirty = false; c.previewDigest = mode === 'confirm' && details && candidateConfirmation(ref,details) ? details.payloadDigest : undefined; delete c.retryAt; delete c.retryDelay; }
+      if (result === 'updated') { c.dirty = false; c.previewDigest = mode === 'confirm' && details && candidateConfirmation(ref,details,op.creatorSave) ? details.payloadDigest : undefined; delete c.retryAt; delete c.retryDelay; }
       else if (result === 'unavailable') c.unavailable = true;
       else if (c.retryDelay !== undefined) {
         c.retryDelay = Math.min(600_000,Math.max(12_000,(c.retryDelay ?? 0)*2));
@@ -695,10 +731,10 @@ export class AuthoringService {
       this.present(p);
       const createdAt = this.now();
       const details = op.carrier.mode === 'confirm' ? editCandidate(op) : undefined;
-      const cardId = await this.im.create(op.carrier.ref,op.carrier.mode,details,op.carrier.mode==='richEdit'?richEditCardContext(op):undefined);
+      const cardId = await this.im.create(op.carrier.ref,op.carrier.mode,details,op.carrier.mode==='richEdit'?richEditCardContext(op):undefined,op.creatorSave);
       op = await this.change(p,id,row => {
         row.carrier.cardId = cardId; row.carrier.createdAt = createdAt;
-        if (details && candidateConfirmation(row.carrier.ref,details)) row.carrier.previewDigest = details.payloadDigest;
+        if (details && candidateConfirmation(row.carrier.ref,details,row.creatorSave)) row.carrier.previewDigest = details.payloadDigest;
         return row;
       });
     }
@@ -759,6 +795,7 @@ export class AuthoringService {
         }
         await reply(genericLink); return true;
       }
+      if (p && live && await this.creator.message(p,recipient,msg)) return true;
       const {duplicate,contexts,pausedEdit,selecting} = await this.ledger.run(db => {
         const own = Object.values(db.operations).filter(o => o.bot === this.botKey && sameRecipient(o.recipient,recipient));
         return {
@@ -947,6 +984,11 @@ export class AuthoringService {
     });
   }
   async onAction(evt: CardActionEvent) {
+    if(creatorClick.safeParse(evt.action?.value).data?.verb==='creator') {
+      const p=this.p;
+      if(p) await this.serial(()=>this.creator.action(p,evt)).catch(()=>undefined);
+      return;
+    }
     const value = handoffClick.safeParse(evt.action?.value).data ?? sourceClick.safeParse(evt.action?.value).data ?? click.safeParse(evt.action?.value).data, raw = operator.safeParse(evt.raw).data;
     if (!value || !raw || evt.operator.openId !== raw.operator.open_id || !physicalChat(evt.chatId)) return;
     return this.serial(async () => {
@@ -1017,7 +1059,7 @@ export class AuthoringService {
         if (op.carrier.mode === 'confirm') {
           const details = editCandidate(op);
           if (!details || op.carrier.previewDigest !== details.payloadDigest ||
-              op.carrier.dirty || !candidateConfirmation(op.carrier.ref,details)) {
+              op.carrier.dirty || !candidateConfirmation(op.carrier.ref,details,op.creatorSave)) {
             await this.change(p,op.view.operationId,row => setCard(row,'confirm'));
             await this.refresh(p,op.view.operationId);
             return;
@@ -1055,4 +1097,8 @@ export class AuthoringService {
       await this.refresh(p,op.view.operationId);
     }).catch(() => undefined);
   }
+}
+
+export class AuthoringService extends AuthoringRouter {
+  constructor(opts:AuthoringOptions) { super(opts,()=>new AuthoringSession(opts)); }
 }

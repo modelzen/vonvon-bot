@@ -4,3 +4,7 @@ export function mainController(options:{accountId:string;botId:string;groupId:st
   controller:{request(req:DesktopAuthoringRequest):Promise<DesktopAuthoringReply>;closeAll():void};
   saved:AuthoringSaved[];generation:AbortController;
 };
+export function savedRichPreview(options:{accountId:string;botId:string;deviceId:string;session:string;draftJob:import('@vonvon/protocol').CreatorJob;
+  content:import('@vonvon/protocol').RecipeRichContent;daemon:(req:RecipeAuthoringRequest)=>Promise<RecipeAuthoringReply>}):Promise<{
+  run(job:import('@vonvon/protocol').CreatorJob):Promise<void>;close():void;
+}>;

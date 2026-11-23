@@ -14,6 +14,9 @@ import {RecipeUseController, type RecipeDeviceLease} from './recipe-use.js';
 import {RecipeAuthoringController} from './recipe-authoring.js';
 import {AuthoringJournal} from './recipe-authoring-journal.js';
 import {AuthoringError} from './recipe-authoring-cloud.js';
+import {RecipeCreatorSupervisor,type CreatorSourceLease} from './recipe-creator-supervisor.js';
+import {RecipeCreatorExecutor} from './recipe-creator.js';
+import {RecipeCreatorJournal} from './recipe-creator-journal.js';
 import {MetadataJournal} from './community-metadata-journal.js';
 import {RecipeJournal} from './recipe-use-journal.js';
 import {RecipeUseError, changed} from './recipe-use-cloud.js';
@@ -198,6 +201,7 @@ export function installBridge(
   /** Bumped by every view change and every local replacement: an await that sees another value is stale. */
   let viewSeq = 0;
   let localGen = 0;
+  let localSourceOwner=new AbortController();
   /** The local connection was lost while a remote device was shown: reported once the page is back here. */
   let localLostPending = false;
   /** `localDaemon` closed, whoever handles it (an expected stop, the shell reconnecting): it answers nothing now. */
@@ -263,6 +267,7 @@ export function installBridge(
     // A page built again for this computer gets the last snapshot from here on, also while the shell reconnects: asking
     // the closed connection left it loading with 启动 daemon out of reach (0.9.0 Mac 验收 S-4).
     localDead = true;
+    localSourceOwner.abort();
     if (actions.isExpectedDisconnect()) return;
     if (actions.recoverConnection(from.identity)) { devices.setLocal({ status: 'connecting' }); return; }
     devices.setLocal({ status: 'offline' });
@@ -437,12 +442,32 @@ export function installBridge(
   };
   const metadataJournal = new MetadataJournal(recipeJournalPath && recipeJournalPath+'.metadata');
   const recipes = new RecipeUseController(account, captureRecipeDevice, new RecipeJournal(recipeJournalPath));
-  const authoring = new RecipeAuthoringController(account, captureRecipeDevice, new AuthoringJournal(authoringJournalPath), value => send({type:'authoringSaved',value}));
+  const authoringJournal=new AuthoringJournal(authoringJournalPath);
+  const authoring = new RecipeAuthoringController(account, captureRecipeDevice, authoringJournal, value => send({type:'authoringSaved',value}));
+  const creatorJournal=new RecipeCreatorJournal(authoringJournalPath&&authoringJournalPath+'.creator');
+  const retainCreatorSource=async(id:string,signal:AbortSignal):Promise<CreatorSourceLease>=>{
+    if(id!==LOCAL_VIEW){
+      const source=await devices.retainSource(id,{signal});
+      try {
+        source.check();const pairedKey=devices.pairedPublicKey?.(id);if(!pairedKey)throw changed();
+        return {viewId:id,client:source.client,pairedKey,signal:source.signal,check:()=>{source.check();if(devices.pairedPublicKey?.(id)!==pairedKey)throw changed();},release:()=>source.release()};
+      }catch(error){source.release();throw error;}
+    }
+    if(localDown()||!localDaemon)throw changed();
+    const current=localDaemon,generation=localGen,reference=new AbortController();
+    const active=AbortSignal.any([signal,localSourceOwner.signal,reference.signal]);
+    return {viewId:LOCAL_VIEW,client:current.client,signal:active,release:()=>reference.abort(),check:()=>{
+      if(disposed||active.aborted||localDaemon!==current||generation!==localGen||localDown())throw changed();
+    }};
+  };
+  const creator=new RecipeCreatorSupervisor(account,retainCreatorSource,()=>devices.state().devices.map(row=>row.id),creatorJournal,authoringJournal,authoring,
+    new RecipeCreatorExecutor(account,creatorJournal,metadataJournal,authoringJournal,
+      value=>send({type:'authoringPublished',value}),value=>send({type:'authoringSaved',value})));
   const noArg = (_: unknown): undefined => undefined;
   const onNavigation = (event: Electron.WebContentsDidStartNavigationEventParams): void => {
     if (!event.isMainFrame || event.isSameDocument) return;
     subscribed = false;
-    if (event.url !== expectedUrl) authoring.closeAll();
+    if (event.url !== expectedUrl) authoring.closeRenderer();
   };
   try {
     registerClient(desktopChannels.snapshot, 0, noArg, () => {
@@ -564,7 +589,15 @@ export function installBridge(
     register(desktopChannels.quit, 0, noArg, () => actions.confirmQuit());
     register(desktopChannels.quitKeepsDaemon, 0, () => { localOnly(); }, () => actions.quitKeepsDaemon());
     register(desktopChannels.recipeSource,1,value=>desktopRecipeSourceRequestSchema.parse(value),value=>recipes.source(value));
-    register(desktopChannels.recipeAuthoring, 1, value => desktopAuthoringRequestSchema.parse(value), value => authoring.request(value));
+    register(desktopChannels.recipeAuthoring, 1, value => desktopAuthoringRequestSchema.parse(value), async value => {
+      if(value.type==='creatorContinue')return creator.continue(value);
+      const reply=await authoring.request(value);
+      if(value.type==='confirmLink'&&reply.kind==='link'&&reply.linked){
+        const status=await authoring.request({type:'status',handle:value.handle});
+        if(status.kind==='session')void creator.associated(status.target.accountId,status.target.viewId,status.target.botId).catch(()=>{});
+      }
+      return reply;
+    });
     register(desktopChannels.recipeUse,1,value=>recipeUseRequestSchema.parse(value),value=>recipes.request(value));
     register(desktopChannels.community, 1, value => communityRequestSchema.parse(value), value => communityRequest(account, value, metadataJournal));
     register(desktopChannels.accountStatus, 0, noArg, async () => accountStatusSchema.parse(account.status()));
@@ -603,6 +636,7 @@ export function installBridge(
     unsubscribers.push(devices.onView(change => { void onView(change); authoring.invalidateStale(); }));
     window.webContents.on('did-start-navigation', onNavigation);
   } catch (error) {
+    creator.dispose();authoring.closeAll();
     window.webContents.removeListener('did-start-navigation', onNavigation);
     for (const channel of registeredChannels) ipcMain.removeHandler(channel);
     for (const off of unsubscribers) off();
@@ -620,6 +654,7 @@ export function installBridge(
       candidate = next;
       replacing = (async () => {
         localGen++;
+        localSourceOwner.abort();localSourceOwner=new AbortController();
         authoring.invalidateStale();
         localWatch?.();
         localWatch = null;
@@ -690,6 +725,8 @@ export function installBridge(
     dispose() {
       disposal ??= (async () => {
         disposed = true;
+        creator.dispose();
+        localSourceOwner.abort();
         authoring.closeAll();
         subscribed = false;
         for (const off of unsubscribers.splice(0)) off();

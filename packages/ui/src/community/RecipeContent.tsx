@@ -70,14 +70,15 @@ export function RecipeConfiguration({config, section}: {config: RecipeConfig; se
   return null;
 }
 
-export function RecipeOverview({recipe, draft}: {recipe: Pick<RecipeDetail, 'public' | 'revision' | 'creator' | 'config' | 'rich'>; draft?: boolean}) {
+type RecipeDisplay = Pick<RecipeDetail, 'public' | 'config' | 'rich' | 'logo'> & Partial<Pick<RecipeDetail, 'revision' | 'creator'>>;
+export function RecipeOverview({recipe, draft}: {recipe: RecipeDisplay; draft?: boolean}) {
   const notes = recipe.rich?.content.setup ?? recipe.config?.setup?.steps ?? [];
-  return <><RecipeMetadata meta={recipe.public} revision={recipe.revision} draft={draft} author={recipe.creator?.displayName}/><RecipeMarkdown text={recipe.public.overview ?? ''}/>
+  return <><RecipeMetadata meta={recipe.public} revision={draft ? undefined : recipe.revision} author={recipe.creator?.displayName}/><RecipeMarkdown text={recipe.public.overview ?? ''}/>
     {notes.length > 0 && <details className="community-additional-notes"><summary>补充说明</summary>{notes.map((note, index) => <article key={index}><h3>{note.title || `说明 ${index + 1}`}</h3><RecipeMarkdown text={note.instructions}/>{note.check && <p>核对方式：{note.check}</p>}</article>)}</details>}
   </>;
 }
 
-export function RecipeDetails({recipe, action, management, share, draft, heading, overview, overviewFooter, section: selectedSection, onSectionChange}: {draft?:boolean;recipe: RecipeDetail; action?: ReactNode; management?: ReactNode; share?: ReactNode; heading?: ReactNode; overview?: ReactNode; overviewFooter?: ReactNode; section?: RecipeSection; onSectionChange?: (section: RecipeSection) => void}) {
+export function RecipeDetails({recipe, action, management, share, draft, heading, overview, overviewFooter, section: selectedSection, onSectionChange}: {draft?:boolean;recipe: RecipeDisplay; action?: ReactNode; management?: ReactNode; share?: ReactNode; heading?: ReactNode; overview?: ReactNode; overviewFooter?: ReactNode; section?: RecipeSection; onSectionChange?: (section: RecipeSection) => void}) {
   const [localSection, setLocalSection] = useState<Section>('概览');
   const section = selectedSection ?? localSection;
   const setSection = (value: RecipeSection) => {setLocalSection(value); onSectionChange?.(value);};

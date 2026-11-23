@@ -67,17 +67,7 @@
 .community-additional-notes article { padding:4px 0 12px; font-size:13px; line-height:1.7; overflow-wrap:anywhere; }
 .community-additional-notes h3 { color:var(--color-text); font-size:14px; font-weight:600; margin:8px 0; }
 .community-additional-notes p { margin:0 0 10px; }
-.community-editor .community-additional-notes p { white-space:pre-wrap; }
 .community-detail-layout nav button:focus-visible,.community-additional-notes > summary:focus-visible { outline:2px solid var(--color-accent); outline-offset:2px; }
-.community-editor { display:grid; gap:20px; }
-.community-editor label { display:grid; gap:8px; font-size:13px; }
-.community-editor textarea { resize:vertical; min-height:150px; line-height:1.7; }
-.community-editor textarea[aria-label="角色与规则"] { min-height:260px; }
-.community-editor-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
-.community-editor fieldset { border:1px solid var(--color-border); border-radius:10px; display:grid; gap:16px; padding:20px; }
-.community-editor legend { padding:0 8px; font-size:13px; font-weight:600; }
-.community-editor .community-checkbox { display:flex; align-items:center; gap:8px; }
-.community-editor .community-checkbox input { flex:none; }
 .community-code-text { white-space:pre-wrap; overflow-wrap:anywhere; padding:12px; border:1px solid var(--color-border); border-radius:8px; font-family:monospace; font-size:12px; }
 .community-copy-fallback { display:grid; gap:6px; width:100%; font-size:12px; color:var(--color-text-secondary); }
 .community-copy-fallback input { width:100%; }
@@ -89,8 +79,6 @@
 .community-rich-settings dd { margin: 6px 0 0; overflow-wrap: anywhere; }
 .community-config details { margin: 12px 0; }
 .community-config summary { cursor: pointer; min-height: 40px; display: flex; align-items: center; }
-.community-logo-editor { display: grid; gap: 12px; }
-.community-logo-editor > img { width: 192px; height: 192px; object-fit: cover; border-radius: 16px; border: 1px solid var(--color-border); }
 
 /* Community follows the approved paper-cover composition, using live recipe metadata. */
 .community-page-heading { padding-bottom:20px; border-bottom:1px solid var(--color-border); }
@@ -133,7 +121,7 @@
 .community-code-form { display:grid; gap:16px; }
 .community-code-form input { width:100%; box-sizing:border-box; padding:11px 12px; border:1px solid var(--color-border); border-radius:8px; color:var(--color-text); background:var(--color-surface-muted); font:inherit; }
 .community-code-form input:focus-visible { outline:2px solid var(--color-accent); outline-offset:2px; }
-@media(max-width:680px) { .community-grid,.community-editor-grid { grid-template-columns:1fr; } .community-detail-layout { grid-template-columns:1fr; gap:20px; } .community-detail-layout nav { flex-direction:row; overflow:auto; } .community-detail-layout nav button { white-space:nowrap; } .community-heading { align-items:flex-start; } .community-heading .community-actions { justify-content:flex-end; } .community-card--hero { grid-template-columns:minmax(0,1fr) 150px; padding:26px; gap:14px; } .community-list-row { align-items:flex-start; flex-wrap:wrap; }
+@media(max-width:680px) { .community-grid { grid-template-columns:1fr; } .community-detail-layout { grid-template-columns:1fr; gap:20px; } .community-detail-layout nav { flex-direction:row; overflow:auto; } .community-detail-layout nav button { white-space:nowrap; } .community-heading { align-items:flex-start; } .community-heading .community-actions { justify-content:flex-end; } .community-card--hero { grid-template-columns:minmax(0,1fr) 150px; padding:26px; gap:14px; } .community-list-row { align-items:flex-start; flex-wrap:wrap; }
  .community-page-heading { align-items:center; gap:12px; }
  .community-tabs button { padding:7px 9px; }
  .community-section-heading { flex-wrap:wrap; }

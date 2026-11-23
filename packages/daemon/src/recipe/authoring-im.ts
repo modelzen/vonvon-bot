@@ -23,7 +23,7 @@ function elementCount(value:unknown):number {
   if(Array.isArray(value))return value.reduce((count,item)=>count+elementCount(item),0);
   return ('tag'in value&&typeof value.tag==='string'?1:0)+Object.values(value).reduce<number>((count,item)=>count+elementCount(item),0);
 }
-export function candidateConfirmation(ref: string, details?: CandidateCardDetails) {
+export function candidateConfirmation(ref: string, details?: CandidateCardDetails, creator=false) {
   if (!details) return;
   const readable=(text:string)=>text.replace(/[⟦⟧\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu,
     char=>char==='\n'?char:'⟦U+'+char.codePointAt(0)!.toString(16).toUpperCase().padStart(4,'0')+'⟧');
@@ -36,9 +36,9 @@ export function candidateConfirmation(ref: string, details?: CandidateCardDetail
     if(field.separate)fields.push(md('**'+readable(field.label)+'**'),text===''?md('**空文本 · 0 字符**'):plain(readable(text)));
     else fields.push(plain(readable(field.label)+' → '+readable(text)));
   }
-  const elements = [plain(details.sourceCapture?'仅保存私人草稿。完整内容在 App 核对，发布前再次确认。':copy.confirm),
+  const elements = [plain(creator?'请核对本次改动。采用后自动保存，公开发布需要另行确认。':details.sourceCapture?'仅保存私人草稿。完整内容在 App 核对，发布前再次确认。':copy.confirm),
     plain(details.sourceCapture?'本次保存你刚选中的本地内容快照。':'第 '+details.revision+' 次修订。请核对以下完整新值。'),
-    ...fields, action(ref,'confirm','保存到草稿',true), action(ref,'cancel','取消')];
+    ...fields, action(ref,'confirm',creator?'采用并保存':'保存到草稿',true), action(ref,'cancel','取消')];
   const body = authoringBody(elements), data = JSON.stringify(body);
   if(elementCount(body)>200)return;
   // CardKit recommends 30 KB. Budget both serialized request envelopes, including JSON escapes.
@@ -47,13 +47,13 @@ export function candidateConfirmation(ref: string, details?: CandidateCardDetail
   if (Math.max(Buffer.byteLength(JSON.stringify(create)),Buffer.byteLength(JSON.stringify(update))) > 30_000) return;
   return body;
 }
-export function authoringCard(ref: string, mode: CardMode, details?: CandidateCardDetails, editing?:RichEditCardContext) {
-  if (mode === 'confirm') return candidateConfirmation(ref,details) ?? authoringBody([
-    plain('本次改动无法在卡片完整、安全地展示，不能在这里确认。请取消后发送更小的修改；名称、简介、概览和版本也可以在 App 编辑。'), action(ref,'cancel','取消'),
+export function authoringCard(ref: string, mode: CardMode, details?: CandidateCardDetails, editing?:RichEditCardContext,creator=false) {
+  if (mode === 'confirm') return candidateConfirmation(ref,details,creator) ?? authoringBody([
+    plain(creator?'本次改动超过卡片可完整展示的范围。请点「取消」，回到私聊一次修改一个字段或一小段内容。':'本次改动无法在卡片完整、安全地展示，不能在这里确认。请取消后发送更小的修改；名称、简介、概览和版本也可以在 App 编辑。'), action(ref,'cancel','取消'),
   ]);
   const introduction=mode==='richEdit'&&editing ? '本次可修改：'+(editing.labels.join('、')||'已选内容')+'。\n'+copy.richEdit+
     (editing.example?'\n也可以发送 '+editing.example+'。':'') : copy[mode];
-  const elements = [md(introduction)];
+  const elements = [md(creator&&mode==='saved'?'已保存。发送 /recipe preview 核对完整内容并确认发布。':creator&&mode==='pending'?'正在保存本次修改。':introduction)];
   if (mode === 'prepare') elements.push(action(ref,'confirm','生成私人草稿',true));
   if (['prepare','edit','richEdit','pending','review'].includes(mode)) elements.push(action(ref,'cancel','取消'));
   return authoringBody(elements);
@@ -70,7 +70,7 @@ export class AuthoringIm {
     if (result.code !== 0 || !result.data?.card_id) throw new Error('私聊卡片创建失败。');
     return result.data.card_id;
   }
-  create(ref: string, mode: CardMode, details?: CandidateCardDetails, editing?:RichEditCardContext) { return this.createJson(authoringCard(ref,mode,details,editing)); }
+  create(ref: string, mode: CardMode, details?: CandidateCardDetails, editing?:RichEditCardContext,creator=false) { return this.createJson(authoringCard(ref,mode,details,editing,creator)); }
   sourceMenu(ref: string, count: number) {
     const elements = [md('请选择已在 App 核对的来源。点击后，Bot 会为该来源准备私人草稿。要查看群名或选择其他群，请到 App。')];
     for (let index = 0; index < count; index++) {
@@ -89,14 +89,19 @@ export class AuthoringIm {
     return id;
   }
   async matches(messageId: string, chatId: string, cardId: string): Promise<boolean> {
-    const result = await this.channel.rawClient.im.v1.message.get({path: {message_id: messageId}});
-    const item = result.data?.items?.find(row => row.message_id === messageId && row.chat_id === chatId && row.msg_type === 'interactive' && !row.deleted);
-    if (result.code !== 0 || !item) return false;
-    const converted = await this.channel.rawClient.cardkit.v1.card.idConvert({data: {message_id: messageId}});
-    return converted.code === 0 && converted.data?.card_id === cardId;
+    return await this.cardStatus(messageId, chatId, cardId) === 'matched';
   }
-  async update(cardId: string, seq: number, ref: string, mode: CardMode, details?: CandidateCardDetails, editing?:RichEditCardContext) {
-    return this.updateJson(cardId,seq,ref,authoringCard(ref,mode,details,editing));
+  async cardStatus(messageId: string, chatId: string, cardId: string): Promise<'matched'|'unavailable'|'unknown'> {
+    const result = await this.channel.rawClient.im.v1.message.get({path: {message_id: messageId}});
+    if (result.code !== 0 || !result.data?.items) return 'unknown';
+    const item = result.data.items.find(row => row.message_id === messageId && row.chat_id === chatId && row.msg_type === 'interactive' && !row.deleted);
+    if (!item) return 'unavailable';
+    const converted = await this.channel.rawClient.cardkit.v1.card.idConvert({data: {message_id: messageId}});
+    if (converted.code !== 0 || !converted.data?.card_id) return 'unknown';
+    return converted.data.card_id === cardId ? 'matched' : 'unavailable';
+  }
+  async update(cardId: string, seq: number, ref: string, mode: CardMode, details?: CandidateCardDetails, editing?:RichEditCardContext,creator=false) {
+    return this.updateJson(cardId,seq,ref,authoringCard(ref,mode,details,editing,creator));
   }
   async updateJson(cardId:string,seq:number,ref:string,body:object){
     let code: number | undefined;
@@ -113,8 +118,8 @@ export class AuthoringIm {
     if (code === 200770 || code === 300317) return 'conflict';
     return 'pending';
   }
-  async shows(messageId: string, chatId: string, ref: string, mode: CardMode, details?: CandidateCardDetails, editing?:RichEditCardContext) {
-    return this.showsJson(messageId,chatId,authoringCard(ref,mode,details,editing));
+  async shows(messageId: string, chatId: string, ref: string, mode: CardMode, details?: CandidateCardDetails, editing?:RichEditCardContext,creator=false) {
+    return this.showsJson(messageId,chatId,authoringCard(ref,mode,details,editing,creator));
   }
   async showsJson(messageId:string,chatId:string,body:object){
     const result = await this.channel.rawClient.im.v1.message.get({path:{message_id:messageId}, params:{card_msg_content_type:'user_card_content'}});

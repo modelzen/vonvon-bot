@@ -22,7 +22,7 @@ const status = {kind: 'signedIn' as const, accountId, displayName: 'Fixture', pr
 const account: AccountShell = {status: async () => status, onStatus: listener => {listener(status); return () => {};}, login: async () => status, cancelLogin: async () => status, logout: async () => ({kind: 'signedOut'})};
 function Host() {
   const community = useCommunity()!;
-  return <DraftGuardProvider><button onClick={() => community.open({kind: 'detail', recipe: {recipeId: A, versionId: B}, privateView: true})}>打开已发布版本</button><button onClick={() => community.open({kind: 'draft'})}>打开私人草稿</button><button onClick={() => community.open({kind: 'draft',draftId})}>打开旧私人草稿</button><CommunityPage/></DraftGuardProvider>;
+  return <DraftGuardProvider><button onClick={() => community.open({kind: 'detail', recipe: {recipeId: A, versionId: B}, privateView: true})}>打开已发布版本</button><button onClick={() => community.open({kind: 'draft',draftId})}>打开旧私人草稿</button><CommunityPage/></DraftGuardProvider>;
 }
 const client = newClient();
 let shell: ReturnType<typeof fakeShell>;
@@ -74,54 +74,15 @@ it('opens an actual catalog card through the production facade and strict main r
     {type: 'detail', accountId, recipeId: A, versionId: B}, {type: 'shareLink', recipeId: A, versionId: B},
   ]);
 });
-it('uses only immutable IDs when opening a just-published receipt', async () => {
-  await draw(); await click('打开私人草稿');
-  await fill('配方名称', '发布的名称'); await fill('公开简介', '公开简介');
-  await click('预览发布'); await click('发布到社区');
-  expect(document.querySelector('.community-detail h1')?.textContent).toBe(recipe.public.name);
-  expect(calls.filter(request => request.type === 'detail' || request.type === 'shareLink')).toEqual([
-    {type: 'detail', accountId, recipeId: A, versionId: B}, {type: 'shareLink', recipeId: A, versionId: B},
-  ]);
-  const catalogs=calls.filter(request=>request.type==='catalog').length;
-  await click('返回 Bot 配方');
-  expect(calls.filter(request=>request.type==='catalog')).toHaveLength(catalogs+1);
-});
-it('edits an older draft without a setup editor or dropping its existing notes', async () => {
-  const legacySetup={steps:[{kind:'tool' as const,title:'旧说明',instructions:'LEGACY_NOTES_KEEP',check:'核对已有工具',required:true}]};
-  const saved={draftId,recipeId:null,revision:1,public:recipe.public,config:{role:'原角色',setup:legacySetup}};
-  const normal=handle;
-  handle=async request=>request.type==='draft'?saved:normal(request);
-  await draw();await click('打开旧私人草稿');
+it('reads legacy notes without rewriting the original role draft', async () => {
+  const legacySetup = {steps: [{kind: 'tool' as const, title: '旧说明', instructions: 'LEGACY_NOTES_KEEP', check: '核对已有工具', required: true}]};
+  const saved = {draftId, recipeId: null, revision: 1, public: recipe.public, config: {role: '原角色', setup: legacySetup}};
+  const normal = handle;
+  handle = async request => request.type === 'draft' ? saved : normal(request);
+  await draw(); await click('打开旧私人草稿');
   expect(document.querySelector('.community-additional-notes')?.textContent).toContain('LEGACY_NOTES_KEEP');
-  await click('编辑草稿');
-  expect(document.querySelector('.community-additional-notes')?.textContent).toContain('核对已有工具');
-  expect(document.querySelector('.community-editor')?.textContent).not.toContain('添加准备步骤');
-  expect(document.querySelector('.community-editor')?.textContent).not.toContain('必需步骤');
-  await fill('配方名称','修改后的名称');await click('保存私人草稿');
-  expect(calls.filter(request=>request.type==='saveDraft').at(-1)).toMatchObject({public:{name:'修改后的名称'},config:{setup:legacySetup}});
-});
-it('removes incomplete old notes explicitly and publishes the same private draft without changing its overview',async()=>{
-  let stored:RecipeRoleDraft={draftId,recipeId:null,revision:1,public:recipe.public,config:{role:'原角色',setup:{steps:[{kind:'tool',title:'',instructions:'',required:true}]}}};
-  const normal=handle;
-  handle=async request=>{
-    if(request.type==='draft')return stored;
-    if(request.type==='saveDraft'){
-      expect(request.target).toEqual({kind:'existing',draftId,revision:1});
-      expect(request.config).toEqual({role:'原角色'});
-      expect(request.public.overview).toBe(recipe.public.overview);
-      return stored={...stored,revision:2,public:request.public,config:request.config};
-    }
-    if(request.type==='publishDraft')expect(request).toMatchObject({draftId,revision:2});
-    return normal(request);
-  };
-  await draw();await click('打开旧私人草稿');
-  expect([...document.querySelectorAll('button')].some(button=>button.textContent==='移除旧补充说明')).toBe(false);
-  await click('编辑草稿');await click('移除旧补充说明');
-  expect(calls.some(request=>request.type==='saveDraft')).toBe(false);
-  expect(document.querySelector('.community-additional-notes')).toBeNull();
-  await click('保存私人草稿');await click('预览发布');await click('发布到社区');
-  expect(calls.filter(request=>request.type==='saveDraft')).toHaveLength(1);
-  expect(calls.filter(request=>request.type==='publishDraft')).toHaveLength(1);
+  expect(document.querySelector('input,textarea')).toBeNull();
+  expect(calls.filter(request => request.type !== 'draft' && request.type !== 'catalog')).toEqual([]);
 });
 it('opens both launch recipe links using the explicit App external-document bridge',async()=>{
   const {readFileSync}=await import('node:fs');const {resolve}=await import('node:path');
@@ -139,42 +100,6 @@ it('opens both launch recipe links using the explicit App external-document brid
   }
   expect(shell.openExternal).toHaveBeenCalledTimes(2);
 });
-it('keeps the actual editor DOM, caret, unsaved text and uncertain request key across reconnects and device switches', async () => {
-  let attempts = 0;
-  const normal = handle;
-  handle = async request => {if (request.type === 'saveDraft' && ++attempts === 1) throw new Error('receipt lost'); return normal(request);};
-  await draw(); await click('打开私人草稿');
-  const input = await fill('配方名称', '保留这份未保存输入');
-  await click('保存私人草稿');
-  input.focus(); input.setSelectionRange(2, 4);
-  for (const state of [devicesState({id: A, phase: 'connecting'}), devicesState({id: A, phase: 'ready'}), devicesState({id: A, phase: 'failed'}), devicesState({id: B, phase: 'ready'}), devicesState({id: 'local'})]) {
-    await draw(state);
-    const current = document.querySelector<HTMLInputElement>('[aria-label="配方名称"]');
-    expect(current).toBe(input); expect(current?.value).toBe('保留这份未保存输入');
-    expect(current?.selectionStart).toBe(2); expect(current?.selectionEnd).toBe(4);
-  }
-  await click('保存私人草稿');
-  const saves = calls.filter(request => request.type === 'saveDraft');
-  expect(saves).toHaveLength(2); expect(saves[1]).toEqual(saves[0]);
-});
-
-it('recovers an uncertain new-draft save before applying later edits without creating a second draft', async () => {
-  let attempts=0;
-  handle=async request=>{
-    if(request.type==='catalog')return {hero:null,items:[],nextCursor:null};
-    if(request.type!=='saveDraft')throw new Error('Unexpected draft request');
-    if(++attempts===1)throw new Error('回执丢失');
-    return {draftId,recipeId:null,revision:attempts-1,public:request.public,config:request.config};
-  };
-  await draw();await click('打开私人草稿');await fill('配方名称','原名称');await click('保存私人草稿');
-  await fill('配方名称','新名称');await click('保存私人草稿');
-  const saves=calls.filter(request=>request.type==='saveDraft');
-  expect(saves).toHaveLength(3);expect(saves[0]).toEqual(saves[1]);expect(saves[0]!.target.kind).toBe('new');
-  expect(saves[2]).toMatchObject({target:{kind:'existing',draftId,revision:1},public:{name:'新名称'}});
-  expect(document.querySelector<HTMLInputElement>('[aria-label="配方名称"]')?.value).toBe('新名称');
-  expect(document.querySelector('main')?.textContent).toContain('私人草稿已保存');
-});
-
 it('recovers a lost code-batch receipt using the same key while retaining only still-available plaintext codes', async () => {
   const available = {codeId: draftId, status: 'available' as const, code: 'A'.repeat(32)};
   const redeemed = {codeId: A, status: 'redeemed' as const};
@@ -200,18 +125,30 @@ it('recovers a lost code-batch receipt using the same key while retaining only s
   expect(document.querySelector('.community-codes')?.textContent).toContain('已停用');
 });
 
-it('preserves valid astral field and search limits all the way through the strict boundary', async () => {
-  await draw();
-  const query = await fill('搜索配方', '🦉'.repeat(120));
-  expect(query.maxLength).toBe(-1);
-  await act(async () => {await new Promise(resolve => setTimeout(resolve, 300));});
-  expect(calls.filter(request => request.type === 'catalog').at(-1)).toMatchObject({query: '🦉'.repeat(120)});
-  await click('打开私人草稿');
-  const name = await fill('配方名称', '🦉'.repeat(60));
-  await fill('公开简介', '🦉'.repeat(240)); await fill('版本', '🦉'.repeat(40));
-  expect(name.maxLength).toBe(-1);
-  await click('保存私人草稿');
-  expect(calls.filter(request => request.type === 'saveDraft').at(-1)).toMatchObject({public: {name: '🦉'.repeat(60), summary: '🦉'.repeat(240), version: '🦉'.repeat(40)}});
+it('keeps App author code listing, reveal, copying and confirmed disable available', async () => {
+  const secret = 'B'.repeat(32), copy = vi.fn(async () => {});
+  Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: copy}});
+  let disabled = false;
+  const normal = handle;
+  handle = async request => {
+    if (request.type === 'detail') return {...recipe, owned: true, public: {...recipe.public, access: 'coded'}};
+    if (request.type === 'codes') return {items: [{codeId: draftId, status: disabled ? 'disabled' : 'available', suffix: 'BBBB', redeemedAt: null}, {codeId: A, status: 'redeemed', suffix: 'AAAA', redeemedAt: null}], nextCursor: null};
+    if (request.type === 'revealCode') return {codeId: request.codeId, status: 'available', code: secret};
+    if (request.type === 'disableCode') {disabled = true; return {codeId: request.codeId, status: 'disabled'};}
+    return normal(request);
+  };
+  try {
+    await draw(); await click('打开已发布版本');
+    expect(document.querySelector('.community-codes')?.textContent).toContain('已兑换');
+    await click('准备复制'); await click('复制分享码');
+    expect(copy).toHaveBeenCalledWith(secret);
+    await click('停用');
+    expect(calls.filter(request => request.type === 'disableCode')).toEqual([]);
+    await click('停用');
+    expect(calls.filter(request => request.type === 'disableCode')).toEqual([expect.objectContaining({accountId, codeId: draftId})]);
+    expect(document.querySelector('.community-codes')?.textContent).toContain('已停用');
+    expect(document.querySelector('.community-codes')?.textContent).not.toContain('复制分享码');
+  } finally {Reflect.deleteProperty(navigator, 'clipboard');}
 });
 
 it.each(['operation_expired','request_upgrade_required'])('reconciles a native %s attempt through the facade and requires explicit confirmation before replacing the key', async failure => {

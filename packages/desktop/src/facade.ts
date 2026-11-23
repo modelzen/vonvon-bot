@@ -1,6 +1,6 @@
 import type { VonvonClient } from '@vonvon/client/browser';
 import {
-  authoringSavedSchema, type AuthoringSaved, acquisitionFailureSchema, desktopAuthoringRequestSchema, desktopAuthoringReplySchema, desktopRecipeSourceRequestSchema,desktopRecipeSourceReplySchema,recipeUseReplySchema, recipeUseRequestSchema, communityRequestSchema, communityResponseSchemas, type CommunityShell, accountStatusSchema, type AccountStatus, adminReplySchema, backendInstallEventPayloadSchema, collaborationReplySchema,
+  authoringPublishedSchema, type AuthoringPublished, authoringSavedSchema, type AuthoringSaved, acquisitionFailureSchema, desktopAuthoringRequestSchema, desktopAuthoringReplySchema, desktopRecipeSourceRequestSchema,desktopRecipeSourceReplySchema,recipeUseReplySchema, recipeUseRequestSchema, communityRequestSchema, communityResponseSchemas, type CommunityShell, accountStatusSchema, type AccountStatus, adminReplySchema, backendInstallEventPayloadSchema, collaborationReplySchema,
   commandResultSchema, desktopSnapshotSchema, directoryReplySchema, memoryReplySchema, contextPreviewReplySchema,
   environmentReplySchema, libraryReplySchema, logEventPayloadSchema, machineReplySchema, desktopUpdateSchema, deviceReplySchema,
   scheduleReplySchema, settingsReplySchema, viewIdSchema, devicesStateSchema, deviceEventPayloadSchema, linkPreviewSchema,
@@ -69,6 +69,7 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
   const updateListeners = new Set<(value: DesktopUpdate) => void>();
   const accountListeners = new Set<(value: AccountStatus) => void>();
   let latestAccount: AccountStatus | undefined;
+  const authoringPublishedListeners = new Set<(value:AuthoringPublished) => void>();
   const authoringSavedListeners = new Set<(value:AuthoringSaved) => void>();
   const stateListeners = new Set<(value: DevicesState) => void>();
   const localDeviceListeners = new Set<(value: DeviceEventPayload) => void>();
@@ -124,6 +125,11 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
           latestAccount = accountStatusSchema.parse(readValue(raw));
           deliverShell(accountListeners, latestAccount);
           return;
+        case 'authoringPublished': {
+          const receipt=authoringPublishedSchema.parse(readValue(raw));
+          if(latestAccount?.kind==='signedIn'&&latestAccount.accountId===receipt.accountId)deliverShell(authoringPublishedListeners,receipt);
+          return;
+        }
         case 'authoringSaved': {
           const receipt = authoringSavedSchema.parse(readValue(raw));
           if (latestAccount?.kind === 'signedIn' && latestAccount.accountId === receipt.accountId) deliverShell(authoringSavedListeners,receipt);
@@ -387,6 +393,7 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
     devices,
     recipeSource: {request:raw=>callShellFor(desktopChannels.recipeSource,value=>desktopRecipeSourceReplySchema.parse(value),desktopRecipeSourceRequestSchema.parse(raw))},
     recipeAuthoring: {
+      onPublished(listener) {authoringPublishedListeners.add(listener);return ()=>{authoringPublishedListeners.delete(listener);};},
       onSaved(listener) {authoringSavedListeners.add(listener); return () => { authoringSavedListeners.delete(listener); };},
       request: raw => callShellFor(desktopChannels.recipeAuthoring, value => desktopAuthoringReplySchema.parse(value), desktopAuthoringRequestSchema.parse(raw)),
     },

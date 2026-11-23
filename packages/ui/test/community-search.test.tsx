@@ -11,7 +11,7 @@ const h = vi.hoisted(() => ({community: undefined as Community | undefined, requ
 vi.mock('../src/community/community-context', () => ({useCommunity: () => h.community}));
 vi.mock('../src/account-context', () => ({useAccount: () => ({supported: true, status: {kind: 'signedIn', accountId: '44444444-4444-4444-8444-444444444444'}, login: vi.fn()}), accountStatusText: () => '已登录'}));
 vi.mock('../src/settings/DraftGuard', () => ({useDraftGuard: () => ({navigate: (action: () => void) => action()})}));
-vi.mock('../src/community/RecipeEditor', () => ({RecipeEditor: ({draftId}: {draftId?: string}) => <p>编辑草稿 {draftId}</p>}));
+vi.mock('../src/community/RecipeDraftPage', () => ({RecipeDraftPage: ({draftId}: {draftId?: string}) => <p>只读配方 {draftId}</p>}));
 const recipe: RecipeDetail = {recipeId: '11111111-1111-4111-8111-111111111111', versionId: '22222222-2222-4222-8222-222222222222', revision: 1,
   public: {name: '会议纪要', summary: '保留会议决定', overview: '', version: '1.2', access: 'direct'}, owned: false, acquired: false};
 const initialCatalog: CommunityResponses['catalog'] = {hero: recipe, items: [], nextCursor: 'next-eight'};
@@ -106,10 +106,10 @@ it('offers one preparation action and keeps existing drafts accessible without m
   const draftId = '55555555-5555-4555-8555-555555555555';
   h.request.mockResolvedValueOnce({items: [{format: 'rich-v2', draftId, recipeId: null, revision: 1, public: recipe.public}]}).mockResolvedValueOnce({items: []});
   await act(async () => root.render(<Harness initial={{kind: 'workspace'}}/>));
-  expect([...document.querySelectorAll('button')].filter(button => button.textContent === '准备配方')).toHaveLength(1);
+  expect([...document.querySelectorAll('button')].filter(button => button.textContent === '分享配方')).toHaveLength(1);
   expect(document.body.textContent).not.toContain('手动');
-  await click('查看草稿');
-  expect(document.body.textContent).toContain('编辑草稿 ' + draftId);
+  await click('查看配方');
+  expect(document.body.textContent).toContain('只读配方 ' + draftId);
 });
 
 
@@ -129,9 +129,9 @@ it('does not append an old load-more response to a new search', async () => {
 it('keeps the empty studio focused on preparation without a blank-draft shortcut', async () => {
   h.request.mockResolvedValue({items: []});
   await act(async () => root.render(<Harness initial={{kind: 'workspace'}}/>));
-  expect(document.body.textContent).toContain('准备配方后，在这里检查内容并发布。');
+  expect(document.body.textContent).toContain('可以直接在 Bot 私聊中开始，或从群聊分享配置。');
   expect(document.body.textContent).not.toContain('手动');
-  expect([...document.querySelectorAll('button')].filter(button => button.textContent === '准备配方')).toHaveLength(1);
+  expect([...document.querySelectorAll('button')].filter(button => button.textContent === '分享配方')).toHaveLength(1);
   expect(h.request.mock.calls.map(([request]) => request.type)).toEqual(['drafts', 'publications']);
 });
 
