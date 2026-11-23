@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { DraftProviderBusy } from '../src/recipe/draft-instruction';
 import { codexDraftParser } from '../src/recipe/codex-draft-parser';
+import {proposeRich} from '../src/recipe/authoring-rich-model';
 
 let home:string;
 const result = {kind:'proposal',changes:[{field:'name',action:'set',before:'',value:'周报'}]};
@@ -58,6 +59,34 @@ it('keeps a non-Lite model on the regular response profile',async()=>{
   const [,opts]=request.mock.calls[0]!;
   expect(new Headers(opts!.headers).has('x-openai-internal-codex-responses-lite')).toBe(false);
   expect(JSON.parse(String(opts!.body)).reasoning).toEqual({effort:'low'});
+});
+it('sends two strict rich-command variants and maps direct public text without JSON-in-string encoding',async()=>{
+  const text='Vonvon「答疑」助手';
+  const proposal={kind:'proposal',commands:[{action:'setPublicText',target:'T1',text}]};
+  const output={type:'message',role:'assistant',content:[{type:'output_text',text:JSON.stringify(proposal)}]};
+  const request=vi.fn<typeof fetch>().mockResolvedValueOnce(stream([
+    {type:'response.output_item.done',item:output},{type:'response.completed',response:{status:'completed',output:[output]}},
+  ]));
+  const itemId='41e7c9ab-2169-4b64-931c-a633c67b08ca';
+  const richInput={instruction:'把名称完整改为「'+text+'」',phase:'edit' as const,selected:[{kind:'publicText' as const,itemId,field:'name',value:''}]};
+  await expect(proposeRich(richInput,signal(),codexDraftParser(selected,{home,env:{},fetch:request}))).resolves.toEqual({
+    kind:'proposal',changes:[{op:'setPublicText',itemId,field:'name',value:text}],omitted:[],
+  });
+  const body=JSON.parse(String(request.mock.calls[0]![1]!.body));
+  const variants=body.text.format.schema.properties.commands.items.anyOf;
+  expect(variants).toHaveLength(2);
+  expect(variants).toContainEqual({type:'object',additionalProperties:false,required:['action','target','text'],properties:{
+    action:{type:'string',enum:['setPublicText']},target:{type:'string',maxLength:6},text:{type:'string',minLength:1,maxLength:6500},
+  }});
+  expect(variants).toContainEqual({type:'object',additionalProperties:false,required:['action','target','valueJson'],properties:{
+    action:{type:'string',enum:['edit','copy','remove','omit']},target:{type:'string',maxLength:6},valueJson:{type:'string',maxLength:6500},
+  }});
+  expect(JSON.parse(body.input[1].content[0].text)).toEqual({instruction:richInput.instruction,phase:'edit',selected:[{target:'T1',kind:'publicText',field:'name',value:''}]});
+  expect(body.input[0].content[0].text).toContain('text 直接是字符串');
+  expect(body).toMatchObject({tool_choice:'none',parallel_tool_calls:false,store:false});
+  expect(body).not.toHaveProperty('tools');
+  for(const leak of [itemId,home,'UNSELECTED','SECRET-REFRESH','SECRET-ID'])expect(String(request.mock.calls[0]![1]!.body)).not.toContain(leak);
+  expect(request).toHaveBeenCalledTimes(1);
 });
 it('accepts the observed headerless Codex SSE message and completed response',async()=>{
   const proposal = {kind:'proposal',changes:[{field:'name',action:'set',before:'',value:'每周项目简报'}]};
