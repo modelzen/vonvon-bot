@@ -19,37 +19,43 @@ const fail = () => new Error('配方资料未通过完整性核对，请重新�
 export class MissingRichRecipe extends Error {}
 export class RichCommunityUnavailable extends Error {constructor(readonly state:'withdrawn'|'blocked'){super(state==='withdrawn'?'作者已撤下此版本，当前账号没有读取资格。':'此版本已被平台停止分发，本机已安装配置仍保留。');}}
 export function richCommunity(account: NativeAccount, accountId: string | undefined, check: () => void) {
-  async function read(path: string, cap: number, init?: RequestInit): Promise<Buffer> {
+  async function read(path: string, cap: number, metadata = false): Promise<Buffer> {
     check();
-    const response = accountId ? await account.request(accountId, path, init ?? {}, check) : await account.publicRequest!(path);
+    const response = accountId ? await account.request(accountId, path, {}, check) : await account.publicRequest!(path);
     check();
-    if (!response.ok || !response.body) {await response.body?.cancel(); if (response.status === 404) throw new MissingRichRecipe(); throw fail();}
+    if (!response.ok || !response.body) {await response.body?.cancel(); if (metadata && response.status === 404) throw new MissingRichRecipe(); throw fail();}
     const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let bytes = 0;
     try {for (;;) {const {done, value} = await reader.read(); check(); if (done) break; if ((bytes += value.byteLength) > cap) throw fail(); chunks.push(value);}}
     finally {await reader.cancel().catch(() => {}); reader.releaseLock();}
     return Buffer.concat(chunks);
   }
-  async function json(path: string) {return JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(await read(path, 2097152))) as unknown;}
+  async function json(path: string, metadata = false) {return JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(await read(path, 2097152, metadata))) as unknown;}
   async function object(path: string, descriptor: {objectId: string; bytes: number; sha256: string}) {
     const value = await read(path + descriptor.objectId, descriptor.bytes);
     if (value.byteLength !== descriptor.bytes || createHash('sha256').update(value).digest('hex') !== descriptor.sha256) throw fail();
     return value;
   }
-  async function view(path: string, descriptor: z.infer<typeof recipeRichManifestObjectSchema>, release?: z.infer<typeof recipeRichReleaseSchema>) {
+  async function loadMembers(path: string, descriptor: z.infer<typeof recipeRichManifestObjectSchema>, release?: z.infer<typeof recipeRichReleaseSchema>) {
     const canonical = await object(path, descriptor);
     const parsed = release ? await verifyRichRecipeRelease(release, canonical) : decodeRichRecipeContent(canonical);
-    const texts: Record<string,string> = {}; let logo: string | undefined;
-    for (const part of parsed.content.parts) {
-      const value = await object(path, part);
+    check();
+    const members = new Map<string, Buffer>();
+    for (const part of parsed.content.parts) members.set(part.objectId, await object(path, part));
+    return {content: parsed.content, canonical, members};
+  }
+  function display(loaded: Awaited<ReturnType<typeof loadMembers>>) {
+    const texts: Record<string, string> = {}; let logo: string | undefined;
+    for (const part of loaded.content.parts) {
+      const value = loaded.members.get(part.objectId)!;
       if (part.kind === 'text') texts[part.objectId] = new TextDecoder('utf-8', {fatal: true}).decode(value);
       else logo = 'data:image/webp;base64,' + value.toString('base64');
     }
-    return {rich: {content: parsed.content, texts, canonical: canonical.toString('base64url')}, logo};
+    return {rich: {content: loaded.content, texts, canonical: loaded.canonical.toString('base64url')}, logo};
   }
   async function draftRead(draftId: string): Promise<RecipeDraft> {
-    const value = draft.parse(await json('/v2/drafts/' + uuid.parse(draftId)));
+    const value = draft.parse(await json('/v2/drafts/' + uuid.parse(draftId), true));
     if (value.draftId !== draftId) throw fail();
-    const loaded = await view(`/v2/drafts/${draftId}/objects/`, value.manifest);
+    const loaded = display(await loadMembers(`/v2/drafts/${draftId}/objects/`, value.manifest));
     if(loaded.rich.content.parts.reduce((total,part)=>total+part.bytes,Buffer.from(loaded.rich.canonical,'base64url').byteLength)!==value.logicalBytes)throw fail();
     const fields = loaded.rich.content.public;
     return {draftId, recipeId: value.recipeId, revision: value.revision, format: 'rich-v2', sourceIntentId: value.sourceIntentId,
@@ -67,7 +73,25 @@ export function richCommunity(account: NativeAccount, accountId: string | undefi
     for(let index=0;index<items.length;index+=8)result.push(...await Promise.all(items.slice(index,index+8).map(logo)));
     return result;
   }
+  async function metadata(recipeId: string, versionId: string) {
+    const raw=await json(`/v2/recipes/${uuid.parse(recipeId)}/versions/${uuid.parse(versionId)}`, true);
+    const unavailable=z.object({state:z.enum(['withdrawn','blocked']),versionId:uuid}).strict().safeParse(raw);
+    if(unavailable.success){if(unavailable.data.versionId!==versionId)throw fail();throw new RichCommunityUnavailable(unavailable.data.state);}
+    const value = richCloudDetailSchema.parse(raw);
+    if (value.recipeId !== recipeId || value.versionId !== versionId) throw fail();
+    const full = value.visibility === 'full';
+    if(value.release&&(value.release.recipeId!==recipeId||value.release.versionId!==versionId||value.release.revision!==value.revision||value.release.access!==value.public.access||value.release.authorId!==value.creator.authorId))throw fail();
+    if (full !== Boolean(value.manifest) || full !== Boolean(value.release)) throw fail();
+    return value;
+  }
+  async function publishedMembers(value: z.infer<typeof richCloudDetailSchema>) {
+    if (!value.manifest || !value.release) throw fail();
+    const loaded = await loadMembers(`/v2/versions/${value.versionId}/objects/`, value.manifest, value.release);
+    if ((['name','summary','overview','version'] as const).some(field => loaded.content.public[field].value !== value.public[field])) throw fail();
+    return loaded;
+  }
   return {
+    metadata, publishedMembers,
     async library(cursor?: string): Promise<CommunityResponses['library']> {
       const page=z.object({items: recipeSummarySchema.array().max(50), nextCursor: uuid.nullable()}).strict().parse(await json('/v2/me/recipes' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : '')));
       return {...page,items:await logos(page.items)};
@@ -88,16 +112,8 @@ export function richCommunity(account: NativeAccount, accountId: string | undefi
       return {...page, hero: page.hero ? await logo(page.hero) : null, items: await Promise.all(page.items.map(logo))};
     },
     async detail(recipeId: string, versionId: string): Promise<RecipeDetail> {
-      const raw=await json(`/v2/recipes/${uuid.parse(recipeId)}/versions/${uuid.parse(versionId)}`);
-      const unavailable=z.object({state:z.enum(['withdrawn','blocked']),versionId:uuid}).strict().safeParse(raw);
-      if(unavailable.success){if(unavailable.data.versionId!==versionId)throw fail();throw new RichCommunityUnavailable(unavailable.data.state);}
-      const value = richCloudDetailSchema.parse(raw);
-      if (value.recipeId !== recipeId || value.versionId !== versionId) throw fail();
-      const full = value.visibility === 'full';
-      if(value.release&&(value.release.recipeId!==recipeId||value.release.versionId!==versionId||value.release.revision!==value.revision||value.release.access!==value.public.access||value.release.authorId!==value.creator.authorId))throw fail();
-      if (full !== Boolean(value.manifest && value.release)) throw fail();
-      const loaded = full ? await view(`/v2/versions/${versionId}/objects/`, value.manifest!, value.release!) : undefined;
-      if(loaded&&(['name','summary','overview','version'] as const).some(field=>loaded.rich.content.public[field].value!==value.public[field]))throw fail();
+      const value = await metadata(recipeId, versionId);
+      const loaded = value.visibility === 'full' ? display(await publishedMembers(value)) : undefined;
       let logo = loaded?.logo;
       if (!logo && value.hasDisplayLogo) logo = 'data:image/webp;base64,' + (await read(`/v2/versions/${versionId}/display-logo`, 131072)).toString('base64');
       return {recipeId, versionId, revision: value.revision, public: value.public, format: 'rich-v2', creator: value.creator,

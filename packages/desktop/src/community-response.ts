@@ -1,10 +1,10 @@
-export async function boundedJson(response: Response, limit = 16 * 1024 * 1024): Promise<unknown> {
+export async function boundedJson(response: Response, limit = 16 * 1024 * 1024, check?: () => void): Promise<unknown> {
   const reader = response.body?.getReader();
   if (!reader) throw new Error('社区响应无效');
   const chunks: Uint8Array[] = []; let bytes = 0;
   try {
     while (true) {
-      const {done, value} = await reader.read(); if (done) break;
+      const {done, value} = await reader.read(); check?.(); if (done) break;
       bytes += value.byteLength;
       if (bytes > limit) throw new Error('社区响应无效');
       chunks.push(value);
