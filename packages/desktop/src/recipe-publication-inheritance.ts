@@ -1,0 +1,32 @@
+import {createHash} from 'node:crypto';
+import type {InheritedPublication} from '@vonvon/protocol';
+import type {NativeAccount} from './account-session.js';
+import {richCommunity} from './community-rich.js';
+import {richAuthoringCloud} from './recipe-authoring-rich-cloud.js';
+
+export async function inheritedPublication(account:NativeAccount,accountId:string,versionId:string,check:()=>void):Promise<InheritedPublication>{
+  const signal=account.lease?.(accountId);
+  if(!signal)throw new Error('请重新核对当前账号。');
+  const attested=await richAuthoringCloud(account,accountId,signal,check).sourceItems(versionId);
+  if(attested.authorId!==accountId)throw new Error('只能从本人发布的版本准备新版。');
+  const community=richCommunity(account,accountId,check);
+  const publication=(await community.publications()).items.find(item=>item.versionId===versionId);
+  if(!publication)throw new Error('找不到本人发布的来源版本。');
+  const detail=await community.detail(publication.recipeId,versionId);
+  check();
+  if(!detail.owned||detail.creator?.authorId!==accountId||!detail.rich||detail.public.access!==attested.access)
+    throw new Error('来源版本无法核对，请重新准备。');
+  const finalLogo=detail.rich.content.finalLogo;
+  let logo:string|undefined;
+  if(finalLogo){
+    const descriptor=detail.rich.content.parts.find(part=>part.objectId===finalLogo.objectId&&part.kind==='finalLogo');
+    if(!descriptor||!detail.logo?.startsWith('data:image/webp;base64,'))
+      throw new Error('来源 Logo 无法核对。');
+    const encoded=detail.logo.slice('data:image/webp;base64,'.length),bytes=Buffer.from(encoded,'base64');
+    if(bytes.toString('base64')!==encoded||bytes.length!==descriptor.bytes||bytes.length>131072||createHash('sha256').update(bytes).digest('hex')!==descriptor.sha256)
+      throw new Error('来源 Logo 无法核对。');
+    logo=bytes.toString('base64url');
+  }
+  const {name,summary,overview,access}=detail.public;
+  return {accountId,versionId,public:{name,summary,overview,version:''},access,...(logo&&{logo})};
+}

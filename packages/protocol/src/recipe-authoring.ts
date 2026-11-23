@@ -25,6 +25,8 @@ export const authoringHandoffSchema = z.object({
 export type AuthoringHandoff = z.infer<typeof authoringHandoffSchema>;
 const handoffAttestation = z.object({retryId:uuid,ref:uuid,generation:positive,lease:digest,versions:uuid.array().max(64),items:z.array(z.object({versionId:uuid,itemIds:uuid.array().min(1).max(512)}).strict()).max(64).optional()}).strict();
 export type HandoffAttestation = z.infer<typeof handoffAttestation>;
+export const inheritedPublicationSchema = z.object({accountId:uuid,versionId:uuid,public:richPreparationSchema.shape.public,access:z.enum(['direct','coded']),logo:richPreparationSchema.shape.logo}).strict();
+export type InheritedPublication = z.infer<typeof inheritedPublicationSchema>;
 const editSource = z.object({sourceIntentId:uuid,canonical:z.string().min(1).max(1401000)}).strict();
 export const authoringChangeSchema = z.discriminatedUnion('op', [
   z.object({op: z.literal('setPublicText'), field: publicField, value: z.string().max(32768)}).strict(),
@@ -64,7 +66,7 @@ const reconciliation = z.object({
 export type AuthoringReconciliation = z.infer<typeof reconciliation>;
 const recipient = z.object({openId: z.string().max(210), chatId: groupIdSchema, tenantKey: z.string().max(200)}).strict();
 export const recipeAuthoringRequestSchema = z.discriminatedUnion('type', [
-  z.object({type:z.literal('beginHandoff'),...session,retryId:uuid,groupId:groupIdSchema,groupName:z.string().min(1).max(512),sourceVersionId:uuid.optional()}).strict(),
+  z.object({type:z.literal('beginHandoff'),...session,retryId:uuid,groupId:groupIdSchema,groupName:z.string().min(1).max(512),sourceVersionId:uuid.optional(),inherited:inheritedPublicationSchema.optional()}).strict(),
   z.object({type:z.literal('beginDraftHandoff'),...session,retryId:uuid,groupId:groupIdSchema,groupName:z.string().min(1).max(512),identity:digest,
     draftId:uuid,baseRevision:positive,canonical:z.string().min(1).max(1401000),source:editSource}).strict(),
   z.object({type:z.literal('handoffStatus'),...session,retryId:uuid}).strict(),

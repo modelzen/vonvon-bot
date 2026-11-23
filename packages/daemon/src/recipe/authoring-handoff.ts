@@ -88,6 +88,7 @@ export class PrivateHandoffs {
     return this.transaction(p,link,h.retryId,row=>{if(row.ref!==h.ref||!active(row))throw changed();row.messageId=messageId;return row;});
   }
   async begin(p:Presence,link:Link,r:Begin){
+    if(r.type==='beginHandoff'&&(!!r.sourceVersionId!==!!r.inherited||r.inherited&&(r.inherited.accountId!==p.account||r.inherited.versionId!==r.sourceVersionId||r.inherited.public.version!=='')))throw changed();
     const identity=await groupSourceIdentity(this.native.channel,this.native.bot,p.scope,r.groupId);
     if(r.type==='beginDraftHandoff'&&r.identity!==identity)throw changed();
     const edit=r.type==='beginDraftHandoff'?{draftId:r.draftId,baseRevision:r.baseRevision,canonical:r.canonical,source:r.source}:undefined;
@@ -97,7 +98,7 @@ export class PrivateHandoffs {
       const previous=slots[r.retryId];
       if(previous){
         if(!bound(previous,p,link)||previous.identity!==identity||previous.groupId!==r.groupId||previous.draftId!==edit?.draftId||
-          previous.sourceVersionId!==(r.type==='beginHandoff'?r.sourceVersionId:undefined)||previous.edit&&wireDigest(previous.edit)!==wireDigest(edit))throw changed();
+          previous.sourceVersionId!==(r.type==='beginHandoff'?r.sourceVersionId:undefined)||wireDigest(previous.inherited??null)!==wireDigest(r.type==='beginHandoff'?r.inherited??null:null)||previous.edit&&wireDigest(previous.edit)!==wireDigest(edit))throw changed();
         return previous;
       }
       if(Object.values(slots).filter(x=>x.account===p.account&&x.expiresAt>this.now()).length>=60)throw new Error('本次准备次数已到上限，请稍后再试。');
@@ -106,7 +107,7 @@ export class PrivateHandoffs {
         (edit?op.view.draftId===edit.draftId:op.view.groupId===r.groupId)))throw new Error('这份配方已有进行中的私聊，请先在原卡片完成或取消。');
       return slots[r.retryId]={account:p.account,scope:p.scope,groupId:r.groupId,groupName:r.groupName,identity,binding:link.binding,recipient:link.recipient,
         ref:randomUUID(),generation:1,sendUuid:randomUUID(),session:p.session,retryId:r.retryId,expiresAt:this.now()+30*60_000,selection:emptySelection(),phase:{state:'selecting'},
-        ...(edit&&{edit,draftId:edit.draftId}),...(r.type==='beginHandoff'&&r.sourceVersionId&&{sourceVersionId:r.sourceVersionId})} satisfies PrivateHandoff;
+        ...(edit&&{edit,draftId:edit.draftId}),...(r.type==='beginHandoff'&&r.sourceVersionId&&{sourceVersionId:r.sourceVersionId,inherited:structuredClone(r.inherited)})} satisfies PrivateHandoff;
     });
     if(!active(h))return publicView(h);
     if(h.session!==p.session){
@@ -151,11 +152,13 @@ export class PrivateHandoffs {
       return publicView(h);
     }
     try{
+      if(h.sourceVersionId&&(!h.inherited||h.inherited.accountId!==p.account||h.inherited.versionId!==h.sourceVersionId))throw changed();
       const inv=await this.inventory(p,h);
       const {selected,versions,items}=selectedSource(h,inv);
       if(inv.lease!==h.phase.request.lease||wireDigest(versions)!==wireDigest(r.request.versions)||r.request.items&&wireDigest(items)!==wireDigest(r.request.items))throw changed();
       const rich=preparedRich({type:'richPrepare',botId:agentIdSchema.parse(this.native.bot.appId),session:p.session,groupId:h.groupId,attestations:r.attestations,
-        selection:{options:h.selection.options,reviewToken:inv.lease,selected,sourceAttested:true,public:{name:'',summary:'',overview:'',version:''},setup:[],access:'direct',
+        selection:{options:h.selection.options,reviewToken:inv.lease,selected,sourceAttested:true,public:h.inherited?.public??{name:'',summary:'',overview:'',version:''},setup:[],access:h.inherited?.access??'direct',
+          ...(h.inherited?.logo&&{logo:h.inherited.logo}),
           ...(h.sourceVersionId&&{sourceVersionId:h.sourceVersionId})}},inv,p.account);
       rich.privateSelection=true;
       const details=richCardReview({view:{operationId:h.retryId},rich});
