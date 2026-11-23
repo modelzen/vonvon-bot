@@ -2,7 +2,8 @@ import {
   adminReplySchema, collaborationReplySchema, commandResultSchema,
   desktopSnapshotSchema, directoryReplySchema, environmentReplySchema, memoryReplySchema, contextPreviewReplySchema,
   errorEnvelopeSchema, eventSchema, machineReplySchema, requestSchema,
-  libraryReplySchema, scheduleReplySchema, settingsReplySchema, deviceReplySchema,
+  libraryReplySchema, scheduleReplySchema, settingsReplySchema, deviceReplySchema, recipeInstallReplySchema,
+  type RecipeInstallRequest, type RecipeInstallReply,
   type AdminReply, type DeviceReply, type DeviceRequest, type AdminRequest, type BackendInstallEventPayload,
   type CollaborationReply, type CollaborationRequest, type Command,
   type CommandResult, type DesktopSnapshot, type DirectoryReply,
@@ -46,6 +47,7 @@ export interface VonvonClient {
   contextPreview(request: ContextPreviewRequest): Promise<ContextPreviewReply>;
   schedule(botId: string, request: ScheduleRequest): Promise<ScheduleReply>;
   device(request: DeviceRequest): Promise<DeviceReply>;
+  recipeInstall?(request: RecipeInstallRequest): Promise<RecipeInstallReply>;
   onLog(listener: (payload: LogEventPayload) => void): () => void;
   onBackendInstall(listener: (payload: BackendInstallEventPayload) => void): () => void;
   /** A client paired with or revoked from this device (devices 4.3); only the owner's connections hear it. */
@@ -62,7 +64,7 @@ const replySchemas = {
   settings: settingsReplySchema, collaboration: collaborationReplySchema,
   environment: environmentReplySchema, machine: machineReplySchema,
   admin: adminReplySchema, directory: directoryReplySchema, memory: memoryReplySchema,
-  library: libraryReplySchema, contextPreview: contextPreviewReplySchema, schedule: scheduleReplySchema, device: deviceReplySchema,
+  library: libraryReplySchema, contextPreview: contextPreviewReplySchema, schedule: scheduleReplySchema, device: deviceReplySchema, recipeInstall: recipeInstallReplySchema,
 } satisfies Record<z.infer<typeof requestSchema>["method"], z.ZodTypeAny>;
 type Method = keyof typeof replySchemas;
 type Payload<M extends Method> = Extract<z.input<typeof requestSchema>, { method: M }>["payload"];
@@ -208,6 +210,7 @@ export function createClient(socket: ClientConnection, capabilities: readonly st
     contextPreview: request => send("contextPreview", request),
     schedule: (botId, request) => send("schedule", { botId, request }),
     device: request => send("device", request),
+    recipeInstall: request => send('recipeInstall', request),
     onLog(listener) { logs.add(listener); return () => { logs.delete(listener); }; },
     onBackendInstall(listener) { installs.add(listener); return () => { installs.delete(listener); }; },
     onDevice(listener) { devices.add(listener); return () => { devices.delete(listener); }; },

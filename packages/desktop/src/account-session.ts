@@ -11,12 +11,15 @@ type Persistence = 'secure' | 'memory';
 type Avatar = { accountId: string; url: string; dataUrl?: string; retryAt?: number };
 
 export interface NativeAccount {
+  lease?(accountId: string): AbortSignal | undefined;
   status(): AccountStatus;
   onStatus(listener: (value: AccountStatus) => void): () => void;
   login(): Promise<AccountStatus>;
   cancelLogin(): Promise<AccountStatus>;
   logout(): Promise<AccountStatus>;
-  request(accountId: string, path: string, init?: RequestInit): Promise<Response>;
+  recipeLink?(recipeId: string, versionId: string): string;
+  publicRequest?(path: string): Promise<Response>;
+  request(accountId: string, path: string, init?: RequestInit, beforeSend?: () => void): Promise<Response>;
   dispose(): Promise<void>;
 }
 
@@ -29,6 +32,7 @@ export function createAccountSession(options: {
   const listeners = new Set<(value: AccountStatus) => void>();
   let view: AccountStatus = deployment ? { kind: 'signingIn' } : { kind: 'unavailable', reason: 'configuration' };
   let owner = new AbortController();
+  let leaseOwner = new AbortController();
   let disposed = false;
   let credential: AccountCredential | undefined;
   let access: Access | undefined;
@@ -39,6 +43,9 @@ export function createAccountSession(options: {
   let avatar: Avatar | undefined;
 
   function publish(next: AccountStatus) {
+    if (view.kind==='signedIn' && (next.kind!=='signedIn' || next.accountId!==view.accountId)) {
+      leaseOwner.abort(); leaseOwner=new AbortController();
+    }
     view = next;
     for (const listener of listeners) {
       try { listener(next); } catch { /* A closed window cannot interrupt a credential change. */ }
@@ -51,6 +58,7 @@ export function createAccountSession(options: {
     return run;
   }
   function invalidate() {
+    leaseOwner.abort(); leaseOwner=new AbortController();
     owner.abort();
     owner = new AbortController();
     clearTimeout(timer);
@@ -147,14 +155,15 @@ export function createAccountSession(options: {
 
   async function clearLocal(reason?: 'cancelled') {
     const signal = invalidate();
+    publish(deployment ? { kind: 'signedOut', ...(reason && { reason }) } : { kind: 'unavailable', reason: 'configuration' });
     try {
       await serialize(() => store.clear());
-      if (!signal.aborted) publish(deployment ? { kind: 'signedOut', ...(reason && { reason }) } : { kind: 'unavailable', reason: 'configuration' });
     } catch { if (!signal.aborted) publish({ kind: 'unavailable', reason: 'storage' }); }
     return view;
   }
 
   return {
+    lease: accountId => !disposed && credential?.accountId === accountId && view.kind === 'signedIn' && view.accountId === accountId ? leaseOwner.signal : undefined,
     status: () => view,
     onStatus(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     async login() {
@@ -199,7 +208,17 @@ export function createAccountSession(options: {
     },
     async cancelLogin() { return view.kind === 'signingIn' && !disposed ? clearLocal('cancelled') : view; },
     async logout() { return disposed ? view : clearLocal(); },
-    async request(accountId, path, init = {}) {
+    recipeLink(recipeId, versionId) {
+      if (!deployment || !/^[0-9a-f-]{36}$/.test(recipeId) || !/^[0-9a-f-]{36}$/.test(versionId)) throw new AccountFault('invalid');
+      return `${deployment.webOrigin}/recipes/${recipeId}/versions/${versionId}`;
+    },
+    async publicRequest(path) {
+      if (!deployment || disposed || !/^\/v1\/(?:community\/recipes(?:\?[^#]*)?|recipes\/[0-9a-f-]+\/versions\/[0-9a-f-]+)$/.test(path)) throw new AccountFault('invalid');
+      const url = new URL(path, deployment.apiOrigin);
+      if (url.origin !== deployment.apiOrigin || url.hash) throw new AccountFault('invalid');
+      return transport(url, {credentials: 'omit', redirect: 'error', cache: 'no-store', signal: requestSignal(owner.signal)});
+    },
+    async request(accountId, path, init = {}, beforeSend) {
       const signal = owner.signal;
       if (!deployment || disposed || !credential || credential.accountId !== accountId || !path.startsWith('/v1/')) throw new AccountFault('invalid');
       const url = new URL(path, deployment.apiOrigin);
@@ -210,6 +229,7 @@ export function createAccountSession(options: {
       const headers = new Headers(init.headers);
       headers.set('Authorization', 'Bearer ' + access.token);
       const signals = init.signal ? AbortSignal.any([signal, init.signal]) : signal;
+      beforeSend?.();
       const response = await transport(url, { ...init, headers, credentials: 'omit', redirect: 'error', cache: 'no-store', signal: requestSignal(signals) });
       signal.throwIfAborted();
       return response;

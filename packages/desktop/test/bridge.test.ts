@@ -202,6 +202,23 @@ describe('desktop IPC boundary', () => {
     expect(h.device).toHaveBeenCalledExactlyOnceWith({ type: 'clients' });
     await h.bridge.dispose();
   });
+  it('rejects an installation after remote A→B→A or a paired-key change during identity lookup',async()=>{
+    for(const transition of ['switch','key']) {
+      const h=harness(), remote=remoteClient(), other=remoteClient(), pk=Buffer.alloc(32,4).toString('base64url');
+      const accountId='33333333-3333-4333-8333-333333333333', signal=new AbortController();
+      Object.assign(h.account,{lease:()=>signal.signal});let paired=pk;
+      Object.assign(h.devs.devices,{pairedPublicKey:()=>paired});
+      const a=remoteView(REMOTE_A,remote);
+      Object.assign(remote.client,{device:async()=>{
+        if(transition==='switch'){await h.devs.show(remoteView(REMOTE_B,other));await h.devs.show(a);} else paired='changed';
+        return {kind:'deviceStatus',status:{device:{id:REMOTE_A,name:'test',publicKey:pk},remote:{port:3000,addresses:[]},clients:{total:1,active:1}}};
+      }});
+      await h.devs.show(a);
+      expect(await h.invoke(desktopChannels.recipeUse,{type:'begin',accountId,viewId:REMOTE_A,botId:'cli_fixture',groupId:'oc_fixture',
+        recipeId:'44444444-4444-4444-8444-444444444444',versionId:'55555555-5555-4555-8555-555555555555'})).toMatchObject({ok:false});
+      expect(h.account.request).not.toHaveBeenCalled();await h.bridge.dispose();
+    }
+  });
   it('forwards a schedule request with its bot and checks both arguments', async () => {
     const h = harness();
     const request = { action: 'list', chatId: 'oc_pay' };

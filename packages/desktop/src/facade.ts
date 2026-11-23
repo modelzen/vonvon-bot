@@ -1,6 +1,6 @@
 import type { VonvonClient } from '@vonvon/client/browser';
 import {
-  accountStatusSchema, type AccountStatus, adminReplySchema, backendInstallEventPayloadSchema, collaborationReplySchema,
+  desktopRecipeSourceRequestSchema,desktopRecipeSourceReplySchema,recipeUseReplySchema, recipeUseRequestSchema, communityRequestSchema, communityResponseSchemas, type CommunityShell, accountStatusSchema, type AccountStatus, adminReplySchema, backendInstallEventPayloadSchema, collaborationReplySchema,
   commandResultSchema, desktopSnapshotSchema, directoryReplySchema, memoryReplySchema, contextPreviewReplySchema,
   environmentReplySchema, libraryReplySchema, logEventPayloadSchema, machineReplySchema, desktopUpdateSchema, deviceReplySchema,
   scheduleReplySchema, settingsReplySchema, viewIdSchema, devicesStateSchema, deviceEventPayloadSchema, linkPreviewSchema,
@@ -378,6 +378,16 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
       return () => { quitListeners.delete(listener); };
     },
     devices,
+    recipeSource: {request:raw=>callShellFor(desktopChannels.recipeSource,value=>desktopRecipeSourceReplySchema.parse(value),desktopRecipeSourceRequestSchema.parse(raw))},
+    recipeUse: {
+      request: raw => callShellFor(desktopChannels.recipeUse, value=>recipeUseReplySchema.parse(value),recipeUseRequestSchema.parse(raw)),
+    },
+    community: {
+      request: ((raw: Parameters<CommunityShell['request']>[0]) => {
+        const request = communityRequestSchema.parse(raw);
+        return callShellFor(desktopChannels.community, value => communityResponseSchemas[request.type].parse(value), request);
+      }) as CommunityShell['request'],
+    },
     account: {
       status: () => callShellFor(desktopChannels.accountStatus, value => accountStatusSchema.parse(value)),
       login: () => callShellFor(desktopChannels.accountLogin, value => accountStatusSchema.parse(value)),

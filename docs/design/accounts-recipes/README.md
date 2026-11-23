@@ -2,6 +2,8 @@
 
 2026-11-13 · 设计基线 `6079afd180c8b56b6c8b20a21ffed1711f3c3b99`（vonvon-bot / dev）。这是产品与技术设计，不是已经上线的行为。历史需求见[交接分支](https://github.com/modelzen/vonvon-bot/tree/codex/accounts-recipes-handoff-20261113/docs/handoffs/accounts-recipes-2026-11-13)；冲突以本轮决定为准。
 
+已获准开发。实现中的交付、真实环境验证及剩余范围见[实现状态](implementation-status.md)；本目录中的设计验收清单不代表功能已经通过验收。
+
 | 读哪份 | 解决的问题 |
 | --- | --- |
 | [首版 PRD](prd.md) | 社区、发布、获取、Logo、设置和多设备各自负责什么；作者与领取者看到什么。 |

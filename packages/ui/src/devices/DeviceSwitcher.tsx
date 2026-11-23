@@ -75,9 +75,9 @@ export function DeviceSwitcherMenu({state, now, onPick, onAdd, onManage, onLeave
 
 /**
  * The desktop's top-left, in the brand's place, like a workspace switcher: which device the window shows and its state,
- * shown with this computer alone too, so 添加设备 can be found. Switching goes through DraftGuard.
+ * shown with this computer alone too, so 添加设备 can be found. Device pages guard a switch; account pages can retain their draft.
  */
-export function DeviceSwitcher({onManage, onAccount}: {onManage: () => void; onAccount?: () => void}) {
+export function DeviceSwitcher({onManage, onAccount, switchKeepsPage = false}: {onManage: () => void; onAccount?: () => void; switchKeepsPage?: boolean}) {
   const state = useDevicesState();
   const devices = useShellCapabilities()?.devices;
   const {isRemote} = useActiveDevice();
@@ -94,7 +94,10 @@ export function DeviceSwitcher({onManage, onAccount}: {onManage: () => void; onA
   if (!state || !devices) return null;
   const current = state.devices.find(row => row.current) ?? state.devices[0]!;
   const view = rowView(current, now);
-  const switchTo = (id: string) => navigate(() => void devices.switchTo(id).catch(reportSwitchFailure));
+  const switchTo = (id: string) => {
+    const changeTarget = () => {void devices.switchTo(id).catch(reportSwitchFailure);};
+    if (switchKeepsPage) changeTarget(); else navigate(changeTarget);
+  };
   const show = (focus?: Focus) => { setFocusOnOpen(focus); setOpen(true); };
   // The item goes away with the menu: the focus goes back to the trigger first, so the dialog an item opens returns it there.
   const choose = (action: () => void) => { trigger.current?.focus(); setOpen(false); action(); };
