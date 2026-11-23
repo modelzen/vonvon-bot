@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { agentIdSchema, groupIdSchema } from './domain.js';
 import { viewIdSchema } from './desktop-devices.js';
 import { recipePublicSchema, recipeConfigSchema } from './desktop-community.js';
-import { authoringChangeSchema, authoringOperationSchema } from './recipe-authoring.js';
+import { authoringChangeSchema, authoringOperationSchema, authoringHandoffSchema } from './recipe-authoring.js';
 import { recipeSetupSchema } from './recipe-setup.js';
 
 const uuid = z.string().uuid();
@@ -14,6 +14,11 @@ const handle = { handle: uuid };
 const operation = { ...handle, operationId: uuid };
 const link = { ...handle, challengeId: uuid };
 export const desktopAuthoringRequestSchema = z.discriminatedUnion('type', [
+  z.object({type:z.literal('openDraftSource'),accountId:uuid,viewId:viewIdSchema,draftId:uuid,baseRevision:revision}).strict(),
+  z.object({type:z.literal('beginHandoff'),...handle,retryId:uuid,groupId:groupIdSchema,sourceVersionId:uuid.optional()}).strict(),
+  z.object({type:z.literal('beginDraftHandoff'),...handle,retryId:uuid,draftId:uuid,baseRevision:revision}).strict(),
+  z.object({type:z.literal('handoffStatus'),...handle,retryId:uuid}).strict(),
+  z.object({type:z.literal('cancelHandoff'),...handle,retryId:uuid}).strict(),
   z.object({type:z.literal('richInspectCandidate'),...operation}).strict(),
   z.object({type:z.literal('richSourceOptions'),...handle,groupId:groupIdSchema}).strict(),
   z.object({type:z.literal('richInventory'),...handle,groupId:groupIdSchema,options:richInventoryOptionsSchema}).strict(),
@@ -81,6 +86,7 @@ export const sourceHistoryEntrySchema = z.discriminatedUnion('state', [
 ]);
 export type SourceHistoryEntry = z.infer<typeof sourceHistoryEntrySchema>;
 export const desktopAuthoringReplySchema = z.discriminatedUnion('kind', [
+  z.object({kind:z.literal('handoff'),handoff:authoringHandoffSchema}).strict(),
   z.object({kind:z.literal('richCandidate'),operation:desktopAuthoringOperationSchema,reviewDigest:digest,request:richFreezeInputSchema}).strict(),
   richSourceOptionsSchema,
   z.object({kind:z.literal('richInventory'),groupId:groupIdSchema,inventory:richLocalInventorySchema}).strict(),
@@ -90,6 +96,7 @@ export const desktopAuthoringReplySchema = z.discriminatedUnion('kind', [
       ...handle,
       target: authoringTargetSchema,
       linked: z.boolean(),
+      sourceGroup:z.object(group).strict().optional(),
       operations: z.array(desktopAuthoringOperationSchema).max(540),
     })
     .strict(),

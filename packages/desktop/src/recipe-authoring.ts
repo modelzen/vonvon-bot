@@ -1,5 +1,5 @@
 import {uploadRichMembers} from './recipe-authoring-upload.js';
-import {richAuthoringCloud,richTerminal} from './recipe-authoring-rich-cloud.js';
+import {richAuthoringCloud,richTerminal,UnavailableSourceItems} from './recipe-authoring-rich-cloud.js';
 import {safeDraftModelText, safeEditValue} from '../../../services/recipe-api/src/draft-model-text.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -11,6 +11,7 @@ import {
   recipeBinary32Schema,
   recipeAuthoringReplySchema,
   type AuthoringOperation,
+  type HandoffAttestation,
   type AuthoringReceipt,
   type AuthoringSaved,
   type AuthoringReconciliation,
@@ -27,6 +28,11 @@ import { authoringCloud, AuthoringError, invalidAuthoring, dispatchDigest } from
 import { AuthoringJournal } from './recipe-authoring-journal.js';
 
 type Open = Extract<DesktopAuthoringRequest, { type: 'open' }>;
+type DraftSourceOpen = Extract<DesktopAuthoringRequest, {type:'openDraftSource'}>;
+type DraftSource = Pick<DraftSourceOpen, 'draftId' | 'baseRevision'> & {
+  operationId:string; deviceId:string; deviceKey:string; groupId?:GroupId; identity?:string;
+};
+type HandoffScope = {retryId:string;groupId:GroupId;draftId?:string};
 type Handle = {
   id: string;
   open: Open;
@@ -51,6 +57,10 @@ type Handle = {
   groups: Map<GroupId, string>;
   operations: Map<string, AuthoringOperation>;
   groupIdentity?: string;
+  draftSource?: DraftSource;
+  handoff?: HandoffScope;
+  attesting?: Promise<void>;
+  attestationRetry?: {ref:string;after:number};
   source?: { groupId: GroupId; reviewToken: string };
   challenge?: { id: string; evidence?: string };
   reviewed: Map<string, string>;
@@ -58,7 +68,7 @@ type Handle = {
   busy: boolean;
   removeAbort?: () => void;
 };
-type Action = Exclude<DesktopAuthoringRequest, Open>;
+type Action = Exclude<DesktopAuthoringRequest, Open | DraftSourceOpen>;
 type SessionRequest = Exclude<RecipeAuthoringRequest, { type: 'open' }>;
 type ScopedRequest<T = SessionRequest> = T extends SessionRequest ? Omit<T, 'session' | 'botId'> : never;
 const changed = () => new AuthoringError('账号或设备连接已改变，请重新打开原来的配方操作。');
@@ -134,7 +144,8 @@ export class RecipeAuthoringController {
     const snapshot = await h.lease.client.snapshot();
     this.check(h);
     const bot = snapshot.agents.find((b) => b.id === h.open.botId);
-    if (!bot) throw new AuthoringError('所选 Bot 已移除，请重新选择。');
+    if (!bot) throw new AuthoringError('来源 Bot 已移除或无法连接。');
+    if (bot.running === false) throw new AuthoringError('来源 Bot 已停止，请先启动这个 Bot。');
     h.target.botName = bot.name || bot.id;
     h.groups = new Map(
       snapshot.memberships
@@ -191,17 +202,80 @@ export class RecipeAuthoringController {
     }
     this.check(h);
   }
-  private async open(input: Open): Promise<DesktopAuthoringReply> {
+  private async openDraftSource(input: DraftSourceOpen) {
+    const {accountId, viewId, draftId, baseRevision} = input;
+    const signal = this.account.lease?.(accountId);
+    const check = () => {
+      if (signal?.aborted || signal !== this.account.lease?.(accountId)) throw changed();
+    };
+    if (!signal) throw changed();
+    check();
+    const meta = await richAuthoringCloud(this.account,accountId,signal,check).draftMetadata(draftId,baseRevision)
+      .catch(() => {check();throw new AuthoringError('无法核验当前账号的这份草稿，请刷新草稿后重试。');});
+    check();
+    const saved = this.journal.history.locator(accountId,meta.sourceIntentId);
+    const prior = this.journal.preparation(accountId,meta.sourceIntentId);
+    const target = saved ?? prior;
+    if (!target) throw new AuthoringError('这台 App 没有这份草稿的来源记录，仍可编辑发布信息。');
+    if (prior && saved && (saved.deviceId !== prior.deviceId || saved.deviceKey !== prior.deviceKey ||
+      saved.botId !== prior.botId || saved.groupId && prior.groupId !== saved.groupId)) throw invalidAuthoring();
+    if ((viewId !== 'local' && viewId !== target.deviceId) || (prior && prior.viewId !== viewId))
+      throw new AuthoringError('请先在设备菜单切换到创建这份草稿的来源设备。');
+    return this.open({type:'open',accountId,viewId,botId:target.botId}, {
+      draftId, baseRevision, operationId:meta.sourceIntentId, deviceId:target.deviceId, deviceKey:target.deviceKey,
+      groupId:saved?.groupId ?? prior?.groupId, identity:saved?.identity,
+    });
+  }
+  private async verifyDraftSource(h: Handle, source: DraftSource) {
+    if (source.deviceId !== h.deviceId || source.deviceKey !== h.deviceKey)
+      throw new AuthoringError('当前连接与原来源设备不符，请在设备菜单检查原设备。');
+    let {groupId,identity} = source;
+    if (!groupId || !identity) {
+      const status = expectKind(await this.daemon(h,{type:'status'}),'status');
+      const op = status.operations.find(op => op.operationId === source.operationId && op.format === 'rich-v2' &&
+        op.purpose === 'prepareDraft' && op.receipt?.status === 'accepted' && op.receipt.draftId === source.draftId);
+      if (op?.groupId) {
+        if (groupId && op.groupId !== groupId) throw invalidAuthoring();
+        this.journal.observe(this.binding(h),op);
+        const stored = expectKind(await this.daemon(h,{type:'operationSourceIdentity',operationId:op.operationId}),'operationSourceIdentity');
+        if (stored.operationId !== op.operationId || stored.groupId !== op.groupId ||
+          identity && stored.identity && identity !== stored.identity) throw invalidAuthoring();
+        identity ??= stored.identity ?? undefined;
+        groupId = op.groupId;
+      }
+    }
+    if (!groupId || !identity) throw new AuthoringError('原群的可核验记录已不可用，仍可编辑发布信息。');
+    if (!h.groups.has(groupId) || await this.groupIdentity(h,groupId) !== identity)
+      throw new AuthoringError('原 Bot 已更换或原群绑定已变化，无法在原私聊继续。');
+    this.journal.history.remember(this.binding(h),source.operationId,identity,groupId);
+    h.draftSource = {...source,groupId,identity};
+  }
+  private async open(input: Open, source?: DraftSource): Promise<DesktopAuthoringReply> {
     const target = input.viewId + '/' + input.botId;
     if (this.opening.has(target)) throw new AuthoringError('正在连接这个 Bot，请稍后继续。');
     this.opening.add(target);
     try {
-      return await this.openTarget(input);
+      this.invalidateStale();
+      for (const prior of this.handles.values()) {
+        if (prior.attached || !prior.handoff || prior.open.accountId !== input.accountId || prior.open.viewId !== input.viewId ||
+          prior.open.botId !== input.botId || prior.open.groupId !== input.groupId || prior.draftSource?.draftId !== source?.draftId ||
+          prior.draftSource?.baseRevision !== source?.baseRevision) continue;
+        await prior.tail;
+        this.check(prior);
+        await this.names(prior);
+        if (source) await this.verifyDraftSource(prior,source);
+        await this.present(prior,true);
+        this.checkIdle(prior);
+        const session = await this.refresh(prior);
+        prior.attached = true;
+        return session;
+      }
+      return await this.openTarget(input,source);
     } finally {
       this.opening.delete(target);
     }
   }
-  private async openTarget(input: Open): Promise<DesktopAuthoringReply> {
+  private async openTarget(input: Open, source?: DraftSource): Promise<DesktopAuthoringReply> {
     const signal = this.account.lease?.(input.accountId),
       actor = this.account.status();
     if (!signal || actor.kind !== 'signedIn' || actor.accountId !== input.accountId) throw changed();
@@ -242,6 +316,8 @@ export class RecipeAuthoringController {
     try {
       await this.present(h);
       await this.identity(h);
+      if (source && (h.deviceId !== source.deviceId || h.deviceKey !== source.deviceKey))
+        throw new AuthoringError('请在设备菜单连接原来源设备后重试。');
       await this.names(h);
       this.check(h);
       if (!h.lease.client.recipeAuthoring) throw new AuthoringError('所选设备尚不支持聊天草稿。');
@@ -263,6 +339,7 @@ export class RecipeAuthoringController {
         throw changed();
       }
       this.check(h);
+      if (source) await this.verifyDraftSource(h,source);
       if (input.groupId) h.groupIdentity = await this.groupIdentity(h, input.groupId);
       await this.workflow(h);
       const result = await this.refresh(h);
@@ -290,6 +367,9 @@ export class RecipeAuthoringController {
     }
     this.checkIdle(h);
     h.pausedContexts = new Set(info.pausedContexts);
+    if (info.handoff && info.handoff.retryId === h.handoff?.retryId && !h.attesting) {
+      h.attesting = this.attestHandoff(h,info.handoff).catch(() => this.invalidateStale()).finally(() => {delete h.attesting;});
+    }
     const request = info.field;
     if (!request) return;
     const op = h.operations.get(request.operationId);
@@ -315,6 +395,33 @@ export class RecipeAuthoringController {
     this.checkIdle(h);
     expectKind(await this.daemon(h,{type:'answerField',request,value}),'fieldAnswered');
   }
+  private async attestHandoff(h:Handle,request:HandoffAttestation) {
+    if (h.attestationRetry?.ref === request.ref && h.attestationRetry.after > Date.now()) return;
+    if (new Set(request.versions).size !== request.versions.length) throw invalidAuthoring();
+    await this.checkGroup(h);
+    const cloud = this.richCloud(h);
+    try {
+      const attestations:Awaited<ReturnType<typeof cloud.sourceItems>>[] = [];
+      let unavailable = false;
+      try {
+        for (const version of request.versions) attestations.push(await cloud.sourceItems(version));
+      } catch(error) {
+        if (!(error instanceof UnavailableSourceItems)) throw error;
+        unavailable = true;
+      }
+      const pending = expectKind(await this.daemon(h,{type:'workflow'}),'workflow').handoff;
+      if (!pending || canonical(pending) !== canonical(request) || h.handoff?.retryId !== request.retryId) return;
+      this.checkIdle(h);
+      await this.checkGroup(h);
+      const reply = expectKind(await this.daemon(h,{type:'answerHandoff',request,
+        attestations:unavailable?[]:attestations,...(unavailable && {unavailable:true as const})}),'handoff');
+      this.verifyHandoff(h.handoff,reply);
+      delete h.attestationRetry;
+    } catch {
+      this.check(h);
+      h.attestationRetry = {ref:request.ref,after:Date.now()+12_000};
+    }
+  }
   private async tick(h: Handle) {
     if (h.workflow) return;
     try {
@@ -339,19 +446,27 @@ export class RecipeAuthoringController {
     return reply.identity;
   }
   private async checkGroup(h: Handle) {
-    if (!h.open.groupId) return;
+    const groupId = h.draftSource?.groupId ?? h.open.groupId;
+    if (!groupId) return;
     try {
-      if (h.groupIdentity !== await this.groupIdentity(h,h.open.groupId)) throw recheck();
+      if ((h.draftSource?.identity ?? h.groupIdentity) !== await this.groupIdentity(h,groupId)) throw recheck();
     } catch (error) { this.revoke(h); throw error; }
   }
   private async rememberSource(h: Handle, op: AuthoringOperation) {
-    if (op.purpose !== 'prepareDraft' || this.journal.history.source(this.binding(h),op.operationId)) return;
+    if (op.purpose !== 'prepareDraft' || !op.groupId) return;
+    const binding = this.binding(h);
+    const existing = this.journal.history.source(binding,op.operationId);
+    if (existing) {
+      this.journal.history.remember(binding,op.operationId,existing,op.groupId);
+      return;
+    }
     const reply = expectKind(await this.daemon(h, {type:'operationSourceIdentity', operationId:op.operationId}), 'operationSourceIdentity');
     if (reply.operationId !== op.operationId || reply.groupId !== op.groupId) throw invalidAuthoring();
-    if (reply.identity) this.journal.history.remember(this.binding(h), op.operationId, reply.identity);
+    if (reply.identity) this.journal.history.remember(binding, op.operationId, reply.identity,op.groupId);
     else if (!terminal(op)) throw recheck();
   }
   private visible(h: Handle, op: DesktopAuthoringOperation) {
+    if (h.draftSource) return op.purpose === 'editDraft' && op.draftId === h.draftSource.draftId;
     return !h.open.groupId || op.groupId === h.open.groupId &&
       this.journal.history.source(this.binding(h), op.operationId) === h.groupIdentity;
   }
@@ -449,6 +564,7 @@ export class RecipeAuthoringController {
       handle: h.id,
       target: h.target,
       linked: status.linked,
+      ...(h.draftSource?.groupId && {sourceGroup:{groupId:h.draftSource.groupId,groupName:h.groups.get(h.draftSource.groupId)!}}),
       operations: [...h.operations.values()].map(op =>
         this.display(h, op, terminal(op) ? undefined : h.retry.get(op.operationId)?.message),
       ).concat(revoked).filter(op => this.visible(h,op)),
@@ -639,14 +755,64 @@ export class RecipeAuthoringController {
     this.check(h);
     return this.confirmedOperation(h, await this.operation(h, { type: 'advance', operationId, authorization }));
   }
+  private async beginHandoff(h:Handle,scope:HandoffScope,request:Extract<ScopedRequest,{type:'beginHandoff'|'beginDraftHandoff'}>) {
+    h.handoff ??= scope;
+    const result = this.verifyHandoff(scope,expectKind(await this.daemon(h,request),'handoff'));
+    h.handoff = scope;
+    return result;
+  }
+  private verifyHandoff(scope:HandoffScope,reply:Extract<RecipeAuthoringReply,{kind:'handoff'}>) {
+    const handoff = reply.handoff;
+    if (handoff.retryId !== scope.retryId || handoff.groupId !== scope.groupId || handoff.draftId !== scope.draftId ||
+      (handoff.state === 'prepared') !== Boolean(handoff.operationId)) throw invalidAuthoring();
+    return reply;
+  }
   private async action(h: Handle, r: Exclude<Action, { type: 'close' | 'detach' }>): Promise<DesktopAuthoringReply> {
     await this.present(h, r.type !== 'status');
+    if (h.draftSource && !['beginLink','inspectLink','confirmLink','beginDraftHandoff','handoffStatus','cancelHandoff',
+      'status','cancel','resume','resend'].includes(r.type)) throw recheck();
     if (h.open.groupId && r.type !== 'status' && r.type !== 'sourceHistory') {
       if (h.groupIdentity !== await this.groupIdentity(h,h.open.groupId) || ('groupId' in r && r.groupId !== h.open.groupId)) throw recheck();
     }
     switch (r.type) {
       case 'status':
         return this.refresh(h);
+      case 'beginHandoff': {
+        if (h.draftSource || h.open.groupId !== r.groupId) throw recheck();
+        await this.names(h);
+        const groupName = h.groups.get(r.groupId);
+        if (!groupName) throw recheck();
+        if (r.sourceVersionId && (await this.richCloud(h).sourceItems(r.sourceVersionId)).authorId !== h.open.accountId) throw recheck();
+        await this.checkGroup(h);
+        const scope = {retryId:r.retryId,groupId:r.groupId};
+        return this.beginHandoff(h,scope,{type:r.type,...scope,groupName,sourceVersionId:r.sourceVersionId});
+      }
+      case 'beginDraftHandoff': {
+        const source = h.draftSource;
+        if (!source?.groupId || !source.identity || source.draftId !== r.draftId || source.baseRevision !== r.baseRevision) throw recheck();
+        await this.names(h);
+        const groupName = h.groups.get(source.groupId);
+        if (!groupName) throw recheck();
+        await this.checkGroup(h);
+        const cloud = this.richCloud(h);
+        const {canonical,meta} = await cloud.draft(r.draftId,r.baseRevision);
+        if (meta.sourceIntentId !== source.operationId) throw recheck();
+        const sourceBytes = await cloud.readMember(r.draftId,meta.sourceManifest);
+        await this.checkGroup(h);
+        const scope = {retryId:r.retryId,groupId:source.groupId,draftId:r.draftId};
+        return this.beginHandoff(h,scope,{type:r.type,...scope,groupName,identity:source.identity,baseRevision:r.baseRevision,canonical,
+          source:{sourceIntentId:source.operationId,canonical:sourceBytes.toString('base64url')}});
+      }
+      case 'handoffStatus':
+      case 'cancelHandoff': {
+        const groupId = h.draftSource?.groupId ?? h.open.groupId;
+        if (!groupId) throw recheck();
+        await this.checkGroup(h);
+        const scope = {retryId:r.retryId,groupId,draftId:h.draftSource?.draftId};
+        if (r.type === 'cancelHandoff' && h.handoff?.retryId !== r.retryId)
+          this.verifyHandoff(scope,expectKind(await this.daemon(h,{type:'handoffStatus',retryId:r.retryId}),'handoff'));
+        return this.verifyHandoff(scope,expectKind(await this.daemon(h,{type:r.type,retryId:r.retryId}),'handoff'));
+      }
       case 'sourceHistory': {
         if (r.groupId !== h.open.groupId || !h.groupIdentity) throw recheck();
         const current = await this.groupIdentity(h,r.groupId);
@@ -771,12 +937,13 @@ export class RecipeAuthoringController {
   }
   async request(raw: DesktopAuthoringRequest) {
     const r = desktopAuthoringRequestSchema.parse(raw);
+    if (r.type === 'openDraftSource') return desktopAuthoringReplySchema.parse(await this.openDraftSource(r));
     if (r.type === 'open') return desktopAuthoringReplySchema.parse(await this.open(r));
     const h = this.handles.get(r.handle);
     if (!h) throw changed();
     if (r.type === 'detach') {
       h.attached = false;
-      if (!h.queued && !h.operations.size) this.revoke(h);
+      if (!h.queued && !h.operations.size && !h.handoff) this.revoke(h);
       return {kind:'closed' as const};
     }
     if (!h.attached) throw changed();

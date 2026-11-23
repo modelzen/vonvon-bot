@@ -43,6 +43,7 @@ export * from './recipe-authoring.js';
 export * from './desktop-recipe-authoring.js';
 export * from './recipe-rich.js';
 export * from './recipe-rich-codec.js';
+export * from './recipe-rich-metadata.js';
 export {canonicalCaselessSegment, isPortableDocumentName} from './recipe-rich-filename.js';
 export * from './schedule-grammar.js';
 export * from './recipe-rich-install.js';

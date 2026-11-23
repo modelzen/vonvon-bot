@@ -1,6 +1,6 @@
 import {BackButton} from '../BackButton';
 import {GlowButton} from '../GlowButton';
-import {RichRecipeEditor} from './RichRecipeEditor';
+import {RichRecipeEditor, type RichDraftContinuationProps} from './RichRecipeEditor';
 import {useEffect, useReducer, useRef, useState} from 'react';
 import {communityFailureMessages, recipePublicSchema, recipeConfigSchema} from '@vonvon/protocol';
 import type {CommunityRequest, CommunityShell, RecipeConfig, RecipeDetail, RecipeDraft, RecipeRoleDraft, RecipePublic} from '@vonvon/protocol';
@@ -8,7 +8,7 @@ import {Button, InlineNotice} from '../reference/components/ui';
 import {useShellCapabilities} from '../client-context';
 import {Dialog} from '../reference/components/ui/Dialog';
 import {useDraft, useDraftGuard} from '../settings/DraftGuard';
-import {RecipeAuthoringPage} from './authoring/RecipeAuthoring';
+import {LegacyDraftChat} from './authoring/LegacyDraftChat';
 import {RecipeConfiguration, RecipeDetails, RecipeOverview} from './RecipeContent';
 
 const blank: {public: RecipePublic; config: RecipeConfig} = {public: {name: '', summary: '', overview: '', version: '1.0', access: 'direct'}, config: {role: ''}};
@@ -76,7 +76,7 @@ function editorDraft(state: EditorDraft, action: DraftAction): EditorDraft {
     }
   }
 }
-export function RecipeEditor(props: Parameters<typeof RoleRecipeEditor>[0]) {
+export function RecipeEditor(props: Parameters<typeof RoleRecipeEditor>[0] & RichDraftContinuationProps) {
   const [read, setRead] = useState<RecipeDraft>();
   const [error, setError] = useState<string>();
   const [retry,setRetry]=useState(0);
@@ -175,7 +175,7 @@ function RoleRecipeEditor({shell, accountId, draftId, source, onBack, onPublishe
       当前显示修订 {model.revision}。{read.minimumRevision > model.revision && <>云端已保存修订 {read.minimumRevision}。</>}{dirty && '你的未保存输入仍保留。'}{read.status === 'failed' && <p>{read.error}</p>}
     </InlineNotice>}
     {remoteUpdate && <InlineNotice title="飞书已保存新修订" actions={<Button onClick={() => dispatch({type: 'latest', draft: remoteUpdate})}>核对新修订</Button>}>云端已有修订 {remoteUpdate.revision}。当前显示修订 {model.revision}。{dirty ? '你的未保存输入仍保留，请核对后再保存。' : '本地内容仍保留，请核对云端内容后继续。'}</InlineNotice>}
-    {chatOpen && <RecipeAuthoringPage draft={{draftId:model.draftId,revision:model.revision}} onSaved={(id,revision) => void readDraft(id,revision,'chat')}/>}
+    {chatOpen && <LegacyDraftChat draft={{draftId:model.draftId,revision:model.revision}} onSaved={(id,revision) => void readDraft(id,revision,'chat')}/>}
   </section>;
   if (loading) return <p role="status">正在读取私人草稿…</p>;
   if (draftId && !model) return <><InlineNotice title="草稿读取未完成" tone="warning">{error}</InlineNotice><BackButton onClick={onBack} label="返回创作中心"/></>;

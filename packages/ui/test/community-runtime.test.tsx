@@ -203,7 +203,7 @@ it('preserves valid astral field and search limits all the way through the stric
   await draw();
   const query = await fill('搜索配方', '🦉'.repeat(120));
   expect(query.maxLength).toBe(-1);
-  await click('搜索');
+  await act(async () => {await new Promise(resolve => setTimeout(resolve, 300));});
   expect(calls.filter(request => request.type === 'catalog').at(-1)).toMatchObject({query: '🦉'.repeat(120)});
   await click('打开私人草稿');
   const name = await fill('配方名称', '🦉'.repeat(60));

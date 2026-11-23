@@ -1,5 +1,5 @@
 import {useEffect, useState} from 'react';
-import type {GroupId, RecipeAuthoringShell, SourceHistoryEntry} from '@vonvon/protocol';
+import type {AgentId,ViewId,GroupId, RecipeAuthoringShell, SourceHistoryEntry} from '@vonvon/protocol';
 import {Button, InlineNotice} from '../../reference/components/ui';
 import {useCommunity} from '../community-context';
 
@@ -48,4 +48,20 @@ export function GroupSourceHistory({shell, handle, groupId}: {shell: RecipeAutho
     </div>)}</div>}
     {page?.nextCursor && <Button disabled={busy} onClick={() => setCursor(page.nextCursor!)}>更多记录</Button>}
   </section>;
+}
+
+export function GroupShareHistory({shell,accountId,viewId,botId,groupId}:{shell:RecipeAuthoringShell;accountId:string;viewId:ViewId;botId:AgentId;groupId:GroupId}){
+  const [handle,setHandle]=useState<string>(),[error,setError]=useState<string>();
+  const [retry,setRetry]=useState(0);
+  useEffect(()=>{
+    let live=true,current:string|undefined;
+    setError(undefined);setHandle(undefined);
+    void shell.request({type:'open',accountId,viewId,botId,groupId}).then(reply=>{
+      if(reply.kind!=='session')throw new Error('未能核对群来源。');
+      current=reply.handle;
+      if(live)setHandle(current);else void shell.request({type:'detach',handle:current}).catch(()=>{});
+    }).catch(reason=>{if(live)setError(reason instanceof Error?reason.message:'暂时无法打开分享历史。');});
+    return ()=>{live=false;if(current)void shell.request({type:'detach',handle:current}).catch(()=>{});};
+  },[shell,accountId,viewId,botId,groupId,retry]);
+  return handle?<GroupSourceHistory shell={shell} handle={handle} groupId={groupId}/>:error?<InlineNotice title="分享历史暂不可用" actions={<Button onClick={()=>setRetry(v=>v+1)}>重新读取</Button>}>{error}</InlineNotice>:<p role="status">正在核对本群来源…</p>;
 }

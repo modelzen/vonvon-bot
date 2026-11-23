@@ -53,6 +53,10 @@ export class AuthoringJournal {
     }
     return this.rows;
   }
+  preparation(accountId: string, operationId: string) {
+    return this.all().find(row => row.accountId === accountId && row.operationId === operationId &&
+      row.format === 'rich-v2' && row.purpose === 'prepareDraft' && row.groupId);
+  }
   checkReconciliation(binding: Binding, recovery: AuthoringReconciliation) {
     if (recovery.purpose === 'prepareDraft' ? recovery.draftId || recovery.baseRevision : !recovery.draftId || !recovery.baseRevision)
       throw invalidAuthoring();

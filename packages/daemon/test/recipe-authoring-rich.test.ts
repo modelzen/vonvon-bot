@@ -80,7 +80,7 @@ it('edits an overview with setup instructions without manufacturing structured s
   const c=fixture(),selected=c.public.overview.itemId,draftId=randomUUID();
   const canonical=Buffer.from(canonicalizeRichRecipeContent(c).canonicalUTF8).toString('base64url');
   const value='使用前请让 Bot 运行 setup 技能。';
-  const parser={proposeRich:vi.fn().mockResolvedValue({kind:'proposal',commands:[{action:'edit',target:'T1',valueJson:JSON.stringify(value)}]})};
+  const parser={proposeRich:vi.fn().mockResolvedValue({kind:'proposal',commands:[{action:'setPublicText',target:'T1',text:value}]})};
   const operation={view:{draftId,baseRevision:3},rich:{base:{canonical,selected:[selected,c.setup[0]!.itemId]}}};
   const result=await chatRichProposal(operation as Parameters<typeof chatRichProposal>[0],'把概览改为：'+value,new AbortController().signal,parser);
   expect(result.kind==='proposal'&&'payload' in result.request&&result.request.payload.changes).toEqual([{op:'setPublicText',field:'overview',itemId:selected,value}]);
@@ -102,4 +102,19 @@ it('rejects every creation path for structured steps while preserving their hist
   const request=selectRichSnapshot(source(content));
   const review=richCardReview({view:{operationId:sourceIntentId},rich:{request,newFields:[content.public.name.itemId]}} as Parameters<typeof richCardReview>[0]);
   expect(JSON.parse(review!.fields.find(field=>field.label==='旧补充说明')!.valueJson)).toEqual(value);
+});
+
+it('applies explicit public commands to a reviewed creation snapshot without consulting a model',async()=>{
+  const {chatRichProposal}=await import('../src/recipe/authoring-rich-flow');
+  const content=fixture(),request=selectRichSnapshot(source(content));
+  const parser={proposeRich:vi.fn().mockRejectedValue(new Error('must never call the Provider'))};
+  const op={view:{operationId:randomUUID()},rich:{request,newFields:[]}} as unknown as Parameters<typeof chatRichProposal>[0];
+  for(const field of ['name','summary','overview','version'] as const){
+    const result=await chatRichProposal(op,'/recipe '+field+' 新值',new AbortController().signal,parser);
+    expect(result.kind).toBe('proposal');
+    if(result.kind!=='proposal'||!('content'in result.request))throw new Error('missing creation candidate');
+    expect(result.request.content.public[field]).toEqual({...content.public[field],value:'新值'});
+    expect(result.newFields).toContain(content.public[field].itemId);
+  }
+  expect(parser.proposeRich).not.toHaveBeenCalled();
 });
