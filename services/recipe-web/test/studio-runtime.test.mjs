@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {JSDOM} from 'jsdom';
+import {returnPath} from '../auth.mjs';
 
 const html = await readFile(new URL('../public/studio.html', import.meta.url), 'utf8');
 const studio = await readFile(new URL('../public/studio.mjs', import.meta.url), 'utf8');
@@ -45,6 +46,34 @@ function assertGuide(document) {
   assert.equal(document.querySelector('a[href="/"]')?.textContent.includes('Vonvon Bot'), true);
   assert.equal(document.querySelector('#library-link')?.getAttribute('href'), '/library');
 }
+
+for (const route of ['/studio', '/studio?draftId=old-draft', '/studio.html', '/studio.html?draftId=old-draft', '/studio?login=1', '/studio.html?login=1', '/studio.html?login=1&next=studio']) {
+  test(`${route} returns account login to the canonical App guide`, async t => {
+    const h = await runtime(t, {route});
+    const assertReturn = () => {
+      const form = h.document.querySelector('#modal form');
+      assert.equal(form.getAttribute('action'), '/auth/start');
+      const next = form.querySelector('[name="returnTo"]').value;
+      assert.equal(returnPath(next), '/studio', 'the real auth return path must keep visitors on the App guide');
+      assert.equal(form.querySelector('[name="continuation"]'), null);
+    };
+    if (route.includes('login=1')) assertReturn();
+    h.document.querySelector('#account').click();
+    assertReturn();
+    assertGuide(h.document);
+    assert.deepEqual(h.calls.map(call => call.path), ['/auth/session']);
+  });
+}
+
+test('the static App guide offers the official desktop download page as a secondary text link', t => {
+  const dom = new JSDOM(html);
+  t.after(() => dom.window.close());
+  const download = dom.window.document.querySelector('main a[href="https://vonvon.cc/get/"]');
+  assert.ok(download, 'visitors without the App need a real official download link');
+  assert.match(download.textContent, /官网.*下载/);
+  assert.equal(download.classList.contains('button'), false);
+  assertGuide(dom.window.document);
+});
 
 for (const signedIn of [false, true]) {
   test(`studio is an App guide for ${signedIn ? 'signed-in authors' : 'anonymous visitors'} and installs no creator actions`, async t => {

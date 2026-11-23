@@ -70,7 +70,7 @@ function clearContinuation(nonce) {
     if (!nonce || storedContinuation()?.nonce === nonce) window.sessionStorage.removeItem(continuationStorageKey);
   } catch { /* Login still works when tab storage is unavailable. */ }
 }
-function openLogin(next = location.pathname, continuation) {
+function openLogin(next = appGuide ? '/studio' : location.pathname, continuation) {
   clearContinuation();
   let continuationNonce;
   if (continuation === 'acquire') {
@@ -396,7 +396,7 @@ try {
   else if (location.pathname === '/library') await library();
   else if (!appGuide) await detail();
   if (params.has('auth')) message('登录未完成，请重试。');
-  if (params.get('login') === '1') openLogin(params.get('next') === 'studio' ? '/studio' : '/');
+  if (params.get('login') === '1') openLogin(appGuide || params.get('next') === 'studio' ? '/studio' : '/');
   if (params.has('login') || params.has('auth')) {
     const url = new URL(location.href); for (const k of ['login','auth','next']) url.searchParams.delete(k);
     history.replaceState(history.state, '', url);

@@ -168,7 +168,7 @@ test('real PostgreSQL API, member broker and shipped Web modules preserve rich s
   console.log('PASS real HTTP: exact-version rich direct full tabs; coded intro only; normalized Logo; code retry and opaque-key recovery; cross-account/CSRF; XSS text; legacy detail.');
 });
 
-test('the App guide preserves a legacy PostgreSQL draft while owner API editing and publication remain compatible',async t=>{
+test('the App guide preserves a legacy PostgreSQL draft while owner Web BFF editing and publication remain compatible',async t=>{
   const fixture=await richFixture(t);
   const original={public:{name:'旧稿兼容验证',summary:'私人草稿',overview:'公开介绍保持原样',version:'1.0',access:'coded'},config:{role:'PRIVATE_ROLE_KEEP',setup:{steps:[{kind:'tool',title:'',instructions:'',required:true}]}}};
   const draft=await fixture.request('/v1/drafts',original,{key:crypto.randomUUID()});
@@ -181,10 +181,13 @@ test('the App guide preserves a legacy PostgreSQL draft while owner API editing 
   const before=await fixture.request('/v1/drafts/'+draft.draftId);
   assert.deepEqual(before.config.setup,original.config.setup);
   assert.equal(before.revision,1);
-  const saved=await fixture.request('/v1/drafts/'+draft.draftId,{public:original.public,config:{role:original.config.role}},{method:'PATCH',key:crypto.randomUUID(),revision:1});
+  const writeHeaders={...author,origin:fixture.publicOrigin,'content-type':'application/json'};
+  const saveResponse=await fetch(fixture.host+'/api/v1/drafts/'+draft.draftId,{method:'PATCH',headers:{...writeHeaders,'idempotency-key':crypto.randomUUID(),'if-match':'"1"'},body:JSON.stringify({public:original.public,config:{role:original.config.role}})});
+  const saved=await saveResponse.json();assert.equal(saveResponse.status,200,JSON.stringify(saved.error));
   assert.equal(saved.draftId,draft.draftId);assert.equal(saved.revision,2);
   assert.deepEqual(saved.config,{role:'PRIVATE_ROLE_KEEP'});assert.equal(saved.public.overview,original.public.overview);
-  const version=await fixture.request('/v1/drafts/'+draft.draftId+'/publish',{},{key:crypto.randomUUID(),revision:2});
+  const publishResponse=await fetch(fixture.host+'/api/v1/drafts/'+draft.draftId+'/publish',{method:'POST',headers:{...writeHeaders,'idempotency-key':crypto.randomUUID(),'if-match':'"2"'},body:'{}'});
+  const version=await publishResponse.json();assert.equal(publishResponse.status,200,JSON.stringify(version.error));
   const published=await fixture.request('/v1'+detailPath(version));
   assert.deepEqual(published.config,{role:'PRIVATE_ROLE_KEEP'});assert.equal(published.public.overview,original.public.overview);
 });
