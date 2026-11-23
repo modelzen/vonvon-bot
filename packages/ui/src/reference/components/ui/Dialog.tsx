@@ -19,6 +19,24 @@ const focusableSelector = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
+const dialogStack: {panel: HTMLElement; backdrop: HTMLElement; root: HTMLElement | null}[] = [];
+const backgroundAttributes = new Map<HTMLElement, {inert: string | null; hidden: string | null}>();
+export function hasOpenDialog() {return dialogStack.length > 0;}
+function updateDialogStack() {
+  for (const entry of dialogStack) {
+    const top = entry === dialogStack.at(-1);
+    entry.backdrop.toggleAttribute('inert', !top);
+    if (top) entry.backdrop.removeAttribute('aria-hidden');
+    else entry.backdrop.setAttribute('aria-hidden', 'true');
+  }
+  for (const [root, previous] of backgroundAttributes) {
+    if (dialogStack.some(entry => entry.root === root)) continue;
+    if (previous.inert === null) root.removeAttribute('inert'); else root.setAttribute('inert', previous.inert);
+    if (previous.hidden === null) root.removeAttribute('aria-hidden'); else root.setAttribute('aria-hidden', previous.hidden);
+    backgroundAttributes.delete(root);
+  }
+}
+
 export function Dialog(props: {
   children: ReactNode;
   description?: ReactNode;
@@ -41,12 +59,19 @@ export function Dialog(props: {
 
   useEffect(() => {
     if (!props.open || typeof document === "undefined") return;
+    const panel = panelRef.current;
+    if (!panel) return;
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
     const root = document.querySelector<HTMLElement>("#root");
+    if (root && !backgroundAttributes.has(root)) backgroundAttributes.set(root, {inert: root.getAttribute('inert'), hidden: root.getAttribute('aria-hidden')});
     root?.setAttribute("inert", "");
     root?.setAttribute("aria-hidden", "true");
+    const entry = {panel, backdrop: panel.parentElement!, root};
+    dialogStack.push(entry);
+    updateDialogStack();
 
     const focusTimer = window.setTimeout(() => {
+      if (dialogStack.at(-1) !== entry) return;
       if (panelRef.current?.contains(document.activeElement)) return;
       const target = props.initialFocusRef?.current
         ?? panelRef.current?.querySelector<HTMLElement>(focusableSelector)
@@ -55,6 +80,7 @@ export function Dialog(props: {
     }, 0);
 
     function onKeyDown(event: KeyboardEvent) {
+      if (dialogStack.at(-1) !== entry || event.defaultPrevented) return;
       const closeState = closeStateRef.current;
       if (event.key === "Escape" && !event.isComposing && closeState.dismissible && closeState.onClose) {
         event.preventDefault();
@@ -71,7 +97,10 @@ export function Dialog(props: {
       }
       const first = focusable[0]!;
       const last = focusable[focusable.length - 1]!;
-      if (event.shiftKey && document.activeElement === first) {
+      if (!entry.panel.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
         last.focus();
       } else if (!event.shiftKey && document.activeElement === last) {
@@ -84,9 +113,13 @@ export function Dialog(props: {
     return () => {
       window.clearTimeout(focusTimer);
       document.removeEventListener("keydown", onKeyDown);
-      root?.removeAttribute("inert");
-      root?.removeAttribute("aria-hidden");
-      previousFocus?.focus();
+      const wasTop = dialogStack.at(-1) === entry;
+      dialogStack.splice(dialogStack.indexOf(entry), 1);
+      updateDialogStack();
+      if (!wasTop) return;
+      const next = dialogStack.at(-1);
+      if (previousFocus?.isConnected && (!next || next.panel.contains(previousFocus))) previousFocus.focus();
+      else (next?.panel.querySelector<HTMLElement>(focusableSelector) ?? next?.panel)?.focus();
     };
   }, [props.initialFocusRef, props.open]);
 
@@ -110,7 +143,7 @@ export function Dialog(props: {
           exit={{ opacity: 0, pointerEvents: "none" }}
           initial={{ opacity: 0 }}
           onMouseDown={(event) => {
-            if (event.currentTarget === event.target && dismissible) props.onClose?.();
+            if (event.currentTarget === event.target && dismissible && dialogStack.at(-1)?.panel === panelRef.current) props.onClose?.();
           }}
           transition={{ duration: props.variant === "search" ? 0 : reduceMotion ? 0.1 : 0.18 }}
         >

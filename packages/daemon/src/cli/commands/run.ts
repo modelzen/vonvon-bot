@@ -164,9 +164,10 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
           if (op.kind === 'status') {
             return { connection: handle.channel.getConnectionStatus?.()?.state ?? 'unknown' };
           }
+          if (op.kind === 'recipeAuthoring' || op.kind === 'recipeAuthoringDisconnect') return handle.authoring(op);
           if (op.kind === 'firstHello') return handle.firstHello();
           if (op.kind === 'collaboration') return handle.collaboration(op.request);
-          if (op.kind === 'joinedGroups' || op.kind === 'groupMembers' || op.kind === 'groupMembership' || op.kind === 'bindGroup') return handle.adminGroups(op);
+          if (op.kind === 'joinedGroups' || op.kind === 'groupMembers' || op.kind === 'groupMembership' || op.kind === 'groupIdentity' || op.kind === 'bindGroup') return handle.adminGroups(op);
           if (op.kind === 'settingsRead') return handle.settings.read(op.scope);
           if (op.kind === 'settingsModels') return handle.settings.models(op.query);
           if (op.kind === 'libraryWorkspaceChanged' || op.kind === 'libraryWorkspaceCheck') return handle.libraryExecute(op);
@@ -193,6 +194,10 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
           executeCollaboration: async (botId, request) => {
             if (botId !== ownAppId) throw new AdminWriteError('这个 Bot 不归本进程管');
             return handle.collaboration(request);
+          },
+          recipeAuthoring: async (botId, op) => {
+            if (botId !== ownAppId) throw new AdminWriteError('这个 Bot 不归本进程管');
+            return handle.authoring(op);
           },
           executeGroups: async (botId, op) => {
             if (botId !== ownAppId) throw new AdminWriteError('这个 Bot 不归本进程管');

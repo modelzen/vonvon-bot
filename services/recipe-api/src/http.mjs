@@ -33,6 +33,7 @@ const endpoints = [
   ['POST', '/operations/:o/redeem', 'redeemOperation', 'possession'],
   ['POST', '/operations/:o/complete', 'completeOperation', 'possession'],
   ['POST', '/authoring/:o/register', 'registerAuthoring'],
+  ['GET', '/authoring/:o/recovery', 'recoverAuthoring'],
   ['GET', '/authoring/:o', 'getAuthoring'],
   ['POST', '/authoring/:o/cancel', 'cancelAuthoring'],
   ['POST', '/authoring/:o/authorize', 'authorizeAuthoring'],
@@ -60,7 +61,7 @@ async function inputFor(req, url, {action, ids}) {
     return [action, ids];
   }
   if (action.endsWith('Operation')) return [action, operationInput(action, ids[0], await bodyJson(req, 2048))];
-  const key = requestKey(req);
+  const key = requestKey(req, action === 'direct' || action === 'redeem');
   const body = await bodyJson(req);
   if (action === 'patchDraft') {
     checkDraftPatch(body);

@@ -1,3 +1,4 @@
+import { AuthoringService, type AuthoringIpc } from '../recipe/authoring-service';
 import { createBridgeChannel } from './bridge-channel';
 import { APP_ROLE_CACHE_MS, APP_ROLE_RETRY_MS, createAppRoleRefresher, getAppRoleSnapshot } from '../config/app-roles';
 import type { CollaborationRequest } from '../admin/collaboration';
@@ -8,7 +9,7 @@ import type { Project } from '../project/registry';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import type { AdminWriteOp } from '../admin/ops';
 import type { AdminLibraryOp } from '../admin/library';
-import type { ScheduleReply, ScheduleRequest } from '@vonvon/protocol';
+import type { GroupIdentity, ScheduleReply, ScheduleRequest } from '@vonvon/protocol';
 import type { ScheduleActor } from '../admin/schedule-commands';
 import { isAdmin, type AppConfig } from '../config/schema';
 import { createCommandTools } from '../agent/entry/command-tools';
@@ -52,10 +53,11 @@ export interface BridgeOptions {
 }
 
 export interface BridgeHandle {
+  authoring: (op: AuthoringIpc) => Promise<unknown>;
   entries: AgentEntries;
   channel: LarkChannel;
   collaboration: (request: CollaborationRequest) => Promise<unknown>;
-  adminGroups: (op: AdminGroupOp) => Promise<JoinedGroups | GroupMembers | GroupMembership | Project>;
+  adminGroups: (op: AdminGroupOp) => Promise<JoinedGroups | GroupMembers | GroupMembership | GroupIdentity | Project>;
   adminExecute: (op: AdminWriteOp) => Promise<AdminWriteResult>;
   /** A read this Bot runs as itself, the host asking (dm-agent 7.3). */
   feishuRead: (request: FeishuReadRequest) => Promise<FeishuReadReply>;
@@ -125,8 +127,9 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   }) });
   const sessionCli = await writeSessionCli();
   if (sessionCli) putSessionCliOnPath(sessionCli);
+  const authoring = new AuthoringService({bot: identity, cfg: opts.cfg, channel});
   const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }),
-    { entries, memory, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity, ...(host ? { host } : {}), ...(sessionCli ? { sessionCli } : {}) });
+    { entries, memory, authoring, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity, ...(host ? { host } : {}), ...(sessionCli ? { sessionCli } : {}) });
   const firstHello = createFirstHello({ cfg: opts.cfg, appSecret: opts.appSecret, channel, write: orchestrator.writePreferences });
   const roles = createAppRoleRefresher(app, opts.appSecret);
   await roles.refresh();
@@ -144,10 +147,11 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   };
   scheduleRoles();
   const offCrash = onCrashSync(() => orchestrator.saveDroppedSync('crash'));
-  const groupTasks = new Set<Promise<JoinedGroups | GroupMembers | GroupMembership | Project>>();
+  const groupTasks = new Set<Promise<JoinedGroups | GroupMembers | GroupMembership | GroupIdentity | Project>>();
   let closing: Promise<void> | undefined;
   const shutdown = (reason?: () => StopReason): Promise<void> => {
     if (closing) return closing;
+    authoring.close();
     rolesStopped = true;
     firstHello.stop();
     clearTimeout(rolesTimer);
@@ -261,7 +265,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
       void task.then(() => groupTasks.delete(task), () => groupTasks.delete(task));
       return task;
     };
-    return { channel, entries, collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, libraryExecute: orchestrator.libraryExecute, settings: orchestrator.settings, schedule: orchestrator.scheduleAs, feishuRead: createFeishuReads({ feishu, members }), feishuApi: createFeishuCalls(feishu), firstHello: firstHello.attempt, shutdown };
+    return { channel, entries, authoring: async op => op.kind === 'recipeAuthoringDisconnect' ? authoring.disconnect(op.peer.id) : authoring.request(op.peer, op.request), collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, libraryExecute: orchestrator.libraryExecute, settings: orchestrator.settings, schedule: orchestrator.scheduleAs, feishuRead: createFeishuReads({ feishu, members }), feishuApi: createFeishuCalls(feishu), firstHello: firstHello.attempt, shutdown };
   } catch (error) {
     try { await shutdown(); }
     catch (cleanupError) {
