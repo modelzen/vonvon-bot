@@ -25,8 +25,8 @@ export type CardDisplayLayoutInput = {
 export type CardDisplayElement = Record<string, unknown>;
 export type CardDisplayCard = Record<string, unknown>;
 /** Independent orphan-healing anchor when the run stop button leaves controls. */
-export const CARD_DISPLAY_STOP_EID = 'display-stop';
-export const CARD_DISPLAY_REMINDER_EID = 'display-reminder';
+export const CARD_DISPLAY_STOP_EID = 'display_stop';
+export const CARD_DISPLAY_REMINDER_EID = 'display_reminder';
 
 const object = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const elements = (value: unknown): CardDisplayElement[] => Array.isArray(value) ? value as CardDisplayElement[] : [];
