@@ -15,9 +15,16 @@ export async function creatorJson(account:NativeAccount,accountId:string,path:st
   const response=await account.request(accountId,path,init);
   const value=await boundedJson(response,cap);
   if(!response.ok){const failure=z.object({error:z.object({code:z.string()})}).safeParse(value);
-    if(response.status>=400&&response.status<500&&failure.success)throw new CreatorCloudRejected(failure.data.error.code);
+    if(response.status>=400&&response.status<500&&response.status!==408&&response.status!==429&&failure.success)throw new CreatorCloudRejected(failure.data.error.code);
     throw new Error('配方结果尚未确认');}
   return value;
+}
+async function receiptJson(account:NativeAccount,accountId:string,path:string){
+  try{return await creatorJson(account,accountId,path);}
+  catch(error){
+    if(error instanceof CreatorCloudRejected)throw new Error('配方回执尚未确认，请稍后核对原请求。');
+    throw error;
+  }
 }
 export async function creatorDraft(account:NativeAccount,accountId:string,draftId:string,check:()=>void){
   try{return await richCommunity(account,accountId,check).draft(draftId);}
@@ -29,7 +36,7 @@ export async function publicationReceipt(account:NativeAccount,row:CreatorComman
   const snapshot=row.command.snapshot;
   const query=new URLSearchParams({draftId:r.draftId,revision:String(r.revision)});
   if(snapshot.format==='rich-v2')query.set('contentSha256',snapshot.contentSha256);
-  const raw=await creatorJson(account,r.accountId,`/${snapshot.format==='rich-v2'?'v2':'v1'}/receipts/publications/${row.id}?${query}`);
+  const raw=await receiptJson(account,r.accountId,`/${snapshot.format==='rich-v2'?'v2':'v1'}/receipts/publications/${row.id}?${query}`);
   if(unknown.safeParse(raw).success)return;
   const {receipt}=publication.parse(raw);
   if(receipt.requestId!==row.id||receipt.format!==snapshot.format||receipt.draftId!==r.draftId||receipt.draftRevision!==r.revision||
@@ -40,7 +47,7 @@ export async function publicationReceipt(account:NativeAccount,row:CreatorComman
 }
 export async function issueReceipt(account:NativeAccount,row:CreatorCommandRecord):Promise<CreatorAnswer|undefined>{
   const r=row.request;if(r.type!=='issueCodes'||row.command.kind!=='issue')throw new Error('发码请求不一致');
-  const raw=await creatorJson(account,r.accountId,`/v1/receipts/code-issuance/${row.id}?`+new URLSearchParams({versionId:r.versionId,count:String(r.count)}));
+  const raw=await receiptJson(account,r.accountId,`/v1/receipts/code-issuance/${row.id}?`+new URLSearchParams({versionId:r.versionId,count:String(r.count)}));
   if(unknown.safeParse(raw).success)return;
   const {receipt}=issuance.parse(raw);
   if(receipt.requestId!==row.id||receipt.versionId!==r.versionId||receipt.count!==r.count||receipt.codeIds.length!==r.count||
@@ -61,7 +68,7 @@ export async function metadataReceipt(account:NativeAccount,r:RichMetadataReques
     logo:r.logo.kind==='replace'?{kind:'replace' as const,inputSha256:creatorSha(Buffer.from(r.logo.base64,'base64'))}:r.logo};
   const query=new URLSearchParams({draftId:r.draftId,revision:String(r.revision),baseManifestSha256:r.baseManifestSha256,
     transformVersion:'1',inputSha256:await richMetadataInputDigest(input)});
-  const raw=await creatorJson(account,r.accountId,`/v2/receipts/metadata/${r.requestId}?${query}`);
+  const raw=await receiptJson(account,r.accountId,`/v2/receipts/metadata/${r.requestId}?${query}`);
   if(unknown.safeParse(raw).success)return;
   const {receipt}=z.object({status:z.literal('committed'),receipt:richMetadataReceiptSchema}).strict().parse(raw);
   return verifyMetadataReceipt(r,receipt);

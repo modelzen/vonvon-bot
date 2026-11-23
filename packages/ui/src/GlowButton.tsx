@@ -8,12 +8,6 @@ type Props = ButtonHTMLAttributes<HTMLButtonElement> & {children: ReactNode; siz
 const SWEEP_MS = 3100;
 const COOLDOWN_MS = 8000;
 
-function ButtonArtwork({children}: {children: ReactNode}) {
-  return <span className="glow-button__button">
-    <span>{children}</span>
-  </span>;
-}
-
 export function GlowButton({children, size = 'sm', variant = 'light', disabled = false, className, type = 'button', ...props}: Props) {
   const [moving, setMoving] = useState(false);
   const [cycle, setCycle] = useState(0);
@@ -39,21 +33,19 @@ export function GlowButton({children, size = 'sm', variant = 'light', disabled =
   }
   return <span className="glow-button" data-size={size} data-variant={variant} data-disabled={disabled || undefined} data-moving={moving || undefined}
     onPointerEnter={event => {if (event.pointerType === 'mouse') play();}}>
-    <span className="glow-button__art" aria-hidden="true">
-      {disabled ? <ButtonArtwork>{children}</ButtonArtwork> : <>
-        <span className="glow-button__idle">
-          <BorderBeam size="line" colorVariant="colorful" theme={variant} strength={0.8} className="glow-button__beam glow-button__beam--idle">
-            <ButtonArtwork>{children}</ButtonArtwork>
-          </BorderBeam>
-        </span>
-        <span className="glow-button__sweep">
-          <BorderBeam key={cycle} size="line" colorVariant="colorful" theme={variant} strength={0.8} className="glow-button__beam glow-button__beam--sweep">
-            <ButtonArtwork>{children}</ButtonArtwork>
-          </BorderBeam>
-        </span>
-      </>}
-    </span>
-    <button {...props} className={["glow-button__button glow-button__control", className].filter(Boolean).join(" ")} type={type} disabled={disabled}>
+    {!disabled && <span className="glow-button__art" aria-hidden="true">
+      <span className="glow-button__idle">
+        <BorderBeam size="line" colorVariant="colorful" theme={variant} strength={0.8} className="glow-button__beam glow-button__beam--idle">
+          <span className="glow-button__shape"/>
+        </BorderBeam>
+      </span>
+      <span className="glow-button__sweep">
+        <BorderBeam key={cycle} size="line" colorVariant="colorful" theme={variant} strength={0.8} className="glow-button__beam glow-button__beam--sweep">
+          <span className="glow-button__shape"/>
+        </BorderBeam>
+      </span>
+    </span>}
+    <button {...props} className={["glow-button__control", className].filter(Boolean).join(" ")} type={type} disabled={disabled}>
       <span>{children}</span>
     </button>
   </span>;

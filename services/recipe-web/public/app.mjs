@@ -30,10 +30,17 @@ function backLink(label, href) {
 function detailOrigin() {
   const from = new URLSearchParams(location.search).get('from');
   if (from === 'author' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(params.get('author') || '')) return 'author';
-  return ['library', 'published'].includes(from) ? from : 'catalog';
+  return ['library', 'library-all', 'published', 'creator'].includes(from) ? from : 'catalog';
 }
 function detailBack() {
-  return detailOrigin() === 'author' ? backLink('返回作者的配方', '/authors/' + encodeURIComponent(params.get('author'))) : detailOrigin() === 'published' ? backLink('返回我发布的', '/publications') : detailOrigin() === 'library' ? backLink('返回已获取', '/library') : backLink('返回 Bot 配方', '/');
+  return detailOrigin() === 'library-all' ? backLink('返回我的配方', '/library?state=all') : ['creator','published'].includes(detailOrigin()) ? backLink('返回我的配方', '/library?state=published') : detailOrigin() === 'author' ? backLink('返回作者的配方', '/authors/' + encodeURIComponent(params.get('author'))) : detailOrigin() === 'library' ? backLink('返回我的配方', '/library?state=acquired') : backLink('返回 Bot 配方', '/');
+}
+function detailReturnPath() {
+  const next = new URL(location.href); next.search = '';
+  const origin = detailOrigin();
+  if (origin !== 'catalog') next.searchParams.set('from', origin);
+  if (origin === 'author') next.searchParams.set('author', params.get('author').toLowerCase());
+  return next.pathname + next.search;
 }
 function button(text, action, cls = 'button') {
   const b = el('button', text, cls); b.type = 'button'; b.addEventListener('click', action); return b;
@@ -63,7 +70,6 @@ function modal(title, ...nodes) {
 const closeDialog = () => {++modalGeneration; releaseModal = undefined; dialog.close();};
 const dismissDialog = () => {releaseModal?.(); closeDialog();};
 const closeButton = () => button('关闭', dismissDialog, 'secondary');
-const labels = { github: 'GitHub', google: 'Google', apple: 'Apple' };
 const continuationStorageKey = 'vv-recipe-login-continuation';
 function storedContinuation() {
   try { return JSON.parse(window.sessionStorage.getItem(continuationStorageKey)); } catch { return null; }
@@ -73,29 +79,56 @@ function clearContinuation(nonce) {
     if (!nonce || storedContinuation()?.nonce === nonce) window.sessionStorage.removeItem(continuationStorageKey);
   } catch { /* Login still works when tab storage is unavailable. */ }
 }
-function openLogin(next = appGuide ? '/studio' : location.pathname, continuation) {
+function openLogin(next = appGuide ? '/studio' : location.pathname + location.search, continuation) {
   clearContinuation();
   let continuationNonce;
   if (continuation === 'acquire') {
     try {
       continuationNonce = Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, '0')).join('');
-      window.sessionStorage.setItem(continuationStorageKey, JSON.stringify({path: next, nonce: continuationNonce}));
+      window.sessionStorage.setItem(continuationStorageKey, JSON.stringify({path: next.split('?')[0], nonce: continuationNonce}));
     } catch { continuationNonce = undefined; }
   }
-  const forms = (session?.providers || []).filter(p => Object.hasOwn(labels, p)).map(p => {
-    const form = el('form', null, 'provider'); form.method = 'post'; form.action = '/auth/start';
-    for (const [name, value] of Object.entries({ provider: p, returnTo: next, ...(continuationNonce && {continuation, continuationNonce}) })) {
-      const field = el('input'); field.type = 'hidden'; field.name = name; field.value = value; form.append(field);
-    }
-    const submit = el('button', '使用 ' + labels[p] + ' 继续', 'secondary'); form.append(submit); return form;
-  });
-  if (!forms.length) forms.push(el('p', '暂时无法登录，请稍后再试。', 'muted'));
-  modal('注册或登录', el('p', '使用同一个 Vonvon 账号，在社区获取配方，在 App 中使用。首次授权会自动创建账号。', 'login-explanation'), ...forms, group('actions', closeButton()));
-  if (continuationNonce) releaseModal = () => clearContinuation(continuationNonce);
+  location.assign('/login?' + new URLSearchParams({returnTo: next}));
 }
 function account() {
   if (!session?.signedIn) return openLogin();
-  location.assign('/account');
+  const menu = document.querySelector('.account-menu'); if (menu) menu.open = !menu.open;
+}
+function siteTarget(name, fallback) {
+  const value = document.documentElement.dataset[name];
+  return value && !value.startsWith('__') ? value : fallback;
+}
+async function accountMenu() {
+  if (!session?.signedIn) return;
+  const currentSession = session.displaySession;
+  accountButton.hidden = true;
+  const menu = el('details', null, 'account-menu'), summary = el('summary');
+  summary.setAttribute('aria-label', '账号菜单');
+  const avatar = el('span', '我', 'account-menu-avatar'), name = el('span', '我的账号');
+  summary.append(avatar, name);
+  const entries = el('nav'); entries.setAttribute('aria-label', '账号选项');
+  const settings = el('a', '账号设置'); settings.setAttribute('aria-disabled', 'true'); settings.tabIndex = -1;
+  entries.append(link('我的配方', '/library'),
+    settings, button('退出登录', async () => {
+      try {
+        const response = await fetch('/auth/logout', {method: 'POST', credentials: 'same-origin', headers: {'X-Vonvon-Session': currentSession}});
+        if (!response.ok) throw new Error('logout_failed');
+        authEvents?.postMessage('check'); location.assign('/');
+      } catch {message('退出未完成，请刷新后重试。');}
+    }, 'text-button'));
+  menu.append(summary, entries); accountButton.after(menu);
+  try {
+    const profile = await request('/api/v2/me/account-profile', {headers: {'X-Vonvon-Session': currentSession}});
+    if (session?.displaySession !== currentSession || !menu.isConnected || typeof profile.displayName !== 'string') return;
+    name.textContent = profile.displayName; avatar.textContent = Array.from(profile.displayName).slice(0, 2).join('');
+    if (/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(profile.authorId || '')) {
+      settings.href = siteTarget('accountUrl', '/account') + '#account=' + profile.authorId;
+      settings.removeAttribute('aria-disabled'); settings.removeAttribute('tabindex');
+    }
+    if (typeof profile.avatarDataUrl === 'string' && profile.avatarDataUrl.length <= 174787 && /^data:image\/webp;base64,[A-Za-z0-9+/]+={0,2}$/.test(profile.avatarDataUrl)) {
+      const picture = el('img'); picture.src = profile.avatarDataUrl; picture.alt = ''; avatar.replaceChildren(picture);
+    }
+  } catch {settings.textContent = '账号设置暂不可用';}
 }
 
 function empty(title, description, action) {
@@ -109,7 +142,7 @@ const versionLabel = item => '版本 ' + item.public.version;
 
 function card(item, hero = false, context = 'catalog', authorId) {
   const a = el('article', null, hero ? 'hero' : 'card');
-  const primary = link(null, detailUrl(item) + (context === 'library' ? '?from=library' : context === 'published' ? '?from=published' : context === 'author' ? '?from=author&author=' + encodeURIComponent(authorId) : ''), hero ? 'featured-main' : 'card-main');
+  const primary = link(null, detailUrl(item) + (context === 'library-all' ? '?from=library-all' : context === 'library' ? '?from=library' : context === 'published' ? '?from=published' : context === 'author' ? '?from=author&author=' + encodeURIComponent(authorId) : ''), hero ? 'featured-main' : 'card-main');
   const p = item.public;
   const logo = item.logo || (item.hasDisplayLogo ? '/media/versions/' + encodeURIComponent(item.versionId) + '/logo.webp' : null);
   const mark = el(logo ? 'img' : 'span', logo ? null : Array.from(p.name)[0], hero ? 'featured-mark' : 'card-mark');
@@ -132,17 +165,15 @@ function card(item, hero = false, context = 'catalog', authorId) {
 
 function communityNav(mine = false) {
   const nav = el('nav', null, 'community-nav'); nav.setAttribute('aria-label', '社区内容');
-  const discover = link('发现配方', '/'); if (!mine) discover.setAttribute('aria-current', 'page'); nav.append(discover);
-  const own = link('我的配方', '/library'); if (mine) own.setAttribute('aria-current', 'page'); nav.append(own);
-  nav.append(creationLink());
+  const discover = link('Bot 配方', '/'); discover.setAttribute('aria-current', 'page'); nav.append(discover);
+  const rental = el('button',null,'community-rental'); rental.type = 'button'; rental.disabled = true;
+  rental.append(el('span','Bot 租赁'),el('small','敬请期待')); nav.append(rental);
   return nav;
 }
 
-function creationLink(label = '分享我的配方') {
-  const value = document.documentElement.dataset.recipeCreateUrl;
-  const href = ['vonvon://recipes/create', 'vonvon-preview://recipes/create'].includes(value) ? value : '/studio';
-  const action = link(label, href, 'button community-create');
-  action.setAttribute('data-create-recipe', '');
+function creationLink(label = '创建配方') {
+  const action = link(label, '/create?' + new URLSearchParams({from:location.pathname + location.search}), 'button');
+  action.setAttribute('data-create-site', '');
   return action;
 }
 function searchMark() {
@@ -153,19 +184,25 @@ function searchMark() {
   return svg;
 }
 
-async function home() {
-  const intro = group('catalog-intro catalog-welcome', el('p', 'VONVON BOT · 配方社区', 'eyebrow'), el('h1', '发现适合你的 Bot 配方'), el('p', '找到好用的现成方案，也把自己的好配置分享出来。'));
+function mountSearch(onClear) {
   const search = el('form', null, 'search catalog-search'), q = el('input');
   search.setAttribute('role', 'search'); search.setAttribute('aria-label', '搜索社区配方');
   q.type = 'search'; q.name = 'q'; q.maxLength = 120; q.placeholder = '搜索配方名称、用途或作者'; q.setAttribute('aria-label', '搜索配方');
   q.value = params.get('q')?.slice(0, 120) || '';
-  const clear = button('×', () => resetSearch(), 'search-clear'); clear.setAttribute('aria-label', '清除搜索'); clear.hidden = !q.value;
-  const submit = el('button', '搜索', 'button search-submit'); submit.type = 'submit';
+  const clear = button('×', () => {q.value=''; if (onClear) onClear(); else q.focus();}, 'search-clear'); clear.setAttribute('aria-label', '清除搜索'); clear.hidden = !q.value;
+  const submit = el('button', '搜索', 'search-submit'); submit.type = 'submit';
+  search.action='/'; search.method='get';
   search.append(searchMark(), q, clear, submit);
+  const header = document.querySelector('.community-mast .site-header-inner');
+  if (header) {header.classList.add('catalog-header'); header.insertBefore(communityNav(), header.querySelector('.actions')); header.insertBefore(search, header.querySelector('.actions'));}
+  return {search,q,clear};
+}
+
+async function home() {
+  const intro = group('catalog-intro catalog-welcome', el('h1', '发现配方'), el('p', '从社区的好方法开始，再用自己的方式完善。'));
+  const {search,q,clear} = mountSearch(() => resetSearch());
   const results = el('section'); results.setAttribute('aria-label', '配方目录'); results.setAttribute('aria-busy','true');
-  const searchDock = group('catalog-search-dock', search);
-  const contribute = group('community-contribute', group('intro', el('h2', '你的 Bot，也有值得分享的好配置'), el('p', '从已有 Bot 和群聊开始，在 App 中整理成配方，让更多人用起来。')), creationLink('打开 App，分享配方'));
-  main.replaceChildren(communityNav(), intro, searchDock, results, contribute);
+  main.replaceChildren(intro, results);
   let cursor, items, hero, heroKind, timer, stableQuery, loadingMore, composing = false;
   function resetSearch() {clearTimeout(timer); q.value = ''; clear.hidden = true; q.focus(); void load();}
   const restore = history.state?.catalog;
@@ -176,11 +213,8 @@ async function home() {
   function render() {
     results.replaceChildren();
     if (stableQuery && (hero || items.length)) results.append(group('catalog-results-heading', el('h2', '“' + stableQuery + '”的搜索结果'), button('查看全部配方', resetSearch, 'text-button')));
-    if (hero) results.append(el('h2', heroKind === 'featured' ? '场景精选' : '最新配方', 'section-title'), card(hero, true));
-    if (items.length) {
-      if (!stableQuery) results.append(el('h2', hero ? '更多配方' : '配方', 'section-title'));
-      results.append(group('cards', ...items.map(x => card(x))));
-    }
+    const cards = hero ? [hero, ...items] : items;
+    if (cards.length) results.append(group('cards', ...cards.map(item => card(item))));
     if (!hero && !items.length) results.append(stableQuery ?
       empty('没有找到匹配的配方', '换一个名称、用途或作者试试。', button('查看全部配方', resetSearch, 'secondary')) :
       empty('社区里还没有配方', '把自己的好配置整理出来，成为第一位分享者。', creationLink()));
@@ -231,42 +265,207 @@ async function home() {
   await load(true);
 }
 
-async function library(published = false) {
-  const route = published ? '/publications' : '/library';
-  const tabs = el('nav', null, 'community-tabs'); tabs.setAttribute('aria-label', '我的配方分类');
-  for (const [label, href] of [['已获取', '/library'], ['我发布的', '/publications']]) {const tab = link(label, href); if (href === route) tab.setAttribute('aria-current', 'page'); tabs.append(tab);}
-  main.replaceChildren(backLink('返回 Bot 配方', '/'), communityNav(true), group('page-top', el('h1', '我的配方')), tabs);
-  if (!session?.signedIn) { main.append(empty('登录后查看我的配方', '在这里浏览你已获取和发布的配方。', button('注册或登录', () => openLogin(route)))); return; }
-  const endpoint = published ? '/api/v2/me/publications' : '/api/v2/me/recipes';
-  const displaySession = session.displaySession;
-  const readPage = async url => {
-    try {return await request(url, {headers: {'X-Vonvon-Session': displaySession}});}
-    catch (error) {if (error.status === 401 || error.code === 'session_changed') {main.replaceChildren(); location.reload();} throw error;}
-  };
-  const firstPage = await readPage(endpoint);
-  if (!firstPage.items.length) {
-    main.append(empty(published ? '还没有发布配方' : '还没有获取配方', null, published ? creationLink() : link('浏览社区', '/', 'secondary'))); return;
+async function library() {
+  document.title = '我的配方 · Vonvon Bot';
+  const labels = {all:'全部',acquired:'已获取',drafts:'创作中',published:'我发布的'};
+  let selected = Object.hasOwn(labels,params.get('state')) ? params.get('state') : 'all';
+  const heading = group('library-heading', group('intro', el('p','个人配方库','eyebrow'),el('h1','我的配方'),el('p','获取和发布的配方，都在这里。','muted')));
+  const tabs = el('nav', null, 'library-filters'); tabs.setAttribute('aria-label', '配方状态');
+  const content = group('library-content');
+  main.replaceChildren(backLink('浏览社区', '/'), heading, tabs, content);
+  const updateTabs = () => {for (const tab of tabs.children) tab.setAttribute('aria-pressed',String(tab.dataset.state === selected));};
+  for (const value of Object.keys(labels)) {
+    const tab = button(labels[value], () => {
+      selected = value; updateTabs();
+      history.replaceState(history.state,'',value === 'all' ? '/library' : '/library?state=' + value);
+      if (session?.signedIn) void refresh();
+    }, 'library-filter'); tab.dataset.state = value; tabs.append(tab);
   }
-  const cards = group('cards');
-  const seen = new Set();
-  let cursor;
-  const next = button('加载更多', async () => {
-    if (next.disabled || !cursor) return;
-    next.disabled = true;
-    try { add(await readPage(endpoint + '?cursor=' + encodeURIComponent(cursor))); }
-    catch { message('加载失败，请重试。'); }
-    finally { next.disabled = false; }
-  }, 'secondary more');
-  function add(page) {
-    for (const item of page.items) {
-      const id = published ? item.versionId : item.recipeId;
-      if (!seen.has(id)) { cards.append(card(item, false, published ? 'published' : 'library')); seen.add(id); }
+  updateTabs();
+  if (!session?.signedIn) {
+    content.append(empty('登录后查看我的配方','获取配方和创建自己的配方，都使用同一个账号。',button('登录',() => openLogin(selected === 'all' ? '/library' : '/library?state=' + selected))));
+    return;
+  }
+  const displaySession = session.displaySession, idPattern = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
+  const pages = new Map(), versions = new Map(), choices = new Map(), versionRequests = new Map(), selectionRequests = new Map();
+  let generation = 0, owner = new AbortController();
+  const cacheKey = (scope,recipeId) => scope + '/' + recipeId;
+  const signal = () => AbortSignal.any([owner.signal,AbortSignal.timeout(12_000)]);
+  const current = (seq,scope) => seq === generation && scope === selected;
+  async function checkSession(lease) {
+    const value = await request('/auth/session',{signal:lease});
+    if (!value.signedIn || value.displaySession !== displaySession) throw new RequestError(409,'session_changed');
+  }
+  function clearCaches() {pages.clear();versions.clear();choices.clear();versionRequests.clear();selectionRequests.clear();}
+  function privateFailure(error) {
+    if (![401,409].includes(error.status) && error.code !== 'session_changed') return false;
+    ++generation; owner.abort(); clearCaches(); content.replaceChildren(); content.setAttribute('aria-busy','false'); location.reload(); return true;
+  }
+  function summary(item,recipeId) {
+    if (!item || !idPattern.test(item.recipeId || '') || !idPattern.test(item.versionId || '') ||
+        recipeId && item.recipeId !== recipeId || !Number.isInteger(item.revision) || item.revision < 1 ||
+        typeof item.public?.name !== 'string' || typeof item.public?.version !== 'string' ||
+        !['listed','withdrawn','deleted'].includes(item.state) || typeof item.owned !== 'boolean' || typeof item.acquired !== 'boolean') throw new Error('invalid_page');
+    return item;
+  }
+  function page(value,recipeId) {
+    if (!value || !Array.isArray(value.items) || value.items.length > 50 ||
+        value.nextCursor !== null && (typeof value.nextCursor !== 'string' || value.nextCursor.length > 1600 || !/^[a-f0-9]+[.][a-f0-9]{64}$/.test(value.nextCursor))) throw new Error('invalid_page');
+    for (const item of value.items) {summary(item,recipeId);if (!recipeId && (!Number.isInteger(item.versionCount) || item.versionCount < 1)) throw new Error('invalid_page');}
+    return value;
+  }
+  function merge(before,next,key) {
+    const items = [...(before?.items || [])], seen = new Set(items.map(item=>item[key]));
+    for (const item of next.items) if (!seen.has(item[key])) {seen.add(item[key]);items.push(item);}
+    return {items,nextCursor:next.nextCursor};
+  }
+  async function loadVersions(scope,root,panel,seq,more = false) {
+    const key = cacheKey(scope,root.recipeId), requestId = (versionRequests.get(key) || 0) + 1;
+    versionRequests.set(key,requestId);
+    const valid = () => current(seq,scope) && versionRequests.get(key) === requestId && panel.isConnected;
+    panel.replaceChildren(el('p','正在读取版本…','fine'));
+    try {
+      const lease = signal(); await checkSession(lease); if (!valid()) return;
+      let stored = versions.get(key);
+      if (!stored || more && stored.nextCursor) {
+        const query = new URLSearchParams({scope}); if (more) query.set('cursor',stored.nextCursor);
+        const result = page(await request('/api/v2/me/recipe-groups/' + encodeURIComponent(root.recipeId) + '/versions?' + query,
+          {signal:lease,headers:{'X-Vonvon-Session':displaySession}}),root.recipeId);
+        if (!valid()) return;
+        stored = merge(more ? stored : undefined,result,'versionId'); versions.set(key,stored);
+      }
+      if (!valid()) return;
+      const options = el('div',null,'library-version-options');
+      for (const item of stored.items) {
+        const option = button('版本 ' + item.public.version + (item.state === 'withdrawn' ? ' · 已下架' : item.state === 'deleted' ? ' · 已删除' : ''),async()=>{
+          if (!current(seq,scope) || !option.isConnected) return;
+          const intent = (selectionRequests.get(key) || 0) + 1; selectionRequests.set(key,intent);
+          try {
+            await checkSession(signal()); if (!current(seq,scope) || !option.isConnected || selectionRequests.get(key) !== intent) return;
+            choices.set(key,item); render(scope);
+          } catch(error) {if (current(seq,scope) && selectionRequests.get(key) === intent && !privateFailure(error)) message('暂时无法切换版本，请重试。');}
+        },'secondary library-version-option');
+        option.dataset.versionId = item.versionId;
+        option.setAttribute('aria-pressed',String((choices.get(key)?.versionId || root.versionId) === item.versionId)); options.append(option);
+      }
+      panel.replaceChildren(options);
+      panel.append(el('p','已加载 ' + stored.items.length + ' 个可查看版本','fine library-version-count'));
+      if (!stored.items.length) panel.append(el('p','暂时没有可查看的版本。','fine'));
+      if (stored.nextCursor) panel.append(button('加载更多版本',()=>{void loadVersions(scope,root,panel,seq,true);},'secondary library-version-more'));
+    } catch (error) {
+      if (!valid()) return;
+      if (privateFailure(error)) return;
+      panel.replaceChildren(el('p','版本暂时无法读取。','fine'),button('重新读取版本',()=>{void loadVersions(scope,root,panel,seq,more);},'secondary'));
     }
-    cursor = page.nextCursor;
-    next.hidden = !cursor;
   }
-  add(firstPage);
-  main.append(cards, next);
+  // The link from a detail page carries both IDs. Resolve ownership again with the current session.
+  const focus = new URLSearchParams(new URL(location.href,location.origin).hash.slice(1));
+  const focusRecipe = focus.get('recipe'), focusVersion = focus.get('version');
+  let focused = false;
+  async function resolveFocus(scope, seq, lease) {
+    if (focused || !idPattern.test(focusRecipe || '') || !idPattern.test(focusVersion || '')) return;
+    const query = new URLSearchParams({scope});
+    const headers = {'X-Vonvon-Session':displaySession};
+    let root = pages.get(scope)?.items.find(item => item.recipeId === focusRecipe);
+    if (!root) {
+      const groupVersions = page(await request('/api/v2/me/recipe-groups/' + focusRecipe + '/versions?' + query, {headers,signal:lease}),focusRecipe);
+      if (!current(seq,scope) || !groupVersions.items.length) return;
+      versions.set(cacheKey(scope,focusRecipe), groupVersions);
+    }
+    const detail = await readDetail('/recipes/' + focusRecipe + '/versions/' + focusVersion, displaySession);
+    if (!current(seq,scope) || !(scope === 'published' ? detail.owned : detail.acquired) || detail.recipeId !== focusRecipe || detail.versionId !== focusVersion) return;
+    const key = cacheKey(scope,focusRecipe);
+    choices.set(key, detail);
+    if (!root) {
+      const stored = versions.get(key);
+      root = {...stored.items[0],versionCount:stored.nextCursor ? null : stored.items.length};
+      // Pin the linked recipe separately from cursor pages so pagination stays stable.
+      pinnedGroup = root;
+    }
+    focused = true;
+  }
+  let pinnedGroup;
+  function render(scope) {
+    const cards = group('cards library-cards'), seq = generation;
+    const rows = pages.get(scope)?.items || [];
+    for (const root of pinnedGroup && choices.has(cacheKey(scope,pinnedGroup.recipeId)) && !rows.some(item => item.recipeId === pinnedGroup.recipeId) ? [pinnedGroup,...rows] : rows) {
+      const key = cacheKey(scope,root.recipeId), item = choices.get(key) || root;
+      const row = card(item,false,scope === 'all' ? 'library-all' : scope === 'acquired' ? 'library' : 'published');
+      row.dataset.recipeId = root.recipeId;
+      if (item.state !== 'listed') row.append(el('span',item.state === 'deleted' ? '已删除' : '已下架','fine'));
+      const panel = group('library-version-panel'); panel.hidden = true;
+      const toggle = button(root.versionCount == null ? '选择版本' : '选择版本（' + root.versionCount + '）',()=>{
+        if (!current(seq,scope)) return;
+        panel.hidden = !panel.hidden; toggle.setAttribute('aria-expanded',String(!panel.hidden));
+        if (!panel.hidden) void loadVersions(scope,root,panel,seq);
+      },'secondary library-version-toggle'); toggle.setAttribute('aria-expanded','false');
+      if (root.versionCount == null || root.versionCount > 1) row.append(toggle,panel);
+      if (item.owned && item.state !== 'deleted') {
+        const remove = () => {
+          const cancel = button('取消', dismissDialog, 'secondary');
+          const confirm = button('确认删除', async () => {
+            if (!current(seq,scope) || confirm.disabled) return;
+            confirm.disabled = true;
+            try {
+              await request('/api/v2/versions/' + item.versionId + '/delete', {method: 'POST', headers: {
+                'Content-Type': 'application/json', 'X-Vonvon-Session': displaySession}, body: '{}'});
+              if (current(seq,scope)) {if (dialog.contains(confirm)) dismissDialog(); clearCaches(); await refresh();}
+            } catch {
+              if (current(seq,scope)) {if (dialog.contains(confirm)) dismissDialog(); message('删除结果尚未确认，请刷新后核对该版本。');}
+            }
+          }, 'button');
+          modal('删除此版本？', el('p','「' + item.public.name + ' · ' + item.public.version + '」删除后无法恢复。剩余分享码会停用，已获取者会看到「已删除」。'),
+            el('p','其他版本和已经部署的群聊继续使用。'), group('actions',cancel,confirm));
+          cancel.focus();
+        };
+        const controls = group('library-version-controls');
+        controls.append(button('删除此版本',remove,'text-button')); row.append(controls);
+      }
+      cards.append(row);
+    }
+    content.replaceChildren(cards);
+    if (!cards.childElementCount) content.append(empty('暂时没有' + (scope === 'all' ? '' : labels[scope]) + '配方','可以先去社区看看，也可以创建自己的配方。',link('浏览社区','/','secondary')));
+    if (pages.get(scope)?.nextCursor) content.append(button('加载更多',()=>{void refresh(true);},'secondary more'));
+  }
+  function localDrafts() {
+    const channel = document.documentElement.dataset.desktopChannel;
+    const expected = channel === 'preview' ? 'vonvon-preview://recipes/drafts' : channel === 'stable' ? 'vonvon://recipes/drafts' : undefined;
+    const configured = document.documentElement.dataset.recipeDraftsUrl;
+    const action = expected && (!configured || configured === expected) ? link('在 App 中继续创作',expected,'button') : null;
+    if (action) action.setAttribute('data-app-drafts','');
+    content.replaceChildren(empty('在本地继续整理配方','创作中的配方保存在本地，发布后才会同步到社区。',action));
+  }
+  async function refresh(more = false) {
+    const seq = ++generation, scope = selected;
+    owner.abort(); owner = new AbortController(); const lease = signal();
+    content.setAttribute('aria-busy','true');
+    if (!more) content.replaceChildren(el('p','正在读取配方…','catalog-status'));
+    else for (const value of content.querySelectorAll('button')) value.disabled = true;
+    try {
+      await checkSession(lease); if (!current(seq,scope)) return;
+      if (scope === 'drafts') {localDrafts();return;}
+      const before = pages.get(scope);
+      if (!before || more && before.nextCursor) {
+        const query = new URLSearchParams({scope}); if (more) query.set('cursor',before.nextCursor);
+        const next = page(await request('/api/v2/me/recipe-groups?' + query,{signal:lease,headers:{'X-Vonvon-Session':displaySession}}));
+        if (!current(seq,scope)) return;
+        pages.set(scope,merge(more ? before : undefined,next,'recipeId'));
+      }
+      if (!more && !focused && (scope === 'published' || scope === 'acquired')) {
+        try {await resolveFocus(scope,seq,lease);} catch (error) {if (error.status !== 404) throw error;}
+      }
+      if (current(seq,scope)) {
+        render(scope);
+        if (!more && focused && focusRecipe) content.querySelector('[data-recipe-id="' + focusRecipe + '"]')?.scrollIntoView?.({block:'nearest'});
+      }
+    } catch (error) {
+      if (!current(seq,scope)) return;
+      if (privateFailure(error)) return;
+      content.replaceChildren(empty('暂时无法读取配方','请稍后重试。',button('重新读取',()=>{void refresh(more);},'secondary')));
+    } finally {if (current(seq,scope)) content.setAttribute('aria-busy','false');}
+  }
+  window.addEventListener('focus',()=>{clearCaches();void refresh();});
+  await refresh();
 }
 
 async function authorPage(authorId) {
@@ -289,16 +488,6 @@ async function authorPage(authorId) {
   if (!data.items.length) main.append(empty('暂时没有公开发布的配方'));
 }
 
-async function copy(button) {
-  const url = location.origin + location.pathname;
-  try {
-    await navigator.clipboard.writeText(url); button.textContent = '✓ 已复制';
-    setTimeout(() => { button.textContent = '复制链接'; }, 2000);
-  } catch {
-    const box = el('input'); box.type = 'url'; box.readOnly = true; box.value = url; box.setAttribute('aria-label','配方链接');
-    modal('复制链接', box, group('actions', closeButton())); box.select();
-  }
-}
 function metric(label, value) { return group('metric', el('span', label), el('strong', value)); }
 async function readDetail(path, displaySession) {
   const options = displaySession ? {headers: {'X-Vonvon-Session': displaySession}} : {};
@@ -326,15 +515,21 @@ async function detail(confirmed) {
     }
   }
   const p = data.public; document.title = p.name + ' · Vonvon Bot';
-  if (data.format === 'rich-v2' || data.preview || data.previewUnavailable) {
+  if (data.format === 'rich-v2' || data.preview || data.previewUnavailable || ['withdrawn','deleted'].includes(data.state)) {
     const {renderRecipe} = await import('/viewer.mjs');
     if (!currentDetail()) return;
     renderRecipe(main, data, trigger => claim(data, trigger, detailSession, currentDetail), detailOrigin());
     await resumeAcquisition();
     return;
   }
-  const sharing = button('复制链接', ev => copy(ev.currentTarget), 'secondary');
-  const actions = group('actions', sharing);
+  const actions = group('actions');
+  const channel = document.documentElement.dataset.desktopChannel;
+  const appScheme = channel === 'preview' ? 'vonvon-preview' : channel === 'stable' ? 'vonvon' : undefined;
+  if (appScheme && (data.acquired || data.owned)) {
+    const handoff = link('在 App 中交给 Bot', appScheme + '://recipes/' + data.recipeId + '/versions/' + data.versionId + '/handoff', 'secondary');
+    handoff.setAttribute('data-handoff-recipe',''); handoff.dataset.recipeId = data.recipeId; handoff.dataset.versionId = data.versionId;
+    actions.append(handoff);
+  }
   if (data.acquired || data.owned) actions.append(el('span', data.owned ? '我的作品' : '已获取', 'pill'));
   else {
     const acquire = button('获取配方', ev => claim(data, ev.currentTarget, detailSession, currentDetail));
@@ -368,6 +563,7 @@ async function detail(confirmed) {
   for (const [key,label] of [['intro','概览'], ...(Object.hasOwn(data, 'config') ? [['settings','配置']] : [])]) {
     const b = button(label, () => setTab(key), 'secondary'); b.dataset.tab = key; tabs.append(b);
   }
+  tabs.classList.add('web-contents');
   main.replaceChildren(detailBack(), top, tabs, content); setTab('intro');
   await resumeAcquisition();
 }
@@ -382,7 +578,7 @@ function newAcquisitionKey() {
 }
 async function claim(recipe, trigger, sessionId, currentDetail, resumed = false) {
   if (!currentDetail()) return;
-  if (!session?.signedIn) return openLogin(detailUrl(recipe), 'acquire');
+  if (!session?.signedIn) return openLogin(detailReturnPath(), 'acquire');
   const coded = recipe.public.access === 'coded';
   const confirmation = coded || resumed;
   const logical = sessionId + ':' + recipe.versionId;
@@ -446,7 +642,7 @@ async function claim(recipe, trigger, sessionId, currentDetail, resumed = false)
         return;
       }
       if (e.code === 'session_changed') {location.reload(); return;}
-      if (e.status === 401) {session.signedIn = false; accountButton.textContent = '登录'; openLogin(detailUrl(recipe), 'acquire'); return;}
+      if (e.status === 401) {session.signedIn = false; accountButton.textContent = '登录'; openLogin(detailReturnPath(), 'acquire'); return;}
       if (e.code === 'invalid_code') delete intent.submitted;
       const msg = e.status === 429 ? '操作过于频繁，请保留输入。' + (e.retryAfter ? ` 请在 ${e.retryAfter} 秒后重试。` : '') :
         e.code === 'invalid_code' ? '这个分享码无法兑换此版本，请核对后重试。' : '获取结果暂未确认，请重试同一操作。';
@@ -462,9 +658,12 @@ dialog.addEventListener('cancel', ev => {ev.preventDefault(); dismissDialog();})
 try {
   if (params.has('auth')) clearContinuation();
   session = await request('/auth/session');
-  accountButton.hidden = false; accountButton.textContent = session.signedIn ? '账号' : '注册或登录';
+  accountButton.hidden = Boolean(session.signedIn); accountButton.textContent = '登录';
+  if (session.signedIn) void accountMenu();
+  if (location.pathname !== '/' && !appGuide) mountSearch();
   if (location.pathname === '/') await home();
-  else if (location.pathname === '/library' || location.pathname === '/publications') await library(location.pathname === '/publications');
+  else if (location.pathname === '/library') await library();
+  else if (['/publications','/creators'].includes(location.pathname)) location.assign('/library?state=published');
   else if (/^\/authors\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(location.pathname)) await authorPage(location.pathname.split('/')[2]);
   else if (!appGuide) await detail();
   if (params.has('auth')) message('登录未完成，请重试。');

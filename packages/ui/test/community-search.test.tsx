@@ -137,16 +137,16 @@ it('keeps the empty studio focused on preparation without a blank-draft shortcut
 
 it.each(['featured', 'latest'] as const)('labels committed search results once and restores the %s catalog heading after clearing', async heroKind => {
   const unfiltered = {...initialCatalog, heroKind};
-  const title = heroKind === 'featured' ? '场景精选' : '最新配方';
+  const title = '发现配方';
   h.request.mockResolvedValueOnce({hero: null, items: [recipe], nextCursor: 'next-eight'}).mockResolvedValueOnce(unfiltered);
   await act(async () => root.render(<Harness catalogResult={unfiltered}/>));
-  expect(document.querySelector('.community-section-heading h2')?.textContent).toBe(title);
+  expect(document.querySelector('.community-section-heading h1')?.textContent).toBe(title);
   await type('会议');
-  expect(document.querySelector('.community-section-heading h2')?.textContent).toBe(title);
+  expect(document.querySelector('.community-section-heading h1')?.textContent).toBe(title);
   await tick();
-  expect([...document.querySelectorAll('.community-section-heading h2, .community-catalog-list > h2')].map(heading => heading.textContent)).toEqual(['搜索结果']);
+  expect([...document.querySelectorAll('.community-section-heading h1, .community-catalog-list > h2')].map(heading => heading.textContent)).toEqual(['搜索结果']);
   expect(document.body.textContent).not.toContain('Vonvon 编辑推荐');
   expect(document.querySelectorAll('.community-card')).toHaveLength(1);
   await click('清除搜索');
-  expect(document.querySelector('.community-section-heading h2')?.textContent).toBe(title);
+  expect(document.querySelector('.community-section-heading h1')?.textContent).toBe(title);
 });

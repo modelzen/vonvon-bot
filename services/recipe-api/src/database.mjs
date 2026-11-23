@@ -8,6 +8,8 @@ import { authoringMaterial } from './authoring-proof.mjs';
 const calls = Object.freeze({
   readerLatest: 'recipe_api.reader_latest($1::uuid)',
   readerLibrary: 'recipe_api.reader_library($1::uuid)',
+  readerRecipeGroups: 'recipe_api.reader_recipe_groups($1::text,$2::text)',
+  readerRecipeGroupVersions: 'recipe_api.reader_recipe_group_versions($1::uuid,$2::text,$3::text)',
   readerPublications: 'recipe_api.reader_publications()',
   readerDrafts: 'recipe_api.reader_drafts()',
   readerAcquire: 'recipe_api.reader_acquire($1::uuid,$2::text,$3::text)',
@@ -18,6 +20,7 @@ const calls = Object.freeze({
   listDrafts: 'recipe_api.list_drafts()',
   saveDraft: 'recipe_api.save_draft($1::uuid,$2::int,$3::jsonb,$4::jsonb,$5::uuid,$6::uuid,$7::uuid)',
   deleteDraft: 'recipe_api.delete_draft($1::uuid,$2::int,$3::uuid)',
+  publishInto: 'recipe_api.publish_into($1::uuid,$2::int,$3::uuid,$4::uuid,$5::uuid,null,null)',
   publishDraft: 'recipe_api.publish_draft($1::uuid,$2::int,$3::uuid)',
   publicationReceipt: 'recipe_api.publication_receipt($1::text,$2::uuid,$3::uuid,$4::int,$5::text)',
   codeIssuanceReceipt: 'recipe_api.code_issuance_receipt($1::uuid,$2::uuid,$3::int)',
@@ -55,7 +58,7 @@ const businessErrors = new Map(Object.entries({
   conflict: 409, quota_exceeded: 422, rate_limited: 429, invalid_code: 422,
   operation_pending_limit: 429, operation_expired: 410, operation_clock_skew: 422,
   operation_cancelled: 409, invalid_operation_proof: 403,
-  proposal_active: 409, acquire_rate_limited: 429, request_upgrade_required: 409, integrity_error: 503,
+  publication_limit: 409, proposal_active: 409, acquire_rate_limited: 429, request_upgrade_required: 409, integrity_error: 503,
 }));
 
 export function makePool(connectionString) {
@@ -73,17 +76,24 @@ export function makePool(connectionString) {
     throw new Error('Unsupported database connection option');
   }
   if (!local) url.searchParams.delete('sslmode');
-  return new pg.Pool({
+  const pool = new pg.Pool({
     connectionString: url.toString(), ssl: local ? undefined : { rejectUnauthorized: true },
-    max: 8, idleTimeoutMillis: 30_000, connectionTimeoutMillis: 5_000,
+    max: 8, idleTimeoutMillis: 30_000, connectionTimeoutMillis: local ? 5_000 : 15_000,
+    // Keep one verified remote connection ready between requests. A cold TLS login can take several seconds.
+    ...(!local && {min: 1, keepAlive: true, keepAliveInitialDelayMillis: 10_000, query_timeout: 15_000}),
     application_name: 'vonvon-recipe-api',
   });
+  const reportDisconnect = () => console.error('Recipe database connection unavailable');
+  // pg-pool removes its idle error listener while a client is checked out.
+  pool.on('acquire', client => client.on('error', reportDisconnect));
+  pool.on('release', (_error, client) => client.removeListener('error', reportDisconnect));
+  pool.on('error', reportDisconnect);
+  return pool;
 }
 
 export async function openDatabase(url, codeKey, issuer) {
   if (!/^[0-9a-f]{64}$/i.test(codeKey)) throw new Error('Invalid RECIPE_CODE_KEY');
   const pool = makePool(url);
-  pool.on('error', () => console.error('Recipe database connection unavailable'));
   try {
     const { rows: [role] } = await pool.query(`
       SELECT NOT r.rolsuper AND NOT r.rolbypassrls AND NOT r.rolcreaterole
@@ -103,9 +113,7 @@ export async function openDatabase(url, codeKey, issuer) {
     if (!role?.ok) throw new Error('Database login must be dedicated to recipe_api');
     const client = await pool.connect();
     try {
-      await client.query('BEGIN');
-      await client.query('SET LOCAL ROLE recipe_api');
-      await client.query("SET LOCAL statement_timeout = '5s'");
+      await client.query("BEGIN; SET LOCAL ROLE recipe_api; SET LOCAL statement_timeout = '5s'");
       await client.query('SELECT recipe_api.bind_identity_issuer($1::text)', [issuer]);
       await client.query('COMMIT');
     } catch (err) {
@@ -125,14 +133,11 @@ export async function openDatabase(url, codeKey, issuer) {
     let discard = false;
     try {
       client = await pool.connect();
-      await client.query('BEGIN');
-      await client.query('SET LOCAL ROLE recipe_api');
-      await client.query("SET LOCAL statement_timeout = '5s'");
+      await client.query("BEGIN; SET LOCAL ROLE recipe_api; SET LOCAL statement_timeout = '5s'");
       await client.query("SELECT set_config('app.recipe_account','',true), set_config('app.recipe_code_key',$1,true)", [codeKey]);
       if (identity) {
-        const { rows: [mapped] } = await client.query('SELECT recipe_api.resolve_identity($1::text,$2::uuid) AS account_id',
+        await client.query("SELECT set_config('app.recipe_account', recipe_api.resolve_identity($1::text,$2::uuid)::text, true)",
           [identity.issuer, identity.subject]);
-        await client.query("SELECT set_config('app.recipe_account',$1,true)", [mapped.account_id]);
       }
       if (operation.startsWith('rich')) {
         const {richExecute}=await import('./rich-database.mjs');

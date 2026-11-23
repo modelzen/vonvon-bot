@@ -29,6 +29,7 @@ export function scheduleState(task: ScheduledTaskView): string {
 }
 
 export const browserZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
+export const schedulePlacementText = {follow: '跟群走', newTopic: '每次开新话题', topic: '固定在原话题'} as const;
 export function knownZone(timeZone: string): boolean {
   try {new Intl.DateTimeFormat(undefined, {timeZone}); return true;} catch {return false;}
 }

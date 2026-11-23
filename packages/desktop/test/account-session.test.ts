@@ -37,12 +37,13 @@ function memoryStore() {
 
 function fixture() {
   const ticket = random(), flowId = random(), pollToken = random();
-  const issued = { flowId, pollToken, launchUrl: web + '/auth/native#ticket=' + ticket, expiresAt: Date.now() + 260_000,
+  const issued = { confirmation: 'identity-v1', flowId, pollToken, launchUrl: web + '/login?mode=app#ticket=' + ticket, expiresAt: Date.now() + 260_000,
     supabaseUrl: issuer, publishableKey: 'sb_publishable_demo' };
   const base = web + '/auth/native/flows';
-  let state = '', challenge = '';
+  let state = '', challenge = '', registeredAccount: string | undefined, created = 0;
+  const confirmation = {status: 'confirmed', accountId: undefined as string | undefined};
   const poll = vi.fn(async () => Response.json({ state, expiresAt: issued.expiresAt, provider,
-    ...(challenge ? { status: 'code', code } : { status: 'provider' }) }));
+    ...(registeredAccount ? {status:confirmation.status, identity:{accountId:confirmation.accountId ?? registeredAccount,displayName:'Example User'}} : challenge ? { status: 'code', code } : { status: 'provider' }) }));
   const exchange = vi.fn(async (body: Record<string, string>) => {
     expect(body.auth_code).toBe(code);
     expect(createHash('sha256').update(body.code_verifier!).digest('base64url')).toBe(challenge);
@@ -61,6 +62,7 @@ function fixture() {
   const verifyUser = vi.fn(async () => Response.json(user));
   const me = vi.fn(async () => Response.json({ accountId: business }));
   const rotate = vi.fn(async () => Response.json(sessionReply(true)));
+  const identity = vi.fn(async (body: {accessToken:string;accountId:string}) => {expect(body.accessToken).toBe(access);registeredAccount=body.accountId;return Response.json({status:'confirming'});});
   const ack = vi.fn(async () => Response.json({ status: 'completed' }));
   const cancel = vi.fn(async () => Response.json({ status: 'cancelled' }));
   const avatar = vi.fn(async () => new Response(null, { status: 404 }));
@@ -80,10 +82,15 @@ function fixture() {
     expect(init.credentials).toBe('omit');
     expect(headers.has('Cookie') || headers.has('Origin')).toBe(false);
     const body = init.body ? JSON.parse(String(init.body)) : undefined;
-    if (url.href === base) { state = body.state; challenge = ''; return Response.json(issued, { status: 201 }); }
-    if (url.href.startsWith(base + '/' + flowId)) {
-      expect(headers.get('Authorization')).toBe('Bearer ' + pollToken);
+    if (url.href === base) {
+      expect(body.confirmation).toBe('identity-v1');
+      if (created++) {issued.flowId=random();issued.pollToken=random();issued.launchUrl=web+'/login?mode=app#ticket='+random();}
+      state = body.state; challenge = ''; registeredAccount=undefined; return Response.json(issued, { status: 201 });
+    }
+    if (url.href.startsWith(base + '/' + issued.flowId)) {
+      expect(headers.get('Authorization')).toBe('Bearer ' + issued.pollToken);
       if (url.pathname.endsWith('/authorize')) return authorize(new URL(body.url));
+      if (url.pathname.endsWith('/identity')) return identity(body);
       if (url.pathname.endsWith('/ack')) return ack();
       if (init.method === 'DELETE') return cancel();
       return poll();
@@ -114,7 +121,7 @@ function fixture() {
     sessions.add(session);
     return session;
   }
-  return { create, store, transport, issued, openBrowser, poll, ack, cancel, rotate, authorize, exchange, verifyUser, me, avatar, logout, profile };
+  return { create, store, transport, issued, openBrowser, poll, ack, cancel, rotate, authorize, exchange, verifyUser, me, avatar, logout, profile, identity, confirmation };
 }
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -124,6 +131,26 @@ function deferred<T>() {
 const waitFor = (assertion: () => void) => vi.waitFor(assertion, { interval: 5, timeout: 2500 });
 
 describe('native desktop account', () => {
+  it('declares public browse capability only for validated anonymous version previews', async () => {
+    const f = fixture(), a = f.create(), recipeId = randomUUID(), versionId = randomUUID();
+    f.transport.mockResolvedValue(Response.json({}));
+    const preview = `/v2/recipes/${recipeId}/versions/${versionId}/preview`;
+    for (const path of [preview, '/v2/community/recipes?q=sample', `/v2/authors/${recipeId}/recipes`, `/v2/versions/${versionId}/display-logo`, `/v2/recipes/${recipeId}/versions/${versionId}`]) {
+      await a.publicRequest!(path);
+      const [url, init] = f.transport.mock.calls.at(-1)!;
+      expect(String(url)).toBe(api + path);
+      const headers = new Headers(init?.headers);
+      expect(headers.get('X-Vonvon-Browse')).toBe(path === preview ? 'public-v2' : null);
+      expect(headers.has('Authorization') || headers.has('Cookie') || headers.has('apikey')).toBe(false);
+      expect(init?.credentials).toBe('omit');
+    }
+    const sent = f.transport.mock.calls.length;
+    for (const path of [preview + '?grant=1', `/v2/recipes/invalid/versions/${versionId}/preview`, `/v2/versions/${versionId}/objects/${recipeId}`, `/v2/drafts/${versionId}/objects/${recipeId}`]) {
+      await expect(a.publicRequest!(path)).rejects.toThrow();
+    }
+    expect(f.transport).toHaveBeenCalledTimes(sent);
+  });
+
   it('allows anonymous public author pages and valid cursors without sending account credentials', async () => {
     const f = fixture(), a = f.create(), authorId = randomUUID(), cursor = randomUUID();
     f.transport.mockResolvedValue(Response.json({items: []}));
@@ -147,8 +174,13 @@ describe('native desktop account', () => {
     await expect(a.manage!()).rejects.toThrow();
     expect(f.openBrowser).not.toHaveBeenCalled();
     await a.login(); await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
+    f.transport.mockImplementationOnce(async (url, init) => {
+      expect(String(url)).toBe(web + '/auth/account-link');
+      expect(new Headers(init?.headers).get('authorization')).toMatch(/^Bearer /);
+      return Response.json({accountId:business,ticket:'a'.repeat(43)});
+    });
     await a.manage!();
-    expect(f.openBrowser).toHaveBeenLastCalledWith(web + '/account#account=' + business);
+    expect(f.openBrowser).toHaveBeenLastCalledWith(web + '/account#link=' + 'a'.repeat(43));
     await a.logout();
     await expect(a.manage!()).rejects.toThrow();
     expect(f.openBrowser).toHaveBeenCalledTimes(2);
@@ -165,7 +197,7 @@ describe('native desktop account', () => {
     expect(a.status()).toMatchObject({accountId: business, displayName: '网站修改的昵称', profileRevision: 4, avatarDataUrl: 'data:image/png;base64,YQ=='});
     expect(f.openBrowser).toHaveBeenCalledOnce();
     expect(f.rotate).not.toHaveBeenCalled();
-    expect(f.profile).toHaveBeenCalledTimes(2);
+    expect(f.profile).toHaveBeenCalledTimes(3);
   });
 
   it('keeps the signed-in account when refreshing website profile fails', async () => {
@@ -186,7 +218,7 @@ describe('native desktop account', () => {
     const held = deferred<Response>(); f.profile.mockReturnValueOnce(held.promise);
     const pending = a.refresh!(); const rejected = expect(pending).rejects.toThrow();
     await a.logout();
-    const nextAccount = randomUUID(); f.me.mockResolvedValueOnce(Response.json({accountId: nextAccount}));
+    const nextAccount = randomUUID(); f.me.mockResolvedValueOnce(Response.json({accountId: nextAccount})).mockResolvedValueOnce(Response.json({accountId: nextAccount}));
     await a.login(); await waitFor(() => expect(a.status()).toMatchObject({kind: 'signedIn', accountId: nextAccount}));
     held.resolve(Response.json({authorId: business, displayName: '旧账号的网站昵称', revision: 20}));
     await rejected;
@@ -195,7 +227,7 @@ describe('native desktop account', () => {
 
   it('restores the saved nickname and custom avatar while keeping the same account ID', async () => {
     const f = fixture(), avatarDataUrl = 'data:image/webp;base64,YQ==';
-    f.profile.mockResolvedValueOnce(Response.json({authorId: business, displayName: '自选昵称', avatarDataUrl, revision: 2}));
+    f.profile.mockImplementation(async()=>Response.json({authorId: business, displayName: '自选昵称', avatarDataUrl, revision: 2}));
     const a = f.create(); await a.login();
     await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
     expect(a.status()).toMatchObject({accountId: business, displayName: '自选昵称', avatarDataUrl, profileRevision: 2});
@@ -241,7 +273,7 @@ describe('native desktop account', () => {
     await waitFor(() => expect(f.store.clear).toHaveBeenCalledTimes(2));
     await expect(a.request(business, '/v1/me/recipes')).rejects.toThrow();
     const nextAccount = randomUUID();
-    f.me.mockResolvedValueOnce(Response.json({accountId: nextAccount}));
+    f.me.mockResolvedValueOnce(Response.json({accountId: nextAccount})).mockResolvedValueOnce(Response.json({accountId: nextAccount}));
     await a.login();
     await waitFor(() => expect(a.status()).toMatchObject({kind: 'signedIn', accountId: nextAccount}));
     held.resolve(new Response(null, {status: 204}));
@@ -381,7 +413,7 @@ describe('native desktop account', () => {
     await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
     await a.logout();
     const held = deferred<Response>(), nextAccount = randomUUID();
-    f.me.mockResolvedValueOnce(Response.json({ accountId: nextAccount }));
+    f.me.mockResolvedValueOnce(Response.json({ accountId: nextAccount })).mockResolvedValueOnce(Response.json({ accountId: nextAccount }));
     f.avatar.mockReturnValueOnce(held.promise);
     await a.login();
     await waitFor(() => expect(a.status()).toMatchObject({ kind: 'signedIn', accountId: nextAccount }));
@@ -480,7 +512,7 @@ describe('native desktop account', () => {
     expect(await a.logout()).toEqual({ kind: 'signedOut' });
     expect(request?.[1]?.signal?.aborted).toBe(true);
     const nextAccount = randomUUID();
-    f.me.mockResolvedValueOnce(Response.json({ accountId: nextAccount }));
+    f.me.mockResolvedValueOnce(Response.json({ accountId: nextAccount })).mockResolvedValueOnce(Response.json({ accountId: nextAccount }));
     await a.login();
     await waitFor(() => expect(a.status()).toMatchObject({ kind: 'signedIn', accountId: nextAccount }));
     expect(f.avatar).toHaveBeenCalledTimes(2);
@@ -531,7 +563,7 @@ describe('native desktop account', () => {
 
   it('drops unsafe profile avatar metadata without failing verified sign-in', async () => {
     const f = fixture();
-    f.verifyUser.mockResolvedValueOnce(Response.json({ ...user, user_metadata: { ...user.user_metadata,
+    f.verifyUser.mockImplementation(async()=>Response.json({ ...user, user_metadata: { ...user.user_metadata,
       avatar_url: 'https://avatars.githubusercontent.com/u/123?access_token=private' } }));
     const a = f.create();
     await a.login();
@@ -601,6 +633,28 @@ describe('native desktop account', () => {
     await a.login();
     await waitFor(() => expect(a.status()).toEqual({ kind: 'signedOut', reason: 'failed' }));
     expect(f.openBrowser).not.toHaveBeenCalled();
+  });
+
+  it.each(['/auth/native?mode=app', '/login?mode=web', '/login?mode=app&mode=app', '/login?mode=app&returnTo=//evil.example', '/login?returnTo=/library&mode=app'])('rejects an unbound login launch target %s', async path => {
+    const f = fixture();
+    f.issued.launchUrl = web + path + new URL(f.issued.launchUrl).hash;
+    const a = f.create();
+    await a.login();
+    await waitFor(() => expect(a.status()).toEqual({kind: 'signedOut', reason: 'failed'}));
+    expect(f.openBrowser).not.toHaveBeenCalled();
+    expect(f.exchange).not.toHaveBeenCalled();
+    expect(f.store.save).not.toHaveBeenCalled();
+  });
+
+  it('accepts an older broker through the exact legacy launch route without another flow', async () => {
+    const f = fixture();
+    f.issued.launchUrl = web + '/auth/native' + new URL(f.issued.launchUrl).hash;
+    const a = f.create(); await a.login();
+    await waitFor(() => expect(a.status().kind).toBe('signedIn'));
+    expect(f.openBrowser).toHaveBeenCalledExactlyOnceWith(f.issued.launchUrl);
+    const creation = f.transport.mock.calls.filter(([url]) => String(url) === web + '/auth/native/flows');
+    expect(creation).toHaveLength(1);
+    expect(new Headers(creation[0]?.[1]?.headers).get('X-Vonvon-Login-Page')).toBe('unified-v1');
   });
 
   it('cancels during exchange and discards the late reply', async () => {
@@ -804,4 +858,74 @@ it('rechecks account ownership after an asynchronous final authorization callbac
   const operation=account.request(business,'/v1/creator-account-test',{method:'POST',body:'{}'},async()=>{entered.resolve();await gate.promise;});
   const rejected=expect(operation).rejects.toThrow();await entered.promise;await account.logout();gate.resolve();await rejected;
   expect(f.transport.mock.calls.filter(([url])=>new URL(String(url)).pathname==='/v1/creator-account-test')).toEqual([]);
+});
+
+// These fixtures exercise the complete AccountSession, including its serialized secure-store boundary.
+it('keeps exchanged tokens only in memory until the browser explicitly confirms the verified account',async()=>{
+  const f=fixture();f.confirmation.status='confirming';const a=f.create();
+  await a.login();await waitFor(()=>expect(f.identity).toHaveBeenCalledOnce());
+  await waitFor(()=>expect(f.poll.mock.calls.length).toBeGreaterThan(3));
+  expect(a.status()).toEqual({kind:'signingIn'});expect(f.store.save).not.toHaveBeenCalled();expect(f.ack).not.toHaveBeenCalled();
+  expect(f.exchange).toHaveBeenCalledOnce();expect(f.verifyUser).toHaveBeenCalledOnce();
+  const submission=f.transport.mock.calls.find(([url])=>String(url).endsWith('/identity'));
+  expect(JSON.parse(String(submission?.[1]?.body))).toEqual({accessToken:access,accountId:business});
+  expect(f.openBrowser.mock.calls[0][0]).not.toContain(access);expect(f.openBrowser.mock.calls[0][0]).not.toContain(refresh);
+  f.confirmation.status='confirmed';await waitFor(()=>expect(f.ack).toHaveBeenCalledOnce());
+  expect(f.store.save).toHaveBeenCalledOnce();expect(f.verifyUser).toHaveBeenCalledTimes(2);
+  expect(a.status()).toMatchObject({kind:'signedIn',accountId:business});
+});
+it.each(['App cancel','browser cancel','expiry'])('discards an exchanged but unconfirmed identity on %s',async action=>{
+  const f=fixture();f.confirmation.status='confirming';const a=f.create();
+  await a.login();await waitFor(()=>expect(f.identity).toHaveBeenCalledOnce());
+  if(action==='App cancel')await a.cancelLogin();
+  else if(action==='browser cancel')f.confirmation.status='cancelled';
+  else vi.spyOn(Date,'now').mockReturnValue(f.issued.expiresAt+1);
+  await waitFor(()=>expect(f.cancel).toHaveBeenCalledOnce());
+  expect(a.status()).not.toMatchObject({kind:'signedIn'});expect(f.store.save).not.toHaveBeenCalled();expect(f.ack).not.toHaveBeenCalled();expect(f.exchange).toHaveBeenCalledOnce();
+});
+it.each(['confirming','confirmed'])('rejects a different account in the %s browser receipt',async status=>{
+  const f=fixture();f.confirmation.status=status;f.confirmation.accountId=randomUUID();const a=f.create();
+  await a.login();await waitFor(()=>expect(f.cancel).toHaveBeenCalledOnce());
+  expect(a.status()).toMatchObject({kind:'signedOut',reason:'failed'});expect(f.store.save).not.toHaveBeenCalled();expect(f.ack).not.toHaveBeenCalled();
+});
+it('rejects business-account remapping after confirmation before any profile initialization or persistence',async()=>{
+  const f=fixture();f.me.mockResolvedValueOnce(Response.json({accountId:business})).mockResolvedValueOnce(Response.json({accountId:randomUUID()}));
+  const a=f.create();await a.login();await waitFor(()=>expect(f.cancel).toHaveBeenCalledOnce());
+  expect(f.profile).toHaveBeenCalledOnce();expect(f.store.save).not.toHaveBeenCalled();expect(f.ack).not.toHaveBeenCalled();
+  expect(f.transport.mock.calls.some(([url])=>String(url).endsWith('/initialize'))).toBe(false);
+});
+it('fails closed before opening a browser when the native server does not acknowledge identity-v1',async()=>{
+  const f=fixture();f.issued.confirmation='unsupported';const a=f.create();await a.login();
+  await waitFor(()=>expect(a.status()).toMatchObject({kind:'signedOut',reason:'failed'}));
+  expect(f.openBrowser).not.toHaveBeenCalled();expect(f.store.save).not.toHaveBeenCalled();expect(f.exchange).not.toHaveBeenCalled();
+});
+it('restarts switching with a fresh flow, state, browser ticket and PKCE verifier before accepting either account',async()=>{
+  const f=fixture();f.confirmation.status='switching';
+  f.openBrowser.mockImplementation(async()=>{if(f.openBrowser.mock.calls.length===2)f.confirmation.status='confirming';});
+  const a=f.create();await a.login();await waitFor(()=>expect(f.identity).toHaveBeenCalledTimes(2));
+  expect(f.store.save).not.toHaveBeenCalled();expect(f.ack).not.toHaveBeenCalled();expect(f.exchange).toHaveBeenCalledTimes(2);
+  expect(f.cancel).toHaveBeenCalledOnce();expect(f.cancel.mock.invocationCallOrder[0]).toBeLessThan(f.openBrowser.mock.invocationCallOrder[1]);
+  const creates=f.transport.mock.calls.filter(([url])=>String(url)===web+'/auth/native/flows');
+  expect(creates).toHaveLength(2);expect(JSON.parse(String(creates[0][1]?.body)).state).not.toBe(JSON.parse(String(creates[1][1]?.body)).state);
+  expect(f.openBrowser.mock.calls[0][0]).not.toBe(f.openBrowser.mock.calls[1][0]);
+  expect(f.authorize.mock.calls[0][0].searchParams.get('code_challenge')).not.toBe(f.authorize.mock.calls[1][0].searchParams.get('code_challenge'));
+  const identityUrls=f.transport.mock.calls.filter(([url])=>String(url).endsWith('/identity')).map(([url])=>String(url));expect(new Set(identityUrls).size).toBe(2);
+  f.confirmation.status='confirmed';await waitFor(()=>expect(f.ack).toHaveBeenCalledOnce());expect(f.store.save).toHaveBeenCalledOnce();
+});
+
+it('does not initialize or save a confirmed identity whose final profile read returns after the flow deadline',async()=>{
+  const f=fixture(),held=deferred<Response>();
+  f.profile.mockResolvedValueOnce(new Response(null,{status:404})).mockReturnValueOnce(held.promise);
+  const a=f.create();await a.login();await waitFor(()=>expect(f.profile).toHaveBeenCalledTimes(2));
+  vi.spyOn(Date,'now').mockReturnValue(f.issued.expiresAt+1);
+  held.resolve(Response.json({authorId:business,displayName:'配方作者',revision:0}));
+  await waitFor(()=>expect(f.cancel).toHaveBeenCalledOnce());expect(f.store.save).not.toHaveBeenCalled();expect(f.ack).not.toHaveBeenCalled();
+  expect(f.transport.mock.calls.some(([url])=>String(url).endsWith('/initialize'))).toBe(false);
+});
+it('rolls back a secure-store write that finishes after the confirmed flow expires',async()=>{
+  const f=fixture(),held=deferred<'secure'>();f.store.save.mockImplementationOnce(async()=>held.promise);
+  const a=f.create();await a.login();await waitFor(()=>expect(f.store.save).toHaveBeenCalledOnce());
+  const clears=f.store.clear.mock.calls.length;vi.spyOn(Date,'now').mockReturnValue(f.issued.expiresAt+1);held.resolve('secure');
+  await waitFor(()=>expect(f.cancel).toHaveBeenCalledOnce());expect(f.store.clear.mock.calls.length).toBeGreaterThan(clears);
+  expect(a.status()).not.toMatchObject({kind:'signedIn'});expect(f.ack).not.toHaveBeenCalled();
 });

@@ -182,7 +182,7 @@ test('real PostgreSQL API and shipped Web modules browse projections without dow
   t.after(() => rm(packageRoot, {recursive: true, force: true}));
   const packaged = join(packageRoot, 'services/recipe-web'), source = fileURLToPath(new URL('../', import.meta.url));
   await mkdir(packaged, {recursive: true});
-  for (const file of ['server.mjs', 'auth.mjs', 'native-auth.mjs', 'release-code-oauth.mjs', 'release-code-store.mjs', 'public', 'dist', 'node_modules']) await cp(join(source, file), join(packaged, file), {recursive: true});
+  for (const file of ['server.mjs', 'auth.mjs', 'native-auth.mjs', 'oauth-provider.mjs', 'release-code-oauth.mjs', 'release-code-store.mjs', 'public', 'dist', 'node_modules']) await cp(join(source, file), join(packaged, file), {recursive: true});
   await mkdir(join(packageRoot, 'services/recipe-api/src'), {recursive: true});
   await cp(new URL('../../recipe-api/src/credential-shapes.mjs', import.meta.url), join(packageRoot, 'services/recipe-api/src/credential-shapes.mjs'));
   const {createRecipeWeb} = await import(pathToFileURL(join(packaged, 'server.mjs')));

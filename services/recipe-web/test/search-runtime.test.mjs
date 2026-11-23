@@ -17,22 +17,29 @@ async function runtime(t,respond=()=>page([recipe]),route='/'){
   const url=new URL(path,window.location.origin),q=url.searchParams.get('q')||'';queries.push(q);return Response.json(await respond(q,url.searchParams.get('cursor')));
  };
  const run=new AsyncFunction('document','window','location','history','fetch','BroadcastChannel','scrollY','setTimeout','clearTimeout',source);
- await run(window.document,window,window.location,window.history,fetch,undefined,0,(fn)=>{const id=++nextId;timers.set(id,fn);return id;},id=>timers.delete(id));
+ const location = {get pathname(){return window.location.pathname;}, get search(){return window.location.search;}, get href(){return window.location.href;}, get origin(){return window.location.origin;}, assigned:[], reloads:0, reload(){this.reloads++;}, assign(path){this.assigned.push(path);}};
+ await run(window.document,window,location,window.history,fetch,undefined,0,(fn)=>{const id=++nextId;timers.set(id,fn);return id;},id=>timers.delete(id));
  const input=window.document.querySelector('input[type=search]'),form=input.form;
  const type=value=>{input.value=value;input.dispatchEvent(new window.Event('input',{bubbles:true}));};
  const submit=async()=>{form.dispatchEvent(new window.Event('submit',{bubbles:true,cancelable:true}));await settle();};
  const flush=async()=>{const pending=[...timers.values()];timers.clear();for(const fn of pending)await fn();await settle();};
- return {document:window.document,window,input,form,queries,type,submit,flush};
+ return {document:window.document,window,location,input,form,queries,type,submit,flush};
 }
 
-test('search is the prominent hero control and My recipes remains discoverable before login',async t=>{
+test('discovery pairs search with Bot recipes and the disabled upcoming rental category',async t=>{
  const h=await runtime(t);
- assert.ok(h.document.querySelector('.catalog-welcome + .catalog-search-dock form[role=search]'));
+ assert.ok(h.document.querySelector('.community-mast .catalog-header form[role=search]'));
  assert.ok(h.form.querySelector('svg[aria-hidden=true]'));
  assert.equal(h.form.querySelector('[type=submit]').textContent,'搜索');
  assert.match(h.input.placeholder,/名称.*用途.*作者/);
- assert.ok(h.document.querySelector('.community-nav a[href="/library"]'));
- assert.equal(h.document.querySelector('.community-nav [data-create-recipe]').getAttribute('href'),'vonvon-preview://recipes/create');
+ const dock=h.document.querySelector('.catalog-header');
+ const nav=dock.querySelector(':scope > .community-nav');
+ assert.equal(h.form.parentElement,dock);
+ assert.equal(nav.querySelector('[aria-current=page]').textContent,'Bot 配方');
+ assert.match(nav.querySelector('button:disabled').textContent,/Bot 租赁.*敬请期待/);
+ assert.equal(h.document.querySelector('a[href="/library"]'),null);
+ assert.equal(h.document.querySelector('a[href="/creators"]'),null);
+ assert.equal(h.document.querySelector('main [data-create-recipe]'),null);
  assert.equal(h.document.querySelector('.catalog-tools'),null);
 });
 
@@ -67,7 +74,7 @@ test('a late search response never replaces newer results',async t=>{
 
 test('empty results retain the search and offer one clear route back to the catalog',async t=>{
  const h=await runtime(t,q=>page(q?[]:[recipe]));h.type('不存在');await h.submit();
- assert.ok(h.document.querySelector('.catalog-search-dock input[type=search]'));
+ assert.ok(h.document.querySelector('.catalog-header input[type=search]'));
  assert.match(h.document.querySelector('.empty').textContent,/没有找到匹配/);
  const reset=[...h.document.querySelectorAll('button')].filter(b=>b.textContent==='查看全部配方');assert.equal(reset.length,1);
  reset[0].click();await settle();assert.equal(h.input.value,'');assert.ok(h.document.querySelector('.card'));

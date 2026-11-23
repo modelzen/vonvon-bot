@@ -1,5 +1,5 @@
 import {useEffect, useRef, useState} from 'react';
-import type {AuthoringPublished, CommunityShell, RecipeDraft} from '@vonvon/protocol';
+import type {AuthoringPublished, CommunityResponses, CommunityShell, ExactResourceVersion, RecipeLibraryVersion, RecipeDraft} from '@vonvon/protocol';
 import {recipePublicationMetadataIssue} from '@vonvon/protocol';
 import {BackButton} from '../BackButton';
 import {GlowButton} from '../GlowButton';
@@ -38,6 +38,44 @@ function DraftSession({shell, accountId, draftId, expectedRevision, onBack, onDe
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string>();
   const [publication, setPublication] = useState<Publication>({kind: 'idle'});
+  const [publishMode,setPublishMode]=useState<'new'|'version'>('new');
+  const [choices,setChoices]=useState<RecipeLibraryVersion[]>();
+  const [choiceError,setChoiceError]=useState<string>();
+  const [choiceAttempt,setChoiceAttempt]=useState(0);
+  const [selectedRecipe,setSelectedRecipe]=useState('');
+  const choosingVersion=publication.kind==='confirm' && publishMode==='version';
+  useEffect(()=>{
+    if(!choosingVersion)return;
+    let active=true;
+    setChoices(undefined);setChoiceError(undefined);
+    async function load(){
+      const result:RecipeLibraryVersion[]=[];
+      let cursor:string|null=null;
+      do {
+        const page:CommunityResponses['recipeGroups']=await shell.request({type:'recipeGroups',accountId,scope:'published',...(cursor&&{cursor})});
+        if(!active)return;
+        for(const group of page.items){
+          if(!group.owned)continue;
+          if(group.state!=='deleted'){result.push(group);continue;}
+          // A deleted latest version can have earlier versions that still belong to the creator.
+          if(group.versionCount<2)continue;
+          let versionsCursor:string|null=null;
+          do {
+            const versions:CommunityResponses['recipeGroupVersions']=await shell.request({type:'recipeGroupVersions',accountId,scope:'published',recipeId:group.recipeId,...(versionsCursor&&{cursor:versionsCursor})});
+            if(!active)return;
+            const eligible=versions.items.find(item=>item.owned&&item.state!=='deleted');
+            if(eligible){result.push(eligible);break;}
+            versionsCursor=versions.nextCursor;
+          }while(versionsCursor);
+        }
+        cursor=page.nextCursor;
+      }while(cursor);
+      setChoices(result);
+    }
+    void load().catch(()=>{if(active)setChoiceError('未能读取已发布配方。');});
+    return ()=>{active=false;};
+  },[choosingVersion,shell,accountId,choiceAttempt]);
+  const chosenVersion=choices?.find(item=>item.recipeId===selectedRecipe);
   const publicationActive = useRef(false);
   const publicationBusy = publication.kind === 'preparing' || publication.kind === 'publishing';
   const publicationLocked = publicationBusy || publication.kind === 'pending' || publication.kind === 'published';
@@ -112,6 +150,7 @@ function DraftSession({shell, accountId, draftId, expectedRevision, onBack, onDe
         else setPublication({kind: 'pending', context: {kind: 'displayed', draft: selected}});
       } else if (result.kind === 'publicationReady' && result.draftId === selected.draftId && result.revision === selected.revision &&
         JSON.stringify(result.public) === JSON.stringify(selected.public) && displayed.current === selected) {
+        setPublishMode(selected.recipeId?'version':'new');setSelectedRecipe(selected.recipeId??'');
         setPublication({kind: 'confirm', confirmation: {reviewId: result.reviewId, draft: selected}});
       } else {
         setPublication({kind: 'failed', message: '配方内容已变化，请重新读取后再确认发布。'});
@@ -125,9 +164,12 @@ function DraftSession({shell, accountId, draftId, expectedRevision, onBack, onDe
   async function confirm(confirmation: Confirmation) {
     if (!authoring || publicationActive.current) return;
     publicationActive.current = true;
+    const destination:ExactResourceVersion|null|undefined=publishMode==='version'&&chosenVersion
+      ? {recipeId:chosenVersion.recipeId,versionId:chosenVersion.versionId}:confirmation.draft.recipeId?null:undefined;
+    if(publishMode==='version'&&!chosenVersion){publicationActive.current=false;return;}
     setPublication({kind: 'publishing', confirmation});
     try {
-      const result = await authoring.request({type: 'confirmPublication', accountId, reviewId: confirmation.reviewId});
+      const result = await authoring.request({type: 'confirmPublication', accountId, reviewId: confirmation.reviewId,...(destination!==undefined&&{destination})});
       if (!alive.current) return;
       if (result.kind !== 'publicationResult') throw new Error('发布结果尚未确认。');
       if (result.result.kind === 'published' && (result.result.publication.accountId !== accountId || result.result.publication.draftId !== confirmation.draft.draftId)) throw new Error('发布回执与这份配方不一致，请重新核对。');
@@ -169,19 +211,37 @@ function DraftSession({shell, accountId, draftId, expectedRevision, onBack, onDe
     {publication.kind === 'published' && <InlineNotice title="已发布到社区">这份配方已发布，可以在我的配方中管理版本与分享码。</InlineNotice>}
     {draft && expectedRevision !== undefined && expectedRevision !== draft.revision && <InlineNotice title="配方已有更新">链接指向修订 {expectedRevision}，这里展示当前修订 {draft.revision}。请查看当前内容后再发布。</InlineNotice>}
     {draft && <>
-      <RecipeDetails draft recipe={draft} overviewFooter={publicationIssue && <p role="status" className="community-muted">{publicationIssue}</p>} heading={<header className="community-detail-heading recipe-draft-heading">
+      <RecipeDetails draft recipe={draft} heading={<header className="community-detail-heading recipe-draft-heading">
         <RecipeMark name={draft.public.name} logo={draft.format === 'rich-v2' ? draft.logo : undefined}/>
-        <div><h1>{draft.public.name || '未命名配方'}</h1><p>创作中 · 仅自己可见</p>{draft.public.summary && <p>{draft.public.summary}</p>}</div>
-        <div className="community-actions"><Button title="让原来源 Bot 发送引导卡，并打开本人私聊" disabled={!current || deleting || publicationLocked || !onContinueInChat} onClick={() => onContinueInChat?.(draft)}>继续创作</Button><GlowButton variant="dark" disabled={!current || deleting || publicationLocked || !authoring || Boolean(publicationIssue)} onClick={() => void prepare(draft)}>{publication.kind === 'preparing' ? '正在准备…' : publication.kind === 'publishing' ? '正在发布…' : publication.kind === 'published' ? '已发布' : '发布到社区'}</GlowButton></div>
-      </header>}/>
-      {!onContinueInChat && <p className="community-muted">请在已关联的 Bot 私聊中继续创作。</p>}
-      <div className="recipe-draft-footer"><Button variant="ghost" disabled={!current || deleting || publicationLocked} onClick={() => {setDeleteError(undefined); setDeletion(draft);}}>删除未发布配方</Button></div>
+        <div><h1>{draft.public.name || '未命名配方'}</h1>{draft.public.summary && <p>{draft.public.summary}</p>}</div>
+      </header>}
+        sidebar={<aside className="community-detail-sidebar recipe-draft-sidebar" aria-label="草稿操作">
+          <h2>本地草稿</h2><dl><div><dt>可见范围</dt><dd>仅自己可见</dd></div><div><dt>版本</dt><dd>{draft.public.version || '待填写'}</dd></div>
+            <div><dt>获取方式</dt><dd>{draft.public.access === 'coded' ? '凭分享码获取' : '直接获取'}</dd></div></dl>
+          {publicationIssue && <p className="recipe-draft-readiness" role="status">{publicationIssue}</p>}
+          <div className="community-side-actions">
+            <Button title="在来源 Bot 的私聊里继续创作" disabled={!current || deleting || publicationLocked || !onContinueInChat} onClick={() => onContinueInChat?.(draft)}>继续创作</Button>
+            <GlowButton variant="dark" disabled={!current || deleting || publicationLocked || !authoring || Boolean(publicationIssue)} onClick={() => void prepare(draft)}>{publication.kind === 'preparing' ? '正在准备…' : publication.kind === 'publishing' ? '正在发布…' : publication.kind === 'published' ? '已发布' : '发布到社区'}</GlowButton>
+          </div>
+          {!onContinueInChat && <p className="community-muted">请在已关联的 Bot 私聊中继续创作。</p>}
+          <div className="recipe-draft-footer"><Button variant="ghost" disabled={!current || deleting || publicationLocked} onClick={() => {setDeleteError(undefined); setDeletion(draft);}}>删除未发布配方</Button></div>
+        </aside>}/>
     </>}
     <Dialog open={publication.kind === 'confirm' || publication.kind === 'publishing'} size="sm" title="发布到社区" onClose={() => {if (!publicationBusy) setPublication({kind: 'idle'});}} footer={<>
       <Button disabled={publicationBusy} onClick={() => setPublication({kind: 'idle'})}>继续检查</Button>
-      <GlowButton variant="dark" disabled={publication.kind !== 'confirm' || !current} onClick={() => {if (publication.kind === 'confirm') void confirm(publication.confirmation);}}>{publication.kind === 'publishing' ? '正在发布…' : '确认发布'}</GlowButton>
+      <GlowButton variant="dark" disabled={publication.kind !== 'confirm' || !current || publishMode==='version'&&!chosenVersion} onClick={() => {if (publication.kind === 'confirm') void confirm(publication.confirmation);}}>{publication.kind === 'publishing' ? '正在发布…' : '确认发布'}</GlowButton>
     </>}>
       {(publication.kind === 'confirm' || publication.kind === 'publishing') && <>
+        <fieldset className="recipe-destination" disabled={publicationBusy}><legend>发布方式</legend>
+          <label><input type="radio" name="recipe-destination" checked={publishMode==='new'} onChange={()=>setPublishMode('new')}/>发布为新配方</label>
+          <label><input type="radio" name="recipe-destination" checked={publishMode==='version'} onChange={()=>setPublishMode('version')}/>发布为已有配方的新版本</label>
+          {publishMode==='version' && <>
+            <select aria-label="要更新的配方" value={selectedRecipe} onChange={event=>setSelectedRecipe(event.target.value)}>
+              <option value="">选择我的已发布配方</option>{choices?.map(item=><option key={item.recipeId} value={item.recipeId}>{item.public.name} · {item.public.version}</option>)}
+            </select>
+            {choiceError?<p role="alert">{choiceError} <Button onClick={()=>setChoiceAttempt(value=>value+1)}>重试</Button></p>:choices===undefined?<small role="status">正在读取已发布配方…</small>:!choices.length?<small>还没有可更新的配方，请选择「发布为新配方」。</small>:null}
+          </>}
+        </fieldset>
         <p>发布「{publication.confirmation.draft.public.name}」· {publication.confirmation.draft.public.version}</p>
         <p>{publication.confirmation.draft.public.access === 'coded' ? '配方介绍公开展示，完整内容凭分享码获取。' : '发布后，所有人都可以查看完整内容并获取配方。'}</p>
       </>}

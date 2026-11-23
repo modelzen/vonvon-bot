@@ -26,23 +26,23 @@ export function mainController({accountId,botId,groupId,daemon,api,broker,bearer
 export async function savedRichPreview({accountId,botId,deviceId,session,draftJob,content,daemon}){
   const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
   const {RecipeCreatorExecutor}=await import('../../../desktop/src/recipe-creator.ts');
-  const {RecipeCreatorJournal,creatorSha}=await import('../../../desktop/src/recipe-creator-journal.ts');
+  const {RecipeCreatorJournal}=await import('../../../desktop/src/recipe-creator-journal.ts');
   const {MetadataJournal}=await import('../../../desktop/src/community-metadata-journal.ts');
-  const {work}=draftJob.task.read,{draftId,source}=work,authoring=new AuthoringJournal();
+  const {LocalRecipeDrafts}=await import('../../../desktop/src/local-recipe-drafts.ts');
+  const {work}=draftJob.task.read,{draftId,source}=work,authoring=new AuthoringJournal(),drafts=new LocalRecipeDrafts();
   const association={accountId,botId,deviceId,deviceKey:Buffer.alloc(32,2).toString('base64url'),viewId:'local',scope:draftJob.scope,binding:draftJob.binding};
   authoring.history.remember(association,source.preparationId,source.identity,source.groupId);
-  const bytes=canonicalizeRichRecipeContent(content).canonicalUTF8;
-  const manifest={objectId:randomUUID(),kind:'manifest',sha256:creatorSha(bytes),bytes:bytes.length,mediaType:'application/json'};
-  const account={request:async(actor,path,init,beforeSend)=>{
-    if(actor!==accountId||init?.method&&init.method!=='GET')throw Error('unexpected account request');
-    await beforeSend?.();
-    const draft='/v2/drafts/'+draftId;
-    if(path===draft)return Response.json({format:'rich-v2',draftId,recipeId:null,revision:1,access:'direct',sourceIntentId:source.preparationId,manifest,sourceManifest:manifest,logicalBytes:bytes.length,retainedCandidateBytes:0});
-    if(path===draft+'/objects/'+manifest.objectId)return new Response(bytes);
-    if(path.startsWith(draft+'/creator-context?'))return Response.json({format:'rich-v2',draftId,revision:1,sourceIntentId:source.preparationId,parent:null});
-    throw Error(path);
-  }};
-  const executor=new RecipeCreatorExecutor(account,new RecipeCreatorJournal(),new MetadataJournal(),authoring);
-  const context={association,session,check(){},settled:async()=>{},rpc:daemon};
-  return {run:job=>executor.run(context,job),close:()=>authoring.history.close()};
+  const doc=canonicalizeRichRecipeContent(content),canonical=Buffer.from(doc.canonicalUTF8).toString('base64url');
+  if(doc.content.parts.length)throw Error('The local fixture must supply exact attachment bytes.');
+  const draft={format:'rich-v2',draftId,recipeId:null,revision:1,sourceIntentId:source.preparationId,
+    public:{name:content.public.name.value,summary:content.public.summary.value,overview:content.public.overview.value,version:content.public.version.value,access:'direct'},
+    rich:{content:doc.content,canonical,texts:{}}};
+  drafts.commit({requestId:randomUUID(),expectedRevision:null,record:{association,work,draft,sourceCanonical:canonical,members:[]}});
+  const generation=new AbortController(),account={
+    status:()=>({kind:'signedIn',accountId,provider:'google',displayName:'Fixture',persistence:'memory'}),lease:()=>generation.signal,
+    request:async()=>{throw Error('A local saved preview must not read a cloud draft.');},
+  };
+  const executor=new RecipeCreatorExecutor(account,new RecipeCreatorJournal(),new MetadataJournal(),authoring,undefined,undefined,undefined,drafts);
+  const context={association,session,check(){generation.signal.throwIfAborted();},settled:async()=>{},rpc:daemon};
+  return {run:job=>executor.run(context,job),close(){drafts.close();authoring.history.close();}};
 }

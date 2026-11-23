@@ -5,10 +5,10 @@ import {fileURLToPath} from 'node:url';
 
 export interface RecipeFileEntry {name: string; bytes: number; sha256: string; data?: string}
 interface Request {
-  provider?:'.agents'|'.claude'; operation: 'skills' | 'source' | 'identity' | 'stage' | 'load' | 'verify'; root: string; installation?: string; generation?: string;
+  provider?:'.agents'|'.claude'; operation: 'skills' | 'documents' | 'source' | 'identity' | 'stage' | 'load' | 'verify'; root: string; installation?: string; generation?: string;
   expectedRoot?: string; names?: readonly string[]; entries?: readonly RecipeFileEntry[];
 }
-interface Response {root: string; skills?:{name:string;files:string[]}[]; files?: {name: string; identity: string; data: string}[]}
+interface Response {root: string; names?:string[]; skills?:{name:string;files:string[]}[]; files?: {name: string; identity: string; data: string}[]}
 function helperPath(): string {
   const name = `recipe-files${process.platform === 'win32' ? '.exe' : ''}`;
   const directory = dirname(fileURLToPath(import.meta.url));

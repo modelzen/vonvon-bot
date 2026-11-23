@@ -62,7 +62,11 @@ export function selectRichSnapshot(args:{
   inventory:RecipeRichContent; selected:readonly string[]; evidence:ReadonlyMap<string,SourceEvidence>;
   attested:ReadonlyMap<string,AttestedSourceItem>; account:string; ownershipClaim:boolean; access:'direct'|'coded'; sourceVersionId?:string;
 }):SnapshotFreeze {
-  const {inventory,selected}=args;
+  const content=selectedRichContent(args.inventory,args.selected);
+  const origins=itemsOf(content).map(({itemId})=>({itemId,source:sourceOf(args.evidence.get(itemId),args.account,args.ownershipClaim,args.attested,content.finalLogo?.itemId===itemId)}));
+  return {format:'rich-v2',content,access:args.access,origins,...(args.sourceVersionId&&{sourceVersionId:args.sourceVersionId})};
+}
+export function selectedRichContent(inventory:RecipeRichContent,selected:readonly string[]){
   const wanted=new Set(selected);
   if(wanted.size!==selected.length)throw new Error('所选内容重复。');
   if(inventory.memories.some(item=>wanted.has(item.itemId)))throw new Error('配方不包含记忆，请重新选择内容。');
@@ -87,6 +91,5 @@ export function selectRichSnapshot(args:{
   content.parts=content.parts.filter(p=>referenced.has(p.objectId));
   const doc=canonicalizeRichRecipeContent(content);
   if(hasLocalPath(doc.content) || credentialField({config:{role:doc.canonical}}))throw new Error('所选内容含本机路径或凭据。');
-  const origins=itemsOf(doc.content).map(({itemId})=>({itemId,source:sourceOf(args.evidence.get(itemId),args.account,args.ownershipClaim,args.attested,content.finalLogo?.itemId===itemId)}));
-  return {format:'rich-v2',content:doc.content,access:args.access,origins,...(args.sourceVersionId&&{sourceVersionId:args.sourceVersionId})};
+  return doc.content;
 }

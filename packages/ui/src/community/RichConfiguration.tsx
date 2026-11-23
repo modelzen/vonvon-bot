@@ -2,11 +2,12 @@ import type {RecipeBrowseDetail, RecipeRichContent, RecipeRichSetting, RecipeRic
 import {recipeSkillDescription} from '@vonvon/protocol';
 import {RecipeMarkdown} from './RecipeContent';
 import {RecipeSkills} from './RecipeSkills';
+import './recipe-configuration.css';
 
 export type RichView = {content: RecipeRichContent; texts: Record<string,string>};
 export const recipeSettingNames: Record<RecipeRichSetting['field'], string> = {
   sessionMode: '会话模式', 'response.noMention': '无需提及 Bot', 'run.pendingPolicy': '执行期间的新消息',
-  'presentation.voiceEnabled': '语音回复', 'presentation.showToolCalls': '展示工具调用', 'presentation.showModel': '模型标记',
+  'presentation.voiceEnabled': '语音转文字', 'presentation.showToolCalls': '展示工具调用', 'presentation.showModel': '模型标记',
   'presentation.completionMode': '完成通知', 'presentation.longTaskMinutes': '长任务分钟数', 'presentation.completionTemplate': '完成通知模板',
   'presentation.cardDisplay': '消息卡片', 'model.recommendation': '推荐模型', 'modelAccess.recommendation': '可选模型建议',
   'speed.recommendation': '速度建议', 'judge.recommendation': '判断模型建议', 'permission.requirement': '权限要求',
@@ -32,31 +33,50 @@ export function SettingValue({value, literal = false}: {value: unknown; literal?
 export function RichSettings({items}: {items: RecipeRichSetting[]}) {
   return <dl className="community-rich-settings">{items.map(item => <div key={item.itemId}><dt>{recipeSettingNames[item.field]}</dt><dd><SettingValue value={item.value} literal={item.field === 'presentation.completionTemplate'}/></dd></div>)}</dl>;
 }
+type SettingGroup = {title: string; fields: RecipeRichSetting['field'][]; note: string};
+const modelGroups: SettingGroup[] = [
+  {title: '模型建议', fields: ['model.recommendation', 'modelAccess.recommendation', 'speed.recommendation', 'judge.recommendation'], note: '未指定的项目沿用目标群设置；新建群时由 Bot 与你核对。'},
+  {title: '权限要求', fields: ['permission.requirement', 'permission.codex.requirement', 'permission.claude.requirement'], note: '这里展示配方的权限要求。未指定时沿用目标群设置，权限变更仍需你确认。'},
+];
+const communicationGroups: SettingGroup[] = [
+  {title: '会话与回应', fields: ['sessionMode', 'response.noMention', 'run.pendingPolicy'], note: '未指定的项目沿用目标群设置；新建群时由 Bot 与你核对。'},
+  {title: '回复与通知', fields: ['presentation.voiceEnabled', 'presentation.showToolCalls', 'presentation.showModel', 'presentation.completionMode', 'presentation.longTaskMinutes', 'presentation.completionTemplate', 'presentation.cardDisplay'], note: '未指定的项目保留目标群的回复与通知设置。'},
+];
+export function RecipeSettingsConfiguration({settings, section, omittedSettingCount = 0}: {settings: RecipeRichSetting[]; section: string; omittedSettingCount?: number}) {
+  const groups = section === '模型与权限' ? modelGroups : section === '沟通方式' ? communicationGroups : undefined;
+  if (!groups) return null;
+  const incomplete = omittedSettingCount > 0;
+  return <section className="community-config recipe-configuration"><h2>{section}</h2>{incomplete && <p className="recipe-configuration-summary">此概览省略了 {omittedSettingCount} 项配置，未提供的字段需在应用配方时核对。</p>}<div className="recipe-configuration-cards">{groups.map(group => <section className="recipe-configuration-card" key={group.title} aria-label={group.title}>
+    <h3>{group.title}</h3><dl className="recipe-configuration-fields">{group.fields.map(field => {
+      const item = settings.find(setting => setting.field === field);
+      return <div key={field}><dt>{recipeSettingNames[field]}</dt><dd>{item ? item.value === null ? <span>{field === 'presentation.completionTemplate' ? '使用默认完成通知模板' : '使用默认消息卡片'}</span> : <SettingValue value={item.value} literal={field === 'presentation.completionTemplate'}/> : <span className="recipe-configuration-unset">{incomplete ? '概览未提供' : '未指定'}</span>}</dd></div>;
+    })}</dl><p className="recipe-configuration-note">{incomplete ? group.title === '权限要求' ? '未提供不代表未配置；实际权限变更仍需你确认。' : '未提供不代表未配置，应用时再与 Bot 核对。' : group.note}</p>
+  </section>)}</div></section>;
+}
+export function RecipeTaskSummary({count}: {count: number}) {
+  return <section className="community-config recipe-configuration"><h2>任务</h2><section className="recipe-configuration-card recipe-task-summary" aria-label="定时任务">
+    <h3>{count ? `包含 ${count} 项任务` : '未预设定时任务'}</h3>
+    <p>{count ? '概览只展示任务数量。将配方应用到群聊时，再读取并核对具体任务安排。' : '这份配方没有预设定时任务。应用配方后，你可以在群聊中与 Bot 商定需要的任务。'}</p>
+    <p className="recipe-configuration-note">{count ? '任务在应用后保持暂停，确认执行内容、时间和时区后再单独启用。' : '如需调整目标群已有任务，可在应用配方时与 Bot 一并核对。'}</p>
+  </section></section>;
+}
 export function RecipeBrowseConfiguration({preview, section}: {preview: NonNullable<RecipeBrowseDetail['preview']>; section: string}) {
-  if (section === '模型与权限') {
-    const settings = preview.settings.filter(item => /^(model|modelAccess|speed|judge|permission)[.]/.test(item.field));
-    return <section className="community-config"><h2>模型与权限</h2>{!settings.some(item => item.field === 'model.recommendation') && <p>推荐模型：未指定</p>}<RichSettings items={settings}/></section>;
-  }
-  if (section === '沟通方式') return <section className="community-config"><h2>沟通方式</h2><RichSettings items={preview.settings.filter(item => !/^(model|modelAccess|speed|judge|permission)[.]/.test(item.field))}/></section>;
-  if (section === '能力') return <section className="community-config"><h2>技能</h2><RecipeSkills skills={preview.skills}/><h2>规则</h2><p>{preview.ruleCount ? `包含 ${preview.ruleCount} 条规则，使用配方时应用。` : '没有规则'}</p></section>;
-  if (section === '任务') return <section className="community-config"><h2>任务</h2><p>{preview.taskCount ? `包含 ${preview.taskCount} 项任务，添加到群后可查看并单独启用。` : '没有任务'}</p></section>;
+  if (section === '模型与权限' || section === '沟通方式') return <RecipeSettingsConfiguration settings={preview.settings} section={section} omittedSettingCount={preview.omittedSettingCount}/>;
+  if (section === '能力') return <section className="community-config"><h2>技能</h2><RecipeSkills skills={preview.skills}/></section>;
+  if (section === '任务') return <RecipeTaskSummary count={preview.taskCount}/>;
   return null;
 }
 export function RichConfiguration({view, section}: {view: RichView; section: string}) {
   const {content} = view;
-  if (section === '模型与权限') {
-    const settings = content.settings.filter(item => /^(model|modelAccess|speed|judge|permission)[.]/.test(item.field));
-    return <section className="community-config"><h2>模型与权限</h2>{!settings.some(item => item.field === 'model.recommendation') && <p>推荐模型：未指定</p>}<RichSettings items={settings}/></section>;
-  }
-  if (section === '沟通方式') return <section className="community-config"><h2>沟通方式</h2><RichSettings items={content.settings.filter(item => !/^(model|modelAccess|speed|judge|permission)[.]/.test(item.field))}/></section>;
+  if (section === '模型与权限' || section === '沟通方式') return <RecipeSettingsConfiguration settings={content.settings} section={section}/>;
   if (section === '能力') {
     const skills = content.skills.map(skill => {
       const entry = content.files.find(file => file.itemId === skill.entryFileId);
       return {itemId: skill.itemId, name: skill.name, description: entry ? recipeSkillDescription(richText(entry.text, view)) : ''};
     });
-    return <section className="community-config"><h2>角色</h2>{content.role ? <RecipeMarkdown text={richText(content.role.text, view)}/> : <p>未指定</p>}<h2>规则</h2>{content.rules.map(rule => <article key={rule.itemId}><h3>{{work:'工作规则',smartRespond:'智能回复规则',smartNewTopic:'智能新话题规则'}[rule.purpose]}</h3><RecipeMarkdown text={richText(rule.text,view)}/></article>)}<h2>技能</h2><RecipeSkills skills={skills}/></section>;
+    return <section className="community-config"><h2>角色</h2>{content.role ? <RecipeMarkdown text={richText(content.role.text, view)}/> : <p>未指定</p>}<h2>技能</h2><RecipeSkills skills={skills}/></section>;
   }
-  if (section === '任务') return <section className="community-config"><h2>任务</h2>{!content.tasks.length && <p className="community-muted">没有任务</p>}{content.tasks.map(task => <article key={task.itemId}><h3>{task.name}</h3><p>{task.spec.kind === 'every' ? `每 ${task.spec.minutes} 分钟` : task.spec.kind === 'once' ? new Date(task.spec.at).toLocaleString() : task.spec.kind === 'cron' ? task.spec.expr : task.spec.kind === 'daily' ? `每天 ${task.spec.time}` : `每周 ${task.spec.days.map(day=>['日','一','二','三','四','五','六'][day]).join('、')} ${task.spec.time}`} · {task.timeZone.kind === 'recommended' ? task.timeZone.iana : '安装时选择时区'} · {task.placement === 'follow' ? '跟随当前会话' : '新话题'}</p><RecipeMarkdown text={richText(task.instruction,view)}/><p className="community-muted">安装后暂停，核对实际执行条件后单独启用。</p></article>)}</section>;
+  if (section === '任务') return content.tasks.length ? <section className="community-config recipe-configuration"><h2>任务</h2><div className="recipe-configuration-cards">{content.tasks.map(task => <article className="recipe-configuration-card" key={task.itemId}><h3>{task.name}</h3><p>{task.spec.kind === 'every' ? `每 ${task.spec.minutes} 分钟` : task.spec.kind === 'once' ? new Date(task.spec.at).toLocaleString() : task.spec.kind === 'cron' ? task.spec.expr : task.spec.kind === 'daily' ? `每天 ${task.spec.time}` : `每周 ${task.spec.days.map(day=>['日','一','二','三','四','五','六'][day]).join('、')} ${task.spec.time}`} · {task.timeZone.kind === 'recommended' ? task.timeZone.iana : '安装时选择时区'} · {task.placement === 'follow' ? '跟随当前会话' : '新话题'}</p><RecipeMarkdown text={richText(task.instruction,view)}/><p className="recipe-configuration-note">安装后暂停，核对实际执行条件后单独启用。</p></article>)}</div></section> : <RecipeTaskSummary count={0}/>;
   return null;
 }
 

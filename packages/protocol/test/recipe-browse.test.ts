@@ -23,7 +23,8 @@ it('extracts bounded descriptions only from explicit frontmatter, including fold
 it('browse detail refuses full source fields and exposes entitlement separately from preview availability',()=>{
   const detail={recipeId:'11111111-1111-4111-8111-111111111111',versionId:'22222222-2222-4222-8222-222222222222',revision:1,format:'rich-v2',public:{name:'Recipe',summary:'',overview:'',version:'1',access:'coded'},creator:{authorId:'33333333-3333-4333-8333-333333333333',displayName:'Author'},owned:false,acquired:true,state:'listed',hasDisplayLogo:false,previewUnavailable:true};
   expect(recipeBrowseDetailSchema.parse(detail).acquired).toBe(true);
-  expect(recipeBrowseDetailSchema.safeParse({...detail,acquired:false}).success).toBe(false);
+  expect(recipeBrowseDetailSchema.safeParse({...detail,acquired:false}).success).toBe(true);
+  expect(recipeBrowseDetailSchema.safeParse({...detail,acquired:false,previewUnavailable:undefined,preview:{settings:[],skills:[],ruleCount:0,taskCount:0}}).success).toBe(true);
   expect(recipeBrowseDetailSchema.safeParse({...detail,preview:{settings:[],skills:[],ruleCount:0,taskCount:0}}).success).toBe(false);
   for(const field of ['canonical','rich','config','manifest','release'])expect(recipeBrowseDetailSchema.safeParse({...detail,[field]:{}}).success).toBe(false);
 });

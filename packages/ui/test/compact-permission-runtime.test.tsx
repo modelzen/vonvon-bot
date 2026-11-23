@@ -1,6 +1,7 @@
 import {beforeEach, expect, it, vi} from 'vitest';
 import {isValidElement, type ReactElement, type ReactNode} from 'react';
 import {Editor, NativePermissionEditor, PermissionFields, PermissionSummary, type Section} from '../src/settings/SettingsPanel';
+import {ExecutionPermissionSummary} from '../src/settings/GroupSettingsSummary';
 import {Dialog} from '../src/reference/components/ui/Dialog';
 import {NativePermissionFields} from '../src/settings/NativePermissionFields';
 import {SettingChoices} from '../src/settings/SettingChoices';
@@ -19,6 +20,7 @@ function nodes(node: ReactNode): Element[] {
   if (Array.isArray(node)) return node.flatMap(nodes);
   if (!isValidElement<Record<string, any>>(node)) return [];
   if (node.type === Dialog && !node.props.open) return [node];
+  if (node.type === ExecutionPermissionSummary) return [node, ...nodes(ExecutionPermissionSummary(node.props as Parameters<typeof ExecutionPermissionSummary>[0]))];
   return [node, ...nodes(node.props.children), ...nodes(node.props.footer), ...nodes(node.props.trailing)];
 }
 function at(name: string, make: () => ReactNode) {

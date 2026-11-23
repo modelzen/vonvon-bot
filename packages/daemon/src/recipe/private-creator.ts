@@ -14,6 +14,7 @@ import {listProjectsIn} from '../project/registry';
 import {AuthoringIm,physicalChat} from './authoring-im';
 import {AuthoringJournal,CreatorSelectionChanged,authoringBotKey,linkKey,matchesAuthoringRoute,renewCreatorBinding,sameRecipient,selectCreatorBinding,type AuthoringLedger,type AuthoringRoute,type Link,type Recipient} from './authoring-journal';
 import {groupSourceIdentity} from './authoring-source';
+import type {ConversationDraftAction} from './conversation-authoring';
 import type {AuthoringOptions,AuthoringPeer,Presence} from './authoring-service';
 import {digest} from './authoring-payload';
 import {operationUuid} from './manifest';
@@ -28,7 +29,7 @@ export function creatorIntent(text:string):Intent|undefined{
   if(/^(?:\/recipe\s+(?:create|start)|(?:从群配置|从这个群|帮我)?(?:创建|创作|制作|分享)(?:一个|一份)?配方)[。！]?$/i.test(text))return 'create';
   if(/^(?:\/recipe(?:\s+(?:list|works|preview|publish|continue))?|我的配方|继续创作|预览发布|发布吧)[。！]?$/i.test(text))return 'works';
 }
-export interface CreatorWake {id:string;messageId:string;intent:Intent;expiresAt:number;cardRef?:string;jobId?:string}
+export interface CreatorWake {id:string;messageId:string;intent:Intent|'conversation';expiresAt:number;cardRef?:string;jobId?:string}
 type Attachment={messageId:string;key:string;type:'image'|'file';sha256:string};
 function directImage(msg:NormalizedMessage){
   const raw=z.object({message:z.object({message_type:z.enum(['image','file']),content:z.string().max(8192)})}).safeParse(msg.raw).data?.message;
@@ -41,6 +42,11 @@ function directImage(msg:NormalizedMessage){
 type CreatorJob=Omit<WireJob,'task'>&{task:Extract<WireJob['task'],{kind:'read'|'command'|'deliverCodes'}>};
 export type JobRecord={
   job:CreatorJob;state:'offer'|'active'|'unknown'|'finished';created:number;expiresAt:number;messageId?:string;originalCardId?:string;approvalGeneration?:number;
+  conversationEntry?:{retryId:string;revision:number;order:number;text?:string;delivered?:true};
+  conversationRead?:{messageId:string;order:number;action:ConversationDraftAction['action'];threadId?:string;originalName?:string;change?:ConversationDraftAction['change']};
+  rename?:{order:number;threadId?:string;previousName:string};
+  inspected?:{name:string;revision:number};
+  conversationList?:{order:number;messageId:string};
   workName?:string;botName?:string;groupName?:string;version?:VersionSelection;codeLabel?:string;
   preview?:{ref?:string;readId?:string;position?:string};previewOwner?:string;
   previewRequest?:{session:string;cardSession:string;eventId?:string};
@@ -49,6 +55,7 @@ export type JobRecord={
 type DraftSelection={kind:'draft';snapshot:CreatorSnapshot};
 export type VersionSelection={kind:'version';target:CreatorVersion;name:string;version:string};
 export interface CreatorLedger {
+  conversationFocus?:{draftId:string;order:number};
   versionOrigins?:Record<string,CreatorWork>;observed?:Record<string,number>;sources?:Record<string,CreatorWork['source']>;
   jobs:Record<string,JobRecord>;cards:Record<string,Card>;chosenUntil?:number;seen?:string[];focusDraft?:string;focusUntil?:number;
   current?:DraftSelection|VersionSelection;awaitLogo?:{draftId:string;expiresAt:number};
@@ -144,7 +151,7 @@ export class PrivateCreator{
     if(wake){
       this.hooks.interact(p);
       if(wake.intent==='create')await this.groups(p,link,0,undefined,wake);
-      else await this.run(p,link,(s,l,db)=>{
+      else if(wake.intent==='works')await this.run(p,link,(s,l,db)=>{
         const current=this.currentWake(db,l,wake);
         current.jobId??=this.addJob(p,link,s,{kind:'read',read:{kind:'works',offset:0}}).job.id;
       });
@@ -177,6 +184,53 @@ export class PrivateCreator{
     const target=task.kind==='read'&&'target'in task.read?task.read.target:task.kind==='command'?versionOf(task.command):task.kind==='deliverCodes'?task.target:undefined;
     const row:JobRecord={job:{id,binding:link.binding,scope:p.scope,task},state:status,created:this.now(),expiresAt:this.now()+ttl,originWork:originWork??(target&&s.versionOrigins?.[target.versionId])};
     s.jobs[id]=row;return row;
+  }
+  async conversationList(p:Presence,recipient:Recipient,messageId:string,offset:number,check:(db:AuthoringLedger)=>Link){
+    const link=await this.hooks.guard(p,recipient);
+    return this.run(p,link,(s,actual,db)=>{
+      check(db);
+      const order=actual.selectionOrder??0;
+      const existing=Object.values(s.jobs).find(j=>j.conversationList?.messageId===messageId&&j.conversationList.order===order&&
+        j.job.task.kind==='read'&&j.job.task.read.kind==='works'&&j.job.task.read.offset===offset);
+      if(existing)return existing.job.id;
+      const row=this.addJob(p,actual,s,{kind:'read',read:{kind:'works',offset,...(p.draftScope&&{draftsOnly:true})}},'active');
+      row.conversationList={order,messageId};return row.job.id;
+    });
+  }
+  async conversationDraft(p:Presence,recipient:Recipient,work:CreatorWork,request:ConversationDraftAction,messageId:string,
+    check:(db:AuthoringLedger)=>Link,threadId?:string,originalName?:string){
+    const link=await this.hooks.guard(p,recipient);
+    await this.source(p,work);
+    const id=await this.run(p,link,(s,actual,db)=>{
+      check(db);
+      const previous=Object.values(s.jobs).find(job=>job.conversationRead?.messageId===messageId&&
+        (request.action==='inspect'?job.conversationRead.action==='inspect'&&same(job.originWork,work):job.conversationRead.action!=='inspect'));
+      if(previous){
+        if(!same(previous.originWork,work)||previous.conversationRead?.action!==request.action||
+          !same(previous.conversationRead?.change,request.change))throw denied();
+        return previous.job.id;
+      }
+      if(request.action!=='inspect')this.noPendingSave(db,p,actual,work);
+      if(request.action==='edit'){
+        const edit=actual.conversationEdit?.proposal;
+        if(edit?.work.draftId===work.draftId){
+          if(edit.acceptedBy&&!actual.conversationEditJobs?.[edit.id]?.result)throw denied();
+          delete actual.conversationEdit;
+        }
+      }
+      if(request.action!=='inspect'&&Object.values(s.jobs).some(j=>pendingPublication(j)&&j.job.task.kind==='command'&&workOf(j.job.task.command)?.draftId===work.draftId))throw denied();
+      if(request.action==='edit'?!request.change||!safeEditValue(request.change):request.change!==undefined)throw denied();
+      const row=this.addJob(p,actual,s,{kind:'read',read:{kind:'draft',work}},'active',work);
+      row.conversationRead={messageId,order:actual.selectionOrder??0,action:request.action,threadId,originalName,change:request.change};
+      if(request.action!=='inspect'){
+        s.focusDraft=work.draftId;s.focusUntil=this.now()+ttl;
+        if(request.action==='edit')s.conversationFocus={draftId:work.draftId,order:actual.selectionOrder??0};
+      }
+      return row.job.id;
+    });
+    return {state:'requested',draftId:work.draftId,requestId:id,message:request.action==='inspect'?'App 正在读取本地草稿的名称和修订。':request.action==='edit'?
+      'App 核对当前修订后会发来修改确认卡。':
+      'App 核对当前修订后，会在本人私聊显示完整预览和正式发布确认。'};
   }
   private read(p:Presence,link:Link,read:CreatorRead,version?:VersionSelection){
     return this.run(p,link,s=>{
@@ -836,7 +890,7 @@ export class PrivateCreator{
             const owner=r.previewOwner?s.jobs[r.previewOwner]:undefined;
             if(!cardAvailable||owner?.preview?.readId!==id||!this.livePreview(s,p.session,owner))throw denied();
           }
-          if(job.task.read.kind==='draft')this.noPendingSave(db,p,link,job.task.read.work);
+          if(job.task.read.kind==='draft'&&r.conversationRead?.action!=='inspect')this.noPendingSave(db,p,link,job.task.read.work);
           return {kind:'creatorChecked',job,mode:'read'};
         case 'deliverCodes':
           if(!cardAvailable)throw denied();
@@ -855,7 +909,31 @@ export class PrivateCreator{
     switch(req.type){
       case 'creatorPreview':return this.publicationPreview(p,link,req.work,req.revision);
       case 'creatorAppConfirm':await this.appConfirm(p,link,req);break;
-      case 'creatorContinue':this.hooks.interact(p);await this.selected(p,link,req.selection);break;
+      case 'creatorContinue':{
+        this.hooks.interact(p);
+        const selection=req.selection;
+        if(req.conversationRevision===undefined){await this.selected(p,link,selection);break;}
+        if(selection.kind!=='draft'||!req.conversationRetryId)throw denied();
+        const revision=req.conversationRevision,retryId=req.conversationRetryId,work=selection.work;
+        const before=await this.run(p,link,(_s,l,db)=>this.selectionState(db,l));
+        await this.source(p,work);
+        await this.run(p,link,(s,l,db)=>{
+          const prior=Object.values(s.jobs).find(j=>j.conversationEntry?.retryId===retryId);
+          if(prior){
+            if(!same(prior.originWork,work)||prior.conversationEntry!.revision!==revision||prior.conversationEntry!.order!==l.selectionOrder)throw denied();
+            return;
+          }
+          if(this.selectionState(db,l)!==before)throw denied();
+          this.noPendingSave(db,p,l,work);
+          selectCreatorBinding(db,l,this.now());
+          delete l.conversationProposal;
+          for(const h of Object.values(db.handoffs??{}))if(h.conversation&&h.scope===p.scope&&h.account===p.account&&h.binding===l.binding&&h.phase.state==='selecting'&&!h.capture)h.phase={state:'cancelled'};
+          delete s.current;delete s.conversationFocus;s.focusDraft=work.draftId;s.focusUntil=this.now()+ttl;
+          const row=this.addJob(p,l,s,{kind:'read',read:{kind:'draft',work}},'active',work);
+          row.conversationEntry={retryId,revision,order:l.selectionOrder!};
+        });
+        break;
+      }
       case 'creatorPoll':{
         const wakeId=await this.run(p,link,(_s,l,db)=>l.wake&&l.wake.expiresAt>this.now()&&this.wakeRoute(db,l)?l.wake.id:undefined);
         if(wakeId)await this.open(p,link.binding,wakeId).catch(error=>{if(!(error instanceof CreatorSelectionChanged))throw error;});
@@ -960,11 +1038,21 @@ export class PrivateCreator{
     }
     return {kind:'creatorAck'};
   }
+  private async entryText(p:Presence,link:Link,id:string){
+    const text=await this.run(p,link,(s,l)=>{
+      const entry=s.jobs[id]?.conversationEntry;
+      if(entry&&!entry.delivered&&entry.order===l.selectionOrder)return entry.text;
+    });
+    if(!text)return;
+    await this.im.sendText(link.recipient.chatId,text,id);
+    await this.run(p,link,s=>{const entry=s.jobs[id]?.conversationEntry;if(entry?.text===text)entry.delivered=true;});
+  }
   private async answer(p:Presence,link:Link,id:string,a:CreatorAnswer){
     const old=await this.currentJob(p,link,id);
     const answerDigest=digest(JSON.stringify(a));
     if(old.state==='finished'){
       if(old.answerDigest!==answerDigest)throw denied();
+      if(old.conversationEntry?.text&&!old.conversationEntry.delivered)await this.entryText(p,link,id);
       const c=await this.run(p,link,s=>old.resultCard&&s.cards[old.resultCard]);
       if(c&&(!c.messageId||c.needsUpdate))await this.redeliver(p,link,c);
       return;
@@ -993,6 +1081,23 @@ export class PrivateCreator{
         r.state='unknown';
         card=this.cards.approvalCard(p,s,r,true);r.resultCard=card.ref;return card;
       }
+      if(task.kind==='read'&&task.read.kind==='works'&&r.conversationList){
+        if(r.conversationList.order!==(_l.selectionOrder??0))throw denied();
+        if(a.kind==='works'){
+          if(a.nextOffset!==null&&a.nextOffset<=task.read.offset)throw denied();
+          r.result={...a,items:a.items.filter(i=>i.kind==='draft')};
+        }else if(a.kind==='rejected')r.result=a;
+        else throw denied();
+        r.state='finished';r.answerDigest=answerDigest;return;
+      }
+      if(task.kind==='read'&&task.read.kind==='draft'&&r.conversationRead?.action==='inspect'){
+        if(r.conversationRead.order!==(_l.selectionOrder??0))throw denied();
+        if(a.kind==='snapshot'&&same(task.read.work,a.snapshot.work))r.inspected={name:a.snapshot.public.name,revision:a.snapshot.revision};
+        else if(a.kind==='rejected')r.result=a;
+        else throw denied();
+        r.state='finished';r.answerDigest=answerDigest;
+        return;
+      }
       if(task.kind==='read'&&task.read.kind==='openPreview'){
         const q=task.read,owner=r.previewOwner?s.jobs[r.previewOwner]:undefined,command=owner?.job.task;
         if(command?.kind!=='command'||command.command.kind!=='publish')throw denied();
@@ -1010,6 +1115,7 @@ export class PrivateCreator{
         delete owner.preview.position;
         card=this.cards.previewCard(s,p,owner,'当前页暂时无法显示','请从发布预览卡重新选择这一节。',[],task.read.work.draftId);
       }else if(a.kind==='rejected'){
+        if(r.conversationRead?.change?.field==='name')r.result=a;
         card=this.cards.newCard(s,p,'配方操作未完成',{changed:'修订或来源已改变，请重新核对。',unavailable:'当前操作未能完成。',forbidden:'当前账号或来源不可用。',invalid:'原请求未被接受，请核对内容。'}[a.reason],[]);
       }else if(task.kind==='read'){
         const q=task.read;
@@ -1024,7 +1130,18 @@ export class PrivateCreator{
           buttons.push({label:'从群创建配方',choice:{kind:'groups',offset:0}});
           card=this.cards.newCard(s,p,'我的配方','请选择要继续的作品。',buttons);
         }else if(q.kind==='draft'&&a.kind==='snapshot'){
-          const snap=a.snapshot;if(!same(q.work,snap.work))throw denied();
+          const snap=a.snapshot;if(!same(q.work,snap.work)||r.conversationRead&&r.conversationRead.order!==(_l.selectionOrder??0))throw denied();
+          if(r.conversationEntry&&(r.conversationEntry.revision!==snap.revision||r.conversationEntry.order!==_l.selectionOrder)){
+            r.state='finished';r.answerDigest=answerDigest;
+            if(r.conversationEntry.order===_l.selectionOrder)r.conversationEntry.text='本地草稿的修订已经变化，请从 App 选择当前版本继续创作。';
+            return;
+          }
+          if(r.conversationRead?.change?.field==='name'&&r.conversationRead.originalName&&r.conversationRead.originalName!==snap.public.name){
+            r.inspected={name:snap.public.name,revision:snap.revision};
+            r.result={kind:'rejected',reason:'changed'};r.answerDigest=answerDigest;r.state='finished';
+            card=this.cards.newCard(s,p,'请核对要改名的草稿','本地修订 '+snap.revision+' 的名称是「'+snap.public.name+'」。请按当前名称指明要修改的草稿。',[]);
+            r.resultCard=card.ref;return card;
+          }
           this.noPendingSave(db,p,link,q.work);
           r.state='finished';invalidate(s,snap.work.draftId);
           (s.sources??={})[snap.work.draftId]=snap.work.source;
@@ -1038,13 +1155,22 @@ export class PrivateCreator{
           if(s.focusDraft===snap.work.draftId||!s.current&&!s.focusDraft&&Object.keys(s.sources).length===1&&!otherContext&&!otherHandoff){
             s.current={kind:'draft',snapshot:snap};s.focusUntil=this.now()+ttl;
           }
-          const cmd:CreatorCommand={kind:'publish',snapshot:snap,snapshotDigest:snapshotHash(snap)};
-          const offer=this.addJob(p,link,s,{kind:'command',command:cmd,expiresAt:this.now()+ttl,approval:'0'.repeat(64)},'offer',snap.work);
-          offer.botName=bot?.botName??bot?.name;
-          const src=snap.work.source;
-          if(src)offer.groupName=Object.values(db.handoffs??{}).find(h=>h.scope===p.scope&&h.account===p.account&&h.binding===link.binding&&h.phase.state==='prepared'&&
-            h.phase.operationId===src.preparationId&&h.groupId===src.groupId&&h.identity===src.identity)?.groupName;
-          card=this.cards.approvalCard(p,s,offer,false);
+          if(r.conversationEntry){
+            s.conversationFocus={draftId:snap.work.draftId,order:r.conversationEntry.order};
+            r.conversationEntry.text='继续创作「'+snap.public.name+'」 · 本地修订 '+snap.revision+'。'+(snap.public.summary?'\n'+snap.public.summary:'')+'\n你可以直接说要调整的介绍、技能、规则或任务，也可以要求预览或正式发布。';
+          }else{
+            const change=r.conversationRead?.change;
+            const cmd:CreatorCommand=change?creatorCommandSchema.parse({kind:'metadata',work:snap.work,revision:snap.revision,baseSha256:snap.contentSha256,change}):
+              {kind:'publish',snapshot:snap,snapshotDigest:snapshotHash(snap)};
+            const offer=this.addJob(p,link,s,{kind:'command',command:cmd,expiresAt:this.now()+ttl,approval:'0'.repeat(64)},'offer',snap.work);
+            if(change?.field==='name'&&r.conversationRead)offer.rename={previousName:snap.public.name,order:r.conversationRead.order,threadId:r.conversationRead.threadId};
+            offer.workName=snap.public.name+' · '+snap.public.version;
+            offer.botName=bot?.botName??bot?.name;
+            const src=snap.work.source;
+            if(src)offer.groupName=Object.values(db.handoffs??{}).find(h=>h.scope===p.scope&&h.account===p.account&&h.binding===link.binding&&h.phase.state==='prepared'&&
+              h.phase.operationId===src.preparationId&&h.groupId===src.groupId&&h.identity===src.identity)?.groupName;
+            card=this.cards.approvalCard(p,s,offer,false);
+          }
         }else if(q.kind==='page'&&a.kind==='page'){
           const offer=r.previewOwner?s.jobs[r.previewOwner]:undefined;
           const cmd=offer?.job.task.kind==='command'?offer.job.task.command:undefined;
@@ -1084,8 +1210,11 @@ export class PrivateCreator{
         }else if(cmd.kind==='withdraw'&&a.kind==='withdrawn'&&same(cmd.target,a.target)){
           card=this.cards.newCard(s,p,'版本已撤下',versionName,[]);
         }else if(cmd.kind==='metadata'&&a.kind==='saved'&&same(cmd.work,a.work)&&a.revision===cmd.revision+1){
-          card=this.cards.newCard(s,p,'修改已保存','修订 '+a.revision,[]);
-          this.addJob(p,link,s,{kind:'read',read:{kind:'draft',work:cmd.work}},'active',cmd.work);
+          card=this.cards.newCard(s,p,'修改已保存',cmd.change.field==='name'?'本地草稿已改名为「'+cmd.change.value+'」\n草稿修订 '+a.revision:'修订 '+a.revision,[]);
+          r.result=a;
+          if(r.rename){
+            if(s.current?.kind==='draft'&&s.current.snapshot.work.draftId===cmd.work.draftId)delete s.current;
+          }else this.addJob(p,link,s,{kind:'read',read:{kind:'draft',work:cmd.work}},'active',cmd.work);
         }else if(cmd.kind==='discard'&&a.kind==='discarded'&&same(cmd.work,a.work)&&a.revision===cmd.revision){
           card=this.cards.newCard(s,p,'已删除创作中的作品',r.workName??'所选草稿',[]);
         }else throw denied();
@@ -1095,7 +1224,7 @@ export class PrivateCreator{
         }
       }
       r.state='finished';r.answerDigest=answerDigest;
-      if(task.kind==='command'&&task.command.kind==='publish'&&(a.kind==='published'||a.kind==='rejected'))r.result=a;
+      if(task.kind==='command'&&(task.command.kind==='publish'||task.command.kind==='metadata')&&(a.kind==='published'||a.kind==='rejected'))r.result=a;
       r.resultCard=card?.ref;
       if(task.kind==='command'&&card){
         r.receiptCard=true;
@@ -1111,5 +1240,6 @@ export class PrivateCreator{
       return card??refresh;
     });
     if(c)await this.display(p,link,c);
+    if(old.conversationEntry)await this.entryText(p,link,id);
   }
 }

@@ -19,7 +19,7 @@ const creatorSource = z.object({viewId:viewIdSchema,botId:agentIdSchema}).strict
 export const desktopAuthoringRequestSchema = z.discriminatedUnion('type', [
   creatorSource.extend({type:z.literal('resourceHandoff'),accountId:uuid,target:exactResourceVersionSchema,requestId:uuid}).strict(),
   z.object({type:z.literal('preparePublication'),accountId:uuid,draft:recipeDraftSchema}).strict(),
-  z.object({type:z.literal('confirmPublication'),accountId:uuid,reviewId:uuid}).strict(),
+  z.object({type:z.literal('confirmPublication'),accountId:uuid,reviewId:uuid,destination:exactResourceVersionSchema.nullable().optional()}).strict(),
   z.object({type:z.literal('recoverPublication'),accountId:uuid,draftId:uuid}).strict(),
   z.object({type:z.literal('creatorContinue'),accountId:uuid,retryId:uuid,recover:z.enum(['request','handoff']).optional(),entry:z.discriminatedUnion('kind',[
     z.object({kind:z.literal('source'),viewId:viewIdSchema,botId:agentIdSchema,groupId:groupIdSchema,
@@ -98,7 +98,7 @@ const historyMetadata = {
   version: recipePublicSchema.shape.version, revision,
 };
 export const sourceHistoryEntrySchema = z.discriminatedUnion('state', [
-  z.object({state: z.literal('draft'), ...historyMetadata, versionId: z.null()}).strict(),
+  z.object({state: z.literal('draft'), ...historyMetadata, recipeId:uuid.nullable(), versionId: z.null()}).strict(),
   z.object({state: z.literal('published'), ...historyMetadata, versionId: uuid}).strict(),
   z.object({state: z.literal('unknown'), operationId: uuid, draftId: z.null(), recipeId: z.null(), versionId: z.null()}).strict(),
 ]);

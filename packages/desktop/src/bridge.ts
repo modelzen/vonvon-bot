@@ -22,6 +22,10 @@ import {RecipeCreatorSupervisor,type CreatorSourceLease} from './recipe-creator-
 import {RecipeCreatorExecutor} from './recipe-creator.js';
 import {RecipeCreatorJournal} from './recipe-creator-journal.js';
 import {MetadataJournal} from './community-metadata-journal.js';
+import {LocalRecipeDrafts,LocalRecipeDraftError} from './local-recipe-drafts.js';
+import {LocalRecipePublisher,type LocalRecipePossessionRequest} from './local-recipe-publisher.js';
+import {localRecipeLogo} from './local-recipe-logo.js';
+import {isLocalRecipeCommunityRequest,localRecipeCommunity} from './local-recipe-community.js';
 import {RecipeUseError, changed} from './recipe-use-cloud.js';
 import type { NativeAccount } from './account-session.js';
 import { RegistryError } from './device-registry.js';
@@ -154,6 +158,7 @@ function safeFailure(error: unknown): SafeFailure {
 }
 
 function failure(error: unknown): IpcResult<never> {
+  if(error instanceof LocalRecipeDraftError)return {ok:false,error:{kind:'validation',code:error.code,message:error.message}};
   return { ok: false, error: safeFailure(error) };
 }
 
@@ -179,7 +184,7 @@ const remoteServiceToggle = (value: unknown): boolean => {
 };
 
 export function installBridge(
-  owner: AttachedDaemon, window: BrowserWindow, paths: DesktopResources, actions: ShellActions, devices: DeviceConnections, account: NativeAccount, recipeJournalPath?:string, authoringJournalPath?:string, recipePreview = new RecipePreviewNavigation('vonvon'), groupNavigation = new GroupNavigation('vonvon'),
+  owner: AttachedDaemon, window: BrowserWindow, paths: DesktopResources, actions: ShellActions, devices: DeviceConnections, account: NativeAccount, recipeJournalPath?:string, authoringJournalPath?:string, recipePreview = new RecipePreviewNavigation('vonvon'), groupNavigation = new GroupNavigation('vonvon'), publicationPossessionRequest?:LocalRecipePossessionRequest,
 ): DesktopBridge {
   const expectedUrl = pathToFileURL(realpathSync(paths.uiIndex)).href;
   let disposed = false;
@@ -445,7 +450,10 @@ export function installBridge(
   };
   const metadataJournal = new MetadataJournal(recipeJournalPath && recipeJournalPath+'.metadata');
   const authoringJournal=new AuthoringJournal(authoringJournalPath);
-  const authoring = new RecipeAuthoringController(account, captureRecipeDevice, authoringJournal, onAuthoringSaved);
+  const localDrafts=new LocalRecipeDrafts(authoringJournalPath&&authoringJournalPath+'.local');
+  const localPublisher=new LocalRecipePublisher(authoringJournalPath&&authoringJournalPath+'.publications',publicationPossessionRequest);
+  const normalizeLogo=localRecipeLogo(script=>window.webContents.executeJavaScript(script),()=>{if(!currentDocument())throw changed();});
+  const authoring = new RecipeAuthoringController(account, captureRecipeDevice, authoringJournal, onAuthoringSaved,localDrafts,normalizeLogo);
   const creatorJournal=new RecipeCreatorJournal(authoringJournalPath&&authoringJournalPath+'.creator');
   const retainCreatorSource=async(id:string,signal:AbortSignal):Promise<CreatorSourceLease>=>{
     if(id!==LOCAL_VIEW){
@@ -468,7 +476,7 @@ export function installBridge(
         const current=account.status();
         if(disposed||current.kind!=='signedIn'||current.accountId!==value.accountId||account.lease?.(value.accountId)?.aborted!==false)throw changed();
         recipePreview.request({draftId:value.draftId,revision:value.revision},value.accountId);
-      }));
+      },localDrafts,localPublisher,normalizeLogo),localDrafts);
   function onAuthoringSaved(value: AuthoringSaved) {
     creator.invalidateDraft(value.accountId, value.draftId);
     send({type:'authoringSaved',value});
@@ -621,7 +629,8 @@ export function installBridge(
     register(desktopChannels.recipePreviewAcknowledge, 1, value => draftPreviewNavigationIdSchema.parse(value), async value => {
       const actor=account.status();recipePreview.acknowledge(value,actor.kind==='signedIn'?actor.accountId:undefined);
     });
-    register(desktopChannels.community, 1, value => communityRequestSchema.parse(value), value => communityRequest(account, value, metadataJournal));
+    register(desktopChannels.community, 1, value => communityRequestSchema.parse(value), value => isLocalRecipeCommunityRequest(value)?
+      localRecipeCommunity(account,localDrafts,value,normalizeLogo):communityRequest(account, value, metadataJournal));
     register(desktopChannels.accountStatus, 0, noArg, async () => accountStatusSchema.parse(account.status()));
     register(desktopChannels.accountLogin, 0, noArg, async () => accountStatusSchema.parse(await account.login()));
     register(desktopChannels.accountCancel, 0, noArg, async () => accountStatusSchema.parse(await account.cancelLogin()));
@@ -757,6 +766,7 @@ export function installBridge(
         creator.dispose();
         localSourceOwner.abort();
         authoring.closeAll();
+        localDrafts.close();localPublisher.close();
         subscribed = false;
         for (const off of unsubscribers.splice(0)) off();
         window.webContents.removeListener('did-start-navigation', onNavigation);

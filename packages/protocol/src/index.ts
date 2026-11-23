@@ -54,5 +54,6 @@ export * from './recipe-rich-authoring.js';
 export * from './recipe-preview.js';
 export * from './recipe-resource-context.js';
 export * from './recipe-browse.js';
+export * from './recipe-library.js';
 
 export * from './group-navigation.js';

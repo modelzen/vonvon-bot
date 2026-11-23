@@ -1,6 +1,6 @@
-import type {CodeSource, ReleaseCodeHost} from '../release-code/host';
 import type { FeedbackSource } from '../agent/entry/feedback-tool';
 import { RESOURCE_TOOL_CATALOG_VERSION } from '../agent/entry/resource-tools';
+import { recipeCreationTurnGuidance } from '../agent/builtin-skills/recipe';
 import { recipeResourceTurnGuidance } from '../recipe/application-guidance';
 import { FEEDBACK_ACTION } from '../feedback/events';
 import type { FeedbackHost } from '../feedback/host';
@@ -550,7 +550,6 @@ export { BACKEND_PROBE_TIMEOUT_MS, probeBackends, validateBackendSwitch } from '
  * manual-reminder ownership and long-task timing never leak from turn one. */
 export interface QueuedTurn {
   feedback?: FeedbackSource;
-  releaseCode?: CodeSource;
   attentionAcceptance?: AttentionAcceptance;
   voice?: VoiceReply;
   input: AgentInput;
@@ -891,7 +890,6 @@ interface TurnExtra {
   /** The ordinary DM router verified a delivered resource for this SDK message. */
   resourceSelected?: true;
   feedback?: FeedbackSource;
-  releaseCode?: CodeSource;
   /** A smart judgement's one-use acknowledgement of actual session intake. */
   attentionAcceptance?: AttentionAcceptance;
   /** Local image paths to send instead of downloading the message's own. */
@@ -1218,7 +1216,7 @@ export function createOrchestrator(
   /** `droppedFile`: where a shutdown keeps the queued messages it drops (s18c). No default: without it, nothing is
    * kept or answered (tests, and every caller but `daemon run`). */
   // Only daemon run supplies judgeUsageFile; tests that omit it do not persist usage.
-  options?: { releaseCode?: ReleaseCodeHost; feedback?: FeedbackHost; authoring?: Pick<import('../recipe/authoring-service').AuthoringService, 'onMessage' | 'onAction' | 'adminRemoved'> & Partial<Pick<import('../recipe/authoring-service').AuthoringService,'resources'>>; entries?: AgentEntries; memory?: MemoryWriter; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention;
+  options?: { feedback?: FeedbackHost; authoring?: Pick<import('../recipe/authoring-service').AuthoringService, 'onMessage' | 'onAction' | 'adminRemoved'> & Partial<Pick<import('../recipe/authoring-service').AuthoringService,'resources'|'conversation'>>; entries?: AgentEntries; memory?: MemoryWriter; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention;
     /** devices-4a 4.3: where each new session's token comes from (the host, over IPC). Without it a session gets none (tests). */
     host?: Pick<HostApi, 'issueSessionToken'>;
     /** The launcher this Bot wrote for its sessions (agent/session-cli.ts); without one a session's PATH stays as it was. */
@@ -1315,7 +1313,7 @@ export function createOrchestrator(
     const downloads = schedule && project ? inboundChatDir(project.chatId) : undefined;
     if (downloads) await prepareInboundDir(downloads);
     const profile = assembled || skills || capabilityPackages.length ? { instructions: [assembled ? openingInstructions(assembled, nonce, { hiddenBlocks: Boolean(project) && hiddenBlocksFor(backend.id) }) : '', managed.instructions].filter(Boolean).join('\n\n'), env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: downloads ? [{ path: downloads, access: 'read' as const }] : [], capabilityPackages, mcpServers: [],
-      tools: { schedule, ...(schedule && project && options?.releaseCode?.enabled(project.chatId) ? {releaseCode: true} : {}), ...(schedule && !project?.dm && options?.feedback ? {feedback: true} : {}), feishu: schedule || comment, ...(feishuEdit ? { feishuEdit } : {}), ...(feishuApi ? { feishuApi } : {}), ...(comment ? { documentsOnly: true } : {}), ...(project?.dm ? { acrossBots: true } : {}) }, ...(skills ? { skills } : {}) } : undefined;
+      tools: { schedule, ...(schedule && !project?.dm && options?.feedback ? {feedback: true} : {}), feishu: schedule || comment, ...(feishuEdit ? { feishuEdit } : {}), ...(feishuApi ? { feishuApi } : {}), ...(comment ? { documentsOnly: true } : {}), ...(project?.dm ? { acrossBots: true } : {}) }, ...(skills ? { skills } : {}) } : undefined;
     const built = await executionSessionProfile({ execution: { ...execution, permission: permission ?? execution.permission }, cwd, backend: backend.id, scope: project ? 'group' : 'ungrouped', profile });
     if (built) profileSkillKeys.set(built, skillKey);
     if (assembled && built) openings.set(built, contextOf(assembled, nonce));
@@ -2992,9 +2990,9 @@ export function createOrchestrator(
     return voiceMessages.remember(msg, ingested);
   }
   const resourceMessages = new WeakSet<NormalizedMessage>();
+  const creationMessages = new WeakSet<NormalizedMessage>();
   const feedbackSources = new WeakMap<NormalizedMessage, FeedbackSource>();
-  const codeSources = new WeakMap<NormalizedMessage, CodeSource>();
-  const directFeedback = (msg: NormalizedMessage): Pick<TurnExtra, 'feedback'|'releaseCode'> => ({feedback: feedbackSources.get(msg),releaseCode:codeSources.get(msg)});
+  const directFeedback = (msg: NormalizedMessage): Pick<TurnExtra, 'feedback'> => ({feedback: feedbackSources.get(msg)});
   const handleMessage = async (msg: NormalizedMessage, intakeOwner?: IntakeStatus): Promise<void> => {
     // Feishu does not keep events in order: a recall can come before its message (s15).
     if (await intakeStoppedBeforeText(msg, intakeOwner)) return;
@@ -3015,8 +3013,7 @@ export function createOrchestrator(
       if (await syncCopy.skip(msg, true)) return;
       if (fromBot(msg)) return;
       // Whoever a group's agent asked may reply to their card; everything else stops here, before any transcription (dm-agent 3.5).
-      if (await options?.releaseCode?.onMessage(msg)) return;
-      if (options?.feedback && /^\/feedback (?:authorize|authorized)$/.test(msg.content.trim()) && await options.feedback.onMessage(msg)) return;
+      if (options?.feedback && /^\/feedback (?:authorize|authorized|code(?:\s.*)?)$/.test(msg.content.trim()) && await options.feedback.onMessage(msg)) return;
       if (!isAdmin(cfg, msg.senderId)) {
         if (!askAnswered(msg)) await refuseDm(msg);
         return;
@@ -3037,6 +3034,7 @@ export function createOrchestrator(
       if (options?.authoring && await options.authoring.onMessage(msg)) return;
       // route() only records a trigger after matching the trusted DM and the delivered account selection.
       if (options?.authoring?.resources?.hasTrigger(msg.messageId)) resourceMessages.add(msg);
+      if (options?.authoring?.conversation?.active(msg.messageId)) creationMessages.add(msg);
       if (isMenuCommand(msg)) { await handleDmConsole(channel, cfg, msg); return; }
       const dm = await openDmChat(msg);
       if (!dm) {
@@ -3066,13 +3064,10 @@ export function createOrchestrator(
       || (noMentionOf(project) && !msg.mentionAll && !msg.mentions.some(mention => !mention.isBot))));
     // Resolve audio copies before spending a transcription on the duplicate.
     if (await syncCopy.skip(msg, voiceCandidate || (smart ? msg.mentionedBot : maybe) || resumePublications.has(msg.chatId))) return;
-    if ((options?.feedback || options?.releaseCode) && project && !bot && project.enabled !== false && !projectMutations.has(msg.chatId)
+    if (options?.feedback && project && !bot && project.enabled !== false && !projectMutations.has(msg.chatId)
       && !resumePublications.has(msg.chatId) && isChatAllowed(cfg, msg.chatId) && isUserAllowedInProject(cfg, project, msg.senderId)) {
-      if (await options.releaseCode?.onMessage(msg)) return;
-      const code = options.releaseCode?.bind(msg,project);
-      if (code) codeSources.set(msg,code);
-      if (/^\/feedback(?:\s|$)/.test(msg.content.trim()) && await options.feedback?.onMessage(msg)) return;
-      const source = options.feedback?.bind(msg, project);
+      if (/^\/feedback(?:\s|$)/.test(msg.content.trim()) && await options.feedback.onMessage(msg)) return;
+      const source = options.feedback.bind(msg, project);
       if (source) feedbackSources.set(msg, source);
     }
     if (voiceCandidate && project && project.enabled !== false
@@ -3765,7 +3760,7 @@ export function createOrchestrator(
     // also covers the card-originated turns (👍 继续, 🔁 重试).
     if (refusedTurn(project, msg.chatId, extra) || dmShut(project, msg, extra)) return Promise.resolve();
     const source = extra?.burst ? burstTrigger(extra.burst) : msg;
-    if (project?.dm && source.messageId === msg.messageId && resourceMessages.has(source) &&
+    if (project?.dm && source.messageId === msg.messageId && (resourceMessages.has(source)||creationMessages.has(source)) &&
       !extra?.initiative && !extra?.wake && !extra?.scheduled && !extra?.retry && extra?.replayText === undefined) {
       // A selection belongs to a real new turn. Steering text into somebody's existing tool scope cannot bind it.
       extra = {...extra, resourceSelected: true, queueOnly: true};
@@ -4038,7 +4033,7 @@ export function createOrchestrator(
         origin,
         ...(extra?.initiative ? { initiative: true as const } : {}),
         wake: extra?.wake,
-        feedback: extra?.feedback, releaseCode: extra?.releaseCode,
+        feedback: extra?.feedback,
         ...memoryTriggerOf(msg, extra),
         ...(extra?.scheduled ? { scheduled: extra.scheduled } : {}),
       });
@@ -4395,7 +4390,7 @@ export function createOrchestrator(
           ...(recreateReason && !unused ? { sessionNotice: sessionChangeNotice(recreateReason, Boolean(topicId)) } : {}),
           ...(extra?.initiative ? { initiative: true as const } : {}),
           wake: extra?.wake,
-          feedback: extra?.feedback, releaseCode: extra?.releaseCode,
+          feedback: extra?.feedback,
           ...memoryTriggerOf(msg, extra),
           ...(extra?.scheduled ? { scheduled: extra.scheduled } : {}),
         };
@@ -4667,7 +4662,7 @@ export function createOrchestrator(
    * Detached — onMessage must return fast (see {@link handleTurn}); a new
    * topic has a unique reply target so no same-topic reservation is needed.
    * `under`: the earlier line the smart mode opens it on instead (s25b). */
-  function startTopicDirectly(msg: NormalizedMessage, text: string, project?: Project, goal?: boolean, extra?: Pick<TurnExtra, 'initiative' | 'wake' | 'attentionAcceptance' | 'feedback' | 'releaseCode'>, under?: RecentLine): void {
+  function startTopicDirectly(msg: NormalizedMessage, text: string, project?: Project, goal?: boolean, extra?: Pick<TurnExtra, 'initiative' | 'wake' | 'attentionAcceptance' | 'feedback'>, under?: RecentLine): void {
     // When this start ends, the registry or Feishu knows the topic under that line, or it did not open (anchorLine put it in).
     const opened = (): void => { if (under) openingUnder.delete(under.id); };
     if (resumePublications.has(msg.chatId) || projectMutations.has(msg.chatId)) {
@@ -4800,7 +4795,7 @@ export function createOrchestrator(
           : { id: msg.messageId, from: senderOf(msg), at: msg.createTime || undefined, text: msg.content },
         ...(extra?.initiative ? { initiative: true as const } : {}),
         wake: extra?.wake,
-        feedback: extra?.feedback, releaseCode: extra?.releaseCode,
+        feedback: extra?.feedback,
         ...memoryTriggerOf(msg, extra),
         backendId: be.id,
         titleJobKey,
@@ -7685,7 +7680,6 @@ export function createOrchestrator(
 
   interface LaunchOpts {
     feedback?: FeedbackSource;
-    releaseCode?: CodeSource;
     attentionAcceptance?: AttentionAcceptance;
     /** Only group-message launches have a sender to notify if preparation is cut short. */
     origin?: DroppedOrigin;
@@ -8141,7 +8135,7 @@ export function createOrchestrator(
         replayText: opts.replayText,
         seen: opts.seen,
         triggerMessageId: opts.triggerMessageId,
-        feedback: opts.feedback, releaseCode: opts.releaseCode,
+        feedback: opts.feedback,
         seenHow: opts.seenHow,
         streaming: opts.streaming,
         woven: opts.woven,
@@ -8173,7 +8167,7 @@ export function createOrchestrator(
         state.scheduled = scheduled ? true : undefined;
         const dmUnionId = dmPeople.find(person => person.openId === currentTurn.requesterOpenId)?.unionId;
         turnScope = entries?.openTurn(opts.thread, {
-          feedback: currentTurn.feedback, releaseCode: currentTurn.releaseCode, requesterOpenId: currentTurn.requesterOpenId, requesterKind: currentTurn.requesterKind,
+          feedback: currentTurn.feedback, requesterOpenId: currentTurn.requesterOpenId, requesterKind: currentTurn.requesterKind,
           triggerMessageId: currentTurn.seen?.id ?? currentTurn.triggerMessageId, retry: currentTurn.replayText !== undefined,
           initiative: Boolean(currentTurn.initiative), wake: Boolean(currentTurn.wake),
           ...(currentTurn.memoryTrigger ? { typed: currentTurn.memoryTrigger.typed, triggerText: currentTurn.memoryTrigger.text } : {}),
@@ -8191,6 +8185,9 @@ export function createOrchestrator(
           });
           if(selection==='unavailable')turnInput={...turnInput,text:turnInput.text+'\n原配方资源当前不可用。请本人在 App 核对账号与来源连接，重新交付后再参考其内容。'};
           if(selection==='selected')turnInput={...turnInput,text:turnInput.text+'\n'+recipeResourceTurnGuidance};
+        }
+        if(turnScope?.presence==='human'&&resourceTrigger&&options?.authoring?.conversation?.active(resourceTrigger)){
+          turnInput={...turnInput,text:turnInput.text+'\n'+recipeCreationTurnGuidance};
         }
         turnMemory = turnScope ? entries?.memoryTurn(opts.thread) : undefined;
         dropRetries(topicThreadId); // an older card's [重试] would replay out of order

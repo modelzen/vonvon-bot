@@ -122,7 +122,10 @@ let revoked: string[] = [];
 async function app(policy: 'steer' | 'queue' = 'queue', host?: Pick<HostApi, 'issueSessionToken'>, authoring?: import('../src/recipe/authoring-service').AuthoringService, create = createOrchestrator) {
   cfg.preferences!.pendingPolicy = policy;
   await saveConfig(cfg);
-  const entries: AgentEntries = createAgentEntries({ appId: APP, isAdmin: id => (cfg.preferences?.access?.admins ?? []).includes(id), tools: authoring?(await import('../src/agent/entry/resource-tools')).resourceTools((get,q)=>authoring.resources.tool(get,q)):[],
+  const entries: AgentEntries = createAgentEntries({ appId: APP, isAdmin: id => (cfg.preferences?.access?.admins ?? []).includes(id), tools: authoring?[
+    ...(await import('../src/agent/entry/resource-tools')).resourceTools((get,q)=>authoring.resources.tool(get,q)),
+    ...(await import('../src/agent/entry/recipe-creation-tools')).recipeCreationTools((get,q)=>authoring.conversation.tool(get,q)),
+  ]:[],
     sessions: { revoke: sessionId => { revoked.push(sessionId); } } });
   const issue = vi.spyOn(entries, 'issue');
   const o = create(channel as never, cfg, paths.appDir, undefined, { entries, bot, authoring, droppedFile: DROPPED, ...(host ? { host } : {}) });
@@ -638,7 +641,7 @@ it.each([
     expect(prepare).toHaveBeenCalledTimes(1);
     expect(prepare.mock.calls[0]?.[1]).toMatchObject({kind: 'prepare', groupId: 'oc_existing',wait:{signal:expect.any(AbortSignal)}});
     expect(wire.inputs().at(-1)?.text).toContain('升级前的私聊记录');
-    expect(await getSession(A)).toMatchObject({sessionId: 'th', resourceToolCatalog: {sessionId: 'th', version: 2}, earlier: ['old-native']});
+    expect(await getSession(A)).toMatchObject({sessionId: 'th', resourceToolCatalog: {sessionId: 'th', version: 5}, earlier: ['old-native']});
     expect(wire.starts()).toHaveLength(2);
     await o.shutdown();
     ({o} = await startProvider());
@@ -779,7 +782,7 @@ it.each(['new session', 'old Codex rollout'] as const)('delivers an exact resour
       const firstCaller = observed.mock.calls.at(-1)?.[0];
       expect(firstCaller).toMatchObject({chatId: A, openId: OWNER, messageId: 'om_resource_read', sessionId: expect.any(String)});
       expect(callsFrom).toEqual([{query: 'index', caller: firstCaller}]);
-      expect(await getSession(A)).toMatchObject({sessionId: 'th', resourceToolCatalog: {sessionId: 'th', version: 2}, earlier: ['old-native']});
+      expect(await getSession(A)).toMatchObject({sessionId: 'th', resourceToolCatalog: {sessionId: 'th', version: 5}, earlier: ['old-native']});
       expect(wire.starts()).toHaveLength(2); // first failed, second accepted
       await o.shutdown();
       ({o} = await startProvider());

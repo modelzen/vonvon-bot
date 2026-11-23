@@ -1,5 +1,5 @@
 import {
-  RESOURCE_CONTEXT_CAPABILITY, NATIVE_RECIPE_PREVIEW_CAPABILITY, adminReplySchema, collaborationReplySchema, commandResultSchema,
+  DRAFT_SCOPE_EDIT_CAPABILITY, RESOURCE_CONTEXT_CAPABILITY, NATIVE_RECIPE_PREVIEW_CAPABILITY, adminReplySchema, collaborationReplySchema, commandResultSchema,
   desktopSnapshotSchema, directoryReplySchema, environmentReplySchema, memoryReplySchema, contextPreviewReplySchema,
   errorEnvelopeSchema, eventSchema, machineReplySchema, requestSchema,
   libraryReplySchema, scheduleReplySchema, settingsReplySchema, deviceReplySchema, recipeInstallReplySchema,
@@ -219,9 +219,10 @@ export function createClient(socket: ClientConnection, capabilities: readonly st
     recipeAuthoring: request => {
       if (request.type === 'resourceHandoff' && !capabilities.includes(RESOURCE_CONTEXT_CAPABILITY)) return Promise.reject(new Error('此设备尚不支持配方资源交付。'));
       if (request.type === 'creatorOpen') {
-        const {nativePreview, resourceContext, ...base} = request;
+        const {nativePreview, resourceContext, draftScope, ...base} = request;
         return send('recipeAuthoring', {...base, ...(nativePreview && capabilities.includes(NATIVE_RECIPE_PREVIEW_CAPABILITY) && {nativePreview}),
-          ...(resourceContext && capabilities.includes(RESOURCE_CONTEXT_CAPABILITY) && {resourceContext})});
+          ...(resourceContext && capabilities.includes(RESOURCE_CONTEXT_CAPABILITY) && {resourceContext}),
+          ...(draftScope && capabilities.includes(DRAFT_SCOPE_EDIT_CAPABILITY) && {draftScope})});
       }
       return send('recipeAuthoring', request);
     },

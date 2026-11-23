@@ -18,7 +18,8 @@ func listNames(dir *held, limit int) ([]string, error) {
 	}
 	return names, nil
 }
-func documentMetadata(parent *held, name string) bool {
+func documentMetadata(parent *held, name string) (bool, bool) {
 	var s unix.Stat_t
-	return unix.Fstatat(int(parent.file.Fd()), name, &s, unix.AT_SYMLINK_NOFOLLOW) == nil && s.Mode&unix.S_IFMT == unix.S_IFREG && s.Nlink == 1 && s.Size <= fileCap
+	regular := unix.Fstatat(int(parent.file.Fd()), name, &s, unix.AT_SYMLINK_NOFOLLOW) == nil && s.Mode&unix.S_IFMT == unix.S_IFREG && s.Nlink == 1
+	return regular && s.Size <= fileCap, regular && s.Size > fileCap
 }

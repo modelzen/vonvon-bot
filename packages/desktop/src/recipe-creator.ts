@@ -1,3 +1,6 @@
+import {draftScopeHead,editLocalDraftScope} from './local-recipe-scope-edit.js';
+import {richAuthoringCloud} from './recipe-authoring-rich-cloud.js';
+import {wireDigest,type AttestedSourceItem} from '../../daemon/src/recipe/authoring-rich-snapshot.js';
 import {isDeepStrictEqual} from 'node:util';
 import {z} from 'zod';
 import {creatorSnapshotSchema,recipeAuthoringReplySchema,validateWritableRichRecipeContent,recipePublicSchema,recipePublicationMetadataIssue,richMetadataRequestSchema,
@@ -5,15 +8,17 @@ import {creatorSnapshotSchema,recipeAuthoringReplySchema,validateWritableRichRec
   type DesktopAuthoringReply,type DraftPreviewLocator,type AuthoringPublished,type AuthoringSaved,type RecipeAuthoringRequest,type RecipeAuthoringReply} from '@vonvon/protocol';
 import type {NativeAccount} from './account-session.js';
 import {RecipeCreatorJournal,checkVersionSource,sameCreatorSource,creatorSha,creatorSnapshotDigest,type CreatorAssociation,type CreatorCommandRecord} from './recipe-creator-journal.js';
-import {creatorDraft,creatorJson,creatorCodes,publicationReceipt,issueReceipt,metadataReceipt,verifyMetadataReceipt,CreatorCloudRejected} from './recipe-creator-cloud.js';
+import {creatorJson,creatorCodes,publicationReceipt,issueReceipt,metadataReceipt,verifyMetadataReceipt,CreatorCloudRejected} from './recipe-creator-cloud.js';
 import {MetadataJournal} from './community-metadata-journal.js';
 import {communityRequest,CommunityError} from './community-api.js';
 import {inheritedPublication,UnsupportedLegacyPublication} from './recipe-publication-inheritance.js';
 import {recipeResourceReader} from './recipe-resource.js';
 import {richCommunity} from './community-rich.js';
-import {richAuthoringCloud} from './recipe-authoring-rich-cloud.js';
 import {authoringCloud} from './recipe-authoring-cloud.js';
 import {AuthoringJournal} from './recipe-authoring-journal.js';
+import {LocalRecipeDrafts,LocalRecipeDraftError} from './local-recipe-drafts.js';
+import {LocalRecipePublisher} from './local-recipe-publisher.js';
+import {localRecipeCommunity,localRecipeRequestSha256} from './local-recipe-community.js';
 
 export interface CreatorContext {
   association:CreatorAssociation;
@@ -43,7 +48,10 @@ export class RecipeCreatorExecutor {
   constructor(private readonly account:NativeAccount,private readonly journal:RecipeCreatorJournal,
     private readonly metadata:MetadataJournal,private readonly authoring:AuthoringJournal,private readonly onPublished?:(receipt:AuthoringPublished)=>void,
     private readonly onSaved?:(receipt:AuthoringSaved)=>void,
-    private readonly onPreview?:(locator:DraftPreviewLocator&{accountId:string})=>void) {}
+    private readonly onPreview?:(locator:DraftPreviewLocator&{accountId:string})=>void,
+    private readonly drafts:LocalRecipeDrafts=new LocalRecipeDrafts(),
+    private readonly publisher?:LocalRecipePublisher,
+    private readonly normalizeLogo?:(bytes:Buffer)=>Promise<Buffer>) {}
   private async checked(context:CreatorContext,job:CreatorJob):Promise<Checked>{
     context.check();
     const reply=expect(recipeAuthoringReplySchema.parse(await context.rpc({type:'creatorCheck',botId:context.association.botId,session:context.session,id:job.id})),'creatorChecked');
@@ -90,48 +98,25 @@ export class RecipeCreatorExecutor {
   }
   private async verifyWork(context:CreatorContext,job:CreatorJob,work:CreatorWork){
     if(!work.source)return;
-    const {association}=context,prior=this.authoring.history.locator(association.accountId,work.source.preparationId);
-    if(!prior||prior.deviceId!==association.deviceId||prior.deviceKey!==association.deviceKey||prior.botId!==association.botId||
-      prior.groupId!==work.source.groupId||prior.identity!==work.source.identity)throw invalid();
+    const {association}=context,local=this.drafts.read(association.accountId,work.draftId);
+    if(!local||!sameCreatorSource(local.association,association)||!isDeepStrictEqual(local.work,work))throw invalid();
     await this.checked(context,job);
-    const source=expect(await context.rpc({type:'operationSourceIdentity',botId:association.botId,session:context.session,operationId:work.source.preparationId}),'operationSourceIdentity');
-    context.check();
-    if(source.operationId!==work.source.preparationId||source.groupId!==work.source.groupId||source.identity!==work.source.identity)throw invalid();
     const current=expect(await context.rpc({type:'groupSourceIdentity',botId:association.botId,session:context.session,groupId:work.source.groupId}),'groupSourceIdentity');
     context.check();if(current.identity!==work.source.identity||current.groupId!==work.source.groupId)throw invalid();
   }
   private async workDraft(context:CreatorContext,job:CreatorJob,work:CreatorWork,modes:Checked['mode'][]=['read','execute']){
     await context.settled(work.draftId);context.check();
     await this.verifyWork(context,job,work);
-    const account=this.transport(context,job,modes),draft=await creatorDraft(account,context.association.accountId,work.draftId,()=>context.check());
+    const account=this.transport(context,job,modes),record=this.drafts.read(context.association.accountId,work.draftId);
+    if(!record||!sameCreatorSource(record.association,context.association)||!isDeepStrictEqual(record.work,work))throw invalid();
+    const draft=record.draft;
     if(draft.format==='rich-v2'?(draft.sourceIntentId!==work.source?.preparationId):work.source!==null)throw invalid();
-    const key=this.metadata.key(context.association.accountId,work.draftId);
-    await this.metadata.exclusive(key,async()=>{
-      context.check();
-      const held=this.metadata.read(key);
-      if(!held)return;
-      const writer=this.journal.command(context.association.accountId,held.request.requestId);
-      if(writer&&(!sameCreatorSource(writer.association,context.association)||writer.association.scope!==context.association.scope||
-        !isDeepStrictEqual(writer.request,held.request)||writer.command.kind!=='metadata'||!isDeepStrictEqual(writer.command.work,work)))throw invalid();
-      const receipt=held.receipt?verifyMetadataReceipt(held.request,held.receipt):await metadataReceipt(account,held.request);
-      context.check();
-      if(receipt&&!held.receipt)this.metadata.write(key,{...held,receipt});
-      if(!receipt||draft.format!=='rich-v2'||draft.revision<receipt.revision||draft.revision===receipt.revision&&
-        creatorSha(Buffer.from(draft.rich.canonical,'base64url'))!==receipt.manifestSha256)throw new Error('这份草稿的保存结果尚未确认。');
-      this.metadata.clear(key);
-    });
-    return {account,draft};
+    return {account,draft,record};
   }
   private async parentContext(account:NativeAccount,accountId:string,draft:RecipeDraft){
-    const hash=draft.format==='rich-v2'?creatorSha(Buffer.from(draft.rich.canonical,'base64url')):undefined;
-    const query=new URLSearchParams({revision:String(draft.revision)});if(hash)query.set('contentSha256',hash);
-    const raw=await creatorJson(account,accountId,`/${hash?'v2':'v1'}/drafts/${draft.draftId}/creator-context?${query}`);
-    const result=z.object({draftId:z.string().uuid(),format:z.enum(['rich-v2','role-v1']),revision:z.number().int().positive(),sourceIntentId:z.string().uuid().nullable(),
-      parent:z.object({recipeId:z.string().uuid(),versionId:z.string().uuid()}).strict().nullable()}).strict().parse(raw);
-    if(result.draftId!==draft.draftId||result.format!==(draft.format??'role-v1')||result.revision!==draft.revision||
-      draft.format==='rich-v2'&&result.sourceIntentId!==draft.sourceIntentId||
-      result.parent&&result.parent.recipeId!==draft.recipeId)throw invalid();
-    return result.parent;
+    const record=this.drafts.read(accountId,draft.draftId);
+    if(!record||record.draft.revision!==draft.revision)throw invalid();
+    return record.parent??null;
   }
   private async freeze(context:CreatorContext,job:CreatorJob,work:CreatorWork,modes:Checked['mode'][]=['read','execute']){
     const {account,draft}=await this.workDraft(context,job,work,modes);
@@ -160,12 +145,7 @@ export class RecipeCreatorExecutor {
     this.journal.freeze({association:context.association,snapshot,canonical:encoded,pages:rendered});
     return {draft,snapshot};
   }
-  private previewUrl(draft:RecipeDraft){
-    if(!this.account.recipeLink)return;
-    const url=new URL(this.account.recipeLink(draft.draftId,draft.draftId));
-    if(url.username||url.password||url.protocol!=='https:'&&!(url.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(url.hostname)))throw invalid();
-    return `${url.origin}/open/draft#${draft.draftId}?revision=${draft.revision}`;
-  }
+  private previewUrl(_draft:RecipeDraft):string|undefined {return undefined;}
   private sameSnapshot(current:CreatorSnapshot,expected:CreatorSnapshot){
     const {appPreviewUrl:_url,...legacy}=current;
     return isDeepStrictEqual(expected.appPreviewUrl?current:legacy,expected);
@@ -182,15 +162,21 @@ export class RecipeCreatorExecutor {
   private async backfillVersions(context:CreatorContext,account:NativeAccount,targets:CreatorVersion[]){
     const a=context.association,remaining=new Map(targets.filter(target=>!this.journal.version(a.accountId,target.versionId)).map(target=>[target.versionId,target]));
     if(!remaining.size)return;
-    const identities=new Map<string,string|null>(),ids:string[]=[];
+    const identities=new Map<string,string|null>(),ids:string[]=[],local=new Set(this.drafts.list(a.accountId).flatMap(row=>row.work.source?[row.work.source.preparationId]:[]));
     for(const row of this.authoring.history.operations(a)){
       if(!row.groupId)continue;
+      if(local.has(row.operationId)||this.drafts.receipt(a.accountId,row.operationId,row.operationId))this.authoring.history.markLocal(a,row.operationId);
       if(!identities.has(row.groupId)){
         try{context.check();const reply=expect(await context.rpc({type:'groupSourceIdentity',botId:a.botId,session:context.session,groupId:row.groupId}),'groupSourceIdentity');
           context.check();identities.set(row.groupId,reply.groupId===row.groupId?reply.identity:null);
         }catch{context.check();identities.set(row.groupId,null);}
       }
-      if(identities.get(row.groupId)===row.identity)ids.push(row.operationId);
+      if(identities.get(row.groupId)===row.identity){
+        if(this.authoring.history.isLocal(a,row.operationId)){
+          const published=this.authoring.history.publication(a,row.operationId),target=published&&remaining.get(published.versionId);
+          if(target&&published&&target.recipeId===published.recipeId){this.journal.rememberVersion(a,published.versionId);remaining.delete(published.versionId);}
+        }else ids.push(row.operationId);
+      }
     }
     const signal=this.account.lease?.(a.accountId);if(!signal)throw invalid();
     const cloud=authoringCloud(account,a.accountId,signal,()=>context.check());
@@ -221,20 +207,23 @@ export class RecipeCreatorExecutor {
     const {accountId}=context.association;
     switch(read.kind){
       case 'works': {
-        const account=this.transport(context,job,['read']),cloud=richCommunity(account,accountId,()=>context.check());
-        const drafts=await cloud.drafts(),publications=await cloud.publications();
-        await this.backfillVersions(context,account,publications.items.map(item=>({recipeId:item.recipeId,versionId:item.versionId})));
+        const drafts=this.drafts.list(accountId).filter(record=>sameCreatorSource(record.association,context.association)).map(record=>record.draft);
         const items:Extract<CreatorAnswer,{kind:'works'}>['items']=[];
-        for(const item of drafts.items){
+        for(const item of drafts){
           if(item.format==='rich-v2'){
-            const draft=await creatorDraft(account,accountId,item.draftId,()=>context.check());
+            const local=this.drafts.read(accountId,item.draftId),draft=local?.draft;
+            if(!draft)throw invalid();
             if(draft.format!=='rich-v2')throw invalid();
-            const source=this.authoring.history.locator(accountId,draft.sourceIntentId),a=context.association;
-            if(!source||source.deviceId!==a.deviceId||source.deviceKey!==a.deviceKey||source.botId!==a.botId||!source.groupId)continue;
-            items.push({kind:'draft',work:{draftId:item.draftId,source:{preparationId:draft.sourceIntentId,groupId:source.groupId,identity:source.identity}},name:item.public.name,version:item.public.version});
+            if(!local.work.source)continue;
+            items.push({kind:'draft',work:local.work,name:item.public.name,version:item.public.version});
           }else items.push({kind:'draft',work:{draftId:item.draftId,source:null},name:item.public.name,version:item.public.version});
         }
-        for(const item of publications.items)if(sameCreatorSource(this.journal.version(accountId,item.versionId),context.association))items.push({kind:'version',target:{recipeId:item.recipeId,versionId:item.versionId},name:item.public.name,version:item.public.version});
+        if(!read.draftsOnly){
+          const account=this.transport(context,job,['read']),cloud=richCommunity(account,accountId,()=>context.check());
+          const publications=await cloud.publications();
+          await this.backfillVersions(context,account,publications.items.map(item=>({recipeId:item.recipeId,versionId:item.versionId})));
+          for(const item of publications.items)if(sameCreatorSource(this.journal.version(accountId,item.versionId),context.association))items.push({kind:'version',target:{recipeId:item.recipeId,versionId:item.versionId},name:item.public.name,version:item.public.version});
+        }
         return {kind:'works',items:items.slice(read.offset,read.offset+16),nextOffset:items.length>read.offset+16?read.offset+16:null};
       }
       case 'draft':return {kind:'snapshot',snapshot:(await this.freeze(context,job,read.work)).snapshot};
@@ -264,13 +253,17 @@ export class RecipeCreatorExecutor {
         const account=await this.requireVersion(context,job,read.target,['read']),result=await creatorCodes(account,accountId,read.target,read.cursor??undefined);
         return {kind:'codes',target:read.target,items:result.items.map(({codeId,suffix,status})=>({codeId,suffix,status})),nextCursor:result.nextCursor};
       }
-      case 'parent':return {kind:'parent',target:read.target,inherited:await inheritedPublication(this.transport(context,job,['read']),accountId,read.target.recipeId,read.target.versionId,()=>context.check())};
+      case 'parent': {
+        const inherited=await inheritedPublication(this.transport(context,job,['read']),accountId,read.target.recipeId,read.target.versionId,()=>context.check());
+        if((await this.checked(context,job)).mode!=='read')throw invalid();
+        this.authoring.history.rememberParent(context.association,read.target);
+        return {kind:'parent',target:read.target,inherited};
+      }
       case 'edit': {
-        const {account,draft}=await this.workDraft(context,job,read.work);
+        const {draft,record}=await this.workDraft(context,job,read.work);
         if(draft.format!=='rich-v2'||draft.revision!==read.revision||!read.work.source)throw invalid();
-        const cloud=richAuthoringCloud(account,accountId,this.account.lease!(accountId)!,()=>context.check()),meta=await cloud.draftMetadata(read.work.draftId,read.revision);
-        const bytes=await cloud.readMember(read.work.draftId,meta.sourceManifest);
-        return {kind:'edit',work:read.work,revision:read.revision,canonical:draft.rich.canonical,sourceCanonical:bytes.toString('base64url')};
+        if(!record.sourceCanonical)throw invalid();
+        return {kind:'edit',work:read.work,revision:read.revision,canonical:draft.rich.canonical,sourceCanonical:record.sourceCanonical};
       }
     }
   }
@@ -325,7 +318,9 @@ export class RecipeCreatorExecutor {
         request={type:command.kind==='disable'?'disableCode':'revealCode',accountId,requestId:job.id,codeId:command.codeId};break;
       }
     }
-    const row:CreatorCommandRecord={association:context.association,id:job.id,command,grant:{approval:job.task.approval,expiresAt:job.task.expiresAt,confirmation:job.task.confirmation},request,phase:'frozen'};
+    const destination=command.kind==='publish'&&job.task.confirmation?.kind==='app'
+      ?this.journal.publicationChoice(accountId,job.id,job.task.confirmation.confirmationId):undefined;
+    const row:CreatorCommandRecord={association:context.association,id:job.id,command,...(destination!==undefined&&{destination}),grant:{approval:job.task.approval,expiresAt:job.task.expiresAt,confirmation:job.task.confirmation},request,phase:'frozen'};
     this.journal.save(row);return row;
   }
   private async findCodes(account:NativeAccount,accountId:string,target:CreatorVersion,ids:string[]){
@@ -341,10 +336,17 @@ export class RecipeCreatorExecutor {
   }
   private async receipt(context:CreatorContext,job:CreatorJob,row:CreatorCommandRecord):Promise<CreatorAnswer|undefined>{
     const account=this.transport(context,job,['receipt','execute','delivery']),id=row.association.accountId,command=row.command;
-    if(command.kind==='publish')return publicationReceipt(account,row);
+    if(command.kind==='publish'){
+      if(this.publisher?.has(id,row.id))return this.publisher.receipt(account,row,()=>context.check());
+      if(this.drafts.read(id,command.snapshot.work.draftId))return;
+      return publicationReceipt(account,row);
+    }
     if(command.kind==='issue')return issueReceipt(account,row);
     if(command.kind==='metadata'){
       const r=row.request;
+      const local=this.drafts.receipt(id,command.work.draftId,row.id);
+      if(local&&!local.deleted){if((r.type!=='saveDraft'&&r.type!=='saveRichDraftMetadata')||local.requestSha256!==localRecipeRequestSha256(r))throw invalid();return {kind:'saved',work:command.work,revision:local.revision};}
+      if(this.drafts.read(id,command.work.draftId))return;
       if(r.type!=='saveRichDraftMetadata')return;
       if(r.accountId!==id||r.requestId!==row.id||r.draftId!==command.work.draftId||r.revision!==command.revision||
         r.baseManifestSha256!==command.baseSha256)throw invalid();
@@ -371,25 +373,33 @@ export class RecipeCreatorExecutor {
       if(code?.status==='disabled')return {kind:'disabled',target:command.target,codeId:command.codeId};return;
     }
     if(command.kind==='discard'){
-      try{await creatorDraft(account,id,command.work.draftId,()=>context.check());}
-      catch(error){if(error instanceof CreatorCloudRejected&&error.code==='not_found')return {kind:'discarded',work:command.work,revision:command.revision};throw error;}
+      const local=this.drafts.receipt(id,command.work.draftId,row.id);
+      if(local?.deleted)return {kind:'discarded',work:command.work,revision:command.revision};
     }
   }
   private async dispatch(context:CreatorContext,job:CreatorJob,row:CreatorCommandRecord):Promise<DispatchResult>{
     const account=this.transport(context,job,['execute']),r=row.request,c=row.command;
     switch(r.type){
-      case 'publishDraft':case 'issueCodes':await communityRequest(account,r);return 'awaitingReceipt';
+      case 'publishDraft':{
+        const record=this.drafts.read(r.accountId,r.draftId);
+        if(!this.publisher||!record||c.kind!=='publish'||record.draft.revision!==r.revision)throw invalid();
+        return this.publisher.publish(account,row,record,async()=>{
+          context.check();const current=await this.checked(context,job);
+          if(current.mode!=='execute'||job.task.kind!=='command'||job.task.expiresAt<=Date.now())throw invalid();context.check();
+        });
+      }
+      case 'issueCodes':await communityRequest(account,r);return 'awaitingReceipt';
       case 'saveRichDraftMetadata': {
-        const outcome=await communityRequest(account,r,this.metadata);
+        const outcome=await localRecipeCommunity(account,this.drafts,r,this.normalizeLogo);
         if(outcome.status==='committed'&&c.kind==='metadata')return {kind:'saved',work:c.work,revision:outcome.receipt.revision};
         if(outcome.status==='rejected')throw new CreatorCloudRejected(outcome.code);return;
       }
       case 'saveDraft': {
-        const saved=await communityRequest(account,r);
+        const saved=await localRecipeCommunity(account,this.drafts,r,this.normalizeLogo);
         if(c.kind!=='metadata'||saved.draftId!==c.work.draftId||saved.revision!==c.revision+1)throw invalid();return {kind:'saved',work:c.work,revision:saved.revision};
       }
       case 'deleteDraft': {
-        const result=await communityRequest(account,r);if(c.kind!=='discard'||result.draftId!==c.work.draftId)throw invalid();return {kind:'discarded',work:c.work,revision:c.revision};
+        const result=await localRecipeCommunity(account,this.drafts,r,this.normalizeLogo);if(c.kind!=='discard'||result.draftId!==c.work.draftId)throw invalid();return {kind:'discarded',work:c.work,revision:c.revision};
       }
       case 'withdraw':if(c.kind!=='withdraw')throw invalid();await this.requireVersion(context,job,c.target,['execute'],true);await communityRequest(account,r);return {kind:'withdrawn',target:c.target};
       case 'disableCode': {
@@ -404,7 +414,8 @@ export class RecipeCreatorExecutor {
     const rows=this.journal.publications(accountId,draftId).filter(row=>row.phase!=='frozen'&&row.result?.kind!=='rejected');
     for(const row of rows){
       check();
-      const answer=await publicationReceipt(this.account,row);check();
+      const answer=this.publisher?.has(accountId,row.id)?await this.publisher.receipt(this.account,row,check):
+        this.drafts.read(accountId,draftId)?undefined:await publicationReceipt(this.account,row);check();
       if(answer?.kind==='published'){
         this.committed(row,answer);
         return {kind:'publicationRecovery',result:{kind:'published',publication:{accountId,draftId,...answer.target,revision:answer.revision}}};
@@ -413,9 +424,22 @@ export class RecipeCreatorExecutor {
     return {kind:'publicationRecovery',result:{kind:rows.length?'pending':'absent'}};
   }
   private committed(row:CreatorCommandRecord,result:CreatorAnswer){
+    if(result.kind==='published'){
+      this.journal.rememberVersion(row.association,result.target.versionId);
+      if(row.command.kind==='publish'&&this.publisher?.has(row.association.accountId,row.id)){
+        const {snapshot}=row.command,sourceOperationId=snapshot.work.source?.preparationId??
+          (this.authoring.history.isLocal(row.association,snapshot.work.draftId)?snapshot.work.draftId:undefined);
+        if(sourceOperationId)this.authoring.history.rememberPublication(row.association,{state:'published',operationId:sourceOperationId,
+          draftId:result.draftId,recipeId:result.target.recipeId,versionId:result.target.versionId,revision:result.revision,
+          name:snapshot.public.name,version:snapshot.public.version});
+      }
+    }
     const next={...row,phase:'committed' as const,result};this.journal.save(next);
     if(result.kind==='saved')this.onSaved?.({accountId:row.association.accountId,draftId:result.work.draftId,revision:result.revision});
-    if(result.kind==='published'){this.journal.rememberVersion(row.association,result.target.versionId);this.onPublished?.({accountId:row.association.accountId,draftId:result.draftId,...result.target,revision:result.revision});}
+    if(result.kind==='published'){
+      try{this.drafts.discard({accountId:row.association.accountId,draftId:result.draftId,requestId:row.id,expectedRevision:result.draftRevision});}catch{/* Preserve local data if publication cleanup cannot be committed. */}
+      this.onPublished?.({accountId:row.association.accountId,draftId:result.draftId,...result.target,revision:result.revision});
+    }
     return result;
   }
   private async command(context:CreatorContext,job:CreatorJob):Promise<CreatorAnswer>{
@@ -452,7 +476,7 @@ export class RecipeCreatorExecutor {
     try {
       result=await this.dispatch(context,job,row);
     }catch(error){
-      if(error instanceof CreatorCloudRejected||!wasDispatched&&error instanceof CommunityError&&['invalid_input','credential_detected','quota_exceeded','incomplete_setup','conflict','not_found'].includes(error.code))return this.committed(row,{kind:'rejected',reason:error.code==='forbidden'?'forbidden':error.code==='conflict'?'changed':'unavailable'});
+      if(error instanceof CreatorCloudRejected||!wasDispatched&&(error instanceof CommunityError||error instanceof LocalRecipeDraftError)&&['invalid_input','credential_detected','quota_exceeded','incomplete_setup','conflict','not_found'].includes(error.code))return this.committed(row,{kind:'rejected',reason:error.code==='forbidden'?'forbidden':error.code==='conflict'?'changed':'unavailable'});
     }
     if(result==='awaitingReceipt'){
       row={...row,phase:'awaitingReceipt'};
@@ -465,6 +489,39 @@ export class RecipeCreatorExecutor {
   }
   async run(context:CreatorContext,job:CreatorJob){
     const checked=await this.checked(context,job);
+    if(job.task.kind==='draftScopeRead'||job.task.kind==='draftScopeApply'){
+      const task=job.task;
+      if(task.kind==='draftScopeRead'?checked.mode!=='read':!['execute','receipt'].includes(checked.mode))throw invalid();
+      let answer:CreatorAnswer;
+      try{
+        if(task.kind==='draftScopeRead'){
+          const {record}=await this.workDraft(context,job,task.work);
+          answer={kind:'draftScopeHead',work:task.work,head:draftScopeHead(record)};
+        }else{
+          const id=context.association.accountId,requestSha256=wireDigest(task),saved=this.drafts.receipt(id,task.work.draftId,job.id);
+          if(saved&&(saved.deleted||saved.revision!==task.revision+1||saved.requestSha256!==requestSha256))throw invalid();
+          if(!saved){
+            if(checked.mode!=='execute')throw invalid();
+            const {record,account}=await this.workDraft(context,job,task.work);
+            const versions=new Set(Object.values(task.evidence).flatMap(e=>e.kind==='managed'?e.parents.map(p=>p.versionId):[]));
+            const attested=new Map<string,AttestedSourceItem>();
+            const cloud=richAuthoringCloud(account,id,new AbortController().signal,context.check);
+            for(const version of versions){
+              const source=await cloud.sourceItems(version);
+              for(const item of source.items)attested.set(version+':'+item.itemId,{...item,versionId:version,authorId:source.authorId,access:source.access});
+            }
+            const next=editLocalDraftScope(record,task,attested);
+            if((await this.checked(context,job)).mode!=='execute')throw invalid();
+            context.check();
+            this.drafts.commit({requestId:job.id,requestSha256,expectedRevision:task.revision,record:next});
+          }
+          answer={kind:'saved',work:task.work,revision:task.revision+1};
+          this.onSaved?.({accountId:id,draftId:task.work.draftId,revision:answer.revision});
+        }
+      }catch{context.check();answer={kind:'rejected',reason:'changed'};}
+      expect(await context.rpc({type:'creatorAnswer',botId:context.association.botId,session:context.session,id:job.id,answer}),'creatorAck');
+      context.check();return;
+    }
     if(job.task.kind==='resourcePreview'||job.task.kind==='resourceRead'||job.task.kind==='resourceLatest'||job.task.kind==='resourceAcquire'){
       if(checked.mode!==(job.task.kind==='resourceAcquire'?'execute':'read'))throw invalid();
       let answer:CreatorAnswer;

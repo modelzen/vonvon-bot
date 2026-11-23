@@ -1,10 +1,10 @@
-import {readerRoute,readerInput} from './reader-http.mjs';
+import {readerRoute,readerInput,readerOutput} from './reader-http.mjs';
 import {receiptRoute,receiptInput} from './receipt-http.mjs';
 import {creatorRoute,creatorInput} from './creator-http.mjs';
 import { createServer } from 'node:http';
 import { identityFromRequest } from './auth.mjs';
 import { ApiError, badInput } from './errors.mjs';
-import { bodyJson, checkDraft, expectedRevision, objectKeys, queryParams, requestKey, uuid } from './input.mjs';
+import { bodyJson, publicationDestination, checkDraft, expectedRevision, objectKeys, queryParams, requestKey, uuid } from './input.mjs';
 import { codeAttempts } from './limiter.mjs';
 import { operationId, operationInput } from './operation-input.mjs';
 import { authoringInput, checkDraftPatch } from './authoring-input.mjs';
@@ -97,6 +97,10 @@ async function inputFor(req, url, {action, ids}) {
     if (typeof body.code !== 'string' || !/^[a-z0-9-]{1,128}$/i.test(body.code)) throw badInput();
     return ['acquire', [...ids, body.code, key]];
   }
+  if (action === 'publishDraft' && Object.hasOwn(body, 'destination')) {
+    objectKeys(body, ['destination']);
+    return ['publishInto', [...ids, expectedRevision(req), key, ...publicationDestination(body.destination)]];
+  }
   objectKeys(body, []);
   if (action === 'direct') return ['acquire', [...ids, null, key]];
   if (action === 'deleteDraft' || action === 'publishDraft') return [action, [...ids, expectedRevision(req), key]];
@@ -155,14 +159,14 @@ export function createRecipeServer({ verify, execute, admitRich=false, attempts 
         if (route.isPublic === 'possession' && req.headersDistinct.authorization) throw badInput();
         const identity = route.isPublic === 'possession' ? null : await identityFromRequest(req, route.isPublic, verify);
         const [operation, args] = await (receipt?receiptInput:creator?creatorInput:reader?readerInput:rich?v2.richInput:inputFor)(req, url, route);
-        if(operation==='richPublish'){
+        if(operation==='richPublish'||operation==='richPublishInto'){
           const descriptions=await publicationDescriptions(args,{authorization:req.headersDistinct.authorization[0],read:publicationRead,
             committed:({draftId,revision,requestId,contentSha256})=>execute(identity,'publicationReceipt',['rich-v2',requestId,draftId,revision,contentSha256]),
             currentDraft:draftId=>execute(identity,'richDraft',[draftId])});
           if(descriptions)args.push(descriptions);
         }
         if (['redeem','readerRedeem'].includes(route.action)) finishAttempt = attempts.begin(identity.issuer + '\0' + identity.subject);
-        const result = await execute(identity, operation, args);
+        const result = readerOutput(req,operation,await execute(identity, operation, args));
         const response = JSON.stringify(result);
         finishAttempt?.(false);
         finishAttempt = undefined;

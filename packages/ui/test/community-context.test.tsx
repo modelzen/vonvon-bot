@@ -10,6 +10,7 @@ vi.mock('react', async original => ({...await original<typeof import('react')>()
   useRef: (initial: unknown) => {const i = h.si++; if (!(i in h.state)) h.state[i] = {current: initial}; return h.state[i];},
   useEffect: (effect: () => (() => void) | void, deps?: unknown[]) => {const i = h.ei++; const old = h.effects[i]; if (old?.deps && deps && deps.every((value, at) => Object.is(value, old.deps![at]))) return; h.pending.push(() => {old?.cleanup?.(); h.effects[i] = {deps, cleanup: effect() || undefined};});},
 }));
+vi.mock('../src/accounts/account-page', () => ({useAccountPage: () => undefined}));
 vi.mock('../src/account-context', () => ({useAccount: () => ({status: h.account})}));
 vi.mock('../src/client-context', () => {const client = {}; return {useClient: () => client, useActiveDevice: () => ({id: 'local'}), useShellCapabilities: () => undefined};});
 vi.mock('../src/settings/DraftGuard', () => ({useOptionalDraftGuard: () => undefined}));
@@ -48,7 +49,7 @@ it('keeps public search, loaded range and scroll position when closing or switch
   expect(render().isOpen).toBe(false);
 });
 
-it.each(['acquired', 'drafts', 'published'] as const)('does not retain the %s workspace tab through an account switch', tab => {
+it.each(['all', 'acquired', 'drafts', 'published'] as const)('does not retain the %s workspace tab through an account switch', tab => {
   render().open({kind: 'workspace', tab});
   expect(render().route).toEqual({kind: 'workspace', tab});
   h.account = b;

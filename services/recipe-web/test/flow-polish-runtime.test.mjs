@@ -17,7 +17,10 @@ async function runtime(t, route, returnedRecipe = recipe) {
   const fetch = async (url, options = {}) => {
     calls.push({url, options});
     if (url === '/auth/session') return Response.json({signedIn: true, displaySession: 'test-session', providers: []});
-    if (url === '/api/v2/me/recipes') return Response.json({items: [returnedRecipe], nextCursor: null});
+    if (url === '/api/v2/me/recipe-groups?scope=all') {
+      assert.equal(options.headers['X-Vonvon-Session'], 'test-session');
+      return Response.json({items: [{...returnedRecipe, owned: true, acquired: false, state: 'listed', versionCount: 1}], nextCursor: null});
+    }
     if (url === '/api/v2' + path + '/preview') return Response.json(returnedRecipe);
     throw Error('Unexpected request ' + url);
   };
@@ -34,8 +37,8 @@ test('library cards describe an owned entry without asking for another code and 
   const card = h.document.querySelector('.card');
   assert.ok(card);
   assert.doesNotMatch(card.textContent, /需分享码/);
-  assert.equal(card.querySelector('.card-main').getAttribute('href'), path + '?from=library');
-  const back = h.document.querySelector('a[aria-label="返回 Bot 配方"]');
+  assert.equal(card.querySelector('.card-main').getAttribute('href'), path + '?from=library-all');
+  const back = h.document.querySelector('a[aria-label="浏览社区"]');
   assert.equal(back.getAttribute('href'), '/');
   assert.ok(back.querySelector('svg[aria-hidden="true"]'));
 });
@@ -49,18 +52,26 @@ test('catalog-shaped summaries load their public version logo and preserve a rea
   assert.equal(h.document.querySelector('.card img'), null);
 });
 
-test('a library detail returns to that library while shared URLs remain the fixed version path', async t => {
-  const h = await runtime(t, path + '?from=library');
-  assert.equal(h.document.querySelector('a[aria-label="返回已获取"]').getAttribute('href'), '/library');
-  [...h.document.querySelectorAll('button')].find(button => button.textContent === '复制链接').click();
-  await h.settle();
-  assert.deepEqual(h.copied, ['https://recipes.example' + path]);
+test('a website library detail preserves its exact version and return destination without copy actions', async t => {
+  const h = await runtime(t, path + '?from=library', {...recipe, acquired:true});
+  assert.equal(h.document.querySelector('a[aria-label="返回我的配方"]').getAttribute('href'), '/library?state=acquired');
+  assert.equal(h.document.defaultView.location.pathname,path);
+  assert.equal(h.calls.some(call=>call.url==='/api/v2'+path+'/preview'),true);
+  assert.equal([...h.document.querySelectorAll('button')].some(button=>/复制|copy/i.test(button.textContent)),false);
+  assert.equal(h.document.querySelector('input[aria-label="手动复制"]'),null);
+  assert.deepEqual(h.copied,[]);
+  assert.equal(h.calls.some(call=>call.options.method==='POST'),false);
 });
 
 test('external return values never become a back destination', async t => {
   const h = await runtime(t, path + '?from=https%3A%2F%2Fother.example');
   assert.equal(h.document.querySelector('a[aria-label="返回 Bot 配方"]').getAttribute('href'), '/');
   assert.equal(h.document.querySelector('a[href^="https://other.example"]'), null);
+});
+
+test('a legacy creator detail returns to the published state in My recipes', async t => {
+  const h = await runtime(t, path + '?from=creator');
+  assert.equal(h.document.querySelector('a[aria-label="返回我的配方"]').getAttribute('href'), '/library?state=published');
 });
 
 test('code confirmation identifies the exact recipe and version before any redemption', async t => {

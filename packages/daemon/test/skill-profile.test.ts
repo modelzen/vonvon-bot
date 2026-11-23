@@ -1,4 +1,5 @@
 import {expect, it} from 'vitest';
+import {createHash} from 'node:crypto';
 import {projectSkillKey, sessionSkillsChanged} from '../src/bot/skill-profile';
 
 it('treats disabled skill paths as a set and keeps legacy sessions without an override', () => {
@@ -15,11 +16,11 @@ it('accepts only the matching native session and refreshes both disabling and re
   expect(sessionSkillsChanged({...record, sessionId: 'manual-old-session'}, project)).toBe(true);
 });
 
-it('refreshes the tool catalog when a group enables, disables, or rebinds release code', () => {
-  const enabled = {releaseCode: {binding: 'group', registration: 'bot', revision: 'first'}};
-  const current = {sessionId: 'session', skillProfile: {sessionId: 'session', key: projectSkillKey(enabled)}};
-  expect(sessionSkillsChanged({sessionId: 'old'}, enabled)).toBe(true);
-  expect(sessionSkillsChanged(current, enabled)).toBe(false);
-  expect(sessionSkillsChanged(current, {})).toBe(true);
-  expect(sessionSkillsChanged(current, {releaseCode: {...enabled.releaseCode, revision: 'second'}})).toBe(true);
+it('refreshes a legacy source-enabled native catalog once while keeping normal groups unchanged', () => {
+  const enabled = {releaseCode: {binding:'group',registration:'bot',revision:'first'}};
+  const oldKey=createHash('sha256').update(JSON.stringify([[],null,enabled.releaseCode.revision])).digest('hex');
+  expect(sessionSkillsChanged({sessionId:'old'},enabled)).toBe(true);
+  expect(sessionSkillsChanged({sessionId:'old',skillProfile:{sessionId:'old',key:oldKey}},enabled)).toBe(true);
+  expect(projectSkillKey(enabled)).toBe(projectSkillKey({}));
+  expect(sessionSkillsChanged({sessionId:'new',skillProfile:{sessionId:'new',key:projectSkillKey(enabled)}},enabled)).toBe(false);
 });

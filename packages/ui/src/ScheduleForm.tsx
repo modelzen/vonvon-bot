@@ -3,7 +3,7 @@ import type {ScheduledTaskView, ScheduleRequest, ScheduleSpec} from '@vonvon/pro
 import {Button, FormField, InlineNotice} from './reference/components/ui';
 import {Dialog} from './reference/components/ui/Dialog';
 import {SettingChoices} from './settings/SettingChoices';
-import {browserZone, knownZone, refusalText, scheduleConflict, shownZone, type ScheduleSend} from './schedule-model';
+import {browserZone, knownZone, refusalText, scheduleConflict, schedulePlacementText as placementText, shownZone, type ScheduleSend} from './schedule-model';
 
 type Placement = 'follow' | 'newTopic' | 'topic';
 export type ScheduleDraft = {
@@ -16,7 +16,6 @@ const WORKDAYS = [1, 2, 3, 4, 5];
 const DAY_NAMES = ['日', '一', '二', '三', '四', '五', '六'];
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 const whenChoices = [{value: 'once', label: '一次'}, {value: 'every', label: '每 N 分钟'}, {value: 'daily', label: '每天'}, {value: 'weekly', label: '每周'}, {value: 'cron', label: 'cron'}] as const;
-const placementText: Record<Placement, string> = {follow: '跟群走', newTopic: '每次开新话题', topic: '固定在原话题'};
 
 function wall(ms: number, timeZone: string): number {
   const format = new Intl.DateTimeFormat('en-US', {timeZone, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', hourCycle: 'h23'});

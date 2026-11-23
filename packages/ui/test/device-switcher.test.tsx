@@ -144,6 +144,6 @@ it('keeps account actions below device actions with the user profile', () => {
   expect(signedIn).toContain('账号管理');
   expect(signedIn).toContain('account-avatar');
   const signedOut = renderMenu({kind: 'signedOut'});
-  expect(signedOut.indexOf('登录 Vonvon')).toBeGreaterThan(signedOut.indexOf('管理设备…'));
+  expect(signedOut.indexOf('<strong>登录</strong>')).toBeGreaterThan(signedOut.indexOf('管理设备…'));
   expect(signedOut).not.toContain('网页登录');
 });

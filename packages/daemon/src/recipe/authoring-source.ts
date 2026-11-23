@@ -9,6 +9,11 @@ import { mutateProjectStore, type Project } from '../project/registry';
 import { blankPublic, digest, freezePayload } from './authoring-wire';
 import { physicalChat } from './authoring-im';
 
+export function exportableRecipeGroup(row:Project, account:string):boolean {
+  return !row.dm && physicalChat(row.chatId) && [row.recipeInstall,row.richRecipe?.pointer.release].every(source=>
+    !source || Boolean(source.versionId && source.authorId && (source.access==='direct'||source.access==='coded'&&source.authorId===account)));
+}
+
 export async function atSource<T>(channel: LarkChannel, bot: BotIdentity, groupId: string, read: (row: Project) => T) {
   if (!physicalChat(groupId)) throw new Error('请选择已绑定的群。');
   await createGroupExecutor(channel, bot)({kind:'groupMembership', chatId: groupId, identity: bot});
@@ -22,9 +27,9 @@ export async function atSource<T>(channel: LarkChannel, bot: BotIdentity, groupI
   }), bot);
 }
 
-const identity = (scope: string, row: Project) => digest(JSON.stringify([scope, row.chatId, row.bindingIncarnation]));
+export const sourceIdentityOf = (scope: string, row: Project) => digest(JSON.stringify([scope, row.chatId, row.bindingIncarnation]));
 export function groupSourceIdentity(channel: LarkChannel, bot: BotIdentity, scope: string, groupId: string) {
-  return atSource(channel, bot, groupId, row => identity(scope, row));
+  return atSource(channel, bot, groupId, row => sourceIdentityOf(scope, row));
 }
 
 export type ReviewedSource = Extract<RecipeAuthoringReply, {kind:'source'}> & {identity: string};
@@ -37,6 +42,6 @@ export function reviewSource(channel: LarkChannel, bot: BotIdentity, scope: stri
     freezePayload({public: blankPublic(), config: {role}});
     const reviewToken = digest(JSON.stringify([scope, account, groupId, row.bindingIncarnation, row.projectSettingsRevision, role,
       source ? [source.access, source.authorId, source.recipeId, source.versionId, source.manifestSha256] : null]));
-    return {kind: 'source', groupId: groupIdSchema.parse(groupId), reviewToken, role, untracked: !source, identity: identity(scope, row)};
+    return {kind: 'source', groupId: groupIdSchema.parse(groupId), reviewToken, role, untracked: !source, identity: sourceIdentityOf(scope, row)};
   });
 }

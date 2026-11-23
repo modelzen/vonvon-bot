@@ -3,7 +3,7 @@ import {recipeBrowseDetailSchema} from './recipe-browse.js';
 import {z} from 'zod';
 import {agentIdSchema, groupIdSchema} from './domain.js';
 import {recipePublicSchema} from './desktop-community.js';
-import {recipeRichContentSchema, recipeRichPartDescriptorSchema} from './recipe-rich.js';
+import {recipeRichContentSchema, recipeRichPartDescriptorSchema, recipeRichOriginEdgeSchema} from './recipe-rich.js';
 import {richPreparationSchema} from './recipe-rich-authoring.js';
 
 const uuid = z.string().uuid();
@@ -40,7 +40,7 @@ export const creatorSnapshotSchema = z.object({
 }).strict().refine(s => s.format === 'role-v1' || s.work.source !== null);
 export type CreatorSnapshot = z.infer<typeof creatorSnapshotSchema>;
 const read = z.discriminatedUnion('kind', [
-  z.object({kind:z.literal('works'),offset:ordinal}).strict(),
+  z.object({kind:z.literal('works'),offset:ordinal,draftsOnly:z.literal(true).optional()}).strict(),
   z.object({kind:z.literal('draft'),work:creatorWorkSchema}).strict(),
   z.object({kind:z.literal('openPreview'),work:creatorWorkSchema,snapshotDigest:digest}).strict(),
   z.object({kind:z.literal('page'),work:creatorWorkSchema,snapshotDigest:digest,section:ordinal,page:ordinal}).strict(),
@@ -73,10 +73,22 @@ export const creatorConfirmationSchema=z.discriminatedUnion('kind',[
   z.object({kind:z.literal('feishu-card')}).strict(),
   z.object({kind:z.literal('app'),confirmationId:uuid}).strict(),
 ]);
+export const DRAFT_SCOPE_EDIT_CAPABILITY='recipe.draft-scope.v1';
 export const RESOURCE_CONTEXT_CAPABILITY = 'recipe.resource-context.v2';
 export const resourceDeliverySchema=z.enum(['sent','pending','unknown','unavailable']);
+export const draftScopeItemSchema=z.object({id:uuid,kind:z.enum(['role','setting','rule','skill','task','file']),label:z.string().min(1).max(360),parent:uuid.optional()}).strict();
+export const draftScopeHeadSchema=z.object({revision:positive,baseSha256:digest,items:draftScopeItemSchema.array().max(512)}).strict();
+export type DraftScopeHead=z.infer<typeof draftScopeHeadSchema>;
+const evidence=z.discriminatedUnion('kind',[
+  z.object({kind:z.literal('native')}).strict(),
+  z.object({kind:z.literal('managed'),parents:recipeRichOriginEdgeSchema.array().min(1).max(64)}).strict(),
+]);
+const draftScopeApply=z.object({kind:z.literal('draftScopeApply'),work:creatorWorkSchema,revision:positive,baseSha256:digest,
+  lease:digest,addIds:uuid.array().max(512),removeIds:uuid.array().max(512),donor:recipeRichContentSchema,evidence:z.record(uuid,evidence)}).strict();
+export type DraftScopeApply=z.infer<typeof draftScopeApply>;
 const task = z.discriminatedUnion('kind', [
   ...resourceReadTaskSchema.options, resourceAcquireTaskSchema,
+  z.object({kind:z.literal('draftScopeRead'),work:creatorWorkSchema}).strict(), draftScopeApply,
   z.object({kind:z.literal('read'),read}).strict(),
   z.object({kind:z.literal('command'),command:creatorCommandSchema,expiresAt:z.number().int().safe().nonnegative(),approval:digest,confirmation:creatorConfirmationSchema.optional()}).strict(),
   z.object({kind:z.literal('deliverCodes'),target:version,codeIds}).strict(),
@@ -89,6 +101,7 @@ export const creatorAnswerSchema = z.discriminatedUnion('kind', [
   z.object({kind:z.literal('resourceSnapshot'),snapshot:verifiedResourceSnapshotSchema}).strict(),
   z.object({kind:z.literal('resourceLatest'),latest:resourceLatestSchema}).strict(),
   z.object({kind:z.literal('resourceAcquired'),outcome:acquisitionOutcomeSchema}).strict(),
+  z.object({kind:z.literal('draftScopeHead'),work:creatorWorkSchema,head:draftScopeHeadSchema}).strict(),
   z.object({kind:z.literal('works'),items:selection.array().max(16),nextOffset:ordinal.nullable()}).strict(),
   z.object({kind:z.literal('snapshot'),snapshot:creatorSnapshotSchema}).strict(),
   z.object({kind:z.literal('previewOpened'),work:creatorWorkSchema,snapshotDigest:digest,revision:positive}).strict(),
@@ -117,8 +130,8 @@ const bot = {botId:agentIdSchema};
 const session = {...bot,session:uuid};
 export const creatorRequests = [
   z.object({type:z.literal('creatorDiscover'),...bot,accountId:uuid}).strict(),
-  z.object({type:z.literal('creatorOpen'),...bot,accountId:uuid,binding:uuid,scope:digest,wakeId:uuid.nullable(),nativePreview:z.literal(true).optional(),resourceContext:z.literal(true).optional()}).strict(),
-  z.object({type:z.literal('creatorContinue'),...session,selection}).strict(),
+  z.object({type:z.literal('creatorOpen'),...bot,accountId:uuid,binding:uuid,scope:digest,wakeId:uuid.nullable(),nativePreview:z.literal(true).optional(),resourceContext:z.literal(true).optional(),draftScope:z.literal(true).optional()}).strict(),
+  z.object({type:z.literal('creatorContinue'),...session,selection,conversationRevision:positive.optional(),conversationRetryId:uuid.optional()}).strict(),
   z.object({type:z.literal('creatorPoll'),...session}).strict(),
   z.object({type:z.literal('creatorCheck'),...session,id:uuid}).strict(),
   z.object({type:z.literal('creatorAnswer'),...session,id:uuid,answer}).strict(),

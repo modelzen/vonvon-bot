@@ -28,7 +28,7 @@ export function AccountPanel() {
       <SettingsRow title="退出账号" trailing={<Button onClick={() => void account.logout()}>退出登录</Button>}/>
     </SettingsGroup> : <div className="account-panel__actions">
       {status?.kind === 'signingIn' ? <Button onClick={() => void account.cancelLogin()}>取消登录</Button>
-        : canLogin ? <Button variant="primary" onClick={() => void account.login()}>{status.kind === 'unavailable' ? '重试登录' : '注册或登录'}</Button> : null}
+        : canLogin ? <Button variant="primary" onClick={() => void account.login()}>{status.kind === 'unavailable' ? '重试登录' : '登录'}</Button> : null}
     </div>}
   </section>;
 }

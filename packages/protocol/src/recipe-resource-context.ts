@@ -183,17 +183,17 @@ export async function openResourceSnapshot(input: unknown): Promise<ResourceDocu
     if (content.role) add('role', 'role', resolve(content.role.text));
     for (const rule of content.rules) add('rule', rule.purpose, resolve(rule.text));
     for (const setting of content.settings) add('setting', setting.field, JSON.stringify(setting.value));
-    const fileDocuments = new Map<string, string>();
+    const fileDocuments = new Map<string, {documentId: string; name: string; use: string; bytes: number; sha256: string}>();
     for (const file of content.files) {
-      fileDocuments.set(file.itemId, 'd' + scope + '-' + documents.length);
-      add('file', file.name, resolve(file.text));
+      const body = resolve(file.text);
+      const bytes = utf8.encode(body);
+      fileDocuments.set(file.itemId, {documentId: 'd' + scope + '-' + documents.length, name: file.name, use: file.use,
+        bytes: bytes.length, sha256: await sha256(bytes)});
+      add('file', file.name, body);
     }
     for (const skill of content.skills) {
-      const files = skill.fileIds.map(id => {
-        const file = content.files.find(f => f.itemId === id)!;
-        return {documentId: fileDocuments.get(id), name: file.name, use: file.use};
-      });
-      add('skill', skill.name, JSON.stringify({name: skill.name, entryDocumentId: fileDocuments.get(skill.entryFileId), files}));
+      const files = skill.fileIds.map(id => fileDocuments.get(id)!);
+      add('skill', skill.name, JSON.stringify({name: skill.name, entryDocumentId: fileDocuments.get(skill.entryFileId)!.documentId, files}));
     }
     for (const task of content.tasks) {
       add('task', task.name, JSON.stringify({name: task.name, instruction: resolve(task.instruction), spec: task.spec,

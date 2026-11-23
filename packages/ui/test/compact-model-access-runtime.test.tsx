@@ -12,7 +12,7 @@ const h = vi.hoisted(() => ({slots: {} as Record<string, Slot>, active: '', pend
 vi.mock('react', async original => ({...await original<typeof import('react')>(),
   useState: (initial: unknown) => {const slot = h.slots[h.active]!; const i = slot.si++; if (!(i in slot.state)) slot.state[i] = typeof initial === 'function' ? initial() : initial; return [slot.state[i], (next: unknown) => {slot.state[i] = typeof next === 'function' ? next(slot.state[i]) : next;}];},
   useRef: (initial: unknown) => {const slot = h.slots[h.active]!; return slot.refs[slot.ri++] ??= {current: initial};},
-  useId: () => `${h.active}-id`,
+  useId: () => `${h.active}-id-${h.slots[h.active]!.si++}`,
   useContext: () => [], useCallback: (fn: unknown) => fn,
   useEffect: (effect: () => (() => void) | void, deps?: unknown[]) => {const slot = h.slots[h.active]!; const i = slot.ei++; const old = slot.effects[i]; if (old?.deps && deps && deps.length === old.deps.length && deps.every((value, at) => Object.is(value, old.deps![at]))) return; h.pending.push(() => {old?.cleanup?.(); slot.effects[i] = {deps, cleanup: effect() || undefined};});},
   useMemo: (make: () => unknown) => make(),
@@ -25,7 +25,7 @@ type Value = Parameters<typeof ModelAccessChoices>[0]['value'];
 function nodes(node: ReactNode): Element[] {
   if (Array.isArray(node)) return node.flatMap(nodes);
   if (!isValidElement<Record<string, any>>(node)) return [];
-  if (typeof node.type === 'function' && ['CheckLabel', 'DefaultBadge'].includes(node.type.name)) return [node, ...nodes(node.type(node.props))];
+  if (typeof node.type === 'function' && ['CheckLabel', 'DefaultBadge', 'ModelSummaryMenu'].includes(node.type.name)) return [node, ...nodes(node.type(node.props))];
   return [node, ...nodes(node.props.children), ...nodes(node.props.footer)];
 }
 function at(name: string, make: () => ReactNode) {

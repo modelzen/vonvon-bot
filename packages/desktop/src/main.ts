@@ -27,6 +27,7 @@ import { createAccountSession, type NativeAccount } from './account-session.js';
 import { accountStore } from './account-store.js';
 import { electronSecretBox, openDeviceRegistry } from './device-registry.js';
 import { createDeviceConnections, type DeviceConnections } from './connections.js';
+import { openDeviceSelection, savedDeviceView } from './device-selection.js';
 import { secureConnector } from './remote-transport.js';
 import { createDeviceLog } from './device-log.js';
 import { REMOTE_UPDATE_TEXT, startRemoteSelfUpdate, type RemoteSelfUpdate } from './remote-self-update.js';
@@ -657,8 +658,9 @@ export async function startDesktop(): Promise<void> {
       openBrowser: url => shell.openExternal(url),
     });
     const registry = await openDeviceRegistry(join(app.getPath('userData'), 'devices.json'), box);
+    const selection = await openDeviceSelection(join(app.getPath('userData'), 'device-selection.json'));
     devices = createDeviceConnections({
-      registry, connector: secureConnector(), box,
+      registry, selection, connector: secureConnector(), box,
       client: { version: app.getVersion(), protocolVersion: PROTOCOL_VERSION },
       log: deviceLog,
       // macOS 15 is Darwin 24.
@@ -741,7 +743,18 @@ export async function startDesktop(): Promise<void> {
       },
       connectionLost: showConnectionLost,
     }, devices, account, join(app.getPath('userData'),'recipe-install-journal.json'),
-      join(app.getPath('userData'),'recipe-authoring-journal.json'), recipePreview, groupNavigation);
+      join(app.getPath('userData'),'recipe-authoring-journal.json'), recipePreview, groupNavigation,async(accountId,path,init,beforeSend)=>{
+        const native=account,signal=native?.lease?.(accountId);
+        if(!native||!signal||!deployment||!/^\/v2\/authoring\/[a-f0-9-]{36}\/(?:dispatch|accept)$/.test(path)||init.method!=='POST')throw new Error('发布连接已失效。');
+        const check=()=>{const status=native.status();if(signal.aborted||native.lease?.(accountId)!==signal||status.kind!=='signedIn'||status.accountId!==accountId)throw new Error('发布账号已变化。');};
+        const headers=new Headers(init.headers);
+        if(headers.has('authorization')||headers.has('cookie')||headers.has('proxy-authorization'))throw new Error('发布请求不接受账号凭据头。');
+        check();await beforeSend();check();
+        return fetch(new URL(path,deployment.apiOrigin),{...init,headers,credentials:'omit',redirect:'error',cache:'no-store',
+          signal:AbortSignal.any([signal,AbortSignal.timeout(12_000),...(init.signal?[init.signal]:[])])});
+      });
+    const savedView = savedDeviceView(selection, registry);
+    if (savedView !== 'local') await devices.switchTo(savedView);
     tray = createDesktopTray(icon, show, requestQuit);
     // U4: the daemon this app carries asks it to update when another device says so. Windows' app is updated on that
     // computer for 0.9.0 (owner 2026-11-02): its shell does not declare it can, as its daemon does not offer it.

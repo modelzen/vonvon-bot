@@ -21,9 +21,11 @@ async function fixture(t){
   const host=await listen(createRecipeWeb({RECIPE_WEB_ORIGIN:origin,RECIPE_API_ORIGIN:api,SUPABASE_URL:issuer,SUPABASE_PUBLISHABLE_KEY:'test',RECIPE_WEB_PROVIDERS:'github'}),t);
   const start=await fetch(host+'/auth/start',{method:'POST',redirect:'manual',headers:{origin},body:new URLSearchParams({provider:'github',returnTo:'/account'})});
   const finish=await fetch(host+'/auth/callback?code=account',{redirect:'manual',headers:{cookie:cookie(start)}});
-  assert.equal(finish.headers.get('location'),'/account');
+  assert.equal(finish.headers.get('location'),'/account#');
   const cookies=cookie(finish),session=await fetch(host+'/auth/session',{headers:{cookie:cookies}}).then(x=>x.json());
   const headers={origin,cookie:cookies,'X-Vonvon-Session':session.displaySession,'Content-Type':'application/json'};
+  assert.deepEqual(calls.map(call=>call.path),['/v2/me/account-profile']);
+  calls.length=0;
   return {host,headers,calls,controls};
 }
 
@@ -64,4 +66,32 @@ test('logout invalidates late profile responses and rejects stale logout from an
   assert.equal((await fetch(host+'/auth/logout',{method:'POST',redirect:'manual',headers})).status,303);
   controls.release();
   const response=await pending;assert.equal(response.status,409);assert.equal((await response.json()).error.code,'session_changed');
+});
+
+test('an App account link opens a verified profile once in a separate browser session', async t => {
+  const origin = 'https://recipes.example';
+  const token = ['eyJhbGciOiJmaXh0dXJlIn0', Buffer.from(JSON.stringify({exp: Math.floor(Date.now()/1000)+120})).toString('base64url'), 'fixture'].join('.');
+  const api = await listen(createServer((req,res) => {
+    assert.equal(req.url,'/v2/me/account-profile');
+    assert.equal(req.headers.authorization,'Bearer ' + token);
+    json(res,{authorId:accountId,displayName:'测试账号',revision:3});
+  }),t);
+  const host = await listen(createRecipeWeb({RECIPE_WEB_ORIGIN:origin,RECIPE_API_ORIGIN:api}),t);
+  const link = await fetch(host+'/auth/account-link',{method:'POST',headers:{Authorization:'Bearer '+token}});
+  assert.equal(link.status,201);
+  const {ticket} = await link.json();
+  assert.match(ticket,/^[a-zA-Z0-9_-]{43}$/);
+  const consume = (body,headers={}) => fetch(host+'/auth/account-link/consume',{method:'POST',headers:{origin,'Content-Type':'application/json',...headers},body:JSON.stringify(body)});
+  const offer = await consume({ticket});
+  assert.deepEqual(await offer.json(),{displayName:'测试账号',accountId,displaySession:null});
+  assert.equal(offer.headers.get('set-cookie'),null);
+  const confirmed = await consume({ticket,confirm:true,displaySession:null});
+  assert.equal(confirmed.status,200);
+  const sessionCookie = cookie(confirmed);
+  assert.ok(sessionCookie && !sessionCookie.includes(ticket) && !sessionCookie.includes(token));
+  const session = await fetch(host+'/auth/session',{headers:{cookie:sessionCookie}}).then(r=>r.json());
+  assert.ok(session.signedIn);
+  const profile = await fetch(host+'/api/v2/me/account-profile',{headers:{cookie:sessionCookie,'X-Vonvon-Session':session.displaySession}}).then(r=>r.json());
+  assert.equal(profile.authorId,accountId);
+  assert.equal((await consume({ticket,confirm:true,displaySession:null})).status,410);
 });

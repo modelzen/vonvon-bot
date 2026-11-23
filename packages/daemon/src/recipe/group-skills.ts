@@ -27,7 +27,7 @@ function resolvedSkills(row: NonNullable<Group['richRecipe']>): EffectiveRecipeS
   };
 }
 
-function entryName(text: string, fallback: string): string {
+export function recipeSkillEntryName(text: string, fallback: string): string {
   const frontmatter = /^(?:\uFEFF)?---[ \t]*\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text.slice(0, 8192));
   const raw = frontmatter?.[1]?.match(/^name:[ \t]*([^\r\n]+)$/m)?.[1]?.trim();
   if (!raw) return fallback;
@@ -56,7 +56,7 @@ async function selection(group: Group, botDataRoot: string, allDocuments: boolea
     const entry = documents.get(skill.entryFileId);
     if (entry === undefined) throw new Error('Missing managed recipe skill entry');
     const path = managedRecipeSkillPath(pointer.installationId, skill.itemId);
-    const name = entryName(entry, skill.name);
+    const name = recipeSkillEntryName(entry, skill.name);
     names.set(skill.itemId, name);
     return {path, name, description: recipeSkillDescription(entry), source: 'workspace', enabled: !disabled.has(path)};
   });

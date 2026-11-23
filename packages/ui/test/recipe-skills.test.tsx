@@ -21,36 +21,38 @@ beforeEach(() => {
 });
 afterEach(async () => {await act(async () => root.unmount()); vi.unstubAllGlobals();});
 
-it('shows skill names and descriptions as read-only rows and searches both without a detail view', async () => {
+it('shows every recipe skill directly without an extra disclosure or search', async () => {
   await act(async () => root.render(<RecipeBrowseConfiguration preview={preview} section="能力"/>));
   expect(document.querySelectorAll('[aria-label="配方技能"] li')).toHaveLength(2);
   expect(document.querySelector('.recipe-skills')?.textContent).toContain('检查依赖并完成初始化配置。');
-  expect(document.querySelector('.recipe-skills-count')?.textContent).toBe('2 项');
+  expect(document.querySelector('input[type="search"], [aria-label="搜索技能"]')).toBeNull();
+  expect(document.querySelector('.recipe-skills-heading')).toBeNull();
   expect(document.querySelector('.recipe-skills details, [role="dialog"]')).toBeNull();
-  expect(document.querySelector('.setup-skill-info')).not.toBeNull();
-  const input = document.querySelector<HTMLInputElement>('[aria-label="搜索技能"]')!;
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '初始化');
-    input.dispatchEvent(new Event('input', {bubbles: true}));
-  });
-  expect(document.querySelectorAll('[aria-label="配方技能"] li')).toHaveLength(1);
-  expect(document.querySelector('.recipe-skills-count')?.textContent).toBe('1 / 2 项');
+  expect(document.querySelector('.recipe-skills-name .setup-skill-badge')?.textContent).toBe('Setup');
   expect(document.querySelector('.recipe-skills-list')?.textContent).toContain('feedback-setup');
-  expect(document.querySelector('.recipe-skills-list')?.textContent).not.toContain('feedback-submit');
+  expect(document.querySelector('.recipe-skills-list')?.textContent).toContain('feedback-submit');
 });
 
 it('pins Setup skills and opens a purpose explanation without exposing skill details', async () => {
   await act(async () => root.render(<RecipeBrowseConfiguration preview={{...preview, skills: [
     preview.skills[1]!, {...preview.skills[0]!, name: 'MySETUPWizard'},
   ]}} section="能力"/>));
-  expect([...document.querySelectorAll('.recipe-skills-name strong')].map(node => node.textContent)).toEqual(['MySETUPWizard', 'feedback-submit']);
-  const info = document.querySelector<HTMLButtonElement>('[aria-label="了解 MySETUPWizard 的 Setup 用途"]')!;
-  await act(async () => info.click());
-  expect(document.querySelector('.setup-skill-popup')?.textContent).toContain('MCP、CLI');
-  expect(document.querySelector('.setup-skill-popup')?.textContent).toContain('首次启动');
-  expect(document.querySelector('details')).toBeNull();
-  await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true})));
-  expect(document.querySelector('.setup-skill-popup')).toBeNull();
+  const buttons = [...document.querySelectorAll<HTMLButtonElement>('.recipe-skills-row > button')];
+  expect(buttons.map(node => node.getAttribute('aria-label'))).toEqual(['MySETUPWizard', 'feedback-submit']);
+  expect(buttons[0]?.querySelector('.recipe-skills-name .setup-skill-badge')?.textContent).toBe('Setup');
+  expect(buttons[1]?.querySelector('.setup-skill-badge')).toBeNull();
+  const dialog = document.querySelector('dialog')!;
+  const showModal = vi.fn();
+  dialog.showModal = showModal;
+  for (const target of ['.recipe-skills-name strong', '.setup-skill-badge', '.recipe-skills-description', 'svg']) {
+    await act(async () => buttons[0]!.querySelector(target)!.dispatchEvent(new MouseEvent('click', {bubbles: true})));
+    expect(dialog.getAttribute('aria-label')).toBe('MySETUPWizard');
+    expect(dialog.textContent).toContain('首次启动');
+  }
+  await act(async () => buttons[1]!.click());
+  expect(showModal).toHaveBeenCalledTimes(5);
+  expect(dialog.getAttribute('aria-label')).toBe('feedback-submit');
+  expect(dialog.textContent).not.toContain('Setup 用途');
 });
 
 it('keeps full skill bodies and attachments out of the legacy rich-data fallback', async () => {

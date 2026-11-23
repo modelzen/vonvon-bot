@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { draftPreviewLocatorSchema, draftPreviewNavigationIdSchema, type DraftPreviewLocator, type RecipePreviewNavigationPayload } from '@vonvon/protocol';
+import { draftPreviewLocatorSchema, draftPreviewNavigationIdSchema, recipeHandoffNavigationSchema, type DraftPreviewLocator, type RecipePreviewNavigationPayload } from '@vonvon/protocol';
 
 export type RecipePreviewScheme = 'vonvon' | 'vonvon-preview';
 const route = /^([a-z-]+):\/\/recipes\/drafts\/([a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12})\?revision=([1-9][0-9]{0,15})$/;
@@ -18,12 +18,25 @@ export class RecipePreviewNavigation {
   constructor(private readonly scheme: RecipePreviewScheme) {}
 
   open(raw: unknown): boolean {
-    if (raw === `${this.scheme}://recipes/create`) {
-      const existing = this.pending().find(value => 'kind' in value && value.kind === 'create');
-      const navigation = existing ?? {kind: 'create' as const, navigationId: randomUUID()};
+    const kind = raw === `${this.scheme}://recipes/create` ? 'create' : raw === `${this.scheme}://recipes/drafts` ? 'drafts' : undefined;
+    if (kind) {
+      const existing = this.pending().find(value => 'kind' in value && value.kind === kind);
+      const navigation = existing ?? {kind, navigationId: randomUUID()};
       if (!existing) this.queue.set(navigation.navigationId, navigation);
       for (const listener of this.listeners) listener({...navigation});
       return true;
+    }
+    if (typeof raw === 'string') {
+      const match = /^([a-z-]+):\/\/recipes\/([a-fA-F0-9-]{36})\/versions\/([a-fA-F0-9-]{36})\/handoff$/.exec(raw);
+      if (match && match[0] === raw && match[1] === this.scheme) {
+        const parsed = recipeHandoffNavigationSchema.safeParse({kind: 'handoff', navigationId: randomUUID(), recipeId: match[2].toLowerCase(), versionId: match[3].toLowerCase()});
+        if (!parsed.success) return false;
+        const existing = this.pending().find(value => 'kind' in value && value.kind === 'handoff' && value.recipeId === parsed.data.recipeId && value.versionId === parsed.data.versionId);
+        const navigation = existing ?? parsed.data;
+        if (!existing) this.queue.set(navigation.navigationId, navigation);
+        for (const listener of this.listeners) listener({...navigation});
+        return true;
+      }
     }
     const locator = parseDraftPreview(raw, this.scheme);
     if (!locator) return false;

@@ -125,7 +125,7 @@ it('opens the account community from a production App with no daemon snapshot or
   first.client.watchSnapshots.mockImplementation(listener => {first.active.add(listener); return () => {first.active.delete(listener);};});
   await draw(A);
   await click('浏览社区');
-  expect(document.querySelector('.community-heading h1')?.textContent).toBe('社区');
+  expect(document.querySelector('.community-heading h1')?.textContent).toBe('发现配方');
   await openSearch();
   expect(document.querySelector('[role="combobox"]')).not.toBeNull();
   await closeSearch();
@@ -165,7 +165,7 @@ it('keeps dirty production group settings behind the original guard before unmou
   expect(editor.textContent).toBe('未保存的群规则');
   expect(first.client.watchSnapshots).toHaveBeenCalledTimes(1);
   await click('社区'); await click('放弃并离开');
-  expect(document.querySelector('.community-heading h1')?.textContent).toBe('社区');
+  expect(document.querySelector('.community-heading h1')?.textContent).toBe('发现配方');
   expect(document.querySelector('[aria-label="判断规则"]')).toBeNull();
   expect(first.client.watchSnapshots).toHaveBeenCalledTimes(2);
   expect(settings.mock.calls.every(([request]) => request.type === 'read')).toBe(true);

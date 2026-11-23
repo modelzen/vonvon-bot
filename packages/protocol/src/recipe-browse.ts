@@ -17,13 +17,10 @@ export const recipeBrowseDetailSchema = z.object({
   recipeId: id, versionId: id, revision: z.number().int().positive().max(2147483647),
   format: z.enum(['rich-v2', 'role-v1']), public: z.lazy(() => recipePublicSchema),
   creator: z.object({authorId: id, displayName: z.lazy(() => publicDisplayNameSchema)}).strict(),
-  owned: z.boolean(), acquired: z.boolean(), state: z.enum(['listed', 'withdrawn']),
+  owned: z.boolean(), acquired: z.boolean(), state: z.enum(['listed', 'withdrawn', 'deleted']),
   hasDisplayLogo: z.boolean(), preview: recipeBrowsePreviewSchema.optional(), previewUnavailable: z.literal(true).optional(),
 }).strict().superRefine((value, ctx) => {
   if (value.preview && value.previewUnavailable) ctx.addIssue({code: 'custom', message: 'Preview cannot be both available and unavailable'});
-  if (value.public.access === 'coded' && !value.owned && !value.acquired && (value.preview || value.previewUnavailable)) {
-    ctx.addIssue({code: 'custom', message: 'Unacquired coded preview must remain restricted'});
-  }
 });
 export type RecipeBrowseDetail = z.infer<typeof recipeBrowseDetailSchema>;
 

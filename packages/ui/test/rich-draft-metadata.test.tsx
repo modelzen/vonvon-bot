@@ -73,11 +73,11 @@ beforeEach(() => {
 });
 afterEach(async () => {await act(async () => root.unmount()); vi.unstubAllGlobals(); vi.restoreAllMocks();});
 
-it('reads complete rich content through five shared tabs without editing, publishing or metadata recovery writes', async () => {
+it('reads complete rich content through the read-only configuration tabs without editing, publishing or metadata recovery writes', async () => {
   await draw();
   expect(document.querySelector('h1')?.textContent).toBe('产品群待办');
   expect(document.body.textContent).toContain(draft.public.summary);
-  expect(document.body.textContent).toContain('创作中 · 仅自己可见');
+  expect(document.querySelector('[aria-label="草稿操作"]')?.textContent).toContain('仅自己可见');
   expect(document.body.textContent).toContain('LEGACY_SETUP_KEEP');
   expect(document.querySelector('input, textarea')).toBeNull();
   expect(document.body.textContent).not.toMatch(/编辑发布信息/);
@@ -87,8 +87,8 @@ it('reads complete rich content through five shared tabs without editing, publis
     await click(section);
     expect(document.body.textContent).not.toContain('PRIVATE_MEMORY_NEVER_DISPLAY');
   }
-  await click('能力'); expect(document.body.textContent).toContain('SETUP_SKILL_BODY');
-  await click('沟通方式'); expect(document.body.textContent).toContain('语音回复');
+  await click('能力'); expect(document.querySelector('[aria-label="配方技能"] button[aria-haspopup=dialog]')).not.toBeNull(); expect(document.body.textContent).not.toContain('SETUP_SKILL_BODY');
+  expect(document.body.textContent).toContain('语音转文字');
   await click('继续创作'); expect(resume).toHaveBeenCalledWith(draft);
   expect(requests).toEqual([{type: 'draft', accountId, draftId}]);
   expect(authoringRequests).toEqual([]);
@@ -204,6 +204,17 @@ it('prepares exactly the displayed content and waits for a separate explicit pub
   await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
   expect(authoringRequests.every(request => request.type !== 'confirmPublication')).toBe(true);
   expect(requests.every(request => request.type === 'draft')).toBe(true);
+});
+
+it('offers current-account recipes only at publish time and confirms the selected exact destination',async()=>{
+  send=async request=>request.type==='recipeGroups'?{items:[{recipeId:accountId,versionId:otherAccount,revision:1,public:{name:'以前发布的配方',version:'0.9',access:'direct'},format:'rich-v2',creator:{authorId:accountId,displayName:'作者'},hasDisplayLogo:false,state:'listed',owned:true,acquired:false,versionCount:1}],nextCursor:null}:draft;
+  await draw();await click('发布到社区');
+  await act(async()=>document.querySelectorAll<HTMLInputElement>('[name=recipe-destination]')[1]!.click());
+  expect(button('确认发布').disabled).toBe(true);
+  const list=document.querySelector<HTMLSelectElement>('[aria-label="要更新的配方"]')!;
+  await act(async()=>{list.value=accountId;list.dispatchEvent(new Event('change',{bubbles:true}));});
+  await click('确认发布');
+  expect(authoringRequests.at(-1)).toMatchObject({type:'confirmPublication',destination:{recipeId:accountId,versionId:otherAccount}});
 });
 
 it('keeps the original displayed draft while recovering an uncertain publication', async () => {

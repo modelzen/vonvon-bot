@@ -20,10 +20,12 @@ async function runtime(t,respond,auth = {signedIn:true,displaySession:'session-a
     calls.push({path,options});
     if(path==='/auth/session')return Response.json(auth);
     if(path==='/auth/continuation')return Response.json({consumed:true});
+    if(path==='/api/v2/me/account-profile')return Response.json({authorId:recipe.recipeId,displayName:'真实账号',revision:1});
     return respond(path,options,calls);
   };
   const run=new AsyncFunction('document','window','location','history','navigator','crypto','fetch','BroadcastChannel','setTimeout','clearTimeout','setup',source+'\nreturn {detail,claim,modal,closeButton,setSession:value=>{session=value;}};');
-  const api=await run(window.document,window,window.location,window.history,window.navigator,webcrypto,fetch,undefined,
+  const location = {get pathname(){return window.location.pathname;}, get search(){return window.location.search;}, get href(){return window.location.href;}, get origin(){return window.location.origin;}, assigned:[], reloads:0, reload(){this.reloads++;}, assign(path){this.assigned.push(path);}};
+  const api=await run(window.document,window,location,window.history,window.navigator,webcrypto,fetch,undefined,
     (fn,ms)=>{const timer=setTimeout(fn,ms);timer.unref();return timer;},clearTimeout);
   t.after(()=>window.close());
   const settle=async()=>{for(let i=0;i<20;i++)await Promise.resolve();await new Promise(setImmediate);};
@@ -36,7 +38,7 @@ async function runtime(t,respond,auth = {signedIn:true,displaySession:'session-a
     form.querySelector('input').value=raw;
     form.dispatchEvent(new window.Event('submit',{bubbles:true,cancelable:true}));await settle();
   }
-  return {dom,api,calls,open,submit,settle,document:window.document};
+  return {dom,api,calls,open,submit,settle,location,document:window.document};
 }
 test('actual Web runtime retains raw/key after committed response loss and confirms exact-session entitlement',async t=>{
   let acquired=false,attempts=0;
@@ -272,21 +274,30 @@ for (const access of ['coded', 'public']) test(`OAuth acquisition continuation o
   await h.api.detail();
   assert.equal(h.document.querySelector('dialog').open, false);
 });
-test('ordinary login does not open acquisition, anonymous acquisition alone records continuation', async t => {
+test('ordinary login redirects without acquisition; explicit acquisition stores only a bare path and nonce', async t => {
   const h = await runtime(t, async () => Response.json(recipe), {signedIn:false, providers:['github']});
-  assert.equal(h.document.querySelector('dialog').open, false);
   h.document.querySelector('#account').click();
-  assert.equal(h.document.querySelector('dialog').open, true);
-  assert.ok(h.document.querySelector('input[name=provider]'));
-  assert.equal(h.document.querySelector('input[name=continuation]'), null);
+  assert.equal(h.document.querySelector('dialog').open, false);
+  assert.equal(h.location.assigned.at(-1), '/login?'+new URLSearchParams({returnTo:route}));
+  assert.equal(h.dom.window.sessionStorage.getItem('vv-recipe-login-continuation'),null);
   await h.open();
-  assert.equal(h.document.querySelector('input[name=continuation]').value, 'acquire');
-  assert.equal(h.document.querySelector('input[name=returnTo]').value, route);
-  const saved = JSON.parse(h.dom.window.sessionStorage.getItem('vv-recipe-login-continuation'));
-  assert.equal(saved.path, route);
-  assert.equal(saved.nonce, h.document.querySelector('input[name=continuationNonce]').value);
-  assert.match(saved.nonce, /^[a-f0-9]{64}$/);
-  assert.equal(h.calls.filter(c => c.options.method === 'POST' && c.path !== '/auth/continuation').length, 0);
+  assert.equal(h.document.querySelector('form'),null);
+  assert.equal(h.location.assigned.at(-1),'/login?'+new URLSearchParams({returnTo:route}));
+  const saved=JSON.parse(h.dom.window.sessionStorage.getItem('vv-recipe-login-continuation'));
+  assert.equal(saved.path,route);assert.match(saved.nonce,/^[a-f0-9]{64}$/);
+  assert.equal(new URL(h.location.assigned.at(-1),'https://recipes.example').searchParams.has('continuationNonce'),false);
+  assert.equal(h.calls.filter(c=>c.options.method==='POST'&&c.path!=='/auth/continuation').length,0);
+});
+
+for(const query of ['?from=library','?from=library-all','?from=creator','?from=author&author=33333333-3333-4333-8333-333333333333'])test('acquisition and 401 relogin preserve the bounded origin '+query,async t=>{
+  const anonymous=await runtime(t,async()=>Response.json(recipe),{signedIn:false,providers:['github']},query);
+  await anonymous.open();
+  assert.equal(new URL(anonymous.location.assigned.at(-1),'https://recipes.example').searchParams.get('returnTo'),route+query);
+  assert.equal(JSON.parse(anonymous.dom.window.sessionStorage.getItem('vv-recipe-login-continuation')).path,route);
+  const expired=await runtime(t,async(_path,options)=>options.method==='POST'?Response.json({error:{code:'login_required'}},{status:401}):Response.json(recipe),undefined,query);
+  const form=await expired.open();await expired.submit(form);
+  assert.equal(new URL(expired.location.assigned.at(-1),'https://recipes.example').searchParams.get('returnTo'),route+query);
+  assert.equal(JSON.parse(expired.dom.window.sessionStorage.getItem('vv-recipe-login-continuation')).path,route);
 });
 test('already acquired continuation shows entitlement and never opens a dialog', async t => {
   const h = await runtime(t, async () => Response.json({...recipe, acquired:true}),
@@ -310,23 +321,18 @@ test('resumed public acquisition requires explicit confirmation and posts only o
   assert.match(h.document.querySelector('#main').textContent, /已获取/);
 });
 
-test('unavailable tab storage preserves login and falls back to manual acquisition', async t => {
-  const h = await runtime(t, async () => Response.json(recipe), {signedIn:false, providers:['github']});
-  Object.defineProperty(h.dom.window, 'sessionStorage', {get(){throw new Error('disabled');}});
-  await h.open();
-  assert.ok(h.document.querySelector('input[name=provider]'));
-  assert.equal(h.document.querySelector('input[name=continuationNonce]'), null);
-  assert.equal(h.document.querySelector('input[name=continuation]'), null);
+test('unavailable tab storage preserves full-page login and falls back to manual acquisition', async t => {
+  const h=await runtime(t,async()=>Response.json(recipe),{signedIn:false,providers:['github']});
+  Object.defineProperty(h.dom.window,'sessionStorage',{get(){throw Error('disabled');}});
+  await h.open();assert.equal(h.location.assigned.at(-1),'/login?'+new URLSearchParams({returnTo:route}));
+  assert.equal(h.document.querySelector('form'),null);assert.equal(h.document.querySelector('dialog').open,false);
 });
-test('canceling acquisition login clears only the pending tab nonce', async t => {
-  const h = await runtime(t, async () => Response.json(recipe), {signedIn:false, providers:['github']});
-  await h.open();
-  assert.ok(h.dom.window.sessionStorage.getItem('vv-recipe-login-continuation'));
-  const close = [...h.document.querySelectorAll('dialog button')].find(b => b.textContent === '关闭');
-  close.click();
-  assert.equal(h.dom.window.sessionStorage.getItem('vv-recipe-login-continuation'), null);
+test('ordinary login clears a pending acquisition instead of silently carrying its intent', async t=>{
+  const h=await runtime(t,async()=>Response.json(recipe),{signedIn:false,providers:['github']});
+  await h.open();assert.ok(h.dom.window.sessionStorage.getItem('vv-recipe-login-continuation'));
+  h.document.querySelector('#account').click();assert.equal(h.dom.window.sessionStorage.getItem('vv-recipe-login-continuation'),null);
+  assert.equal(h.location.assigned.at(-1),'/login?'+new URLSearchParams({returnTo:route}));
 });
-
 test('failed OAuth clears the tab nonce even when the returning detail cannot load', async t => {
   const h = await runtime(t, async () => Response.json({error:{code:'unavailable'}},{status:503}),
     {signedIn:false, providers:['github'], continuation:route}, '?auth=failed');

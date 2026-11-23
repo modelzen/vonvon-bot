@@ -123,7 +123,9 @@ export function createFeedbackHost(deps: Dependencies): FeedbackHost {
         const im = deps.im(message);
         try {
           await deps.checkBot();
-          if (command === '/feedback authorize' || command === '/feedback authorized') {
+          if (/^\/feedback code(?:\s|$)/.test(command)) {
+            await im.reply(actor, '直接描述现象即可开始排查。可在受影响设备打开「设置 → 诊断」，一起核对检查结果和官网说明。');
+          } else if (command === '/feedback authorize' || command === '/feedback authorized') {
             await feedbackAuthorizationMessage(command, message, actor, deps.authorization, im);
           } else if (message.chatType === 'group' && /^\/feedback setup(?:\s|$)/.test(command)) {
             const destination = setupDestination(command);

@@ -35,7 +35,7 @@ export const feedbackSummarySchema = z.object({
   impact: z.enum(['无法使用', '部分受影响', '建议改进']).nullable().default(null),
   areas: z.array(z.enum(['聊天与消息', '配方', '账号与权限', '安装与更新', '其他'])).max(5).default([]),
   checks: detailText.describe('实际排查步骤和观察到的结果。'),
-  sourceEvidence: detailText.describe('正式版版本、源码相对路径:行号及其能支持的结论。请勿粘贴大段源码。'),
+  sourceEvidence: detailText.describe('可选。经核实且与现场版本对应的官方公开源码版本、仓库相对路径:行号及其能支持的结论。请勿粘贴大段源码。'),
   openQuestions: detailText.describe('尚需确认的问题，明确哪些是推测。'),
   useCase: detailText.describe('用户的使用场景、现在的做法和遇到的不便。'),
   acceptanceCriteria: detailText.describe('改进后可观察或验证的结果。'),

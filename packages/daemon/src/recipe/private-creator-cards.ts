@@ -74,7 +74,7 @@ export class CreatorCards {
     if(c.kind==='publish'){
       const snap=c.snapshot,pub=snap.public;
       title=incomplete?'完善发布信息':'预览发布';label='确认发布 '+pub.version;
-      text=[(pub.name||'未命名配方')+' · '+(pub.version||'未指定版本'),pub.access==='coded'?'凭分享码获取':'直接获取','草稿修订 '+snap.revision,...(incomplete?[incomplete]:[]),
+      text=[(pub.name||'未命名配方')+' · '+(pub.version||'未指定版本'),pub.access==='coded'?'凭分享码获取':'直接获取','草稿修订 '+snap.revision,...(p.nativePreview||snap.appPreviewUrl?['在 App 中预览可选择发布为新配方或已有配方的新版本。私聊直接确认将'+(snap.recipeId?'更新创作时选择的配方。':'发布为独立的新配方。')]:[]),...(incomplete?[incomplete]:[]),
         ...(!p.nativePreview&&!snap.appPreviewUrl?['请打开 App 的「我的配方」查看完整内容。']:[])].join('\n');
       if(!retry||incomplete)choices.push({label:'继续修改内容',choice:{kind:'edit',id:row.job.id}});
       if(!retry&&row.state==='offer')choices.push({
@@ -87,7 +87,10 @@ export class CreatorCards {
       const field={name:'名称',summary:'简介',overview:'概览',version:'显示版本',access:'获取方式',logo:'Logo'}[c.change.field];
       const value=c.change.field==='access'?(c.change.value==='coded'?'凭分享码获取':'直接获取'):
         c.change.field==='logo'?(c.change.value==='attachment'?'本次发送的私聊图片':'移除 Logo'):c.change.value;
-      text=workName+' · 修订 '+c.revision+'\n'+field+' → '+value;
+      if(c.change.field==='name'&&row.rename){
+        title='确认修改本地草稿名称';
+        text=['本地草稿 · 修订 '+c.revision,'当前名称：'+row.rename.previousName,'新名称：'+value,'','点击“采用修改”后保存到这份草稿。'].join('\n');
+      }else text=workName+' · 修订 '+c.revision+'\n'+field+' → '+value;
     }else if(c.kind==='discard'){
       title='删除创作中的作品';label='确认删除';text='将删除「'+workName+'」的草稿修订 '+c.revision+'。已发布版本会保留。';
     }else{
@@ -130,11 +133,9 @@ export class CreatorCards {
   }
   versionCard(s:CreatorLedger,p:Presence,v:VersionSelection,url?:string){
     const {target}=v;
-    const c=this.newCard(s,p,v.name+' · '+v.version,(url?'已发布。':'管理这个版本的分享码或准备新版。')+'\n可发送 /recipe issue 3 指定分享码数量。',[
+    const c=this.newCard(s,p,v.name+' · '+v.version,(url?'已发布。':'管理这个版本的分享码。')+'\n可发送 /recipe issue 3 指定分享码数量。',[
       {label:'管理分享码',choice:{kind:'read',read:{kind:'codes',target,cursor:null}}},
       {label:'生成一枚分享码',choice:{kind:'offer',command:{kind:'issue',target,count:1}}},
-      {label:'准备新版',choice:{kind:'read',read:{kind:'parent',target}}},
-      {label:'撤下版本',choice:{kind:'offer',command:{kind:'withdraw',target}}},
     ],undefined,url);
     c.version=v;return c;
   }

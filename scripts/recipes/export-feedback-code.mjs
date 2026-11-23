@@ -8,22 +8,40 @@ import {createFeedbackRecipe, feedbackHelpUrls} from '../../packages/daemon/src/
 import {decodeRichRecipeContent, openResourceSnapshot} from '../../packages/protocol/dist/index.js';
 import {document, freezeSnapshot, inventory, writableDocument} from '../../services/recipe-api/src/rich-document.mjs';
 
-const [baselinePath, receiptPath, logoPath, output] = process.argv.slice(2);
-if (!output || process.argv.length !== 6) throw Error('Expected: BASELINE.json PUBLICATION-RECEIPT.json LOGO.webp NEW-OUTPUT-DIRECTORY');
+const [baselinePath, receiptPath, logoPath, output, acceptedPreviewPath] = process.argv.slice(2);
+if (!output || process.argv.length > 7) throw Error('Expected: BASELINE.json|ACQUIRED-DIRECTORY PUBLICATION-RECEIPT.json LOGO.webp OUTPUT-DIRECTORY [ACCEPTED-PREVIEW.json]');
 const sha = data => createHash('sha256').update(data).digest('hex');
 const json = data => JSON.stringify(data, null, 2) + '\n';
 const readJson = async path => JSON.parse(await readFile(path, 'utf8'));
-const [baseline, receipts, logo] = await Promise.all([readJson(baselinePath), readJson(receiptPath), readFile(logoPath)]);
-assert.equal(baseline.capturedFromActualAcceptedR2, true);
-const base = decodeRichRecipeContent(Buffer.from(baseline.canonical, 'base64url')).content;
+const [inputStat, receipts, logo] = await Promise.all([lstat(baselinePath), readJson(receiptPath), readFile(logoPath)]);
+const acquired = inputStat.isDirectory() ? await readJson(join(baselinePath, 'receipt.json')) : undefined;
+const accepted = acquired ? (acceptedPreviewPath && await readJson(acceptedPreviewPath)) : await readJson(baselinePath);
+const canonical = acquired ? await readFile(join(baselinePath, 'canonical.json')) : Buffer.from(accepted.canonical, 'base64url');
+const base = decodeRichRecipeContent(canonical).content;
+const baseline = {revision: acquired?.revision ?? accepted.revision};
+if (acquired) {
+  assert.equal(acquired.acquired, true);
+  assert.equal(acquired.contentSha256, sha(canonical));
+  assert.equal(acquired.tag, base.public.version.value);
+}
+if (accepted) {
+  assert.equal(accepted.capturedFromActualAcceptedR2, true);
+  assert.equal(accepted.revision, baseline.revision);
+  assert.deepEqual(Buffer.from(accepted.canonical, 'base64url'), canonical);
+  if (acquired?.access) assert.equal(accepted.public.access, acquired.access);
+}
+const access = acquired?.access ?? accepted?.public.access;
+assert.ok(['direct', 'coded'].includes(access), 'the acquisition or matching original preview must identify the access policy');
 const targetReceipt = receipts.filter(r => r.phase === 'committed' && r.result?.kind === 'published' &&
   r.publicVersion === base.public.version.value && r.result.revision === baseline.revision);
 assert.equal(targetReceipt.length, 1, 'need exactly one matching published baseline');
 const {recipeId, versionId: sourceVersionId} = targetReceipt[0].result.target;
+if (acquired) assert.deepEqual([acquired.recipeId, acquired.versionId], [recipeId, sourceVersionId]);
 const logoPart = base.parts.find(p => p.kind === 'finalLogo' && p.objectId === base.finalLogo?.objectId);
 assert.ok(logoPart, 'expected original logo');
 for (const p of base.parts) {
-  const bytes = p.kind === 'finalLogo' ? logo : Buffer.from(baseline.texts[p.objectId], 'utf8');
+  const bytes = acquired ? await readFile(join(baselinePath, p.objectId + '.bin')) : p.kind === 'finalLogo' ? logo : Buffer.from(accepted.texts[p.objectId], 'utf8');
+  if (p.kind === 'finalLogo') assert.deepEqual(bytes, logo);
   assert.equal(bytes.length, p.bytes);
   assert.equal(sha(bytes), p.sha256, 'failed baseline part hash: ' + p.objectId);
 }
@@ -82,7 +100,7 @@ const prior = new Map(inventory(base).map(row => [row.itemId, row]));
 const origins = inventory(content).map(({itemId}) => ({itemId, source: prior.has(itemId) ? {
   kind: 'releaseItem', versionId: sourceVersionId, itemId, baselineSha256: prior.get(itemId).baselineSha256,
 } : {kind: 'accountClaim'}}));
-const source = {format:'rich-v2', access: baseline.public.access, sourceVersionId, content, origins};
+const source = {format:'rich-v2', access, sourceVersionId, content, origins};
 // Only a real approval supplies a production allocation seed and upload-package ID.
 // This reproducible local preview uses its own namespace, never an upstream release identity.
 const seed = Buffer.from(sha('vonvon-feedback-local-preview:' + sourceVersionId), 'hex');

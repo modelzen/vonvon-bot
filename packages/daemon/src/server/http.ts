@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir, networkInterfaces } from 'node:os';
-import { RESOURCE_CONTEXT_CAPABILITY, NATIVE_RECIPE_PREVIEW_CAPABILITY, recipeAuthoringReplySchema, CLOSE_CODES, DRAIN_KINDS, PROTOCOL_VERSION, rpcKindOf, serverInfoSessionSchema, serverInfoV1Schema, serverInfoV2Schema, type Request, type Response } from '@vonvon/protocol';
+import { DRAFT_SCOPE_EDIT_CAPABILITY, RESOURCE_CONTEXT_CAPABILITY, NATIVE_RECIPE_PREVIEW_CAPABILITY, recipeAuthoringReplySchema, CLOSE_CODES, DRAIN_KINDS, PROTOCOL_VERSION, rpcKindOf, serverInfoSessionSchema, serverInfoV1Schema, serverInfoV2Schema, type Request, type Response } from '@vonvon/protocol';
 import type { AdminService } from '../admin/service';
 import type { ShutdownControl } from '../host/lifecycle';
 import { createServiceActionLauncher } from '../host/service-action';
@@ -392,7 +392,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
       : serverInfoV2Schema.parse({ type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: PROTOCOL_VERSION,
         deviceName: identity.current.name, platform: hostPlatform(), principal: principalWire(peer.principal),
         capabilities: [...capabilities(distribution, remote.status().length > 0),
-          ...(options.service.recipeAuthoring && !options.service.readonlyPreview ? [NATIVE_RECIPE_PREVIEW_CAPABILITY, RESOURCE_CONTEXT_CAPABILITY] : [])] });
+          ...(options.service.recipeAuthoring && !options.service.readonlyPreview ? [NATIVE_RECIPE_PREVIEW_CAPABILITY, RESOURCE_CONTEXT_CAPABILITY, DRAFT_SCOPE_EDIT_CAPABILITY] : [])] });
     // devices-2 4.3: every server's connections in one hub, so a publish, a drain or a release reaches all of them; its
     // view gives each connection its part of an event whoever publishes it (devices-4a 4.7).
     // devices-ui-3 4.2: whose a scan is, so the same client coming back on a new connection keeps it (`attached`).

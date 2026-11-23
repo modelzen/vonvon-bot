@@ -8,11 +8,13 @@ import {
 } from '@vonvon/protocol';
 import { MAX_DEVICES, RegistryError, type DeviceRegistry, type SecretBox, type StoredDevice, type StoredProblem } from './device-registry.js';
 import { RemoteConnectError, type RemoteConnectCode, type RemoteConnector, type RemoteLink } from './remote-transport.js';
+import type { DeviceSelectionStore } from './device-selection.js';
 
 export type DeviceLogEvent = 'device-opened' | 'device-closed' | 'device-failed' | 'device-added' | 'device-removed'
-  | 'device-route-failed' | 'device-add-failed';
+  | 'device-route-failed' | 'device-add-failed' | 'device-selection-failed';
 export interface DeviceConnectionsDeps {
   registry: DeviceRegistry;
+  selection?: DeviceSelectionStore;
   connector: RemoteConnector;
   box: SecretBox;
   /** app.getVersion() and PROTOCOL_VERSION. */
@@ -656,13 +658,20 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     emitState();
   }
 
+  async function rememberSelection(id:ViewId,device:StoredDevice|undefined):Promise<void>{
+    if(!deps.selection)return;
+    try{await track(deps.selection.set(device?{kind:'paired',deviceId:device.deviceId,pk:device.pk}:{kind:'local'}));}
+    catch{log('device-selection-failed',{id:short(id),code:'write_failed'});}
+  }
+
   async function switchTo(id: ViewId): Promise<void> {
     if (disposed) throw new DeviceConnectionsError('disposed');
+    const device = id === LOCAL_VIEW ? undefined : registry.get(id);
+    if (id !== LOCAL_VIEW && !device) throw new DeviceConnectionsError('unknown_device');
     if (id === viewId) {
       if (phase === 'failed') retry();
-      return;
+      return rememberSelection(id,device);
     }
-    if (id !== LOCAL_VIEW && !registry.get(id)) throw new DeviceConnectionsError('unknown_device');
     gen++;
     connecting?.abort();
     connecting = undefined;
@@ -682,7 +691,7 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
       phase = 'ready';
       emitView({ kind: 'local' });
       emitState();
-      return;
+      return rememberSelection(id,device);
     }
     const problem = problemOf(id);
     if (problem) {
@@ -690,13 +699,14 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
       failure = { code: problem, attempts: [], at: now() };
       emitView({ kind: 'waiting', id });
       emitState();
-      return;
+      return rememberSelection(id,device);
     }
     phase = 'connecting';
     emitView({ kind: 'waiting', id });
     emitState();
     seq++;
     void track(open(gen, seq));
+    return rememberSelection(id,device);
   }
 
   function retry(): void {

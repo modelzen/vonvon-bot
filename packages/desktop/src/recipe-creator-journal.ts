@@ -3,7 +3,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {closeSync,fsyncSync,mkdirSync,openSync,opendirSync,readFileSync,renameSync,statSync,unlinkSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {z} from 'zod';
-import {agentIdSchema,viewIdSchema,recipeBinary32Schema,creatorCommandSchema,creatorConfirmationSchema,creatorSnapshotSchema,creatorAnswerSchema,communityRequestSchema} from '@vonvon/protocol';
+import {exactResourceVersionSchema,agentIdSchema,viewIdSchema,recipeBinary32Schema,creatorCommandSchema,creatorConfirmationSchema,creatorSnapshotSchema,creatorAnswerSchema,communityRequestSchema} from '@vonvon/protocol';
 
 const uuid=z.string().uuid(), digest=z.string().regex(/^[a-f0-9]{64}$/);
 export const creatorAssociationSchema=z.object({accountId:uuid,viewId:viewIdSchema,deviceId:uuid,deviceKey:recipeBinary32Schema,botId:agentIdSchema,binding:uuid,scope:digest}).strict();
@@ -19,7 +19,7 @@ const snapshot=z.object({association:creatorAssociationSchema,snapshot:creatorSn
 export type CreatorFrozenSnapshot=z.infer<typeof snapshot>;
 const command=z.object({association:creatorAssociationSchema,id:uuid,command:creatorCommandSchema,
   grant:z.object({approval:digest,expiresAt:z.number().int().safe().nonnegative(),confirmation:creatorConfirmationSchema.optional()}).strict(),
-  request:communityRequestSchema,phase:z.enum(['frozen','dispatched','unknown','awaitingReceipt','committed']),result:creatorAnswerSchema.refine(answer=>!answer.kind.startsWith('resource')).optional()}).strict();
+  destination:exactResourceVersionSchema.nullable().optional(),request:communityRequestSchema,phase:z.enum(['frozen','dispatched','unknown','awaitingReceipt','committed']),result:creatorAnswerSchema.refine(answer=>!answer.kind.startsWith('resource')).optional()}).strict();
 export type CreatorCommandRecord=z.infer<typeof command>;
 export const creatorSha=(value:string|Uint8Array)=>createHash('sha256').update(value).digest('hex');
 export const creatorSnapshotDigest=(value:unknown)=>creatorSha(JSON.stringify(creatorSnapshotSchema.parse(value)));
@@ -42,6 +42,14 @@ export class RecipeCreatorJournal {
       renameSync(tmp,path);
       if(process.platform!=='win32'){const directory=openSync(this.dir,'r');try{fsyncSync(directory);}finally{closeSync(directory);}}
     }finally{try{unlinkSync(tmp);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
+  }
+  publicationChoice(accountId:string,jobId:string,confirmationId:string){
+    return this.read('publish-choice-'+uuid.parse(accountId)+'-'+uuid.parse(jobId)+'-'+uuid.parse(confirmationId),exactResourceVersionSchema.nullable());
+  }
+  bindPublicationChoice(accountId:string,jobId:string,confirmationId:string,destination:z.infer<typeof exactResourceVersionSchema>|null){
+    const prior=this.publicationChoice(accountId,jobId,confirmationId);
+    if(prior!==undefined&&!isDeepStrictEqual(prior,destination))throw new Error('发布目标已确认，请核对原请求。');
+    this.write('publish-choice-'+accountId+'-'+jobId+'-'+confirmationId,exactResourceVersionSchema.nullable(),destination);
   }
   associations(accountId:string){return (this.read('associations',creatorAssociationSchema.array().max(256))??[]).filter(row=>row.accountId===accountId);}
   remember(value:CreatorAssociation){

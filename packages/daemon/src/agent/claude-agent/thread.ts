@@ -1,4 +1,3 @@
-import { codeTool, codeNamespace } from '../entry/release-code-tools';
 import { z } from 'zod';
 import type { ClaudeSdkFacade } from './backend';
 import { readFile } from 'node:fs/promises';
@@ -377,17 +376,13 @@ export class ClaudeAgentThread implements AgentThread {
           (cfg.feishuTools || !feishuReadToolNames.has(spec.name)) &&
           (cfg.feishuEditTools || spec.name !== FEISHU_DOC_EDIT) &&
           (cfg.feishuApiTools || spec.name !== FEISHU_API));
-        for (const name of ['vonvon_bot', codeNamespace]) {
-          const specs = visible.filter(spec => codeTool(spec.name) === (name === codeNamespace));
-          if (name === codeNamespace && !specs.length) continue;
-          const tools = specs.map(spec => tool(spec.name, spec.description, spec.input.shape, async (args, extra) => {
-            const origin = toolOriginSchema.safeParse(extra);
-            const toolUseId = origin.success ? origin.data._meta['claudecode/toolUseId'] : undefined;
-            const reply = await entry.call(spec.name, args, { toolUseId });
-            return { content: [{ type: 'text', text: toolReplyText(reply) }], ...(!reply.ok ? { isError: true } : {}) };
-          }));
-          mcpServers[name] = cfg.createSdkMcpServer({ name, version: '1', tools });
-        }
+        const tools = visible.map(spec => tool(spec.name, spec.description, spec.input.shape, async (args, extra) => {
+          const origin = toolOriginSchema.safeParse(extra);
+          const toolUseId = origin.success ? origin.data._meta['claudecode/toolUseId'] : undefined;
+          const reply = await entry.call(spec.name, args, { toolUseId });
+          return { content: [{ type: 'text', text: toolReplyText(reply) }], ...(!reply.ok ? { isError: true } : {}) };
+        }));
+        mcpServers.vonvon_bot = cfg.createSdkMcpServer({ name:'vonvon_bot', version:'1', tools });
       } else if (!entryMissingWarned) {
         entryMissingWarned = true;
         log.warn('agent', 'entry-missing', { reason: 'sdk' });
@@ -419,8 +414,6 @@ export class ClaudeAgentThread implements AgentThread {
       ...(mcpServers.vonvon_bot ? { mcpServers } : {}),
       // permission tier (permissionMode / sandbox / canUseTool / disallowedTools)
       ...cfg.permission,
-      ...(mcpServers[codeNamespace] ? { allowedTools: [...cfg.permission.allowedTools ?? [],
-        'mcp__' + codeNamespace + '__rg', 'mcp__' + codeNamespace + '__read'] } : {}),
       disallowedTools: [...cfg.permission.disallowedTools ?? [], ...NATIVE_SCHEDULING_TOOLS],
       canUseTool: (name, input, opts) => this.canUseTool(name, input, opts),
       stderr: (d: string) => {
@@ -523,12 +516,12 @@ export class ClaudeAgentThread implements AgentThread {
       for await (const msg of this.query) {
         if (msg.type === 'assistant') {
           for (const block of msg.message.content) {
-            if (block.type === 'tool_use' && (block.name.startsWith('mcp__vonvon_bot__') || block.name.startsWith('mcp__'+codeNamespace+'__'))) this.cfg.entry?.noteToolUse(block.id);
+            if (block.type === 'tool_use' && block.name.startsWith('mcp__vonvon_bot__')) this.cfg.entry?.noteToolUse(block.id);
           }
         }
         if (msg.type === 'stream_event' && msg.event.type === 'content_block_start') {
           const block = msg.event.content_block;
-          if (block.type === 'tool_use' && (block.name.startsWith('mcp__vonvon_bot__') || block.name.startsWith('mcp__'+codeNamespace+'__'))) this.cfg.entry?.noteToolUse(block.id);
+          if (block.type === 'tool_use' && block.name.startsWith('mcp__vonvon_bot__')) this.cfg.entry?.noteToolUse(block.id);
         }
         if (msg.type === 'system' && msg.subtype === 'init' && this.cfg.plugins?.length) {
           // The one check the code can make (T4b 4.4): the CLI's own report of the plugins it loaded.

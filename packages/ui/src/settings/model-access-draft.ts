@@ -3,11 +3,14 @@ import type {ModelCatalog, ProjectSettingsView} from '@vonvon/protocol';
 export type ModelAccess = NonNullable<ProjectSettingsView['sections']['modelAccess']>['stored'];
 export type CatalogModel = ModelCatalog['models'][number];
 export type EffortGroup = {key: string; models: CatalogModel[]; efforts: string[]};
-export const allowedEfforts = (value: ModelAccess, id: string) => value.modelEfforts?.[id] ?? value.efforts;
+export const allowedEfforts = (value: Pick<ModelAccess, 'modelEfforts' | 'efforts'>, id: string) => value.modelEfforts?.[id] ?? value.efforts;
 const unique = (values: string[]) => [...new Set(values)];
 
+export function modelAccessDefaultId(value: Pick<ModelAccess, 'defaultModel' | 'models'>) {
+  return value.defaultModel ?? value.models[0];
+}
 export function modelAccessDefault(value: ModelAccess, models: CatalogModel[]) {
-  const id = value.defaultModel ?? value.models[0];
+  const id = modelAccessDefaultId(value);
   const model = models.find(m => m.id === id && !m.hidden);
   const supported = model?.supportedEfforts.filter(e => allowedEfforts(value, model.id).includes(e)) ?? [];
   const effort = value.defaultEffort ?? supported.find(e => e === model?.defaultEffort) ?? supported[0];

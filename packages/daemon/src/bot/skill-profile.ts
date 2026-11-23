@@ -7,8 +7,6 @@ export function projectSkillKey(project?: SkillProject): string {
   return createHash('sha256').update(JSON.stringify([
     [...new Set(project?.skills?.disabledPaths ?? [])].sort(),
     project?.richRecipe?.pointer ?? null,
-    // An opt-in changes the tool catalog. Preserve existing keys for groups without it.
-    ...(project?.releaseCode ? [project.releaseCode.revision] : []),
   ])).digest('hex');
 }
 

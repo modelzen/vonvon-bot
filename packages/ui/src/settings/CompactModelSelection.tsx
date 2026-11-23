@@ -6,7 +6,7 @@ import type {CatalogControls} from './SettingsPanel';
 import {allowedEfforts, editModelAccess, effortGroups, modelAccessDefault, type ModelAccess, type ModelAccessAction} from './model-access-draft';
 import './compact-model-selection.css';
 
-function DefaultBadge() {
+export function DefaultBadge() {
   return <span className="gd-default-badge" title="新话题默认"><Star size={11} fill="currentColor" aria-hidden="true"/>默认</span>;
 }
 function CheckLabel({label, checked, mixed, disabled, onChange, children}: {label: string; checked: boolean; mixed?: boolean; disabled: boolean; onChange: () => void; children: ReactNode}) {
@@ -15,12 +15,31 @@ function CheckLabel({label, checked, mixed, disabled, onChange, children}: {labe
     <span className="gd-model-check-mark" aria-hidden="true">{checked ? <Check size={12}/> : mixed ? '−' : null}</span>{children}</label>;
 }
 
+export function ModelSummaryMenu({label, summary, trigger, open, onOpenChange, children, error}: {
+  label: string; summary: string; trigger: string; open?: boolean; onOpenChange?: (open: boolean) => void; children: ReactNode; error?: string;
+}) {
+  const errorId = useId();
+  return <div className="gd-model-summary-row">
+    <span className="gd-model-summary-label">{label}</span>
+    <Popover.Root open={open} onOpenChange={onOpenChange}>
+      <Popover.Trigger className="gd-model-selection-control" aria-invalid={Boolean(error)} aria-describedby={error ? errorId : undefined} aria-label={trigger}>
+        <span className="gd-model-selection-copy">{summary}</span><ChevronDown size={14} aria-hidden="true"/>
+      </Popover.Trigger>
+      <Popover.Portal><Popover.Positioner side="bottom" align="start" sideOffset={7} collisionPadding={12} className="gd-model-menu-positioner">
+        <Popover.Popup className="gd-model-menu" aria-label={label}>{children}
+          <div className="gd-model-menu-footer"><span><Star size={11} aria-hidden="true"/>默认仅用于新话题</span></div>
+        </Popover.Popup>
+      </Popover.Positioner></Popover.Portal>
+    </Popover.Root>
+    {error && <p id={errorId} className="gd-model-field-error" role="alert">{error}</p>}
+  </div>;
+}
+
 /** Menus edit one section draft; its Save persists permissions and defaults together. */
 export function CompactModelSelection({value, onChange, catalog, catalogControls, disabled, errors = {}}: {
   errors?: {models?: string; efforts?: string};
   value: ModelAccess; onChange: (value: ModelAccess) => void; catalog?: ModelCatalog; catalogControls?: CatalogControls; disabled: boolean;
 }) {
-  const errorId = useId();
   const [picker, setPicker] = useState<{id: 'models' | 'efforts'; backend: string}>();
   const [query, setQuery] = useState('');
   const [notice, setNotice] = useState<string>();
@@ -42,16 +61,12 @@ export function CompactModelSelection({value, onChange, catalog, catalogControls
   };
   const refresh = (kind: 'models' | 'efforts') => catalogControls && <button type="button" className="gd-model-icon-button" aria-label={kind === 'models' ? '刷新模型' : '刷新思考强度'} title="刷新模型及其支持的能力" disabled={catalogControls.loading} onClick={catalogControls.refresh}><RefreshCw size={15} className={catalogControls.loading ? 'gd-model-refreshing' : ''} aria-hidden="true"/></button>;
   const messages = <>{status && <p className="gd-model-menu-note" role="status">{status}</p>}{notice && <p className="gd-model-menu-notice" role="status">{notice}</p>}</>;
-  const menu = (kind: 'models' | 'efforts', label: string, summary: string, children: ReactNode) => <div className="gd-model-summary-row" key={kind}>
-    <span className="gd-model-summary-label">{label}</span>
-    <Popover.Root open={picker?.id === kind && picker.backend === value.backend} onOpenChange={open => {setPicker(open ? {id: kind, backend: value.backend} : undefined); setQuery(''); setNotice(undefined);}}>
-      <Popover.Trigger className="gd-model-selection-control" aria-invalid={Boolean(errors[kind])} aria-describedby={errors[kind] ? `${errorId}-${kind}` : undefined} aria-label={kind === 'models' ? '配置可用模型' : '配置可用思考强度'}><span className="gd-model-selection-copy">{summary}</span><ChevronDown size={14} aria-hidden="true"/></Popover.Trigger>
-      <Popover.Portal><Popover.Positioner side="bottom" align="start" sideOffset={7} collisionPadding={12} className="gd-model-menu-positioner"><Popover.Popup className="gd-model-menu" aria-label={label}>
-        {children}{messages}<div className="gd-model-menu-footer"><span><Star size={11} aria-hidden="true"/>默认仅用于新话题</span></div>
-      </Popover.Popup></Popover.Positioner></Popover.Portal>
-    </Popover.Root>
-    {errors[kind] && <p id={`${errorId}-${kind}`} className="gd-model-field-error" role="alert">{errors[kind]}</p>}
-  </div>;
+  const menu = (kind: 'models' | 'efforts', label: string, summary: string, children: ReactNode) => <ModelSummaryMenu
+    label={label} summary={summary} trigger={kind === 'models' ? '配置可用模型' : '配置可用思考强度'} error={errors[kind]}
+    open={picker?.id === kind && picker.backend === value.backend}
+    onOpenChange={open => {setPicker(open ? {id: kind, backend: value.backend} : undefined); setQuery(''); setNotice(undefined);}}>
+    {children}{messages}
+  </ModelSummaryMenu>;
   return <>
     {menu('models', '可用模型', `${value.models.length} 个模型${ready && missing.length ? ` · ${missing.length} 个已不可用` : ''}`, <>
       <div className="gd-model-menu-heading"><label className="gd-model-menu-search"><Search size={14} aria-hidden="true"/><input type="search" aria-label="搜索模型" placeholder="搜索模型" value={query} onChange={e => setQuery(e.target.value)}/></label>{refresh('models')}</div>

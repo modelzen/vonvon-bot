@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN" data-desktop-channel="__DESKTOP_CHANNEL__" data-community-url="__COMMUNITY_URL__" data-creators-url="__CREATORS_URL__" data-account-url="__ACCOUNT_URL__"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="same-origin"><meta name="color-scheme" content="light">
+<title>创作者中心 · Vonvon</title><link rel="icon" href="/mark.png"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/creators.css"><script type="module" src="/creators.mjs"></script><script type="module" src="/create.mjs"></script>
+</head><body>
+<header class="mast"><div class="bar shell"><a class="brand" href="__CREATORS_URL__"><img src="/mark.png" width="28" height="28" alt="">Vonvon 创作者中心</a><nav class="actions" aria-label="创作者导航"><a href="__COMMUNITY_URL__">社区</a><a href="https://vonvon.cc/docs/">文档</a><a id="creators-account" aria-disabled="true" tabindex="-1">账号</a></nav></div></header>
+<main class="creators-shell">
+<header class="creators-heading"><div><p class="eyebrow">VONVON BOT</p><h1>创作者中心</h1><p>把自己的经验整理成配方，让更多 Bot 用起来。</p></div><a class="button" href="__RECIPE_CREATE_URL__" data-create-recipe>创建配方</a></header>
+<aside class="creators-guide"><p>在 App 中创建配方，通过群聊整理内容，预览确认后发布到社区。</p><a href="/studio">查看创作指引 →</a></aside>
+<section class="creators-workspace" aria-label="我的创作">
+<div class="creators-tabs" role="tablist" aria-label="创作状态"><button type="button" id="creators-published" role="tab" aria-selected="true" aria-controls="creators-list" data-tab="published">已发布</button><button type="button" id="creators-drafts" role="tab" aria-selected="false" aria-controls="creators-list" tabindex="-1" data-tab="drafts">创作中</button></div>
+<p id="creators-status" class="notice" role="status" aria-live="polite">正在读取创作…</p>
+<div id="creators-login" class="creators-empty" hidden><h2>登录后查看自己的创作</h2><p>社区、创作者中心和 App 使用同一个 Vonvon 账号。</p><a class="button" href="/login?returnTo=%2Fcreators">登录</a></div>
+<div id="creators-list" role="tabpanel" aria-labelledby="creators-published" aria-busy="false"></div>
+<button id="creators-retry" class="secondary" type="button" hidden>重新读取</button>
+</section>
+<noscript><p class="notice">请开启 JavaScript 后查看创作。</p></noscript>
+</main>
+<footer class="site-footer"><div class="shell"><p>Vonvon · 从一个 Bot 的经验，到更多人的配方</p><nav aria-label="相关页面"><a href="__COMMUNITY_URL__">配方社区</a><a href="/studio">创作指引</a><a data-creators-account aria-disabled="true" tabindex="-1">账号设置</a></nav></div></footer>
+</body></html>

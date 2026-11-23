@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
+import {oauthCallback, oauthProviders} from './oauth-provider.mjs';
 
 const minute = 60_000;
 const providers = new Set(['github', 'google', 'apple']);
@@ -6,8 +7,48 @@ const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 export const detailPath = new RegExp('^/recipes/' + uuid + '/versions/' + uuid + '$', 'i');
 
 export function returnPath(value) {
-  if (['/library', '/publications', '/studio', '/account'].includes(value) || (typeof value === 'string' && (detailPath.test(value) || /^\/release-code\/confirm\/[A-Za-z0-9_-]{8,128}$/.test(value) || /^\/authors\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value)))) return value;
-  return '/';
+  if (typeof value !== 'string' || value.length > 4096 || !value.isWellFormed() ||
+      !value.startsWith('/') || value.startsWith('//') || /[\\#\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(value) || /%(?![a-f0-9]{2})/i.test(value)) return '/';
+  const url = new URL(value, 'https://return.invalid');
+  if (url.origin !== 'https://return.invalid' || value.split('?')[0] !== url.pathname) return '/';
+  const params = url.searchParams;
+  for (const [key, item] of params) {
+    if (params.getAll(key).length !== 1 || /[\\\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(item)) return '/';
+  }
+  if (/^\/release-code\/confirm\/[A-Za-z0-9_-]{8,128}$/.test(url.pathname)) return value === url.pathname ? url.pathname : '/';
+  const query = new URLSearchParams();
+  if (url.pathname === '/') {
+    if ([...params.keys()].some(key => key !== 'q')) return '/';
+    const q = params.get('q');
+    if (q !== null) {
+      if ([...q].length > 120) return '/';
+      query.set('q', q);
+    }
+  } else if (url.pathname === '/library') {
+    if ([...params.keys()].some(key => key !== 'state')) return '/';
+    const state = params.get('state');
+    if (state !== null) {
+      if (!['all','acquired','drafts','published'].includes(state)) return '/';
+      query.set('state',state);
+    }
+  } else if (detailPath.test(url.pathname)) {
+    if ([...params.keys()].some(key => !['from', 'author'].includes(key))) return '/';
+    const from = params.get('from'), author = params.get('author');
+    if (from !== null) {
+      if (!['library', 'library-all', 'published', 'author', 'creator'].includes(from)) return '/';
+      query.set('from', from);
+    }
+    if (from === 'author') {
+      if (!new RegExp('^' + uuid + '$', 'i').test(author ?? '')) return '/';
+      query.set('author', author.toLowerCase());
+    } else if (author !== null) return '/';
+  } else {
+    const allowed = ['/library', '/publications', '/studio', '/account', '/creators', '/create'].includes(url.pathname) ||
+      new RegExp('^/authors/' + uuid + '$', 'i').test(url.pathname);
+    if (!allowed || params.size) return '/';
+  }
+  const path = url.pathname.toLowerCase();
+  return path + (query.size ? '?' + query.toString() : '');
 }
 
 function cookieValue(req, name) {
@@ -31,9 +72,9 @@ export function createLoginAdmission({ now = Date.now } = {}) {
   };
 }
 
-export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, providerNames }) {
-  const available = supabaseOrigin && publishableKey ? providerNames.filter(p => providers.has(p)) : [];
-  const flows = new Map(), sessions = new Map();
+export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, providerNames, verifyIdentity }) {
+  const available = supabaseOrigin && publishableKey ? oauthProviders(providerNames) : [];
+  const flows = new Map(), sessions = new Map(), links = new Map();
   const admit = createLoginAdmission();
   const secure = new URL(publicOrigin).protocol === 'https:';
   const flowName = secure ? '__Host-vv-flow' : 'vv-local-flow';
@@ -47,7 +88,7 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
     sessions.delete(key);
   };
   const purge = setInterval(() => {
-    for (const map of [flows, sessions]) {
+    for (const map of [flows, sessions, links]) {
       for (const [key, value] of map) if (value.deadline <= Date.now()) map.delete(key);
     }
   }, minute);
@@ -70,12 +111,55 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
       accessUntil: Date.now() + token.expires_in * 1000 };
   }
 
+  function verifiedExpiry(access) {
+    const expiry = JSON.parse(Buffer.from(access.split('.')[1], 'base64url')).exp * 1000;
+    if (!Number.isFinite(expiry) || expiry <= Date.now() + 15000) throw new WebError(401, 'login_required');
+    return expiry;
+  }
+
+  function attachSession(req, res, access, identity, accessUntil, provider) {
+    const previous = getSession(req);
+    if (previous?.accountId === identity.accountId && previous.deadline >= accessUntil - 15000) return;
+    if (sessions.size >= 4096) throw new WebError(429, 'busy');
+    const id = random(), deadline = accessUntil - 15000;
+    sessions.delete(cookieValue(req, sessionName));
+    sessions.set(id, {accountId: identity.accountId, provider, access, accessUntil, displaySession: random(), deadline});
+    res.setHeader('Set-Cookie', cookie(sessionName, id, Math.floor((deadline - Date.now()) / 1000)));
+  }
+
   return {
-    stop() { clearInterval(purge); flows.clear(); sessions.clear(); },
+    stop() { clearInterval(purge); flows.clear(); sessions.clear(); links.clear(); },
     status(req) {
       const session = getSession(req);
       const continuation = session?.continuation;
-      return { ...(continuation && { continuation }), signedIn: Boolean(session), ...(session && { displaySession: session.displaySession }), providers: available };
+      return { ...(continuation && { continuation }), signedIn: Boolean(session), ...(session && { displaySession: session.displaySession, ...(providers.has(session.provider) && { provider: session.provider }) }), providers: available };
+    },
+    confirmNative(req, res, access, identity, provider) {
+      attachSession(req, res, access, identity, Math.min(verifiedExpiry(access), Date.now() + 8 * 60 * minute), provider);
+    },
+    accountLink(access, identity) {
+      admit();
+      if (links.size >= 1024) throw new WebError(429, 'busy');
+      // The API verified this JWT before the link was issued. Its expiry also bounds the browser session.
+      const accessUntil = Math.min(verifiedExpiry(access), Date.now() + 15 * minute);
+      const ticket = random();
+      links.set(ticket, {access, identity, accessUntil, deadline: Math.min(accessUntil, Date.now() + minute)});
+      return {ticket, accountId: identity.accountId};
+    },
+    async consumeAccountLink(req, res, input, verifyIdentity) {
+      const item = links.get(input?.ticket);
+      if (!item || item.deadline <= Date.now()) throw new WebError(410, 'link_expired');
+      const previous = getSession(req);
+      if (!input.confirm) return {displayName: item.identity.displayName, accountId: item.identity.accountId,
+        displaySession: previous?.displaySession ?? null};
+      if (input.displaySession !== (previous?.displaySession ?? null)) throw new WebError(409, 'session_changed');
+      if (sessions.size >= 4096) throw new WebError(429, 'busy');
+      const identity = await verifyIdentity(item.access);
+      if (identity.accountId !== item.identity.accountId || links.get(input.ticket) !== item ||
+          item.deadline <= Date.now() || getSession(req) !== previous) throw new WebError(409, 'session_changed');
+      links.delete(input.ticket);
+      attachSession(req, res, item.access, identity, item.accessUntil);
+      return {accountId: identity.accountId};
     },
     consumeContinuation(req, path, nonce) {
       const session = getSession(req);
@@ -93,9 +177,11 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
       const key = random(), verifier = random();
       flows.delete(cookieValue(req, flowName));
       const returnTo = returnPath(form.get('returnTo'));
+      const backTo = returnPath(form.get('backTo') || returnTo);
       const continuationNonce = form.get('continuationNonce');
-      const continuation = form.get('continuation') === 'acquire' && detailPath.test(returnTo) && /^[a-f0-9]{64}$/.test(continuationNonce || '') ? returnTo : undefined;
-      flows.set(key, { verifier, returnTo, continuation, continuationNonce: continuation ? continuationNonce : undefined, deadline: Date.now() + 10 * minute });
+      const destinationPath = new URL(returnTo, publicOrigin).pathname;
+      const continuation = form.get('continuation') === 'acquire' && detailPath.test(destinationPath) && /^[a-f0-9]{64}$/.test(continuationNonce || '') ? destinationPath : undefined;
+      flows.set(key, { verifier, provider, returnTo, backTo, continuation, continuationNonce: continuation ? continuationNonce : undefined, deadline: Date.now() + 10 * minute });
       const authorize = new URL('/auth/v1/authorize', supabaseOrigin);
       authorize.searchParams.set('provider', provider);
       if (['github', 'google'].includes(provider)) authorize.searchParams.set('prompt', 'select_account');
@@ -112,28 +198,42 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
         if (flows.get(key) !== flow) return false;
         flows.delete(key); cookies.push(cookie(flowName, '', 0)); return true;
       };
-      const code = url.searchParams.get('code');
-      let location = (flow?.returnTo || '/') + '?auth=failed';
-      if (flow?.deadline > Date.now() && !flow.exchanging && code && code.length <= 2048 && !url.searchParams.has('error')) {
+      const result = oauthCallback(url);
+      let location = '/login?' + new URLSearchParams({ returnTo: returnPath(flow?.returnTo), ...(flow?.backTo && flow.backTo !== flow.returnTo && {backTo: flow.backTo}), auth: 'failed' });
+      if (flow?.deadline > Date.now() && !flow.exchanging && result.kind === 'code') {
         flow.exchanging = true;
         try {
-          const token = await tokenRequest('pkce', { auth_code: code, code_verifier: flow.verifier });
+          const token = await tokenRequest('pkce', { auth_code: result.code, code_verifier: flow.verifier });
           if (flow.deadline > Date.now() && consume() && sessions.size < 4096) {
             sessions.delete(cookieValue(req, sessionName));
             const id = random();
-            sessions.set(id, { ...token, continuation: flow.continuation, continuationNonce: flow.continuationNonce, displaySession: random(), deadline: Date.now() + 8 * 60 * minute });
+            sessions.set(id, { ...token, provider: flow.provider, continuation: flow.continuation, continuationNonce: flow.continuationNonce, displaySession: random(), deadline: Date.now() + 8 * 60 * minute });
             cookies.push(cookie(sessionName, id, 8 * 3600));
             location = flow.returnTo;
+            if (verifyIdentity && !location.startsWith('/release-code/')) {
+              try {
+                const profile = await verifyIdentity(token.access, AbortSignal.timeout(9000));
+                const session = sessions.get(id);
+                if (session) session.accountId = profile.accountId;
+                if (profile.revision === 0) {
+                  location = '/account?' + new URLSearchParams({after: flow.returnTo});
+                }
+              } catch { /* The authenticated destination can retry a temporary profile outage. */ }
+            }
           }
         } catch {} finally { consume(); }
-      } else if (flow && !flow.exchanging) consume();
-      res.writeHead(303, { Location: location, ...(cookies.length && { 'Set-Cookie': cookies }) }); res.end();
+      } else if (flow && !flow.exchanging) {
+        if (flow.deadline > Date.now() && result.kind === 'cancelled') location = '/login?' + new URLSearchParams({returnTo: flow.returnTo, ...(flow.backTo !== flow.returnTo && {backTo: flow.backTo}), auth: 'cancelled'});
+        consume();
+      }
+      res.writeHead(303, { Location: location + '#', ...(cookies.length && { 'Set-Cookie': cookies }) }); res.end();
     },
     async access(req, { write = false } = {}) {
       const session = getSession(req);
       if (!session) return null;
       if (write && req.headers['x-vonvon-session'] !== session.displaySession) throw new WebError(409, 'session_changed');
       if (session.accessUntil > Date.now() + 15_000) return session.access;
+      if (!session.refresh) throw new WebError(401, 'login_required');
       if (!session.refreshing) {
         session.refreshing = tokenRequest('refresh_token', { refresh_token: session.refresh })
           .then(values => {

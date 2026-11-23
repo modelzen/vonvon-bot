@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import {z} from 'zod';
 import {decodeRichRecipeContent, verifyRichRecipeRelease, recipeRichManifestObjectSchema, recipeRichReleaseSchema,
-  publicDisplayNameSchema, recipePublicSchema, recipeRoleDraftSchema, recipeSummarySchema, recipeBrowseDetailSchema, type RecipeBrowseDetail, type RecipeDetail, type RecipeDraft, type CommunityResponses} from '@vonvon/protocol';
+  communityResponseSchemas, publicDisplayNameSchema, recipePublicSchema, recipeRoleDraftSchema, recipeSummarySchema, recipeBrowseDetailSchema, type RecipeBrowseDetail, type RecipeDetail, type RecipeDraft, type CommunityResponses} from '@vonvon/protocol';
 import type {NativeAccount} from './account-session.js';
 
 const uuid = z.string().uuid();
@@ -21,7 +21,8 @@ export class RichCommunityUnavailable extends Error {constructor(readonly state:
 export function richCommunity(account: NativeAccount, accountId: string | undefined, check: () => void) {
   async function read(path: string, cap: number, metadata = false): Promise<Buffer> {
     check();
-    const response = accountId ? await account.request(accountId, path, {}, check) : await account.publicRequest!(path);
+    const init = path.endsWith('/preview') ? {headers: {'X-Vonvon-Browse': 'public-v2'}} : {};
+    const response = accountId ? await account.request(accountId, path, init, check) : await account.publicRequest!(path);
     check();
     if (!response.ok || !response.body) {await response.body?.cancel(); if (metadata && response.status === 404) throw new MissingRichRecipe(); throw fail();}
     const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let bytes = 0;
@@ -107,6 +108,19 @@ export function richCommunity(account: NativeAccount, accountId: string | undefi
       const value = recipeBrowseDetailSchema.parse(raw);
       if (value.recipeId !== recipeId || value.versionId !== versionId) throw fail();
       return value;
+    },
+    async taskSummaries(recipeId:string,versionId:string):Promise<CommunityResponses['recipeTaskSummaries']>{
+      if(!accountId)throw fail();
+      const path=`/v2/recipes/${uuid.parse(recipeId)}/versions/${uuid.parse(versionId)}/task-summaries`;
+      try{
+        const bytes=await read(path,65536,true);
+        const value=communityResponseSchemas.recipeTaskSummaries.parse(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes)));
+        if(value.recipeId!==recipeId||value.versionId!==versionId)throw fail();
+        return value;
+      }catch(error){
+        if(error instanceof MissingRichRecipe)return {recipeId,versionId};
+        throw error;
+      }
     },
     async displayLogo(versionId: string): Promise<CommunityResponses['displayLogo']> {
       const bytes = await read(`/v2/versions/${uuid.parse(versionId)}/display-logo`, 131072);

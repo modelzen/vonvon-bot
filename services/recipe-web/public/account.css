@@ -23,3 +23,11 @@
 .account-providers button { width: 100%; }
 #account-retry { margin-top: 16px; }
 @media(max-width:540px) { .account-shell { width: calc(100% - 32px); } .account-shell .panel { padding: 20px; } .account-avatar-row { align-items: flex-start; gap: 16px; } .account-avatar { width: 56px; height: 56px; font-size: 18px; } .account-id-row { flex-wrap: wrap; } .account-id-row input { flex-basis: 100%; } }
+
+#avatar-crop { width: min(384px, 92vw); margin: auto; padding: 24px; border: 1px solid var(--stroke); border-radius: 16px; background: var(--paper); }
+#avatar-crop::backdrop { background: #17171770; }
+#avatar-canvas { display: block; width: 100%; height: auto; margin: 16px 0; background: var(--soft); border-radius: 8px; touch-action: none; cursor: grab; }
+#avatar-zoom { width: 100%; accent-color: var(--accent); }
+#avatar-crop form { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+.avatar-error:not(:empty) { margin: 8px 0; padding: 8px 12px; border-inline-start: 3px solid #b42318; background: #fff2f0; color: #972016; border-radius: 4px; font-size: 14px; }

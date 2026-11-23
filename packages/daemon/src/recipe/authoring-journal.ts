@@ -27,7 +27,7 @@ function nextSelectionOrder(now:number){return lastSelectionOrder=Math.max(lastS
 /** Preserve the inbound event's order across account checks, source validation and the per-session queue. */
 export function atRecipeIntake<T>(now:number,run:()=>Promise<T>){return selectionIntake.run(nextSelectionOrder(now),run);}
 export function recipeSelectionOrder(now:number){return selectionIntake.getStore()??nextSelectionOrder(now);}
-export interface Link { selectionOrder?:number; wake?: import('./private-creator').CreatorWake; creator?: import('./private-creator').CreatorLedger; bot: string; binding: string; recipient: Recipient; sources: Source[]; context?: {operationId: string; until: number} }
+export interface Link { conversationEdit?:import('./conversation-draft-edit').ConversationEditState;conversationEditJobs?:Record<string,import('./conversation-draft-edit').EditJob>; conversationProposal?:import('./conversation-inventory').ConversationProposal; selectionOrder?:number; wake?: import('./private-creator').CreatorWake; creator?: import('./private-creator').CreatorLedger; bot: string; binding: string; recipient: Recipient; sources: Source[]; context?: {operationId: string; until: number} }
 export interface Carrier {
   ref: string; sendUuid: string; generation: number; seq: number; mode: CardMode; dirty: boolean;
   cardId?: string; messageId?: string; firstSend?: number; createdAt?: number;
@@ -54,7 +54,10 @@ export function operationView(op: LocalOperation, now: number): AuthoringOperati
   return update ? {...op.view, cardUpdate:update} : op.view;
 }
 export interface LocalOperation {
+  conversation?:true;
   creatorSave?:true;
+  localDraft?:{draftId:string;acceptDigest?:string};
+  localDraftAcknowledged?:true;
   view: AuthoringOperation;
   accountId: string; scope: string; bot: string; binding: string; recipient: Recipient; carrier: Carrier;
   secret?: string; nonce?: string; source?: Source; sourceIdentity?: string; payload?: string; proposalDigest?: string;
@@ -129,6 +132,11 @@ export function retire(op: LocalOperation, state: 'completed' | 'cancelled' | 'e
 }
 export function maintain(ledger: AuthoringLedger, now: number) {
   for(const [id,row] of Object.entries(ledger.resources??{}))if(row.expires+7*DAY<=now)delete ledger.resources![id];
+  for(const link of Object.values(ledger.links)){
+    if(link.conversationEdit?.proposal&&link.conversationEdit.proposal.expires<=now)delete link.conversationEdit.proposal;
+    for(const [id,job] of Object.entries(link.conversationEditJobs??{}))if(job.expires<=now)delete link.conversationEditJobs![id];
+  }
+  for(const link of Object.values(ledger.links))if(link.conversationProposal&&link.conversationProposal.expiresAt<=now)delete link.conversationProposal;
   for(const link of Object.values(ledger.links))if(link.wake&&link.wake.expiresAt<=now){
     const creator=link.creator,wake=link.wake;
     if(creator&&wake.cardRef&&!Object.values(creator.jobs).some(job=>job.receiptCard&&job.resultCard===wake.cardRef))delete creator.cards[wake.cardRef];
@@ -144,8 +152,12 @@ export function maintain(ledger: AuthoringLedger, now: number) {
   }
   for (const [id, op] of Object.entries(ledger.operations)) {
     if (active(op) && op.view.createdAt + DAY <= now) {
-      // An accept response may have been lost. Keep tracking until the original account settles it, even after cloud retention.
-      if (op.view.state === 'pendingCloud' || op.view.state === 'cancelPending') {
+      if(op.view.storage==='local'){
+        op.view.receipt={operationId:op.view.operationId,status:'expired',stateRevision:3};
+        retire(op,'expired',op.view.createdAt+DAY);
+        if(!op.revoked)setCard(op,'expired');
+      }else if (op.view.state === 'pendingCloud' || op.view.state === 'cancelPending') {
+        // A legacy cloud accept may have won; retain its registration until the original account reads the receipt.
         op.view.state = 'cancelPending';
         // Recovery needs only the registration commitment and a receipt; do not retain candidate text or keys indefinitely.
         discardAuthoringMaterial(op);
@@ -153,7 +165,10 @@ export function maintain(ledger: AuthoringLedger, now: number) {
         retire(op, 'expired', op.view.createdAt + DAY);
         if (!op.revoked) setCard(op, 'expired');
       }
-    } else if (op.terminalAt !== undefined && op.terminalAt + 7 * DAY <= now) delete ledger.operations[id];
+    } else if (op.terminalAt !== undefined && op.terminalAt + 7 * DAY <= now) {
+      if(op.view.storage==='local'&&!op.localDraftAcknowledged)delete op.richSaved;
+      else delete ledger.operations[id];
+    }
   }
   const day = new Date(now).toISOString().slice(0,10);
   for (const [key, budget] of Object.entries(ledger.daily)) if (budget.day !== day) delete ledger.daily[key];
@@ -161,8 +176,9 @@ export function maintain(ledger: AuthoringLedger, now: number) {
 export function reserve(ledger: AuthoringLedger, account: string, now: number) {
   const day = new Date(now).toISOString().slice(0,10);
   const count = ledger.daily[account]?.day === day ? ledger.daily[account]!.count : 0;
-  if (count >= 60 || Object.values(ledger.operations).filter(op => op.accountId === account && active(op)).length >= 3)
-    throw new Error('进行中的配方请求或今日请求数已到上限。');
+  const retained=Object.values(ledger.operations).filter(op=>op.accountId===account);
+  if (count >= 60 || retained.length>=512 || retained.filter(active).length >= 3)
+    throw new Error('进行中或待确认的配方请求、今日请求数已到上限。');
   ledger.daily[account] = {day, count: count + 1};
 }
 export function linkKey(scope: string, account: string) { return digest(JSON.stringify([scope, account])); }

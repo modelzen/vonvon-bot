@@ -88,7 +88,8 @@ it('puts project skills first and pins Setup within each source group with its p
   expect(html.indexOf('feedback-setup')).toBeLessThan(html.indexOf('普通工作区技能'));
   expect(html.indexOf('普通工作区技能')).toBeLessThan(html.indexOf('用户技能'));
   expect(html.indexOf('用户技能')).toBeLessThan(html.indexOf('ProviderSETUP'));
-  expect(html).toContain('Setup Skill');
+  expect(html).toContain('>Setup</span>');
+  expect(html).not.toContain('Setup Skill');
   expect(html).toContain('了解 ProviderSETUP 的 Setup 用途');
   expect(html).toContain('aria-label="使用 ProviderSETUP"');
 });

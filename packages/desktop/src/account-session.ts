@@ -18,6 +18,7 @@ const avatarAttemptLimit = avatarRetryDelays.length + 1;
 
 const uuidSegment = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const publicDetail = new RegExp('^/v[12]/recipes/' + uuidSegment + '/versions/' + uuidSegment + '(?:/preview)?$');
+const publicBrowse = new RegExp('^/v2/recipes/' + uuidSegment + '/versions/' + uuidSegment + '/preview$');
 const publicVersionObject = new RegExp('^/v2/versions/' + uuidSegment + '/display-logo$');
 const publicAuthor = new RegExp('^/v2/authors/' + uuidSegment + '/recipes$', 'i');
 const authorCursor = new RegExp('^' + uuidSegment + '$', 'i');
@@ -306,14 +307,14 @@ export function createAccountSession(options: {
         signal.throwIfAborted();
         await nativeLogin({
           deployment, signal, transport, pollMs: options.pollMs ?? 1000, openBrowser: options.openBrowser,
-          async accept({ project, provider, tokens, auth, signal: attempt }) {
-            const identity = await verifyAccount(deployment, auth, tokens.access, tokens.subject, provider, attempt, transport);
+          async accept({ project, provider, tokens, auth, signal: attempt, confirmedAccountId, checkActive }) {
+            const identity = await verifyAccount(deployment, auth, tokens.access, tokens.subject, provider, attempt, transport, {expectedAccountId: confirmedAccountId, checkActive});
             const record: AccountCredential = { ...project, webOrigin: deployment.webOrigin, apiOrigin: deployment.apiOrigin,
               subject: tokens.subject, refreshToken: tokens.refresh, accountId: identity.accountId, provider };
             await serialize(async () => {
-              attempt.throwIfAborted();
+              checkActive();
               const persistence = await store.save(record).catch(() => { throw new AccountFault('storage'); });
-              if (attempt.aborted) { await store.clear(); attempt.throwIfAborted(); }
+              try {checkActive();} catch (error) {await store.clear(); throw error;}
               ready(record, identity, { token: tokens.access, expiresAt: tokens.expiresAt }, persistence, signal);
               loginActive = false;
             });
@@ -354,7 +355,20 @@ export function createAccountSession(options: {
     },
     async manage() {
       if (!deployment || disposed || view.kind !== 'signedIn') throw new AccountFault('invalid');
-      await options.openBrowser(deployment.webOrigin + '/account#account=' + view.accountId);
+      const accountId = view.accountId;
+      const signal = owner.signal;
+      if (!access || access.expiresAt - Date.now() <= 90_000) await refresh(signal);
+      signal.throwIfAborted();
+      if (!access || credential?.accountId !== accountId) throw new AccountFault('invalid');
+      const response = await transport(deployment.webOrigin + '/auth/account-link', {
+        method: 'POST', headers: {Authorization: 'Bearer ' + access.token}, credentials: 'omit',
+        redirect: 'error', cache: 'no-store', signal: requestSignal(signal),
+      });
+      checkResponse(response);
+      const link = await boundedJson(response, 4096) as {ticket?: unknown; accountId?: unknown};
+      signal.throwIfAborted();
+      if (link.accountId !== accountId || typeof link.ticket !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(link.ticket)) throw new AccountFault('invalid');
+      await options.openBrowser(deployment.webOrigin + '/account#link=' + link.ticket);
     },
     refresh: refreshProfile,
     applyProfile,
@@ -365,7 +379,8 @@ export function createAccountSession(options: {
     async publicRequest(path) {
       if (!deployment || disposed) throw new AccountFault('invalid');
       const url = apiUrl(path, deployment.apiOrigin, true);
-      return transport(url, {credentials: 'omit', redirect: 'error', cache: 'no-store', signal: requestSignal(owner.signal)});
+      return transport(url, {credentials: 'omit', redirect: 'error', cache: 'no-store', signal: requestSignal(owner.signal),
+        ...(publicBrowse.test(url.pathname) && {headers: {'X-Vonvon-Browse': 'public-v2'}})});
     },
     async request(accountId, path, init = {}, beforeSend) {
       const signal = owner.signal;

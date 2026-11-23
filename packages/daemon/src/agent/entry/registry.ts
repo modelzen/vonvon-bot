@@ -8,7 +8,6 @@ import { sessionInfoTool, TOOL_RESULT_BYTES, ToolRefusal, type AgentTool, type T
 
 export interface AgentPlace { kind: 'group' | 'p2p' | 'doc'; chatId?: string; docId?: string }
 export interface TurnFacts {
-  releaseCode?: import('../../release-code/host').CodeSource;
   feedback?: import('./feedback-tool').FeedbackSource;
   requesterOpenId?: string;
   requesterKind?: 'user' | 'bot' | 'unknown';
@@ -167,14 +166,19 @@ export function createAgentEntries(opts: {
   appId: string;
   isAdmin(openId: string): boolean;
   tools?: readonly AgentTool[];
-  codeEnabled?(chatId:string):boolean;
   feedbackEnabled?(chatId: string): boolean;
   /** devices-4a 4.3: told once when a session ends, so the host drops its token (best effort: it never throws). */
   sessions?: { revoke(sessionId: string): void };
   /** devices-4b 4.5: a turn's place for memory (the memory writer's own), where a session's command-line write lands. */
   memoryPlace?(turn: Pick<MemoryTurn, 'chatId' | 'place'>): Promise<MemoryPlace>;
-}): AgentEntries {
+}): AgentEntries & {toolNames(place:AgentPlace):string[]} {
   const tools = opts.tools ?? [sessionInfoTool];
+  const toolsFor = (place:AgentPlace) => tools.filter(tool => {
+    if (!placed(tool, place)) return false;
+    if (tool.class === 'feedback') return !!place.chatId;
+    return tool.class === 'read' || tool.class === 'document'
+      || (tool.class === 'memory' || tool.class === 'schedule' ? place.kind !== 'doc' : place.kind === 'p2p');
+  });
   const table = new Map(tools.map(tool => [tool.name, tool]));
   if (table.size !== tools.length || tools.some(tool => !/^[a-z][a-z0-9_]{0,40}$/.test(tool.name))) {
     throw new Error('Invalid agent tool registry');
@@ -246,12 +250,11 @@ export function createAgentEntries(opts: {
     if (!auth) return refused('unknown-origin');
     if (!auth.active || grant.turn !== auth) return refused('turn-ended');
   }
-  function authorizeFeedback(grant: Grant, auth: TurnAuth | undefined, code = false): Failure | undefined {
+  function authorizeFeedback(grant: Grant, auth: TurnAuth | undefined): Failure | undefined {
     const refusal = authorizeMemory(grant, auth);
-    const source = code ? auth?.facts.releaseCode : auth?.facts.feedback;
+    const source = auth?.facts.feedback;
     if (refusal) return refusal;
-    if (code && (!grant.place.chatId || !opts.codeEnabled?.(grant.place.chatId))) return failure('unknown-tool');
-    if (!code && auth?.human && !auth.feedbackSteer.signal.aborted && grant.place.kind === 'group' && grant.place.chatId
+    if (auth?.human && !auth.feedbackSteer.signal.aborted && grant.place.kind === 'group' && grant.place.chatId
       && !opts.feedbackEnabled?.(grant.place.chatId))
       return { ok: false, code: 'refused', message: '本群反馈尚不可用。请让 Bot 管理员检查工具并用 /feedback setup 配置接收目标。' };
     if (!auth?.human || auth.feedbackSteer.signal.aborted || !source || grant.place.kind !== 'group'
@@ -371,14 +374,13 @@ export function createAgentEntries(opts: {
       const schedule = tool.class === 'schedule';
       const document = tool.class === 'document' && (tool.writes === true || grant.place.kind === 'doc');
       const feishuApi = tool.class === 'feishu-api';
-      const code = tool.class === 'release-code';
-      const feedback = tool.class === 'feedback' || code;
+      const feedback = tool.class === 'feedback';
       const resource=tool.class==='resource';
       const gated = resource || feedback || settings || memory || schedule || document || feishuApi;
       const taskId = schedule && args && typeof args === 'object' && 'taskId' in args ? args.taskId : undefined;
       // Claude's tool-use id, or the Codex turn id its turn/start answered with (定时任务 T3b): both noted by noteToolUse.
       const auth = origin?.toolUseId ? grant.origins.get(origin.toolUseId) : undefined;
-      const authNow = (): Failure | undefined => resource ? (authorizeNow(grant,auth)??(auth?.presence!=='human'||auth.steered?refused('not-human-turn'):undefined)) : feedback ? authorizeFeedback(grant, auth, code) : memory ? authorizeMemory(grant, auth)
+      const authNow = (): Failure | undefined => resource ? (authorizeNow(grant,auth)??(auth?.presence!=='human'||auth.steered?refused('not-human-turn'):undefined)) : feedback ? authorizeFeedback(grant, auth) : memory ? authorizeMemory(grant, auth)
         : schedule ? authorizeSchedule(grant, auth, tool.action, taskId)
           : document ? authorizeFeishu(grant, auth) : feishuApi ? authorizeFeishuApi(grant, auth) : authorizeNow(grant, auth);
       if (gated) {
@@ -460,11 +462,7 @@ export function createAgentEntries(opts: {
             ctx.releaseBotWrite = () => { auth.botWrites = Math.max(0, auth.botWrites - 1); };
           }
           if (schedule && auth) ctx.schedule = () => ({ actor: scheduleActor(grant, auth), where: auth.facts.where?.() ?? { inTopic: false }, steered: auth.steered });
-          if (code && auth?.facts.releaseCode) {
-            const source = auth.facts.releaseCode;
-            ctx.codeSource=(name,args)=>source.call(name,args,controller.signal,()=>check(0));
-          }
-          if (feedback && !code && auth?.facts.feedback) {
+          if (feedback && auth?.facts.feedback) {
             const source = auth.facts.feedback;
             ctx.feedback = input => source.prepare(input, controller.signal, () => check(0));
           }
@@ -536,13 +534,7 @@ export function createAgentEntries(opts: {
         if (grant.phase === 'revoked') throw new ToolRefusal(failure('revoked'));
         if (grant.phase === 'capacity') return [];
         // 评论会话（doc）只给读类和文档这一列的工具；写记忆的和任务的在群和私聊里给；只为设置服务的读工具只在私聊里给
-        return tools.filter(tool => {
-          if (!placed(tool, grant.place)) return false;
-          if (tool.class === 'release-code') return !!grant.place.chatId && !!opts.codeEnabled?.(grant.place.chatId);
-          if (tool.class === 'feedback') return !!grant.place.chatId;
-          return tool.class === 'read' || tool.class === 'document'
-            || (tool.class === 'memory' || tool.class === 'schedule' ? grant.place.kind !== 'doc' : grant.place.kind === 'p2p');
-        })
+        return toolsFor(grant.place)
           .map(tool => ({ name: tool.name, description: tool.description, input: inputAt(tool, grant.place) }));
       },
       call,
@@ -659,6 +651,7 @@ export function createAgentEntries(opts: {
     }
   }
   return {
+    toolNames: place => toolsFor(place).map(tool => tool.name),
     issue,
     authorizeSessionCall,
     openTurn(thread, facts) {

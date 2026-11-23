@@ -17,7 +17,14 @@ export type HandoffSelection = {
   page:Page;offset:number;skill?:string;options:Options;selected:string[];candidates:string[];
   lease:string;choices:Choice[];count:number;
 };
+export interface ConversationCapture {
+  groupId:string;requestId:string;public:{name:string;summary:string;overview:string;version:string};access?:'direct'|'coded';
+  reviewedScope:{lease:string;selected:string[]};
+  expectedSelection:{order:number;handoffId?:string;identity:string};
+}
 export interface PrivateHandoff {
+  conversation?:true;introText?:string;captureOrder?:number;
+  capture?:Pick<ConversationCapture,'requestId'|'public'|'access'>&Partial<Pick<ConversationCapture,'reviewedScope'>>;
   creator?:true;
   retryId:string;groupId:AuthoringHandoff['groupId'];groupName:string;identity:string;account:string;scope:string;binding:string;recipient:Recipient;
   session:string;expiresAt:number;sourceVersionId?:string;inherited?:Extract<RecipeAuthoringRequest,{type:'beginHandoff'}>['inherited'];edit?:Pick<Edit,'draftId'|'baseRevision'|'canonical'|'source'>;
@@ -146,7 +153,7 @@ export function toggleChoice(h:PrivateHandoff,click:Click){
 }
 export function selectedSource(h:PrivateHandoff,inventory:SourceInventory){
   const s=h.selection,items=contentItems(inventory.content);
-  const selected=items.filter(i=>i.kind!=='publicText'&&(i.kind==='skill'||i.kind==='file'||s.selected.includes(i.id)));
+  const selected=items.filter(i=>i.kind!=='publicText'&&(!h.conversation&&(i.kind==='skill'||i.kind==='file')||s.selected.includes(i.id)));
   if(selected.some(i=>inventory.evidence.get(i.id)?.kind==='unresolved'||i.parent&&!selected.some(p=>p.id===i.parent)))throw new Error('请先选择对应的父条目，并核对来源。');
   const needed=[...selected.map(i=>i.id),...Object.values(inventory.content.public).map(i=>i.itemId)];
   const parents=new Map<string,Set<string>>();
@@ -160,7 +167,7 @@ export function selectedSource(h:PrivateHandoff,inventory:SourceInventory){
   }
   const versions=[...parents.keys()].sort();
   const requiredItems=versions.map(versionId=>({versionId,itemIds:[...parents.get(versionId)!].sort()}));
-  return {selected:selected.map(i=>i.id),versions,items:requiredItems};
+  return {selected:[...new Set(selected.map(i=>i.id))],versions,items:requiredItems};
 }
 export function handoffCard(h:PrivateHandoff){
   const s=h.selection, elements:CardElement[]=[];

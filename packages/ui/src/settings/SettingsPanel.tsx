@@ -1,3 +1,4 @@
+import {ExecutionPermissionSummary} from './GroupSettingsSummary';
 import {RefreshCw, Zap} from 'lucide-react';
 import {useClient, useShellCapabilities} from '../client-context';
 import type {VonvonClient} from '@vonvon/client/browser';
@@ -1027,13 +1028,12 @@ export function PermissionSummary({section, provider, save}: {section: Section<P
     finally {setPending(false);}
   }
   return <>
-    <SettingsGroup label="执行权限" id={settingAnchor('权限')} className="permission-summary"
-      footer={section.access.kind === 'readonly' && !hasReadonlyMessage(announcedReadonly, section.access) ? section.access.message : undefined}>
-      <SettingsRow title={invalid ? '只读（设置异常）' : value.custom ? '自定义权限' : currentTier?.name ?? value.mode}
-        description={description}
-        trailing={<span data-search-title="修改权限"><Button size="sm" onClick={() => {setEditSession(session => session + 1); setOpen(true);}}>{section.access.kind === 'readonly' ? '查看权限' : '修改权限'}</Button></span>}/>
+    <ExecutionPermissionSummary id={settingAnchor('权限')}
+      footer={section.access.kind === 'readonly' && !hasReadonlyMessage(announcedReadonly, section.access) ? section.access.message : undefined}
+      label={invalid ? '只读（设置异常）' : value.custom ? '自定义权限' : currentTier?.name ?? value.mode} description={description}
+      action={section.access.kind === 'readonly' ? '查看权限' : '修改权限'} onAction={() => {setEditSession(session => session + 1); setOpen(true);}}>
       {fullAccessWarning(value) && <p className="permission-note" role="note">{fullAccessWarning(value)}</p>}
-    </SettingsGroup>
+    </ExecutionPermissionSummary>
     <Editor key={editSession} title="执行权限" section={section} save={savePermission} afterSave={async () => setOpen(false)}
       prepareSave={(_patch, draft) => draft.custom ? {custom: nativePermissionPatch(draft.options.fields ?? [], draft.custom)} : {mode: draft.mode}}
       validate={draft => draft.custom && !draft.options.fields?.length ? '当前 Provider 未提供可编辑的自定义权限，请选择预设。' : undefined}

@@ -1,7 +1,9 @@
 import {communityRequest} from './community-api.js';
 import {inheritedPublication} from './recipe-publication-inheritance.js';
-import {uploadRichMembers} from './recipe-authoring-upload.js';
 import {richAuthoringCloud,richTerminal,UnavailableSourceItems} from './recipe-authoring-rich-cloud.js';
+import {LocalRecipeDrafts,type LocalRecipeDraftRecord} from './local-recipe-drafts.js';
+import {bindLocalRichMembers,freezeLocalRich,buildLocalRichRecord} from './local-recipe-content.js';
+import {creatorAssociationSchema,type CreatorAssociation} from './recipe-creator-journal.js';
 import {safeDraftModelText, safeEditValue} from '../../../services/recipe-api/src/draft-model-text.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -13,6 +15,7 @@ import {
   deviceReplySchema,
   recipeBinary32Schema,
   recipeAuthoringReplySchema,
+  type SourceHistoryEntry,
   type AuthoringOperation,
   type HandoffAttestation,
   type AuthoringReceipt,
@@ -27,7 +30,7 @@ import {
 } from '@vonvon/protocol';
 import type { NativeAccount } from './account-session.js';
 import type { RecipeDeviceLease } from './recipe-use.js';
-import { authoringCloud, AuthoringError, AuthoringServiceUnavailable, invalidAuthoring, dispatchDigest } from './recipe-authoring-cloud.js';
+import { authoringCloud, AuthoringError, AuthoringServiceUnavailable, invalidAuthoring } from './recipe-authoring-cloud.js';
 import { AuthoringJournal } from './recipe-authoring-journal.js';
 
 type Open = Extract<DesktopAuthoringRequest, { type: 'open' }>;
@@ -47,7 +50,6 @@ type Handle = {
   lease: RecipeDeviceLease;
   signal: AbortSignal;
   stop: AbortController;
-  transfer?:{operationId:string;cancel:AbortController};
   deviceId: string;
   deviceKey: string;
   session?: string;
@@ -59,6 +61,7 @@ type Handle = {
   nextRefresh: number;
   sequence: number;
   pausedContexts: Set<string>;
+  acknowledgedLocal?:Set<string>;
   lastActivity: number;
   lastVerified?: number;
   retry: Map<string, { state: string; until: number; delay: number; message?: string }>;
@@ -68,6 +71,7 @@ type Handle = {
   groupIdentity?: string;
   draftSource?: DraftSource;
   handoff?: HandoffScope;
+  parent?:{recipeId:string;versionId:string};
   attesting?: Promise<void>;
   attestationRetry?: {ref:string;after:number};
   source?: { groupId: GroupId; reviewToken: string };
@@ -108,15 +112,18 @@ function expectKind<K extends RecipeAuthoringReply['kind']>(reply: RecipeAuthori
   return reply as Extract<RecipeAuthoringReply, { kind: K }>;
 }
 export class RecipeAuthoringController {
+  private readonly drafts:LocalRecipeDrafts;
+  private readonly ownsDrafts:boolean;
   private handles = new Map<string, Handle>();
   private opening = new Set<string>();
-  private accountTransfer = new Map<string,Promise<void>>();
   constructor(
     private readonly account: NativeAccount,
     private readonly capture: (viewId: string) => RecipeDeviceLease,
     private readonly journal: AuthoringJournal,
     private readonly onSaved?: (receipt: AuthoringSaved) => void,
-  ) {}
+    localDrafts?:LocalRecipeDrafts,
+    private readonly normalizeLogo?:(bytes:Buffer)=>Promise<Buffer>,
+  ) {this.drafts=localDrafts??new LocalRecipeDrafts();this.ownsDrafts=!localDrafts;}
   private check(h: Handle) {
     h.lease.check();
     if (h.stop.signal.aborted || this.account.lease?.(h.open.accountId) !== h.signal || h.signal.aborted)
@@ -208,6 +215,19 @@ export class RecipeAuthoringController {
   closeAll() {
     for (const h of this.handles.values()) this.revoke(h);
     this.journal.history.close();
+    if(this.ownsDrafts)this.drafts.close();
+  }
+  private localDraft(h:Handle,draftId:string,revision?:number):LocalRecipeDraftRecord{
+    this.check(h);const row=this.drafts.read(h.open.accountId,draftId);
+    if(!row||revision!==undefined&&row.draft.revision!==revision||row.association.viewId!==h.open.viewId||
+      row.association.deviceId!==h.deviceId||row.association.deviceKey!==h.deviceKey||row.association.botId!==h.open.botId)throw recheck();
+    return row;
+  }
+  private async localAssociation(h:Handle):Promise<CreatorAssociation>{
+    this.check(h);if(!h.lease.client.recipeAuthoring)throw changed();
+    const reply=expectKind(recipeAuthoringReplySchema.parse(await h.lease.client.recipeAuthoring({type:'creatorDiscover',botId:h.open.botId,accountId:h.open.accountId})),'creatorBinding');
+    this.check(h);if(!reply.association)throw recheck();
+    return creatorAssociationSchema.parse({...this.binding(h),binding:reply.association.binding,scope:reply.association.scope});
   }
   private async present(h: Handle, force = true) {
     this.check(h);
@@ -263,6 +283,7 @@ export class RecipeAuthoringController {
         return continuation('delivered');
       }
       if(entry.kind==='source'){
+        h.parent=entry.parent;
         if(entry.viewId!==h.open.viewId||entry.botId!==h.open.botId)throw recheck();
         const groupName=h.groups.get(entry.groupId);if(!groupName)throw recheck();
         const inherited=entry.parent?await inheritedPublication(this.account,h.open.accountId,entry.parent.recipeId,entry.parent.versionId,()=>this.check(h)):undefined;
@@ -273,19 +294,15 @@ export class RecipeAuthoringController {
           const restored=await this.restoreCreatorHandoff(h,scope,recover,{kind:'source',groupId:entry.groupId,...origin});
           if(restored)return handoffDelivery(restored,true);
         }
-        return handoffDelivery(await this.beginHandoff(h,scope,{type:'beginHandoff',...scope,groupName,...origin}));
+        return handoffDelivery(await this.beginHandoff(h,scope,{type:'beginHandoff',...scope,groupName,conversation:true,...origin}));
       }
-      const cloud=this.richCloud(h),{canonical,meta}=await cloud.draft(entry.draftId,entry.revision);
-      const original=this.journal.history.locator(h.open.accountId,meta.sourceIntentId);
-      if(!original?.groupId||original.deviceId!==h.deviceId||original.deviceKey!==h.deviceKey||original.botId!==h.open.botId||
-        original.identity!==await this.groupIdentity(h,original.groupId))throw recheck();
-      const sourceBytes=await cloud.readMember(entry.draftId,meta.sourceManifest),groupName=h.groups.get(original.groupId);
-      if(!groupName)throw recheck();
+      const local=this.localDraft(h,entry.draftId,entry.revision),source=local.work.source;
+      if(local.draft.format!=='rich-v2'||!source||!local.sourceCanonical||source.identity!==await this.groupIdentity(h,source.groupId))throw recheck();
       const status=expectKind(await this.daemon(h,{type:'status'}),'status');
       if(!status.linked)throw recheck();
-      const scope={retryId,groupId:original.groupId,draftId:entry.draftId};
+      const scope={retryId,groupId:source.groupId,draftId:entry.draftId};
       if(recover){
-        const restored=await this.restoreCreatorHandoff(h,scope,recover,{kind:'draft',groupId:original.groupId,draftId:entry.draftId,baseRevision:entry.revision});
+        const restored=await this.restoreCreatorHandoff(h,scope,recover,{kind:'draft',groupId:source.groupId,draftId:entry.draftId,baseRevision:entry.revision});
         if(restored)return handoffDelivery(restored,true);
       }
       const existing=status.operations.filter(op=>op.purpose==='editDraft'&&op.draftId===entry.draftId&&!terminal(op));
@@ -295,13 +312,10 @@ export class RecipeAuthoringController {
         const resumed=await this.operation(h,{type:'resumeContext',operationId:op.operationId});
         if(resumed.operationId!==op.operationId||resumed.format!=='rich-v2'||resumed.purpose!=='editDraft'||resumed.draftId!==entry.draftId||resumed.baseRevision!==entry.revision||
           resumed.deliveryUnknown||!['waiting','candidate'].includes(resumed.state))throw recheck();
-        const {content}=decodeRichRecipeContent(Buffer.from(canonical,'base64url'));
-        expectKind(await this.daemon(h,{type:'creatorContinue',selection:{kind:'draft',work:{draftId:entry.draftId,
-          source:{preparationId:meta.sourceIntentId,groupId:original.groupId,identity:original.identity}},name:content.public.name.value,version:content.public.version.value}}),'creatorAck');
-        return continuation('restored');
       }
-      return handoffDelivery(await this.beginHandoff(h,scope,{type:'beginDraftHandoff',...scope,groupName,identity:original.identity,baseRevision:entry.revision,canonical,
-        source:{sourceIntentId:meta.sourceIntentId,canonical:sourceBytes.toString('base64url')}}));
+      expectKind(await this.daemon(h,{type:'creatorContinue',conversationRevision:entry.revision,conversationRetryId:retryId,
+        selection:{kind:'draft',work:local.work,name:local.draft.public.name,version:local.draft.public.version}}),'creatorAck');
+      return continuation(existing.length?'restored':'delivered');
     });
   }
   private async openDraftSource(input: DraftSourceOpen) {
@@ -312,13 +326,20 @@ export class RecipeAuthoringController {
     };
     if (!signal) throw changed();
     check();
-    const meta = await richAuthoringCloud(this.account,accountId,signal,check).draftMetadata(draftId,baseRevision)
-      .catch(() => {check();throw new AuthoringError('无法核验当前账号的这份草稿，请刷新草稿后重试。');});
+    const local=this.drafts.read(accountId,draftId);
+    if(!local||local.draft.format!=='rich-v2'||local.draft.revision!==baseRevision||!local.work.source)throw recheck();
+    const meta={sourceIntentId:local.draft.sourceIntentId};
     check();
     const original=this.draftSource(input,meta.sourceIntentId);
     return this.open({type:'open',accountId,viewId,botId:original.botId},original.source);
   }
   private draftSource({accountId,viewId,draftId,baseRevision}:DraftSourceOpen,sourceIntentId:string) {
+    const local=this.drafts.read(accountId,draftId);
+    if(local?.draft.format==='rich-v2'&&local.work.source&&local.draft.revision===baseRevision&&local.draft.sourceIntentId===sourceIntentId){
+      if(local.association.viewId!==viewId)throw recheck();
+      return {botId:local.association.botId,source:{draftId,baseRevision,operationId:sourceIntentId,deviceId:local.association.deviceId,
+        deviceKey:local.association.deviceKey,groupId:local.work.source.groupId,identity:local.work.source.identity}};
+    }
     const saved = this.journal.history.locator(accountId,sourceIntentId);
     const prior = this.journal.preparation(accountId,sourceIntentId);
     const target = saved ?? prior;
@@ -473,6 +494,7 @@ export class RecipeAuthoringController {
     if (info.activity > h.sequence) {
       h.sequence = info.activity;
       h.lastActivity = Math.max(h.lastActivity,start-info.ageMs);
+      if(h.creator) h.nextRefresh = 0;
     }
     this.checkIdle(h);
     h.pausedContexts = new Set(info.pausedContexts);
@@ -483,7 +505,8 @@ export class RecipeAuthoringController {
     }
     if(h.creator&&info.handoff&&!h.attesting){
       const pending=expectKind(await this.daemon(h,{type:'handoffStatus',retryId:info.handoff.retryId}),'handoff').handoff;
-      if(pending.retryId!==info.handoff.retryId||!h.groups.has(pending.groupId))throw recheck();
+      if(pending.retryId!==info.handoff.retryId)throw recheck();
+      if(!h.groups.has(pending.groupId))await this.names(h);
       h.handoff={retryId:pending.retryId,groupId:pending.groupId,draftId:pending.draftId};
       await this.groupIdentity(h,pending.groupId);
     }
@@ -500,10 +523,7 @@ export class RecipeAuthoringController {
       try {
         await this.present(h,true);
         await this.checkGroup(h);
-        const cloud = this.cloud(h);
-        const registration = await cloud.get(op);
-        if (saved ? !registration || canonical(registration) !== canonical(saved) : registration?.status !== 'dispatched') throw recheck();
-        const draft = await cloud.draft(request.draftId,request.revision);
+        const draft = this.localDraft(h,request.draftId,request.revision).draft;
         const text = draft.public[request.field];
         if (safeDraftModelText(text)) value = text;
       } catch (error) {
@@ -553,6 +573,7 @@ export class RecipeAuthoringController {
         attestations:unavailable?[]:attestations,...(unavailable && {unavailable:true as const})}),'handoff');
       this.verifyHandoff(scope,reply);
       this.trackRestoredOperation(h,reply.handoff);
+      h.nextRefresh = 0;
       delete h.attestationRetry;
     } catch {
       this.check(h);
@@ -611,11 +632,34 @@ export class RecipeAuthoringController {
     return !h.open.groupId || op.groupId === h.open.groupId &&
       this.journal.history.source(this.binding(h), op.operationId) === h.groupIdentity;
   }
+  private async settleLocalDraft(h:Handle,op:Pick<AuthoringOperation,'operationId'|'draftId'|'storage'|'receipt'>,acknowledge=true){
+    if(op.storage!=='local'||!op.receipt)return;
+    const draftId=op.receipt.status==='accepted'?op.receipt.draftId:op.draftId??op.operationId;
+    const pending=this.drafts.pending(h.open.accountId,draftId,op.operationId);
+    if(pending){
+      const a=pending.record.association;
+      if(a.viewId!==h.open.viewId||a.deviceId!==h.deviceId||a.deviceKey!==h.deviceKey||a.botId!==h.open.botId)throw recheck();
+      if(op.receipt.status==='accepted'){
+        this.drafts.finishPending({accountId:h.open.accountId,draftId,requestId:op.operationId,receipt:op.receipt});
+        this.onSaved?.({accountId:h.open.accountId,draftId,revision:op.receipt.revision});
+      }else this.drafts.abortPending(h.open.accountId,draftId,op.operationId);
+    }
+    const committed=this.drafts.receipt(h.open.accountId,draftId,op.operationId);
+    if(this.journal.localAcceptance(op.operationId)&&(op.receipt.status!=='accepted'||committed))this.journal.clearLocalAcceptance(op.operationId);
+    if(!acknowledge||op.receipt.status==='accepted'&&(!committed||committed.deleted||committed.revision!==op.receipt.revision))return;
+    if(h.acknowledgedLocal?.has(op.operationId))return;
+    try{
+      const reply=expectKind(await this.daemon(h,{type:'localDraftAcknowledged',operationId:op.operationId,receipt:op.receipt}),'localDraftAcknowledged');
+      if(reply.operationId!==op.operationId)throw invalidAuthoring();
+      (h.acknowledgedLocal??=new Set()).add(op.operationId);
+    }catch{this.check(h);}
+  }
   private remember(h: Handle, op: AuthoringOperation, cancel = false) {
-    const row = this.journal.observe(this.binding(h), op, cancel);
+    const binding=this.binding(h),row = this.journal.observe(binding, op, cancel,op.purpose==='prepareDraft'?h.parent:undefined);
+    if(op.storage==='local')this.journal.history.markLocal(binding,op.operationId);
     const prior = h.operations.get(op.operationId);
     h.operations.set(op.operationId, op);
-    if (prior && prior.receipt?.status !== 'accepted' && op.state === 'completed' && op.receipt?.status === 'accepted') {
+    if (op.storage!=='local' && prior && prior.receipt?.status !== 'accepted' && op.state === 'completed' && op.receipt?.status === 'accepted') {
       this.onSaved?.({accountId:h.open.accountId,draftId:op.receipt.draftId,revision:op.receipt.revision});
     }
     return row;
@@ -637,18 +681,24 @@ export class RecipeAuthoringController {
     const current = new Set(status.operations.map(op => op.operationId));
     for (const id of h.operations.keys()) if (!current.has(id)) h.operations.delete(id);
     for (const [index,op] of status.operations.entries()) {
+      this.journal.observe(this.binding(h),op,false,op.purpose==='prepareDraft'?h.parent:undefined);
+      await this.settleLocalDraft(h,op,false);
       this.remember(h, op);
       if (terminal(op) && op.receipt?.status === 'accepted') await this.rememberSource(h, op);
       if (status.linked && op.cardUpdate === 'pending')
         status.operations[index] = await this.operation(h, { type: 'updateCard', operationId: op.operationId });
+      await this.settleLocalDraft(h,status.operations[index]!);
     }
     return status;
   }
   private async reconcile(h: Handle, op: AuthoringReconciliation): Promise<DesktopAuthoringOperation> {
     this.journal.checkReconciliation(this.binding(h), op);
+    if(op.storage==='local')this.journal.history.markLocal(this.binding(h),op.operationId);
+    await this.settleLocalDraft(h,op);
     const { operationId, createdAt, purpose, draftId, baseRevision } = op;
     const summary = { operationId, createdAt, purpose, draftId, baseRevision, target:h.target, deliveryUnknown:false };
     let receipt = op.receipt;
+    if(op.storage==='local'&&!receipt)return {...summary,state:'cancelPending',syncMessage:'原关联已变化，本地草稿已保留；请重新核对来源。'};
     if (!receipt) {
       const recent = h.retry.get(operationId);
       if (recent?.state !== 'revoked' || recent.until <= Date.now()) {
@@ -657,10 +707,10 @@ export class RecipeAuthoringController {
           // A registration must match this account and device operation before even a cancellation can mutate it.
           let winner:AuthoringReceipt|undefined;
           if(op.format==='rich-v2'){
-            winner=richTerminal(await this.richCloud(h).cancel(operationId));
+            winner=richTerminal(await this.richCloud(h).recover(operationId));
           }else{
             const state=await cloud.get(op);
-            winner=state&&'operationId' in state?state:await cloud.cancel(op);
+            winner=state&&'operationId' in state?state:undefined;
           }
           if(!winner)throw invalidAuthoring();
           const result = expectKind(await this.daemon(h, { type:'reconcile', operationId, receipt:winner }), 'reconciled');
@@ -717,10 +767,12 @@ export class RecipeAuthoringController {
   private async operation(h: Handle, request: ScopedRequest & { operationId: string }) {
     const { operation } = expectKind(await this.daemon(h, request), 'operation');
     if (operation.operationId !== request.operationId) throw invalidAuthoring();
+    await this.settleLocalDraft(h,operation);
     this.remember(h, operation);
     return operation;
   }
   private async confirmedOperation(h: Handle, op: AuthoringOperation) {
+    if(op.storage==='local')return op;
     if (!terminal(op)) return op;
     const state = await this.cloud(h).get(op);
     if (!state || !('operationId' in state)) throw invalidAuthoring();
@@ -779,78 +831,100 @@ export class RecipeAuthoringController {
     return result;
   }
   private async syncRich(h:Handle,op:AuthoringOperation,action:'sync'|'resume'|'cancel'|'resend'|'accept',digest?:string){
-    const cloud=this.richCloud(h),id=op.operationId;
-    if(action==='accept'&&(op.state!=='pendingCloud'||op.payloadDigest!==digest))throw recheck();
-    const row=this.remember(h,op,action==='cancel');
-    if(row.cancelling||op.state==='cancelPending'){
-      if(op.state!=='cancelPending'&&!terminal(op))await this.operation(h,{type:'cancel',operationId:id});
-      const winner=richTerminal(await cloud.cancel(id));
-      if(!winner)throw invalidAuthoring();
-      await cloud.cancelPackage(id).catch(()=>{});
-      return this.settle(h,op,winner);
+    if(op.storage==='local')return this.syncLocal(h,op,action,digest);
+    return this.pauseLegacy(h,op);
+  }
+  private async pauseLegacy(h:Handle,op:AuthoringOperation){
+    this.check(h);
+    if(terminal(op))return op;
+    if(op.format==='rich-v2'){
+      const receipt=richTerminal(await this.richCloud(h).recover(op.operationId));
+      if(receipt)return this.settle(h,op,receipt);
+    }else{
+      const receipt=await this.cloud(h).get(op);
+      if(receipt&&'operationId'in receipt)return this.settle(h,op,receipt);
     }
     if(terminal(op))return op;
-    await this.rememberSource(h,op);
-    const recovered=await cloud.recover(id);
-    const winner=richTerminal(recovered);
-    if(winner)return this.settle(h,op,winner);
-    const destinationDraftId=await cloud.register(op);
-    if(op.state==='pendingMain'){
-      const already=z.object({status:z.literal('dispatched'),format:z.literal('rich-v2'),operationId:z.literal(id),accountId:z.literal(h.open.accountId)}).safeParse(recovered);
-      if(already.success)return this.operation(h,{type:'deliver',operationId:id});
-      const authorization=await cloud.authorize(id,'dispatch',dispatchDigest);
-      return this.operation(h,{type:'richAdvance',operationId:id,destinationDraftId,authorization});
-    }
-    if(action==='resend'||op.state==='sending')return this.operation(h,{type:action==='resend'?'resend':'deliver',operationId:id});
-    if(action==='resume'&&h.pausedContexts.has(id))return this.operation(h,{type:'resumeContext',operationId:id});
-    if(op.cardUpdate==='pending')op=await this.operation(h,{type:'updateCard',operationId:id});
-    if(op.state!=='pendingCloud')return op;
-    const cancel=new AbortController(),signal=AbortSignal.any([h.signal,h.stop.signal,cancel.signal]);
-    const accountId=h.open.accountId,prior=this.accountTransfer.get(accountId);
-    h.transfer={operationId:id,cancel};
-    const run=(async()=>{
-      await prior;
-      signal.throwIfAborted();
-      return this.transferRich(h,op,destinationDraftId,signal);
-    })();
-    const settled=run.then(()=>{},()=>{});
-    this.accountTransfer.set(accountId,settled);
-    try{return await run;}finally{
-      if(this.accountTransfer.get(accountId)===settled)this.accountTransfer.delete(accountId);
-      delete h.transfer;
-    }
+    throw new AuthoringError('旧云草稿操作已暂停；未继续上传。已有数据会保留，请从本地草稿继续。');
   }
-  private async transferRich(h:Handle,op:AuthoringOperation,destinationDraftId:string,signal:AbortSignal){
-    const cloud=richAuthoringCloud(this.account,h.open.accountId,signal,()=>this.check(h)),id=op.operationId;
-    const read=async()=>expectKind(await this.daemon(h,{type:'richInspect',operationId:id}),'richCandidate');
-    const transfer=expectKind(await this.daemon(h,{type:'richMembers',operationId:id}),'richMembers');
-    if(transfer.operationId!==id||transfer.reviewDigest!==op.payloadDigest)throw recheck();
-    if(transfer.members.length){
-      await cloud.reserve(id,destinationDraftId,transfer.cap);
-      const descriptors=await uploadRichMembers(transfer.members,signal,async(index,ordinal,m,signal)=>{
-        const raw=expectKind(await this.daemon(h,{type:'richReadMember',operationId:id,reviewDigest:transfer.reviewDigest,index}),'richMember');
-        if(raw.operationId!==id||raw.index!==index||raw.reviewDigest!==transfer.reviewDigest)throw recheck();
-        const bytes=Buffer.from(raw.bytes,'base64url');
-        if(createHash('sha256').update(bytes).digest('hex')!==m.sha256)throw recheck();
-        signal.throwIfAborted();
-        const part=await cloud.upload(id,ordinal,m.kind,bytes,signal);
-        if(part.kind==='manifest')throw recheck();
-        return part;
-      });
-      await this.daemon(h,{type:'richBindMembers',operationId:id,reviewDigest:transfer.reviewDigest,descriptors});
+  private async syncLocal(h:Handle,op:AuthoringOperation,action:'sync'|'resume'|'cancel'|'resend'|'accept',digest?:string):Promise<AuthoringOperation>{
+    this.check(h);const row=this.remember(h,op,action==='cancel'),draftId=op.draftId??op.operationId;
+    const replay=this.journal.localAcceptance(op.operationId),pending=this.drafts.pending(h.open.accountId,draftId,op.operationId),
+      receipt=this.drafts.receipt(h.open.accountId,draftId,op.operationId);
+    if(op.receipt){await this.settleLocalDraft(h,op);return op;}
+    if(replay&&(pending||receipt&&!receipt.deleted)&&action!=='cancel'&&!row.cancelling){
+      const saved=await this.operation(h,{type:'localDraftAdvance',operationId:op.operationId,advance:replay});
+      if(saved.receipt?.status!=='accepted'||saved.receipt.draftId!==draftId||saved.receipt.revision!==(pending?.record.draft.revision??receipt?.revision))throw recheck();
+      return saved;
     }
-    const approved=await read();
-    if(approved.operationId!==id||approved.reviewDigest!==op.payloadDigest)throw recheck();
-    const frozen=await cloud.freeze(id,approved.request);
-    if(frozen.destinationDraftId!==destinationDraftId||frozen.sourceReviewSha256!==createHash('sha256').update(canonical(approved.request)).digest('hex'))throw recheck();
-    const bytes=Buffer.from(frozen.canonical,'base64url');
-    if(createHash('sha256').update(bytes).digest('hex')!==frozen.contentSha256)throw invalidAuthoring();
-    if(!transfer.members.length)await cloud.reserve(id,destinationDraftId,2*bytes.length);
-    const member=await cloud.upload(id,65,'manifest',bytes,signal);
-    const binding=await cloud.authorize(id,'accept',frozen.payloadDigest);
-    if((await read()).reviewDigest!==approved.reviewDigest)throw recheck();
-    signal.throwIfAborted();
-    return this.operation(h,{type:'richAdvance',operationId:id,destinationDraftId,authorization:binding,accepted:{frozen,manifestId:member.objectId,packageId:id}});
+    if(terminal(op))return op;
+    if(row.cancelling||op.state==='cancelPending'){
+      if(op.state!=='cancelPending')op=await this.operation(h,{type:'cancel',operationId:op.operationId});
+      return this.operation(h,{type:'localDraftAdvance',operationId:op.operationId,advance:{kind:'cancel'}});
+    }
+    await this.rememberSource(h,op);
+    if(op.state==='pendingMain'){
+      const dispatched=await this.operation(h,{type:'localDraftAdvance',operationId:op.operationId,advance:{kind:'dispatch',draftId}});
+      if(h.creator && dispatched.state==='pendingCloud') h.nextRefresh = 0;
+      return dispatched;
+    }
+    if(action==='resend'||op.state==='sending')return this.operation(h,{type:action==='resend'?'resend':'deliver',operationId:op.operationId});
+    if(action==='resume'&&h.pausedContexts.has(op.operationId))return this.operation(h,{type:'resumeContext',operationId:op.operationId});
+    if(op.cardUpdate==='pending')op=await this.operation(h,{type:'updateCard',operationId:op.operationId});
+    if(op.state!=='pendingCloud')return op;
+    if(action==='accept'&&op.payloadDigest!==digest)throw recheck();
+    const base=op.draftId?this.localDraft(h,op.draftId,op.baseRevision):undefined;
+    const association=base?.association??await this.localAssociation(h),revision=(op.baseRevision??0)+1;
+    let record:LocalRecipeDraftRecord,advance:Extract<RecipeAuthoringRequest,{type:'localDraftAdvance'}>['advance'];
+    if(op.format==='rich-v2'){
+      const transfer=expectKind(await this.daemon(h,{type:'richMembers',operationId:op.operationId}),'richMembers');
+      if(transfer.reviewDigest!==op.payloadDigest)throw recheck();
+      const raw=expectKind(await this.daemon(h,{type:'richInspect',operationId:op.operationId,preview:true}),'richCandidate');
+      if(raw.reviewDigest!==transfer.reviewDigest)throw recheck();
+      const members=[];
+      for(const [index,member] of transfer.members.entries()){
+        const value=expectKind(await this.daemon(h,{type:'richReadMember',operationId:op.operationId,reviewDigest:transfer.reviewDigest,index}),'richMember');
+        if(value.reviewDigest!==transfer.reviewDigest||value.index!==index)throw recheck();
+        members.push({...member,bytes:value.bytes});
+      }
+      const local=await bindLocalRichMembers(op.operationId,raw.request,members,this.normalizeLogo);this.check(h);
+      if(transfer.members.length)await this.daemon(h,{type:'richBindMembers',operationId:op.operationId,reviewDigest:transfer.reviewDigest,descriptors:local.descriptors});
+      const bound=expectKind(await this.daemon(h,{type:'richInspect',operationId:op.operationId}),'richCandidate');
+      if(bound.reviewDigest!==transfer.reviewDigest)throw recheck();
+      const frozen=freezeLocalRich(op.operationId,draftId,bound.request),source=this.journal.history.locator(h.open.accountId,op.operationId);
+      const work=base?.work??(source?.groupId?{draftId,source:{preparationId:op.operationId,groupId:source.groupId,identity:source.identity}}:undefined);
+      if(!work)throw recheck();
+      let parent=base?.parent;
+      if(!base&&'content'in bound.request&&bound.request.sourceVersionId){
+        const versionId=bound.request.sourceVersionId,known=this.journal.parent(op.operationId)??h.parent,
+          verified=this.journal.history.parent(this.binding(h),versionId);
+        if(verified&&known?.versionId===versionId&&verified.recipeId!==known.recipeId)throw recheck();
+        parent=verified??(known?.versionId===versionId?known:undefined);
+      }
+      record=buildLocalRichRecord({association,work,revision,request:bound.request,frozen,members:local.members,base,parent});
+      advance={kind:'richAccept',draftId,reviewDigest:transfer.reviewDigest,frozen};
+    }else{
+      const candidate=await this.inspect(h,op),content=candidate.content;
+      if(!('changes'in content))record={association,work:{draftId,source:null},draft:{draftId,recipeId:null,revision,public:content.public,config:content.config},members:[]};
+      else{
+        if(!base||base.draft.format==='rich-v2')throw recheck();
+        const value=structuredClone(base.draft);
+        for(const change of content.changes){
+          if(change.op==='setPublicText')value.public[change.field]=change.value;
+          else if(change.op==='setDraftRole')value.config.role=change.value;
+          else if(change.value)value.config.setup=change.value;else delete value.config.setup;
+        }
+        record={...base,draft:{...value,revision}};
+      }
+      advance={kind:'roleAccept',draftId,reviewDigest:candidate.payloadDigest,revision};
+    }
+    this.check(h);this.journal.acceptLocal(this.binding(h),op,advance);
+    try{this.drafts.stage({requestId:op.operationId,expectedRevision:op.baseRevision??null,record});}
+    catch(error){if(!this.drafts.pending(h.open.accountId,draftId,op.operationId)&&!this.drafts.receipt(h.open.accountId,draftId,op.operationId))this.journal.clearLocalAcceptance(op.operationId);throw error;}
+    this.check(h);
+    const saved=await this.operation(h,{type:'localDraftAdvance',operationId:op.operationId,advance});
+    if(saved.receipt?.status!=='accepted'||saved.receipt.draftId!==draftId||saved.receipt.revision!==revision)throw recheck();
+    return saved;
   }
   private async sync(
     h: Handle,
@@ -858,46 +932,7 @@ export class RecipeAuthoringController {
     action: 'sync' | 'resume' | 'cancel' | 'resend' | 'accept' = 'sync',
     digest?: string,
   ) {
-    if(op.format==='rich-v2')return this.syncRich(h,op,action,digest);
-    const row = this.remember(h, op, action === 'cancel');
-    const operationId = op.operationId,
-      cloud = this.cloud(h);
-    if (row.cancelling || op.state === 'cancelPending') {
-      if (!terminal(op) && op.state !== 'cancelPending') await this.operation(h, { type: 'cancel', operationId });
-      return this.settle(h, op, await cloud.cancel(op));
-    }
-    let state = await cloud.get(op);
-    this.check(h);
-    if (!state || !('operationId' in state)) await this.rememberSource(h,op);
-    if (!state && op.state === 'pendingMain') state = await cloud.register(op);
-    this.check(h);
-    if (!state) throw invalidAuthoring();
-    if ('operationId' in state) return this.settle(h, op, state);
-    if (terminal(op)) throw invalidAuthoring();
-    if (action === 'accept' && (op.state !== 'pendingCloud' || digest !== op.payloadDigest)) throw recheck();
-    if (state.status === 'registered') {
-      if (op.state !== 'pendingMain' && op.state !== 'sending') throw invalidAuthoring();
-      const authorization = await cloud.authorize(op, 'dispatch', dispatchDigest);
-      op = await this.operation(h, { type: 'advance', operationId, authorization });
-      if (terminal(op)) return this.confirmedOperation(h, op);
-    }
-    if (op.state === 'pendingMain' || op.state === 'sending' || action === 'resend') {
-      return this.operation(h, { type: action === 'resend' ? 'resend' : 'deliver', operationId });
-    }
-    if (action === 'resume' && h.pausedContexts.has(operationId) && ['waiting','candidate'].includes(op.state)) {
-      if (op.draftId && op.baseRevision) await cloud.draft(op.draftId,op.baseRevision);
-      const resumed = await this.operation(h,{type:'resumeContext',operationId});
-      h.pausedContexts.delete(operationId);
-      return resumed;
-    }
-    if (op.state !== 'pendingCloud') return op;
-    const candidate = await this.inspect(h, op);
-    this.check(h);
-    const authorization = await cloud.authorize(op, 'accept', candidate.payloadDigest);
-    // Reject an intervening candidate change before transferring a stage ticket to the original peer.
-    await this.inspect(h, op);
-    this.check(h);
-    return this.confirmedOperation(h, await this.operation(h, { type: 'advance', operationId, authorization }));
+    return op.storage==='local'?this.syncLocal(h,op,action,digest):this.pauseLegacy(h,op);
   }
   private async restoreCreatorHandoff(h:Handle,scope:HandoffScope,recover:NonNullable<CreatorContinue['recover']>,expected:Extract<ScopedRequest,{type:'restoreHandoff'}>['expected']){
     const reply=await this.daemon(h,{type:'restoreHandoff',retryId:scope.retryId,expected});
@@ -933,6 +968,7 @@ export class RecipeAuthoringController {
       case 'status':
         return this.refresh(h);
       case 'beginHandoff': {
+        h.parent=r.source;
         if (h.draftSource || h.open.groupId !== r.groupId) throw recheck();
         await this.names(h);
         const groupName = h.groups.get(r.groupId);
@@ -949,10 +985,9 @@ export class RecipeAuthoringController {
         const groupName = h.groups.get(source.groupId);
         if (!groupName) throw recheck();
         await this.checkGroup(h);
-        const cloud = this.richCloud(h);
-        const {canonical,meta} = await cloud.draft(r.draftId,r.baseRevision);
-        if (meta.sourceIntentId !== source.operationId) throw recheck();
-        const sourceBytes = await cloud.readMember(r.draftId,meta.sourceManifest);
+        const local=this.localDraft(h,r.draftId,r.baseRevision);
+        if(local.draft.format!=='rich-v2'||local.draft.sourceIntentId!==source.operationId||!local.sourceCanonical)throw recheck();
+        const canonical=local.draft.rich.canonical,sourceBytes=Buffer.from(local.sourceCanonical,'base64url');
         await this.checkGroup(h);
         const scope = {retryId:r.retryId,groupId:source.groupId,draftId:r.draftId};
         return this.beginHandoff(h,scope,{type:r.type,...scope,groupName,identity:source.identity,baseRevision:r.baseRevision,canonical,
@@ -975,7 +1010,17 @@ export class RecipeAuthoringController {
         const current = await this.groupIdentity(h,r.groupId);
         if (current !== h.groupIdentity) throw recheck();
         const {ids,nextCursor} = this.journal.history.page(this.binding(h), current, r.cursor);
-        const entries = await this.cloud(h).sourceHistory(ids);
+        const local=new Map(this.drafts.list(h.open.accountId).filter(record=>record.work.source).map(record=>[record.work.source!.preparationId,record]));
+        const legacy=ids.filter(id=>!this.journal.history.isLocal(this.binding(h),id));
+        const remote=new Map((await this.cloud(h).sourceHistory(legacy)).map(entry=>[entry.operationId,entry]));
+        const entries:SourceHistoryEntry[]=ids.map(operationId=>{
+          const published=this.journal.history.publication(this.binding(h),operationId);
+          if(published)return published;
+          const record=local.get(operationId);
+          if(record){this.localDraft(h,record.draft.draftId);return {state:'draft',operationId,draftId:record.draft.draftId,recipeId:record.draft.recipeId,
+            name:record.draft.public.name,version:record.draft.public.version,revision:record.draft.revision,versionId:null};}
+          return remote.get(operationId)??{state:'unknown',operationId,draftId:null,recipeId:null,versionId:null};
+        });
         if (current !== await this.groupIdentity(h,r.groupId)) throw recheck();
         return {kind:'sourceHistory', entries, nextCursor};
       }
@@ -1034,13 +1079,20 @@ export class RecipeAuthoringController {
           if(!h.groups.has(r.groupId))throw recheck();
           const inv=expectKind(await this.daemon(h,{type:'richInventory',groupId:r.groupId,options:r.selection.options}),'richInventory').inventory;
           if(inv.reviewToken!==r.selection.reviewToken)throw recheck();
-          const attestations=await Promise.all(inv.versions.map(v=>cloud.sourceItems(v)));
+          // Inventory covers the whole group. The daemon verifies every selected item's
+          // parent, so an unavailable, unselected version need not prevent preparation.
+          const sources=await Promise.all(inv.versions.map(async version=>{
+            try {return await cloud.sourceItems(version);}
+            catch(error){if(error instanceof UnavailableSourceItems)return undefined;throw error;}
+          }));
+          const attestations=sources.filter(source=>source!==undefined);
           req={type:r.type,groupId:r.groupId,selection:r.selection,attestations};
         }else{
           if(h.open.groupId)throw recheck();
-          const {canonical,meta}=await cloud.draft(r.draftId,r.baseRevision);
-          const source=r.changes?.some(c=>c.op==='includeCandidate')?{sourceIntentId:meta.sourceIntentId,
-            canonical:(await cloud.readMember(r.draftId,meta.sourceManifest)).toString('base64url')}:undefined;
+          const local=this.localDraft(h,r.draftId,r.baseRevision);
+          if(local.draft.format!=='rich-v2'||!local.sourceCanonical)throw recheck();
+          const canonical=local.draft.rich.canonical;
+          const source=r.changes?.some(c=>c.op==='includeCandidate')?{sourceIntentId:local.draft.sourceIntentId,canonical:local.sourceCanonical}:undefined;
           req={type:r.type,draftId:r.draftId,baseRevision:r.baseRevision,canonical,selected:r.selected,changes:r.changes,logo:r.logo,access:r.access,source};
         }
         const op=expectKind(await this.daemon(h,req),'operation').operation;
@@ -1052,7 +1104,7 @@ export class RecipeAuthoringController {
         if (r.type === 'edit' && h.open.groupId) throw recheck();
         if (r.type === 'prepare' && (h.source?.groupId !== r.groupId || h.source.reviewToken !== r.reviewToken))
           throw recheck();
-        if (r.type === 'edit') await this.cloud(h).draft(r.draftId, r.baseRevision);
+        if (r.type === 'edit')this.localDraft(h,r.draftId,r.baseRevision);
         const req =
           r.type === 'prepare'
             ? {
@@ -1121,7 +1173,9 @@ export class RecipeAuthoringController {
       const signal=this.account.lease?.(r.accountId);
       if(!signal)throw changed();
       const check=()=>{if(signal.aborted||signal!==this.account.lease?.(r.accountId))throw changed();};
-      const locator=await richAuthoringCloud(this.account,r.accountId,signal,check).draftSourceLocator(r.target.draftId);
+      const local=this.drafts.read(r.accountId,r.target.draftId);
+      if(!local||local.draft.format!=='rich-v2'||local.draft.revision!==r.target.baseRevision)throw recheck();
+      const locator={sourceIntentId:local.draft.sourceIntentId};
       const original=this.draftSource({type:'openDraftSource',accountId:r.accountId,viewId:r.viewId,...r.target},locator.sourceIntentId);
       source=original.source;
       open={type:'open',accountId:r.accountId,viewId:r.viewId,botId:original.botId};
@@ -1156,6 +1210,7 @@ export class RecipeAuthoringController {
       return {kind:'handoffLinkRequired',session:this.sessionView(h,false,[])};
     }
     const target=r.target;
+    if(target.kind==='source')h.parent=target.parent;
     const groupId=target.kind==='source'?target.groupId:h.draftSource?.groupId;
     if(!groupId)throw recheck();
     const expected:Extract<ScopedRequest,{type:'restoreHandoff'}>['expected']=target.kind==='draft'
@@ -1226,7 +1281,6 @@ export class RecipeAuthoringController {
       this.revoke(h);
       return { kind: 'closed' as const };
     }
-    if(r.type==='cancel'&&h.transfer?.operationId===r.operationId)h.transfer.cancel.abort();
     return this.enqueue(h,async()=>{
       this.checkRestoreAction(h,r);
       await this.workflow(h);

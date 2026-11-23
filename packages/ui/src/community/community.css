@@ -25,7 +25,6 @@
 .community-empty h2 { color:var(--color-text); font-size:19px; font-weight:620; }
 .community-muted { color:var(--color-text-secondary); font-size:13px; line-height:1.65; }
 .community-workspace-section { display:grid; gap:12px; }
-.community-library-entry { display:grid; gap:8px; align-content:start; }
 .community-library-update { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:0 4px; color:var(--color-text-secondary); font:inherit; font-size:12px; border:0; background:none; cursor:pointer; text-align:left; }
 .community-library-update:hover { color:var(--color-text); }
 .community-workspace-section > h2 { margin:0; font-size:16px; }
@@ -159,3 +158,49 @@
 .community-author-link:hover { color: var(--color-text); }
 .community-author-link:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; border-radius: 2px; }
 .community-author-page { display: flex; flex-direction: column; gap: 24px; }
+
+
+.community-library-versions { display: grid; gap: 8px; }
+.community-library-versions label { display: grid; gap: 6px; font-size: 12px; color: var(--color-text-secondary); }
+.community-library-versions select { width: 100%; }
+
+.community-browse-toolbar { position:sticky; top:0; z-index:3; display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:8px 0; background:var(--color-canvas); }
+.community-browse-toolbar .community-search { flex:1; max-width:480px; min-width:140px; }
+.community-browse-toolbar > :last-child { margin-inline-start:auto; }
+.community-browse-toolbar .community-tabs button:disabled { cursor:default; color:var(--color-text-tertiary,var(--color-text-secondary)); }
+.community-browse-toolbar .community-tabs button span {font-size:10px;}
+.community-published .community-detail-heading { border:0; padding:0; align-items:center; }
+.community-published .community-detail-layout > nav { position:sticky; top:0; z-index:2; width:fit-content; max-width:100%; }
+.community-published .community-detail-columns { display:grid; grid-template-columns:minmax(0,1fr) minmax(210px,280px); align-items:start; gap:32px; }
+.community-detail-content > .community-markdown > :first-child { margin-top:0; }
+.community-detail-sidebar { position:sticky; top:56px; border:1px solid var(--color-border); border-radius:12px; padding:16px; background:var(--color-surface); }
+.community-detail-sidebar h2 { font-size:14px; margin:0 0 18px; }
+.community-detail-sidebar .community-metadata { display:grid; gap:12px; border:0; padding:0; margin:0 0 18px; }
+.community-detail-sidebar .community-metadata > div { display:grid; grid-template-columns:max-content minmax(0,1fr); align-items:baseline; gap:12px; }
+.community-detail-sidebar dt { font-size:12px; white-space:nowrap; }
+.community-detail-sidebar dd { min-width:0; margin:0; overflow-wrap:anywhere; text-align:end; }
+.community-detail-sidebar .community-author-link { max-width:100%; overflow-wrap:anywhere; text-align:inherit; }
+.community-side-actions { display:grid; gap:8px; }
+.community-saved { font-size:13px; color:var(--color-text-secondary); }
+@media (max-width:740px) {
+  .community-published .community-detail-columns { grid-template-columns:minmax(0,1fr); gap:20px; }
+  .community-detail-sidebar { position:static; }
+}
+
+.community-tile { padding: 16px; gap: 0; border: 1px solid var(--color-border); border-radius: 14px; background: var(--color-surface); }
+.community-tile:focus-within, .community-tile:hover { border-color: color-mix(in srgb, var(--color-text) 25%, var(--color-border)); }
+.community-tile > .community-card { border: 0; padding: 0; border-radius: 3px; background: transparent; box-shadow: none; }
+.community-tile-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-top: 8px; }
+.community-tile-meta .community-card-author { padding: 0; margin-right: auto; overflow-wrap: anywhere; }
+.community-tile-meta .community-card-action { border: 0; padding: 4px 0; background: transparent; color: var(--color-text-secondary); cursor: pointer; font: inherit; font-size: 12px; }
+.community-tile-meta .community-card-action:hover { color: var(--color-text); text-decoration: underline; }
+.community-library-versions:has([aria-expanded=true]) { flex-basis: 100%; }
+.community-library-versions .community-card-action { justify-self: start; }
+
+.community-card-action[aria-expanded]::after { content: ''; width: 6px; height: 6px; border: solid currentColor; border-width: 0 1px 1px 0; transform: translateY(-2px) rotate(45deg); margin-left: 6px; display: inline-block; }
+.community-card-action[aria-expanded="true"]::after { transform: translateY(1px) rotate(225deg); }
+.community-detail-content .community-markdown > :first-child { margin-block-start: 0; }
+
+@media (min-width: 741px) {
+  .community-published .community-detail-sidebar { margin-block-start: var(--recipe-card-offset, 0px); }
+}

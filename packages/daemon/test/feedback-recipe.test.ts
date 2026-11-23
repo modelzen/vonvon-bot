@@ -27,6 +27,15 @@ describe('portable feedback recipe', () => {
     expect(ref.text.value).toMatch(/0\.10\.1[\s\S]*完成后输出/);
   });
 
+  it('uses existing diagnostics and version-matched public references without a private source login', () => {
+    const recipe = createFeedbackRecipe();
+    const text = recipe.files.flatMap(file => file.text.kind === 'inline' ? [file.text.value] : []).join('\n');
+    expect(text).not.toMatch(/vonvon-release-code|\/feedback code|code\.vonvon\.cc|MCP/);
+    expect(text).toContain('管理员也可以在运行 Bot 的设备亲自使用本地终端，运行 vonvon settings get presentation --group');
+    for (const step of ['设置 → 诊断', '最近没回的消息', '普通网页', '官方公开', '提交 SHA', '留空源码依据', 'feedback_prepare', '确认提交'])
+      expect(text).toContain(step);
+  });
+
   it('puts a host-parseable administrator command in Setup for a chosen public center', () => {
     const content = createFeedbackRecipe({
       boardUrl: 'https://my.feishu.cn/base/PublicTest?table=tblFeedback&view=vewReview',

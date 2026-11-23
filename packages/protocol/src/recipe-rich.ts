@@ -153,6 +153,8 @@ const timezone = z.discriminatedUnion('kind', [
 ]);
 const task = z.object({...identity, name: text(160, 40).refine(value => value.length <= 40, 'Native task name limit exceeded'), instruction: recipeRichTextSchema, spec: cadence,
   timeZone: timezone, placement: z.enum(['follow','newTopic'])}).strict();
+export const recipeTaskSummarySchema = task.pick({itemId:true,name:true,spec:true,timeZone:true,placement:true});
+export type RecipeTaskSummary = z.infer<typeof recipeTaskSummarySchema>;
 const setup = z.object({...identity, kind: z.enum(['config','tool','context']), title: text(320, 80),
   instructions: text(2048), check: text(512).optional(), required: z.boolean(),
   action: z.discriminatedUnion('kind', [

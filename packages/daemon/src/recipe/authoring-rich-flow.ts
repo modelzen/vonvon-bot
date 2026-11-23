@@ -1,3 +1,7 @@
+import {basename,dirname,join,relative,isAbsolute,sep} from 'node:path';
+import type {AgentSkill} from '../agent/types';
+import {readSelectedRecipeFiles} from './rich-source-files';
+import {managedRecipeSkillPath,recipeSkillEntryName} from './group-skills';
 import {recipeFileIO} from './rich-file-helper';
 import {groupBackendId} from '../config/execution';
 import {staticLogoFormat} from '../../../../services/recipe-api/src/logo-format.mjs';
@@ -8,7 +12,7 @@ import {botPaths} from '../config/paths';
 import type {BotIdentity} from '../config/bots';
 import {applyManagedInventory,type ManagedSourceItem,type ManagedSourceSelection} from './authoring-rich-managed';
 import type {Project} from '../project/registry';
-import {atSource} from './authoring-source';
+import {atSource,exportableRecipeGroup} from './authoring-source';
 import {nativeRichInventory,inventoryAlias} from './authoring-rich-inventory';
 import {itemsOf,selectRichSnapshot,wireDigest,wireJson,type AttestedSourceItem,type RichOrigin} from './authoring-rich-snapshot';
 import type {LocalOperation} from './authoring-journal';
@@ -39,7 +43,7 @@ export interface RichLocalDraft {
   boundRequest?:RichFreezeInput;
   destinationDraftId?:string;
 }
-export interface RichNativeOptions {bot:BotIdentity;channel:LarkChannel;tasks?:(chat:string)=>Promise<ScheduledTaskView[]>;managedSources?:(row:Project,root:string,selection?:ManagedSourceSelection)=>Promise<ManagedSourceItem[]>}
+export interface RichNativeOptions {groupSkills?:(row:Project)=>Promise<AgentSkill[]>;bot:BotIdentity;channel:LarkChannel;tasks?:(chat:string)=>Promise<ScheduledTaskView[]>;managedSources?:(row:Project,root:string,selection?:ManagedSourceSelection)=>Promise<ManagedSourceItem[]>}
 function managedSkillHandle(item:ManagedSourceItem){return '已安装 · '+String(item.value.name).slice(0,28)+' · '+item.itemId;}
 function managedSkillChoices(managed:ManagedSourceItem[]){
   return managed.filter(item=>item.kind==='skills').map(item=>({name:managedSkillHandle(item),files:managed.filter(file=>file.kind==='files'&&
@@ -70,18 +74,19 @@ export async function richSkillOptions(native:RichNativeOptions,group:string){
   if(!await atSource(native.channel,native.bot,group,r=>r.bindingIncarnation===row.bindingIncarnation&&r.projectSettingsRevision===row.projectSettingsRevision&&r.cwd===row.cwd))throw new Error('来源群已变化。');
   return [...(result.skills??[]).map(skill=>({...skill,files:['SKILL.md',...skill.files.filter(name=>name!=='SKILL.md')]})),...managedSkillChoices(managed??[])];
 }
-export async function readRichSource(native:RichNativeOptions,scope:string,account:string,group:string,options:InventoryOptions){
+export async function readRichSource(native:RichNativeOptions,scope:string,account:string,group:string,options:InventoryOptions,skillRoots?:Map<string,string>,unavailable?:string[]){
   const row=await atSource(native.channel,native.bot,group,row=>structuredClone(row));
   const seed=wireDigest([scope,account,row.bindingIncarnation]);
   const metadata=row.richRecipe?await native.managedSources?.(row,botPaths(native.bot.appId).dir):[];
   if(row.richRecipe&&!metadata)throw new Error('需要核对当前已安装配方的来源。');
   const selected=selectManagedSources(metadata??[],options);
+  if(skillRoots&&selected.some(i=>i.access==='coded'&&i.authorId!==account))throw new Error('所选群技能含无法导出的受限来源。');
   const managed=row.richRecipe?await native.managedSources?.(row,botPaths(native.bot.appId).dir,{
     fileIds:selected.filter(item=>item.kind==='files').map(item=>item.itemId),includeBotMemories:false,includeTasks:options.includeTasks,
   }):[];
   if(row.richRecipe&&!managed)throw new Error('需要核对当前已安装配方的来源。');
   const handles=new Set(managedSkillChoices(metadata??[]).map(skill=>skill.name));
-  const inventory=await nativeRichInventory({seed,row,botRoot:botPaths(native.bot.appId).dir,botId:native.bot.appId,...options,skills:options.skills.filter(choice=>!handles.has(choice.skill)),
+  const inventory=await nativeRichInventory({seed,row,botRoot:botPaths(native.bot.appId).dir,botId:native.bot.appId,...options,skillRoots,unavailable,skills:options.skills.filter(choice=>!handles.has(choice.skill)),
     tasks:options.includeTasks?await native.tasks?.(group):[]});
   if('richRecipe' in row && row.richRecipe){
     const visible=selectManagedSources(managed!,options).filter(item=>
@@ -92,6 +97,63 @@ export async function readRichSource(native:RichNativeOptions,scope:string,accou
   const recheck=await atSource(native.channel,native.bot,group,live=>live.bindingIncarnation===row.bindingIncarnation&&live.projectSettingsRevision===row.projectSettingsRevision);
   if(!recheck)throw new Error('来源群已变化，请重新预览。');
   return inventory;
+}
+/** Inventory all portable content offered by this group's current provider, including installed recipe skills. */
+export async function conversationSource(native:RichNativeOptions,scope:string,account:string,group:string){
+  const row=await atSource(native.channel,native.bot,group,r=>structuredClone(r));
+  if(!native.groupSkills||!native.tasks)throw new Error('暂时无法核对当前群的技能与任务。');
+  if(!exportableRecipeGroup(row,account))throw new Error('这个群含无法导出的受限配方。');
+  const disabled=new Set(row.skills?.disabledPaths??[]);
+  const catalog=await native.groupSkills(row);
+  const workspace=catalog.filter(s=>s.source==='workspace'&&s.enabled&&!disabled.has(s.path));
+  const provider=groupBackendId(row)==='claude-agent'?'.claude':'.agents';
+  const roots=[...new Set([row.cwd,...row.directories?.workspaces?.additional??[]])].map(root=>join(root,provider,'skills'));
+  const managed=row.richRecipe?await native.managedSources?.(row,botPaths(native.bot.appId).dir):[];
+  if(!managed)throw new Error('需要核对当前已安装配方的来源。');
+  const choices:InventoryOptions['skills']=[];
+  const skillRoots=new Map<string,string>();
+  const add=async (root:string,name:string)=>{
+    if(skillRoots.has(name))throw new Error('群里有同名的工作区技能，无法完整导出。');
+    const result=await recipeFileIO({operation:'documents',root});
+    const files=result.names;
+    if(!files?.includes('SKILL.md'))throw new Error('群技能缺少可分享的说明文件。');
+    skillRoots.set(name,root);choices.push({skill:name,files});
+  };
+  const managedSkills=new Map(managed.filter(item=>item.kind==='skills').map(item=>[managedRecipeSkillPath(row.richRecipe!.pointer.installationId,item.itemId),item]));
+  const claude=workspace.filter(s=>s.path.startsWith('claude:'));
+  const claudeDirs=new Map<string,string>();
+  if(claude.length){
+    const wanted=new Set(claude.map(s=>s.path));
+    for(const root of roots){
+      const available=await recipeFileIO({operation:'skills',provider,root:dirname(dirname(root))});
+      for(const skill of available.skills??[]){
+        const dir=join(root,skill.name);
+        const entry=(await readSelectedRecipeFiles(dir,['SKILL.md'])).files[0]!.text;
+        const key='claude:'+recipeSkillEntryName(entry,skill.name);
+        if(!wanted.has(key))continue;
+        if(claudeDirs.has(key))throw new Error('同一群有多个同名技能，无法核对来源。');
+        claudeDirs.set(key,dir);
+      }
+    }
+  }
+  for(const skill of workspace){
+    const installed=managedSkills.get(skill.path);
+    if(installed){
+      const details=managedSkillChoices([installed,...managed.filter(i=>i.kind==='files')])[0]!;
+      choices.push({skill:details.name,files:details.files});continue;
+    }
+    const dir=claudeDirs.get(skill.path)??(basename(skill.path)==='SKILL.md'?dirname(skill.path):undefined);
+    if(!dir||!roots.some(root=>{const rel=relative(root,dir);return rel!==''&&rel!=='..'&&!rel.startsWith('..'+sep)&&!isAbsolute(rel);}))
+      throw new Error('有已启用的群技能无法核对工作区来源。');
+    await add(dir,skill.name);
+  }
+  choices.sort((a,b)=>a.skill<b.skill?-1:a.skill>b.skill?1:0);
+  if(new Set(choices.map(choice=>choice.skill)).size!==choices.length)throw new Error('群技能名称冲突，无法完整导出。');
+  const options:InventoryOptions={skills:choices,includeBotMemories:false,includeTasks:true};
+  const unavailable:string[]=[];
+  const inventory=await readRichSource(native,scope,account,group,options,skillRoots,unavailable);
+  if(!await atSource(native.channel,native.bot,group,r=>r.bindingIncarnation===row.bindingIncarnation&&r.projectSettingsRevision===row.projectSettingsRevision))throw new Error('来源群已变化，请重新准备。');
+  return {options,inventory,row,catalog,unavailable};
 }
 export function preparedRich(req:Preparation,inventory:Awaited<ReturnType<typeof readRichSource>>,account:string):RichLocalDraft {
   const selection=req.selection;

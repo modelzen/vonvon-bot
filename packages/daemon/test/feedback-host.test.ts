@@ -66,6 +66,21 @@ function fixture() {
   return {host, makeHost, setup, prepare, project, access, checkBot, store, gateway, review, reply, close, beginAuthorization};
 }
 
+it('guides old source commands to diagnostics while preserving the separately configured submission flow', async () => {
+  const f=fixture();
+  for(const [command,chat] of [['/feedback code on','group'],['/feedback code login','p2p']] as const) {
+    expect(await f.host.onMessage(message(command,'ou_member',chat))).toBe(true);
+    expect(f.reply.mock.lastCall?.[1]).toContain('设置 → 诊断');
+  }
+  expect(f.beginAuthorization).not.toHaveBeenCalled();expect(f.project.feedback).toBeUndefined();
+  await f.setup();
+  const {operationId}=await f.prepare();
+  expect(f.gateway.submit).not.toHaveBeenCalled();
+  const {draft}=await f.store.read(operationId);
+  await f.host.onAction(action(draft,'ou_other'));expect(f.gateway.submit).not.toHaveBeenCalled();
+  await f.host.onAction(action(draft));expect(f.gateway.submit).toHaveBeenCalledOnce();
+});
+
 it('binds explicit setup to an ordinary group binding and bot registration and exact official URL shapes', async () => {
   expect(setupDestination(command)).toEqual(destination);
   for (const text of [command.replace('my.feishu.cn', 'my.feishu.cn.example.org'), command.replace('https:', 'http:'),
