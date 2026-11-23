@@ -24,7 +24,7 @@ function read(dir:string,hash:string){
 function visit(ledger:AuthoringLedger,fn:(owner:object,key:string)=>void){
   for(const handoff of Object.values(ledger.handoffs??{})){fn(handoff,'edit');fn(handoff,'inherited');}
   for(const operation of Object.values(ledger.operations)){
-    fn(operation,'rich');fn(operation,'richSaved');
+    fn(operation,'rich');fn(operation,'richSaved');fn(operation,'richSourceOriginal');
   }
   for(const link of Object.values(ledger.links))for(const source of link.sources)if(source.rich)fn(source.rich,'draft');
 }

@@ -1,5 +1,5 @@
 import {localRichStorage} from './authoring-rich-storage';
-import type {RichLocalDraft} from './authoring-rich-flow';
+import type {RichLocalDraft,SourceCapture} from './authoring-rich-flow';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { AuthoringAuthorization, AuthoringOperation, RecipeSetup } from '@vonvon/protocol';
@@ -52,6 +52,7 @@ export interface LocalOperation {
   secret?: string; nonce?: string; source?: Source; sourceIdentity?: string; payload?: string; proposalDigest?: string;
   originalGroup?:{groupId:string;identity:string};
   rich?: RichLocalDraft;
+  richSourceOriginal?:SourceCapture;
   richSaved?:NonNullable<RichLocalDraft['base']>;
   editApproval?: string;
   dispatchAuthorization?: AuthoringAuthorization;
@@ -71,7 +72,7 @@ export interface AuthoringLedger {
 export const active = (op: LocalOperation) => op.terminalAt === undefined;
 export function discardAuthoringMaterial(op: LocalOperation) {
   delete op.richDispatch; delete op.secret; delete op.nonce; delete op.dispatchAuthorization; delete op.payload; delete op.source;
-  delete op.rich; delete op.editApproval; delete op.view.payloadDigest; delete op.proposalDigest;
+  delete op.rich; delete op.richSourceOriginal; delete op.editApproval; delete op.view.payloadDigest; delete op.proposalDigest;
 }
 export function retire(op: LocalOperation, state: 'completed' | 'cancelled' | 'expired', now: number) {
   op.view.state = state;

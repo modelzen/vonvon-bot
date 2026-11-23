@@ -17,16 +17,18 @@ import {checkedRichInput,proposeRich,type RichModelInput} from './authoring-rich
 import {parseChanges} from './authoring-wire';
 import {DraftProviderBusy,fieldLabels,type PublicField} from './draft-instruction';
 import {safeEditValue} from '../../../../services/recipe-api/src/draft-model-text.mjs';
-import {contentReviewFields,changeReviewFields,reviewPositions} from './authoring-review-text';
+import {contentReviewFields,changeReviewFields,sourceOmissionFields,reviewPositions} from './authoring-review-text';
 import {applyChanges} from '../../../../services/recipe-api/src/rich-document.mjs';
 
 type Preparation=Extract<RecipeAuthoringRequest,{type:'richPrepare'}>;
 type InventoryOptions=Preparation['selection']['options'];
+export type SourceCapture={request?:RichFreezeInput;members?:{itemId:string;kind:'text'|'finalLogo';sha256:string}[]};
 export interface RichLocalDraft {
   selectionDigest?:string;
   privateSelection?:boolean;
   inheritedVersionId?:string;
   sourceCaptureDigest?:string;
+  sourceOmitted?:string[];
   newFields?:string[];
   sourcePublicValues?:Partial<Record<PublicField,string>>;
   sourceRef?:string;
@@ -120,7 +122,7 @@ export function preparedRich(req:Preparation,inventory:Awaited<ReturnType<typeof
   rich.sourceCaptureDigest=richReviewDigest(rich);
   return rich;
 }
-export function richReviewDigest(rich:RichLocalDraft){
+export function richReviewDigest(rich:SourceCapture){
   if(!rich.request)throw new Error('缺少当前审核内容。');
   return rich.members?.length ? wireDigest({request:rich.request,members:rich.members.map(({itemId,kind,sha256})=>({itemId,kind,sha256}))}):wireDigest(rich.request);
 }
@@ -241,13 +243,27 @@ export function richEditTargets(content:RecipeRichContent,selected:readonly stri
   if(items.length!==selected.length)throw new Error('选择的草稿条目不存在。');
   return items;
 }
-export function richCardReview(op:{rich?:RichLocalDraft;view:Pick<LocalOperation['view'],'operationId'|'draftId'|'baseRevision'>}){
+function omitSourceItems(request:Extract<RichFreezeInput,{content:unknown}>,omitted:ReadonlySet<string>){
+  if(request.content.role&&omitted.has(request.content.role.itemId))delete request.content.role;
+  for(const key of ['skills','rules','settings','files','memories','tasks','setup'] as const){
+    const remaining=request.content[key].filter(i=>!omitted.has(i.itemId));
+    Object.assign(request.content,{[key]:remaining});
+  }
+  for(const skill of request.content.skills)skill.fileIds=skill.fileIds.filter(id=>!omitted.has(id));
+  const keptFiles=new Set(request.content.skills.flatMap(s=>s.fileIds));
+  request.content.files=request.content.files.filter(f=>keptFiles.has(f.itemId));
+  for(const setting of request.content.settings)if(setting.field==='presentation.cardDisplay'&&setting.value)
+    setting.value.blocks=setting.value.blocks.filter(b=>!omitted.has(b.itemId));
+  const kept=new Set(itemsOf(request.content).map(i=>i.itemId));
+  request.origins=request.origins.filter(o=>kept.has(o.itemId));
+}
+export function richCardReview(op:{rich?:RichLocalDraft;richSourceOriginal?:SourceCapture;view:Pick<LocalOperation['view'],'operationId'|'draftId'|'baseRevision'>}){
   const rich=op.rich;
   if(!rich?.request)return;
   try{
     const request=richFreezeInputSchema.parse(rich.request),payloadDigest=richReviewDigest(rich);
-    const captured=structuredClone(rich);
-    if(captured.request&&'content'in captured.request)for(const [key,value] of Object.entries(rich.sourcePublicValues??{})){
+    const captured:SourceCapture=structuredClone(op.richSourceOriginal??rich);
+    if(captured.request&&'content'in captured.request&&!op.richSourceOriginal)for(const [key,value] of Object.entries(rich.sourcePublicValues??{})){
       if(!['name','summary','overview','version'].includes(key)||typeof value!=='string')return;
       const item=captured.request.content.public[key as PublicField];
       if(!rich.newFields?.includes(item.itemId))return;
@@ -258,8 +274,25 @@ export function richCardReview(op:{rich?:RichLocalDraft;view:Pick<LocalOperation
     if(sourceCapture&&rich.newFields!.some(id=>!Object.entries(request.content.public).some(([key,item])=>
       item.itemId===id&&Object.hasOwn(rich.sourcePublicValues??{},key))))return;
     if(!sourceCapture&&(rich.sourcePublicValues||rich.members?.some(m=>m.kind==='finalLogo')))return;
-    if(sourceCapture&&rich.members?.some(m=>m.kind==='finalLogo'&&
+    if(sourceCapture&&rich.members?.some(m=>
       createHash('sha256').update(Buffer.from(m.bytes,'base64url')).digest('hex')!==m.sha256))return;
+    if(op.richSourceOriginal||rich.sourceOmitted){
+      if(!sourceCapture||!op.richSourceOriginal||!rich.sourceOmitted?.length||!captured.request||!('content'in captured.request))return;
+      const expected=structuredClone(captured),initial=expected.request;
+      if(!initial||!('content'in initial))return;
+      const targets=richEditTargets(initial.content,rich.source!.selected);
+      if(new Set(rich.sourceOmitted).size!==rich.sourceOmitted.length||rich.sourceOmitted.some(id=>
+        !targets.some(t=>t.itemId===id&&t.kind!=='publicText'&&t.kind!=='finalLogo')))return;
+      omitSourceItems(initial,new Set(rich.sourceOmitted));
+      expected.members=expected.members?.filter(m=>m.kind==='finalLogo'||initial.content.files.some(f=>f.itemId===m.itemId));
+      for(const [key,value] of Object.entries(rich.sourcePublicValues??{})){
+        if(!['name','summary','overview','version'].includes(key)||typeof value!=='string')return;
+        const item=initial.content.public[key as PublicField];
+        if(!rich.newFields?.includes(item.itemId)||item.value!==value)return;
+        item.value=request.content.public[key as PublicField].value;
+      }
+      if(richReviewDigest(expected)!==payloadDigest)return;
+    }
     const fields='content'in request?contentReviewFields(request.content,sourceCapture,sourceCapture?rich.inheritedVersionId:undefined,sourceCapture?rich.newFields:undefined):(()=>{
       const base=decodeRichRecipeContent(Buffer.from(request.baseCanonical,'base64url')).content;
       const resolve=(ref:{sourceIntentId:string;candidateId:string})=>{
@@ -279,6 +312,8 @@ export function richCardReview(op:{rich?:RichLocalDraft;view:Pick<LocalOperation
         return [{label:'执行顺序',text:step,valueJson:JSON.stringify(step),separate:true as const},...fields];
       });
     })();
+    if(sourceCapture&&rich.sourceOmitted?.length&&captured.request&&'content'in captured.request)
+      fields.push(...sourceOmissionFields(captured.request.content,new Set(itemsOf(request.content).map(i=>i.itemId))));
     if(sourceCapture)for(const logo of rich.members?.filter(m=>m.kind==='finalLogo')??[])
       fields.push({label:'Logo',valueJson:JSON.stringify((rich.inheritedVersionId?'已继承来源 Logo · ':'已选本地图片 · ')+Buffer.from(logo.bytes,'base64url').length+' 字节')});
     if(request.access)fields.push({label:'获取方式',valueJson:JSON.stringify(request.access==='coded'?'凭码获取':'直接获取')});
@@ -352,19 +387,16 @@ export async function chatRichProposal(op:LocalOperation,instruction:string,sign
   if(parsed.kind!=='proposal')return parsed;
   if(original){
     const request=structuredClone(original);
-    const omitted=new Set(parsed.omitted);
-    if(request.content.role&&omitted.has(request.content.role.itemId))delete request.content.role;
-    for(const key of ['skills','rules','settings','files','memories','tasks','setup'] as const){
-      const remaining=request.content[key].filter(i=>!omitted.has(i.itemId));
-      Object.assign(request.content,{[key]:remaining});
+    let sourceOriginal=op.richSourceOriginal;
+    if(parsed.omitted.length&&rich.privateSelection&&rich.source&&rich.sourceCaptureDigest&&!sourceOriginal){
+      sourceOriginal=structuredClone({request:original,...(rich.members&&{members:rich.members.map(({itemId,kind,sha256})=>({itemId,kind,sha256}))})});
+      if(sourceOriginal.request&&'content'in sourceOriginal.request)for(const [key,value] of Object.entries(rich.sourcePublicValues??{}))
+        sourceOriginal.request.content.public[key as PublicField].value=value;
+      if(richReviewDigest(sourceOriginal)!==rich.sourceCaptureDigest)throw new Error('来源快照已改变，请重新准备。');
     }
-    for(const skill of request.content.skills)skill.fileIds=skill.fileIds.filter(id=>!omitted.has(id));
-    const keptFiles=new Set(request.content.skills.flatMap(s=>s.fileIds));
-    request.content.files=request.content.files.filter(f=>keptFiles.has(f.itemId));
-    for(const setting of request.content.settings)if(setting.field==='presentation.cardDisplay'&&setting.value)
-      setting.value.blocks=setting.value.blocks.filter(b=>!omitted.has(b.itemId));
-    const kept=new Set(itemsOf(request.content).map(i=>i.itemId));
-    request.origins=request.origins.filter(o=>kept.has(o.itemId));
+    const sourceOmitted=[...new Set([...(rich.sourceOmitted??[]),...parsed.omitted])];
+    const omitted=new Set(parsed.omitted);
+    omitSourceItems(request,omitted);
     const sourcePublicValues={...rich.sourcePublicValues};
     for(const change of parsed.changes){
       if(change.op!=='setPublicText'||request.content.public[change.field].itemId!==change.itemId)throw new Error('创建时仅能填写公开介绍。');
@@ -374,7 +406,7 @@ export async function chatRichProposal(op:LocalOperation,instruction:string,sign
     }
     canonicalizeRichRecipeContent(request.content);
     const newFields=[...new Set([...(rich.newFields??[]),...parsed.changes.flatMap(c=>'itemId' in c&&c.itemId?[c.itemId]:[])])];
-    return {kind:'proposal',request,newFields,...(rich.privateSelection&&rich.source&&rich.sourceCaptureDigest&&{sourcePublicValues})} as const;
+    return {kind:'proposal',request,newFields,...(rich.privateSelection&&rich.source&&rich.sourceCaptureDigest&&{sourcePublicValues,...(sourceOriginal&&{richSourceOriginal:sourceOriginal,sourceOmitted})})} as const;
   }
   if(!op.view.draftId||!op.view.baseRevision||!base)throw new Error('缺少当前草稿修订。');
   const request:RichFreezeInput={format:'rich-v2',baseCanonical:base.canonical,payload:{format:'rich-v2',purpose:'editDraft',draftId:op.view.draftId,

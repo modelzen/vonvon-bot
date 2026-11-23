@@ -8,6 +8,7 @@ import type { AddressInfo } from 'node:net';
 import { Client, DefaultCache, type LarkChannel, type NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import { authoringAuthorizationSchema, agentIdSchema, groupIdSchema, recipeAuthoringRequestSchema, type AuthoringAuthorization, type AuthoringOperation, type RecipeAuthoringReply } from '@vonvon/protocol';
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
+import type {RichModelInput} from '../src/recipe/authoring-rich-model';
 import type { DraftInstructionParser, ReadDraftField } from '../src/recipe/draft-instruction';
 import type { AppConfig } from '../src/config/schema';
 
@@ -1345,4 +1346,31 @@ it('stops a permanently unavailable authenticated source without creating a clou
   const reply=kind(await rpc('answerHandoff',{request,unavailable:true,attestations:[]}),'handoff');
   expect(reply.handoff.state).toBe('needsReview');
   expect(kind(await rpc('status'),'status').operations).toHaveLength(0);
+});
+
+it.each([[false,false],[true,false],[true,true]])('selected role omission inherited=%s after public edit=%s',async(inherit,edited)=>{
+  const versionId=randomUUID(),original={name:'原名',version:'',overview:'短介绍',summary:'原始简介'};
+  const arg={...beginInput(),...(inherit&&{sourceVersionId:versionId,inherited:{accountId:account,versionId,public:original,access:'direct'}})};
+  await link();await rpc('beginHandoff',arg);await tap(privateChoice('☐ 群角色'));await tap(privateChoice('确认所选来源'));
+  const attest=kind(await rpc('workflow'),'workflow').handoff!;
+  const h=kind(await rpc('answerHandoff',{request:attest,attestations:[]}),'handoff').handoff;
+  const op=await status(h.operationId!),destinationDraftId=randomUUID();
+  await rpc('richAdvance',{operationId:op.operationId,destinationDraftId,authorization:{...await auth(op,'dispatch'),format:'rich-v2'}});
+  if(edited)await service.onMessage(msg('/recipe version 2.0'));
+  expect([...cards.values()].at(-1)).toContain('保存到草稿');
+  proposeRich.mockImplementationOnce(async (input:RichModelInput)=>({kind:'proposal',commands:[{action:'omit',target:'T'+(input.selected.findIndex(i=>i.kind==='role')+1),valueJson:'null'}]}));
+  await service.onMessage(msg('请排除群角色'));
+  const body=[...cards.values()].at(-1)!;
+  const preview=kind(await rpc('richInspect',{operationId:op.operationId,preview:true}),'richCandidate');
+  if(!('content'in preview.request))throw Error('missing content');
+  expect(preview.request.content.role).toBeUndefined();if(edited)expect(preview.request.content.public.version.value).toBe('2.0');
+  expect(body).toContain('本次排除');expect(body).toContain('角色');
+  expect(body).toContain('保存到草稿');
+  await orch.shutdown();restart();await open();orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});
+  await service.onMessage(msg('/recipe version 3.0'));
+  expect([...cards.values()].at(-1)).toContain('本次排除');
+  const resumed=kind(await rpc('richInspect',{operationId:op.operationId,preview:true}),'richCandidate');
+  if(!('content'in resumed.request))throw Error('missing content');
+  expect(resumed.request.content.public.version.value).toBe('3.0');expect(resumed.request.content.role).toBeUndefined();
+  await act(ref());expect((await status(op.operationId)).state).toBe('pendingCloud');
 });
