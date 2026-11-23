@@ -246,8 +246,17 @@ test('stageDaemon ships a minified CLI with the workspace packages bundled from 
   const daemonRoot = fileURLToPath(new URL('../packages/daemon/', import.meta.url));
   const daemon = JSON.parse(await readFile(join(daemonRoot, 'package.json'), 'utf8'));
   const staged = join(root, 'daemon');
-  const result = await stageDaemon(staged, {name: daemon.name, version: daemon.version, type: 'module', bin: daemon.bin, dependencies: daemon.dependencies}, {hoist: true});
+  const previousOrigin = process.env.VONVON_ACCOUNT_API_ORIGIN;
+  process.env.VONVON_ACCOUNT_API_ORIGIN = 'https://recipes-staging.example';
+  let result;
+  try {
+    result = await stageDaemon(staged, {name: daemon.name, version: daemon.version, type: 'module', bin: daemon.bin, dependencies: daemon.dependencies}, {hoist: true});
+  } finally {
+    if (previousOrigin === undefined) delete process.env.VONVON_ACCOUNT_API_ORIGIN;
+    else process.env.VONVON_ACCOUNT_API_ORIGIN = previousOrigin;
+  }
   const cli = await readFile(join(staged, 'dist/cli.js'), 'utf8');
+  assert.ok(cli.includes('https://recipes-staging.example'), 'the packaged daemon retains its compiled account origin');
   assert.ok(cli.length / cli.split('\n').length > 400, 'dist/cli.js is minified');
   assert.doesNotMatch(cli, /sourceMappingURL|\bfrom\s*["']@vonvon\//);
   const metadata = JSON.parse(await readFile(join(staged, 'package.json'), 'utf8'));

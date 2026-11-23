@@ -1,0 +1,10 @@
+.draft-preview-landing main { width:min(520px,calc(100% - 32px)); margin:12vh auto; padding:32px; border:1px solid var(--stroke); border-radius:18px; background:var(--paper); box-shadow:0 8px 32px #00000006; }
+.draft-preview-landing .brand { margin-bottom:32px; font-size:14px; }
+.draft-preview-landing h1 { font-size:26px; line-height:1.3; letter-spacing:-.035em; margin-bottom:12px; }
+.draft-preview-landing p { line-height:1.7; }
+.draft-preview-landing #open-app { display:inline-flex; align-items:center; justify-content:center; margin:24px 0 12px; padding:10px 16px; border:1px solid transparent; border-radius:8px; background:var(--action); color:var(--onaction); font-size:14px; font-weight:600; text-decoration:none; }
+.draft-preview-landing #open-app:active { transform:translateY(1px); }
+.draft-preview-landing #status { color:var(--muted); font-size:13px; }
+.draft-preview-landing .help { margin-top:16px; color:var(--muted); font-size:12px; }
+.draft-preview-landing #status + .help { margin-top:28px; }
+@media(max-width:520px) { .draft-preview-landing main { padding:24px; margin-top:8vh; } .draft-preview-landing h1 { font-size:24px; } }

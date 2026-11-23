@@ -5,6 +5,7 @@ import { AdminWriteError, type AdminWriteOp } from './ops';
 import type { AdminLibraryOp } from './library';
 import type { ScheduleActor } from './schedule-commands';
 import type { MemoryDowngrade, MemoryItem, MemoryItemScope, MemorySource, ScheduleRequest } from '@vonvon/protocol';
+import { groupIdSchema } from '@vonvon/protocol';
 import { z } from 'zod';
 import { SESSION_ID_RE, type SessionInput } from '../host/session-tokens';
 import { SESSION_TURN_ENDED } from '../agent/entry/registry';
@@ -78,7 +79,7 @@ export type AdminSessionOp = { kind: 'authorizeSessionCall'; sessionId: string; 
  * `feishuApi`: the same for `feishu_api`, which only a private chat's tool ever asks the host for (7.6).
  */
 export type AdminFeishuOp = { kind: 'feishuRead'; request: FeishuReadRequest } | { kind: 'feishuApi'; request: ApiRequest };
-export type AdminIpcOp = AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | AdminScheduleOp | AdminSessionOp | AdminFeishuOp | { kind: 'status' } | { kind: 'firstHello' };
+export type AdminIpcOp = import('../recipe/rich-installer').RichBotOp | import('../recipe/authoring-service').AuthoringIpc | AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | AdminScheduleOp | AdminSessionOp | AdminFeishuOp | { kind: 'status' } | { kind: 'firstHello' };
 
 export interface AdminIpcRequest {
   fcb: typeof ADMIN_IPC_REQ;
@@ -93,6 +94,7 @@ export interface IpcResponse {
   result?: unknown;
   error?: string;
   code?: string;
+  groupId?: string;
 }
 export interface AdminIpcResponse extends IpcResponse {
   fcb: typeof ADMIN_IPC_RES;
@@ -206,7 +208,12 @@ export function createIpcResponder<Op>(channels: IpcChannels, execute: (op: Op) 
     };
     void execute(msg.op as Op).then(
       (result) => reply({ ok: true, result }),
-      (err: unknown) => reply({ ok: false, error: err instanceof Error ? err.message : String(err), code: (err as { code?: string } | null)?.code }),
+      (err: unknown) => {
+        const failure = err as {code?: string; chatId?: unknown} | null;
+        const id = failure?.code === 'CREATED_UNSAVED' && groupIdSchema.safeParse(failure.chatId);
+        reply({ok:false, error:err instanceof Error ? err.message : String(err), code:failure?.code,
+          ...(id && id.success && {groupId:id.data})});
+      },
     );
   };
 }
@@ -221,9 +228,8 @@ export function createAdminIpcCaller(send: (msg: AdminIpcRequest) => void): Admi
     revive: (msg) => {
       const reason = msg.error ?? '子进程执行失败';
       // 校验拒绝跨进程还原成 AdminWriteError —— HTTP 层与进程内路径同样映射 409。
-      // 「群建好了没存上」只带回它的 code（s36d1），RPC 层据此让网页锁住建群表单。
       return msg.code === 'ADMIN_WRITE_REJECTED' ? new AdminWriteError(reason) : msg.code === 'GROUP_UPSTREAM' ? new GroupUpstreamError(reason) : msg.code === 'INVALID_GROUP_INPUT' ? new InvalidGroupInput(reason)
-        : msg.code === 'CREATED_UNSAVED' ? Object.assign(new Error(reason), { code: msg.code }) : new Error(reason);
+        : msg.code === 'CREATED_UNSAVED' ? Object.assign(new Error(reason), { code: msg.code, chatId: msg.groupId }) : new Error(reason);
     },
   });
 }

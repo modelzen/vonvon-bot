@@ -17,6 +17,7 @@ import { assertNoBundledClaude } from './desktop-backend-policy.mjs';
 import { fileEntries, listFiles, sha256 } from './package-tools.mjs';
 import { checkedProductVersion } from './product-version.mjs';
 import { PUBLISHED_TARGETS, archiveName } from './server-constants.mjs';
+import { buildRecipeFiles } from './build-recipe-files.mjs';
 import { stageDaemon } from './stage-daemon.mjs';
 
 const repository = fileURLToPath(new URL('../', import.meta.url));
@@ -102,7 +103,7 @@ export async function assembleRelease({ app, runtime, target, version, nodeVersi
 export async function checkServerTree(release, target) {
   const files = await listFiles(release); // refuses symbolic links and special files
   const problems = [];
-  const required = ['standalone.json', 'app/package.json', 'app/bin/vonvon.mjs', 'app/dist/cli.js', 'app/ui/dist/index.html', 'app/server-update.json',
+  const required = ['standalone.json', 'app/package.json', 'app/bin/vonvon.mjs', 'app/dist/cli.js', 'app/dist/native/recipe-files', 'app/ui/dist/index.html', 'app/server-update.json',
     'app/NOTICE', 'app/LICENSE.paseo', 'app/LICENSE.bridge', 'node/LICENSE', `node/${NODE}`, `node/${NPM}/bin/npm-cli.js`];
   for (const file of required) if (!files.includes(file)) problems.push(`missing ${file}`);
   for (const file of files) {
@@ -111,7 +112,7 @@ export async function checkServerTree(release, target) {
     if (file.endsWith('.node')) problems.push(`native module refused: ${file}`);
     if (file.startsWith('app/') && !file.startsWith('app/node_modules/')) {
       const top = file.split('/')[1];
-      if (!APP_TOP.has(top) || (top === 'dist' && file !== 'app/dist/cli.js') || (top === 'ui' && !file.startsWith('app/ui/dist/'))) problems.push(`unexpected app file: ${file}`);
+      if (!APP_TOP.has(top) || (top === 'dist' && file !== 'app/dist/cli.js' && file !== 'app/dist/native/recipe-files') || (top === 'ui' && !file.startsWith('app/ui/dist/'))) problems.push(`unexpected app file: ${file}`);
     }
     if (file.startsWith('app/node_modules/@vonvon/')) problems.push(`workspace package shipped as files: ${file}`);
   }
@@ -239,6 +240,7 @@ export async function buildServer({ out, targets, cache, allowDirty, publicKeyFi
       const runtime = await unpackNode(await pinnedNodeFile(pins, target, nodeCache), join(work, 'node', target));
       const release = join(work, 'release', target);
       await assembleRelease({ app, runtime, target, version, nodeVersion: pins.version }, release);
+      buildRecipeFiles(join(release, 'app/dist'), target);
       await checkServerTree(release, target);
       const manifest = { schema: 1, package: 'vonvon-server', version, target, node: pins.version, sourceHead, sourceDirty, lockfileSha256, buildNode: process.version, esbuild, files: await fileEntries(release) };
       await writeFile(join(release, 'build-manifest.json'), JSON.stringify(manifest, null, 2) + '\n');

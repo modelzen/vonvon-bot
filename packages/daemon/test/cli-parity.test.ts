@@ -33,6 +33,12 @@ let commands: CommandInfo[] = [];
 beforeAll(async () => { commands = await loadCommands(); });
 
 describe('CLI parity with the RPC kinds (devices 8.5)', () => {
+  it('keeps every rich authoring RPC on the signed-in desktop', () => {
+    const richAuthoring = kinds.filter(kind => kind.startsWith('recipeAuthoring.rich'));
+    expect(richAuthoring).toHaveLength(9);
+    for (const kind of richAuthoring) expect(CLI_PARITY_ALLOWLIST[kind], kind).toMatchObject({ reason: 'desktop-only' });
+  });
+
   // main 必败: there was no covers metadata and no allowlist
   it('covers every kind or names it in the allowlist, and nothing else', () => {
     expect(parityProblems(kinds, commands, CLI_PARITY_ALLOWLIST)).toEqual([]);

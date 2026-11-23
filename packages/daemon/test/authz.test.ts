@@ -26,6 +26,7 @@ it('lets the owner do everything, a connection of another protocol only the main
   expect(await authorize(old, request('machine', { type: 'stopHost' }))).toEqual({ ok: true });
   expect(await authorize(peer({ kind: 'unpaired' }), request('admin', { type: 'daemonStatus' }))).toMatchObject({ ok: false, code: 'permission_denied' });
   expect(await authorize(owner, request('command', { type: 'notAKind' }))).toMatchObject({ ok: false, code: 'permission_denied' });
+  expect(await authorize(owner, request('recipeAuthoring', { type: 'richUnknown' }))).toMatchObject({ ok: false, code: 'permission_denied' });
 });
 
 // s1b, owner 2026-11-02: a group session's cells are a whitelist, written out row by row. main 必败.

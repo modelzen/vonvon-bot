@@ -34,6 +34,7 @@ interface DesktopDaemonRuntime {
   executable: string;
   resources: string;
   packaged: boolean;
+  allowRegisteredService?: boolean;
 }
 
 export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonManagerDependencies & { ownerRunning(previous: { pid: number; startedAt: string }): Promise<boolean> } {
@@ -84,6 +85,7 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
       return { pid: lock.pid, startedAt: lock.startedAt, listen: lock.listen, ...(lock.version === undefined ? {} : { version: lock.version }) };
     },
     async readRegistration() {
+      if (runtime.allowRegisteredService === false) return { kind: 'absent' };
       const platform = process.platform;
       // Windows runs the bundled daemon directly, without a registered service.
       if (platform === 'win32') return { kind: 'absent' };
@@ -101,7 +103,10 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
         case 'unrecognized': return { kind: 'unrecognized', file: registration.location, replaceable: !isIrreplaceableDefinition(registration.reason) };
       }
     },
-    async startManaged(port) { await launch('start', port); },
+    async startManaged(port) {
+      if (runtime.allowRegisteredService === false) throw new Error('预览版不启动登录服务。');
+      await launch('start', port);
+    },
     async startBundled(port) { await launch('run', port); },
     async startSelectedBot(port, bot) {
       const pid = await launch('run', port, bot);

@@ -14,6 +14,7 @@ beforeEach(() => {h.selected = undefined;});
 function render(data = snapshot) {
   const onSelect = vi.fn();
   const dialog = SelectJoinBotDialog({snapshot: data, onSelect, onClose: vi.fn()});
+  expect(dialog.props.description).toBe('选择后，继续创建或连接群聊。');
   const next = nodes(dialog.props.footer).find(node => node.props.children === '下一步')!;
   return {options: nodes(dialog).filter(node => node.type === 'input'), next, onSelect};
 }

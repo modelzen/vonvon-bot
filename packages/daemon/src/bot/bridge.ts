@@ -1,14 +1,19 @@
+import { bridgeFeedback } from '../feedback/bridge';
+import { nativeRichSourceItems } from '../recipe/rich-source-lineage';
+import { codexDraftParser } from '../recipe/codex-draft-parser';
+import { resolveModelPreference } from '../config/execution';
+import { AuthoringService, type AuthoringIpc } from '../recipe/authoring-service';
 import { createBridgeChannel } from './bridge-channel';
 import { APP_ROLE_CACHE_MS, APP_ROLE_RETRY_MS, createAppRoleRefresher, getAppRoleSnapshot } from '../config/app-roles';
 import type { CollaborationRequest } from '../admin/collaboration';
 import type { HostSettings } from '../admin/settings-types';
 import type { AdminWriteResult } from '../admin/ops';
-import { createGroupExecutor, type AdminGroupOp, type GroupMembers, type JoinedGroups } from '../admin/groups';
+import { createGroupExecutor, type AdminGroupOp, type GroupMembers, type GroupMembership, type JoinedGroups } from '../admin/groups';
 import type { Project } from '../project/registry';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import type { AdminWriteOp } from '../admin/ops';
 import type { AdminLibraryOp } from '../admin/library';
-import type { ScheduleReply, ScheduleRequest } from '@vonvon/protocol';
+import type { GroupIdentity, ScheduleReply, ScheduleRequest } from '@vonvon/protocol';
 import type { ScheduleActor } from '../admin/schedule-commands';
 import { isAdmin, type AppConfig } from '../config/schema';
 import { createCommandTools } from '../agent/entry/command-tools';
@@ -17,7 +22,7 @@ import { createFeishuCalls, createFeishuReads } from '../agent/entry/feishu-tool
 import type { ApiRequest } from '../feishu-read/api';
 import { createMemoryWriter } from './memory-writer';
 import { createFirstHello } from './first-hello';
-import { dmPersonOf, getProjectByChatId, listProjects } from '../project/registry';
+import { dmProject, dmPersonOf, getProjectByChatId, listProjects } from '../project/registry';
 import { isProjectId } from '../project/library';
 import { createAgentEntries, type AgentEntries } from '../agent/entry/registry';
 import { log } from '../core/logger';
@@ -26,7 +31,7 @@ import { putSessionCliOnPath, writeSessionCli } from '../agent/session-cli';
 import { createTopicRegistry } from './topic-registry';
 import type { BotIdentity } from '../config/bots';
 import { adoptAdminSessions } from './session-store';
-import { paths } from '../config/paths';
+import { botPaths, paths } from '../config/paths';
 import { setTierMergePending, splitTierChats } from '../project/registry';
 import type { PermissionMode } from '../agent/types';
 import { onCrashSync } from '../host/crash-guard';
@@ -52,10 +57,12 @@ export interface BridgeOptions {
 }
 
 export interface BridgeHandle {
+  richRecipe:(op:import('../recipe/rich-installer').RichBotOp)=>Promise<unknown>;
+  authoring: (op: AuthoringIpc) => Promise<unknown>;
   entries: AgentEntries;
   channel: LarkChannel;
   collaboration: (request: CollaborationRequest) => Promise<unknown>;
-  adminGroups: (op: AdminGroupOp) => Promise<JoinedGroups | GroupMembers | Project>;
+  adminGroups: (op: AdminGroupOp) => Promise<JoinedGroups | GroupMembers | GroupMembership | GroupIdentity | Project>;
   adminExecute: (op: AdminWriteOp) => Promise<AdminWriteResult>;
   /** A read this Bot runs as itself, the host asking (dm-agent 7.3). */
   feishuRead: (request: FeishuReadRequest) => Promise<FeishuReadReply>;
@@ -88,6 +95,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   await mergeTiers();
   const app = opts.cfg.accounts.app;
   const channel = createBridgeChannel(app, opts.appSecret);
+  const feedback = bridgeFeedback(identity, opts.cfg, opts.appSecret, channel);
   const cardCallbacks = createCardCallbackRecorder(app.id, {
     onError: error => log.fail('setup', error, { phase: 'card-callback-verification', appId: app.id }),
   });
@@ -112,9 +120,9 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     if (!('members' in result)) throw new Error('Invalid members reply');
     return result;
   };
-  const entries = createAgentEntries({ appId: app.id, isAdmin: id => isAdmin(opts.cfg, id), ...(sessions ? { sessions } : {}),
+  const entries = createAgentEntries({ feedbackEnabled: feedback.enabled, appId: app.id, isAdmin: id => isAdmin(opts.cfg, id), ...(sessions ? { sessions } : {}),
     memoryPlace: turn => memory.placeOf(turn), tools: createCommandTools({
-    appId: app.id, memory, feishu, groupTier: chatId => orchestrator.permissionOf(chatId),
+    appId: app.id, feedback: true, memory, feishu, groupTier: chatId => orchestrator.permissionOf(chatId),
     schedule: { execute: (actor, request) => orchestrator.scheduleAs(actor, request) },
     groups: async cursor => {
       const result = await createGroupExecutor(channel, identity)({ kind: 'joinedGroups', cursor });
@@ -125,8 +133,19 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   }) });
   const sessionCli = await writeSessionCli();
   if (sessionCli) putSessionCliOnPath(sessionCli);
+  const parser = codexDraftParser(async () => {
+    const group = await dmProject(botPaths(identity.appId).projectsFile);
+    if (!group) return;
+    const backend = group.modelAccess?.backend ?? group.backend ?? 'codex-appserver';
+    return {backend, model:resolveModelPreference({bot:opts.cfg.preferences, group},backend)?.model};
+  });
+  const authoring = new AuthoringService({bot: identity, cfg: opts.cfg, channel, parser,managedSources:nativeRichSourceItems,tasks:async chatId=>{
+    const result=await orchestrator.scheduleAs({kind:'local',via:'desktop'},{action:'list',chatId});
+    if(result.kind!=='tasks')throw new Error('无法读取所选群的任务。');
+    return result.tasks;
+  }});
   const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }),
-    { entries, memory, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity, ...(host ? { host } : {}), ...(sessionCli ? { sessionCli } : {}) });
+    { entries, memory, authoring, feedback, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity, ...(host ? { host } : {}), ...(sessionCli ? { sessionCli } : {}) });
   const firstHello = createFirstHello({ cfg: opts.cfg, appSecret: opts.appSecret, channel, write: orchestrator.writePreferences });
   const roles = createAppRoleRefresher(app, opts.appSecret);
   await roles.refresh();
@@ -144,13 +163,15 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   };
   scheduleRoles();
   const offCrash = onCrashSync(() => orchestrator.saveDroppedSync('crash'));
-  const groupTasks = new Set<Promise<JoinedGroups | GroupMembers | Project>>();
+  const groupTasks = new Set<Promise<JoinedGroups | GroupMembers | GroupMembership | GroupIdentity | Project>>();
   let closing: Promise<void> | undefined;
   const shutdown = (reason?: () => StopReason): Promise<void> => {
     if (closing) return closing;
+    authoring.close();
     rolesStopped = true;
     firstHello.stop();
     clearTimeout(rolesTimer);
+    const feedbackClosing = Promise.allSettled([feedback.close()]);
     const rolesClosing = roles.stop();
     // s18c: stop taking events first. One that comes after this is not acknowledged, so Feishu pushes it again to the
     // next process, which answers it; taken now, it would be acknowledged and dropped by the closing orchestrator.
@@ -167,6 +188,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     const orchestratorClosing = orchestrator.shutdown(reason);
     closing = (async () => {
       const errors: unknown[] = [];
+      for (const result of await feedbackClosing) if (result.status === 'rejected') errors.push(result.reason);
       await rolesClosing;
       try { await orchestratorClosing; }
       catch (error) { errors.push(error); }
@@ -261,7 +283,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
       void task.then(() => groupTasks.delete(task), () => groupTasks.delete(task));
       return task;
     };
-    return { channel, entries, collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, libraryExecute: orchestrator.libraryExecute, settings: orchestrator.settings, schedule: orchestrator.scheduleAs, feishuRead: createFeishuReads({ feishu, members }), feishuApi: createFeishuCalls(feishu), firstHello: firstHello.attempt, shutdown };
+    return { channel, entries, richRecipe:op=>orchestrator.richRecipe!(op,identity,async chatId=>{await adminGroups({kind:'groupMembership',chatId,identity});}), authoring: async op => op.kind === 'recipeAuthoringDisconnect' ? authoring.disconnect(op.peer.id) : authoring.request(op.peer, op.request), collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, libraryExecute: orchestrator.libraryExecute, settings: orchestrator.settings, schedule: orchestrator.scheduleAs, feishuRead: createFeishuReads({ feishu, members }), feishuApi: createFeishuCalls(feishu), firstHello: firstHello.attempt, shutdown };
   } catch (error) {
     try { await shutdown(); }
     catch (cleanupError) {

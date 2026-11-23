@@ -8,7 +8,7 @@ const verificationHosts = new Set([
   ...registrationHosts, "auth.openai.com", "chatgpt.com",
   "claude.ai", "console.anthropic.com", "platform.claude.com",
 ]);
-export type ExternalUrlKind = "registration" | "authorization" | "verification" | "event-settings" | "app-console" | "group" | "bot-chat" | "releases" | "download" | "tailscale";
+export type ExternalUrlKind = "registration" | "authorization" | "verification" | "event-settings" | "app-console" | "group" | "bot-chat" | "releases" | "download" | "tailscale" | "recipe-document";
 
 /** 官网的更新日志和下载页；安装包在这里下载，应用内更新没生效时也指到这里。 */
 export const changelogUrl = "https://vonvon.cc/changelog/";
@@ -17,6 +17,11 @@ export const downloadPageUrl = "https://vonvon.cc/get/";
 export function allowedExternalUrl(value: string, kind: ExternalUrlKind): string | null {
   try {
     const url = new URL(value);
+    if (kind === "recipe-document") {
+      // Creator-written links may target web documents; the other actions keep their official-host rules.
+      return /^https?:\/\//i.test(value) && !/[\s\\]/.test(value) &&
+        (url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password ? url.href : null;
+    }
     const authority = /^https:\/\/([^/?#]+)/i.exec(value)?.[1];
     if (url.protocol !== "https:" || url.username || url.password || url.port ||
         authority?.toLowerCase() !== url.hostname) return null;
@@ -60,7 +65,10 @@ export function allowedExternalUrl(value: string, kind: ExternalUrlKind): string
 export async function openExternalUrl(value: string, kind: ExternalUrlKind, shell?: ShellCapabilities): Promise<void> {
   const url = allowedExternalUrl(value, kind);
   if (!url) throw new Error("链接不是受支持的官方地址。");
-  if (shell?.openExternal) await shell.openExternal(url);
+  if (shell?.openExternal) {
+    if (kind === "recipe-document") await shell.openExternal(url, kind);
+    else await shell.openExternal(url);
+  }
   else window.open(url, "_blank", "noopener");
 }
 
