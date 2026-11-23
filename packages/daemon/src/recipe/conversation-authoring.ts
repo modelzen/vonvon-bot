@@ -14,13 +14,14 @@ import {draftTargets,renameIntent,renameReceipt,type RenameIntent} from './conve
 import {inventoryAlias} from './authoring-rich-inventory';
 import {AuthoringIm} from './authoring-im';
 import type {InventoryCategory} from '../agent/entry/recipe-creation-tools';
+import {materialContent,materialReview,type MaterialInput} from './conversation-material';
 import type {ResourceCaller} from './resource-context';
 
 type Wait = {signal:AbortSignal; notAfter:number};
 export type ConversationDraftEditAction={action:'inventory';draftId?:string}|{action:'propose';draftId?:string;inventoryId:string;addIds:string[];removeIds:string[]}|{action:'apply';draftId?:string;proposalId?:string};
 export type ConversationDraftAction={action:'inspect'|'preview'|'edit'|'publish';draftId?:string;change?:{field:'name'|'summary'|'overview'|'version'|'access';value:string}};
 export type RecipeCreationQuery = (
-  {kind:'sources';offset?:number} | {kind:'inventory';groupId:string;category?:InventoryCategory;offset?:number} |
+  {kind:'material';action:'propose';material:MaterialInput} | {kind:'material';action:'create';proposalId:string} | {kind:'sources';offset?:number} | {kind:'inventory';groupId:string;category?:InventoryCategory;offset?:number} |
   {kind:'propose';groupId:string;inventoryId:string;selectedIds:string[];switchFromGroupId?:string;public:Omit<RecipePublic,'access'>;access?:RecipePublic['access']} |
   {kind:'create';proposalId:string} | {kind:'status'} | ({kind:'draft'} & (ConversationDraftAction|ConversationDraftEditAction|{action:'list';offset?:number}))
 ) & {wait?:Wait};
@@ -37,7 +38,7 @@ export function confirmsConversationScope(text:string,editing=false){
 }
 type Account = {key:string;binding:string;order:number};
 type Selected = {id:string;groupId:string;name:string;identity:string;expiresAt:number};
-type Selection = {account?:Account;selected?:Selected;proposalId?:string;editProposalId?:string;receiptResource?:string;ambiguous?:true};
+type Selection = {materialProposalId?:string;account?:Account;selected?:Selected;proposalId?:string;editProposalId?:string;receiptResource?:string;ambiguous?:true};
 type Turn = Selection & {recipient:Recipient;expires:number;authoring:boolean;rename?:RenameIntent;acceptsScope:boolean;acceptsEditScope:boolean;sentAt:number;threadId?:string;sessionId?:string};
 const ttl = 30*60_000;
 const denied = () => new Error('本次私聊的账号、来源或授权已改变。请在 App 选择当前来源，再发一条消息。');
@@ -121,7 +122,9 @@ export class ConversationAuthoring {
     const proposalId=offer?.shownAt&&offer.binding===link.binding&&offer.order===(link.selectionOrder??0)&&offer.expiresAt>this.now()?offer.id:undefined;
     const edit=link.conversationEdit?.proposal;
     const editProposalId=edit?.shown&&edit.order===(link.selectionOrder??0)&&edit.expires>this.now()?edit.id:undefined;
-    return {account:{key,binding:link.binding,order:link.selectionOrder??0},proposalId,editProposalId,receiptResource,
+    const material=link.materialProposal;
+    const materialProposalId=material?.shownAt&&material.binding===link.binding&&material.order===(link.selectionOrder??0)&&material.expiresAt>this.now()?material.id:undefined;
+    return {materialProposalId,account:{key,binding:link.binding,order:link.selectionOrder??0},proposalId,editProposalId,receiptResource,
       ...(h&&{selected:{id:h.retryId,groupId:h.groupId,name:h.groupName,identity:h.identity,expiresAt:h.expiresAt}})};
   }
   remember(messageId:string,recipient:Recipient,selection:Selection,authoring:boolean,threadId?:string,text='',sentAt=0) {
@@ -177,8 +180,8 @@ export class ConversationAuthoring {
     };
     const initial=await this.journal.run(checkAccount);
     if(!initial.account)return initial.ambiguous?
-      {state:'chooseAccount',message:'有多个账号或来源。请在希望使用的账号打开 App，点创作配方并选择来源群，再回到这里。'}:
-      {state:'unlinked',message:'请在 Vonvon App 登录，点创作配方、选择来源群，按提示将当前 Bot 与本人飞书私聊关联。'};
+      {state:'chooseAccount',message:'有多个账号或来源。请在希望使用的账号打开 App，点创作配方并选择资料创作或来源群，再回到这里。'}:
+      {state:'unlinked',message:'请在 Vonvon App 登录，点创作配方、选择资料创作或来源群，按提示将当前 Bot 与本人飞书私聊关联。'};
     const account=initial.account;
     const id=query.kind==='create'&&!turn.receiptResource?query.proposalId:undefined;
     const readStatus=(db:AuthoringLedger)=>{
@@ -202,15 +205,28 @@ export class ConversationAuthoring {
     const editProposal=(db:AuthoringLedger)=>{
       const current=checkAccount(db),link=db.links[account.key],offer=link?.conversationEdit?.proposal;
       if(!link||!offer||!turn.editProposalId||turn.editProposalId!==current.editProposalId||offer.id!==turn.editProposalId||
-        !isDeepStrictEqual(current.selected,turn.selected)||offer.thread!==turn.threadId||!offer.work.source)return;
+        !isDeepStrictEqual(current.selected,turn.selected)||offer.thread!==turn.threadId)return;
       const work=offer.work,known=link.creator?.sources?.[work.draftId];
       if(known!==undefined&&!isDeepStrictEqual(known,work.source))return;
-      const op=db.operations[work.source!.preparationId];
+      const op=work.source&&db.operations[work.source.preparationId];
       if(op&&(op.revoked||op.bot!==this.bot||linkKey(op.scope,op.accountId)!==account.key||op.binding!==account.binding||
         !sameRecipient(op.recipient,turn.recipient)||op.view.receipt?.status!=='accepted'||op.view.receipt.draftId!==work.draftId||
         (op.originalGroup?.groupId??op.view.groupId)!==work.source!.groupId||(op.originalGroup?.identity??op.sourceIdentity)!==work.source!.identity))return;
       return offer;
     };
+    const materialStatus=await this.journal.run(db=>{
+      const current=checkAccount(db),link=db.links[account.key]!,offer=link.materialProposal;
+      if(!offer||!current.materialProposalId||turn.materialProposalId!==offer.id||current.materialProposalId!==offer.id||
+        offer.threadId!==turn.threadId||offer.handoffId!==turn.selected?.id)return;
+      const row=offer.jobId&&link.creator?.jobs[offer.jobId];
+      if(row&&row.job.binding!==account.binding)throw denied();
+      if(row&&row.result?.kind==='saved')return {operation:'createDraft',state:'saved',draftId:row.result.work.draftId,
+        nameAtCreation:offer.input.public.name,versionAtCreation:offer.input.public.version,revisionAtCreation:row.result.revision};
+      if(row&&row.result?.kind==='rejected')return {operation:'createDraft',state:'needsReview',proposalId:offer.id,message:'App 未能保存，请核对当前账号与内容后重新提案。'};
+      return {operation:'createDraft',state:offer.acceptedBy?'preparing':'awaitingConfirmation',proposalId:offer.id,
+        nextTool:'recipe_author_material',nextAction:'create',proposedName:offer.input.public.name};
+    });
+    if(query.kind==='status'&&materialStatus)return materialStatus;
     const renameContext=await this.journal.run(db=>{
       const selection=checkAccount(db),link=db.links[account.key]!;
       const proposal=link.conversationProposal;
@@ -252,7 +268,7 @@ export class ConversationAuthoring {
           if(job&&(job.job.binding!==account.binding||job.order!==edit.order||
             job.job.task.kind!=='draftScopeApply'||!isDeepStrictEqual(job.job.task.work,edit.work)||job.job.task.revision!==edit.revision||
             job.job.task.baseSha256!==edit.baseSha256))throw denied();
-          const target={operation:'editDraftScope' as const,draftId:edit.work.draftId,groupId:edit.work.source!.groupId,proposalId:edit.id};
+          const target={operation:'editDraftScope' as const,draftId:edit.work.draftId,...(edit.work.source&&{groupId:edit.work.source.groupId}),proposalId:edit.id};
           if(job?.result?.kind==='saved')return {...target,state:'saved',revision:job.result.revision};
           if(job?.result?.kind==='rejected')return {...target,state:'needsReview',revision:edit.revision};
           return {...target,state:edit.acceptedBy?'preparing':'awaitingConfirmation',revision:edit.revision,
@@ -297,6 +313,52 @@ export class ConversationAuthoring {
       live();await this.journal.run(db=>{checkSelection(db);});live();
     };
     await verified();
+    if(query.kind==='material'){
+      if(!p.materialAuthor)return {state:'upgradeRequired',message:'请更新来源 App 后再保存资料创作的配方。'};
+      if(query.action==='propose'){
+        const content=materialContent(query.material),offer=await this.journal.run(db=>{
+          const link=checkSelection(db),prior=link.materialProposal;
+          if(prior?.from===caller.messageId&&prior.binding===account.binding&&prior.order===account.order&&
+            isDeepStrictEqual(prior.input,query.material))return prior;
+          if(turn.selected){
+            const old=db.handoffs?.[turn.selected.id];
+            if(!old?.conversation||old.capture||old.phase.state!=='selecting')throw denied();
+            old.phase={state:'cancelled'};delete turn.selected;
+          }
+          selectCreatorBinding(db,link,this.now());account.order=link.selectionOrder!;turn.account={...account};
+          delete link.conversationProposal;delete link.conversationEdit;
+          return link.materialProposal={id:randomUUID(),draftId:randomUUID(),content,input:query.material,binding:account.binding,
+            order:account.order,threadId:turn.threadId,from:caller.messageId,expiresAt:Math.min(this.now()+ttl,turn.expires)};
+        },live);
+        turn.materialProposalId=offer.id;turn.authoring=true;
+        if(!offer.shownAt){
+          const im=new AuthoringIm(this.opts.channel),pages=reviewPages(materialReview(offer.input));
+          for(const [index,page] of pages.entries()){
+            await this.journal.run(db=>{if(checkSelection(db).materialProposal?.id!==offer.id)throw denied();},live);
+            await im.sendText(turn.recipient.chatId,page,index===0?offer.id:inventoryAlias(offer.id,'page:'+index));
+          }
+          await this.journal.run(db=>{const current=checkSelection(db).materialProposal;if(current?.id!==offer.id)throw denied();current.shownAt??=this.now();},live);
+        }
+        return {state:'awaitingConfirmation',operation:'createDraft',proposalId:offer.id,message:'已展示完整保存内容，等待作者下一条消息明确确认。'};
+      }
+      const offer=await this.journal.run(db=>{
+        const current=checkSelection(db).materialProposal;
+        if(!current||current.id!==query.proposalId||current.id!==turn.materialProposalId||!current.shownAt||current.binding!==account.binding||
+          current.order!==account.order||current.threadId!==turn.threadId||current.handoffId!==turn.selected?.id||current.expiresAt<=this.now())
+          throw new Error('资料创作提案已改变或过期，请重新展示并确认。');
+        return current;
+      },live);
+      if(!offer.acceptedBy&&(!turn.acceptsScope||caller.messageId===offer.from||turn.sentAt<offer.shownAt!))
+        return {state:'awaitingConfirmation',proposalId:offer.id,message:'请作者在下一条私聊中明确确认这个范围并保存草稿。'};
+      const jobId=await session.creator.conversationMaterial(p,turn.recipient,offer,caller.messageId,checkSelection);
+      let row=await this.journal.run(db=>checkSelection(db).creator?.jobs[jobId]);
+      while(row&&row.state!=='finished'&&Date.now()+400<stopAt){
+        await delay(400,undefined,{signal:query.wait?.signal});live();row=await this.journal.run(db=>checkSelection(db).creator?.jobs[jobId]);
+      }
+      if(row?.result?.kind==='saved')return {operation:'createDraft',state:'saved',draftId:row.result.work.draftId,
+        nameAtCreation:offer.input.public.name,versionAtCreation:offer.input.public.version,revisionAtCreation:row.result.revision};
+      return {operation:'createDraft',state:row?.result?.kind==='rejected'?'needsReview':'preparing',proposalId:offer.id};
+    }
     if(query.kind==='sources'){
       turn.authoring=true;
       const offset=query.offset??0,selected=turn.selected&&await source(turn.selected.groupId);

@@ -179,12 +179,13 @@ export class AuthoringRouter {
         selection=this.conversation.selection(db,recipient);
       }
       const link=selection.account&&db.links[selection.account.key];
+      const materialEntry=!!link&&(link.creator?.focusUntil??0)>now&&Object.values(link.creator?.materialEntries??{}).some(entry=>entry.order===(link.selectionOrder??0));
       const checkingReceipt=asksAboutSave&&!!link&&handoffs.some(h=>h.conversation&&h.capture&&h.binding===link.binding&&linkKey(h.scope,h.account)===selection.account!.key);
       const localDraft=!!link&&(link.creator?.current?.kind==='draft'||operations.some(o=>o.binding===link.binding&&o.localDraftAcknowledged&&!o.revoked));
       const conversationDraft=!!link&&(!!link.conversationEdit?.proposal||!!link.creator?.conversationFocus&&link.creator.conversationFocus.order===(link.selectionOrder??0));
       const editing=!!link&&(handoffs.some(h=>h.creator&&h.edit&&h.binding===link.binding&&h.expiresAt>now&&['selecting','awaitingAttestations'].includes(h.phase.state))||
         operations.some(o=>o.binding===link.binding&&o.view.purpose==='editDraft'&&o.contextOpen&&!o.revoked&&o.terminalAt===undefined));
-      return {own,context,knownQuote,conversationQuote,handoffSession,selection,localDraft,conversationDraft,checkingReceipt,editing,incomplete:incomplete||foreignQuote,route,ambiguous:chosen.length>1};
+      return {own,context,knownQuote,conversationQuote,handoffSession,selection,localDraft,conversationDraft,materialEntry,checkingReceipt,editing,incomplete:incomplete||foreignQuote,route,ambiguous:chosen.length>1};
     });
     if(!snapshot)return true;
     const {own,route}=snapshot;
@@ -194,7 +195,7 @@ export class AuthoringRouter {
     if(!command&&(!snapshot.knownQuote||replyingToSource)&&isAdmin(this.opts.cfg,recipient.openId)){
       const selected=Boolean(snapshot.selection.selected);
       const draftAction=snapshot.localDraft&&(!!renameIntent(text)||/(?:^(?:正式)?发布(?:吧|这份)?[。！]?$|预览发布|发布.{0,12}(?:草稿|配方)|(?:改|编辑|预览).{0,16}(?:草稿|配方))/u.test(text));
-      let conversational=naturalCreate||snapshot.checkingReceipt||draftAction||(selected||snapshot.conversationDraft||!!snapshot.selection.proposalId)&&!intent;
+      let conversational=snapshot.materialEntry||naturalCreate||snapshot.checkingReceipt||draftAction||(selected||snapshot.conversationDraft||!!snapshot.selection.proposalId||!!snapshot.selection.materialProposalId)&&!intent;
       if(msg.rawContentType==='text'&&(!snapshot.editing||naturalCreate||snapshot.checkingReceipt)&&(!intent||intent==='create'||draftAction||snapshot.checkingReceipt)){
         const native=(msg.raw as {message?:{message_type?:string;content?:string;create_time?:string}}).message;
         let actualText='';

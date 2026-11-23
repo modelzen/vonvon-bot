@@ -52,7 +52,7 @@ test('opening creation is user-driven and offers a download fallback without web
  window.HTMLDialogElement.prototype.showModal=function(){this.open=true;};window.HTMLDialogElement.prototype.close=function(){this.open=false;};
  Object.assign(window,{recipeCreationUrl,recipeDraftsUrl,recipeHandoffUrl});window.eval(source);assert.equal(window.document.querySelector('dialog'),null);
  window.document.addEventListener('click',e=>e.preventDefault());window.document.querySelector('a').click();
- const dialog=window.document.querySelector('dialog');assert.equal(dialog.open,true);assert.match(dialog.textContent,/选择已有 Bot 和群聊/);
+ const dialog=window.document.querySelector('dialog');assert.equal(dialog.open,true);assert.match(dialog.textContent,/选择 Bot.*链接、文档或教程.*也可以选取已有群配置/);
  assert.match(dialog.textContent,/需要使用本轮验收的 Vonvon Bot Preview/);
  assert.equal(dialog.querySelector('a[href="https://vonvon.cc/get/"]').textContent,'了解正式版');
  assert.equal(dialog.querySelector('a[href="vonvon-preview://recipes/create"]').textContent,'重新打开 Preview');

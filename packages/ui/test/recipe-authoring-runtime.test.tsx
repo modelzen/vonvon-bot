@@ -89,7 +89,8 @@ async function fill(label: string,value: string) {
 async function chooseSource() {
   await click('社区'); await click('我的配方'); await click('创作配方');
   const selects = document.querySelectorAll('select');
-  expect(Array.from(selects).map(select => select.selectedOptions[0]?.textContent)).toEqual(['Bot A', '群聊 A']);
+  expect(Array.from(selects).map(select => select.selectedOptions[0]?.textContent)).toEqual(['Bot A', '不选群聊，从资料创作']);
+  await act(async () => {selects[1]!.value=groupA;selects[1]!.dispatchEvent(new Event('change',{bubbles:true}));});
   await click('前往私聊创作');
 }
 async function openDraft() {
@@ -849,12 +850,12 @@ it('opens the existing Bot and group chooser directly from a website creation na
   await draw();
   await act(async()=>emit({type:'recipePreview',value:{kind:'create',navigationId:draftId}}));
   expect(dialog('创作配方')).toBeDefined();
-  expect(Array.from(document.querySelectorAll('select')).map(select=>select.selectedOptions[0]?.textContent)).toEqual(['Bot A','群聊 A']);
+  expect(Array.from(document.querySelectorAll('select')).map(select=>select.selectedOptions[0]?.textContent)).toEqual(['Bot A','不选群聊，从资料创作']);
   expect(calls).toEqual([]);
   expect(externalCalls).toEqual([]);
   expect(cloudCalls.some(request=>['publishDraft','saveDraft','acquire'].includes(request.type))).toBe(false);
   await click('前往私聊创作');
-  expect(calls.find(request=>request.type==='creatorContinue')).toMatchObject({accountId:accountA,entry:{kind:'source',viewId:A,botId:botA,groupId:groupA}});
+  expect(calls.find(request=>request.type==='creatorContinue')).toMatchObject({accountId:accountA,entry:{kind:'materials',viewId:A,botId:botA}});
 });
 it('offers App login before revealing creation sources and retains the incoming creation after login', async () => {
   status={kind:'signedOut'};
@@ -883,7 +884,7 @@ it('combines personal recipe states and starts creation from the same account-sc
   await click('已发布');expect(visible()).toContain('已发布测试配方');expect(visible()).not.toContain('已获取测试配方');expect(visible()).not.toContain('同一份私人草稿');
   expect(document.querySelector('.community-studio-heading h2')?.textContent).toBe('我的配方');
   await click('创作配方');
-  expect([...document.querySelectorAll('select')].map(select=>select.selectedOptions[0]?.textContent)).toEqual(['Bot A','群聊 A']);
+  expect([...document.querySelectorAll('select')].map(select=>select.selectedOptions[0]?.textContent)).toEqual(['Bot A','不选群聊，从资料创作']);
   expect(calls).toEqual([]);expect(externalCalls).toEqual([]);
   await click('取消');
   status=signedIn(accountB);await act(async()=>emit({type:'account',value:status}));
@@ -1023,4 +1024,44 @@ it('requires a new exact entitlement read for a fresh handoff even when the same
   expect(dialog('交给 Bot')).toBeUndefined();
   await act(async()=>finish(browseFixture(accountB,draftId,{acquired:false})));
   expect(dialog('交给 Bot')).toBeUndefined();expect(calls).toEqual([]);expect(cloudCalls.some(request=>request.type==='acquire')).toBe(false);
+});
+
+it('starts from materials with a running Bot that belongs to no group',async()=>{
+  linked=true;
+  const normal=deviceSnapshot;
+  deviceSnapshot=view=>({...normal(view),memberships:[],groups:[]});
+  await draw();await click('社区');await click('我的配方');await click('创作配方');
+  expect(document.querySelector<HTMLSelectElement>('[aria-label="配方来源 Bot"]')?.value).toBe(botA);
+  expect(document.querySelector<HTMLSelectElement>('[aria-label="配方来源群聊"]')).toBeNull();
+  await click('前往私聊创作');
+  expect(calls.find(request=>request.type==='creatorContinue')).toMatchObject({entry:{kind:'materials',viewId:A,botId:botA}});
+  expect(calls.find(request=>request.type==='open')).not.toHaveProperty('groupId');
+});
+
+it('shows stopped Bots and lets the user choose another connected Bot without starting either',async()=>{
+  linked=true;const normal=deviceSnapshot;
+  deviceSnapshot=view=>{const value=normal(view);return desktopSnapshotSchema.parse({...value,agents:[{...value.agents[0]!,running:false}, {...value.agents[0]!,id:'cli_online',name:'在线 Bot'}]});};
+  await draw();await click('社区');await click('我的配方');await click('创作配方');
+  const select=document.querySelector<HTMLSelectElement>('[aria-label="配方来源 Bot"]')!;
+  expect(select.textContent).toContain('Bot A（未启动）');
+  await act(async()=>{select.value=botA;select.dispatchEvent(new Event('change',{bubbles:true}));});
+  expect(dialog('创作配方')?.textContent).toContain('尚未启动');
+  expect(dialog('创作配方')?.textContent).not.toContain('前往群组');
+  expect([...document.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent==='前往私聊创作')?.disabled).toBe(true);
+  await act(async()=>{select.value='cli_online';select.dispatchEvent(new Event('change',{bubbles:true}));});
+  await click('前往私聊创作');
+  expect(calls.find(r=>r.type==='creatorContinue')).toMatchObject({entry:{kind:'materials',botId:'cli_online'}});
+});
+it('requires explicit reselection when a chosen group disappears before continuing',async()=>{
+  linked=true;await draw();await click('社区');await click('我的配方');await click('创作配方');
+  const select=document.querySelector<HTMLSelectElement>('[aria-label="配方来源群聊"]')!;
+  await act(async()=>{select.value=groupA;select.dispatchEvent(new Event('change',{bubbles:true}));});
+  const first=snapshot(A);
+  await act(async()=>emit({type:'snapshot',view:A,value:{...first,revision:2,memberships:[],groups:[]}}));
+  expect(dialog('创作配方')?.textContent).toContain('所选来源群聊已不可用');
+  expect([...document.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent==='前往私聊创作')?.disabled).toBe(true);
+  expect(calls).toEqual([]);
+  await act(async()=>{select.value='';select.dispatchEvent(new Event('change',{bubbles:true}));});
+  await click('前往私聊创作');
+  expect(calls.find(r=>r.type==='creatorContinue')).toMatchObject({entry:{kind:'materials'}});
 });

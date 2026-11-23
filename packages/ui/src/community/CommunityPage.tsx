@@ -327,7 +327,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
           })}>加载更多</Button>}
         </section>}
         <section hidden={workspaceTab !== 'drafts'} className="community-workspace-section">
-          {workspaceTab === 'drafts' && drafts?.length === 0 && <div className="recipe-drafts-empty"><FilePenLine aria-hidden="true" size={22}/><div><strong>还没有创作中的配方</strong><p>点击「创作配方」，选择已有 Bot 和群聊，在私聊中开始。</p></div></div>}
+          {workspaceTab === 'drafts' && drafts?.length === 0 && <div className="recipe-drafts-empty"><FilePenLine aria-hidden="true" size={22}/><div><strong>还没有创作中的配方</strong><p>点击「创作配方」，选择 Bot，在私聊中提供资料或整理已有群配置。</p></div></div>}
           {Boolean(drafts?.length) && <div className="community-grid recipe-drafts-grid">{drafts?.map(draft => <article key={draft.draftId} className="recipe-draft-tile">
             <div className="recipe-draft-tile-body"><RecipeMark name={draft.public.name}/><div><h3 id={`draft-name-${draft.draftId}`}>{draft.public.name || '未命名配方'}</h3>{draft.public.summary && <p>{draft.public.summary}</p>}</div></div>
             <footer><span>{draft.public.version || '待填写版本'}</span><button type="button" aria-describedby={`draft-name-${draft.draftId}`} onClick={() => open({kind:'draft',draftId:draft.draftId,from:'drafts'})}>查看配方<ArrowUpRight size={14} aria-hidden="true"/></button></footer>

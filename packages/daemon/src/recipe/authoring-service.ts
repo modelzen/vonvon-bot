@@ -27,7 +27,7 @@ import { operationUuid } from './manifest';
 export interface AuthoringPeer {id: string; device: string}
 export type AuthoringIpc = {kind: 'recipeAuthoring'; peer: AuthoringPeer; request: RecipeAuthoringRequest} |
   {kind: 'recipeAuthoringDisconnect'; peer: AuthoringPeer};
-export interface Presence {readonly peer: AuthoringPeer; readonly session: string; readonly account: string; readonly scope: string; readonly binding?: string; readonly nativePreview?: true; readonly resourceContext?: true; draftScope?:true; until: number; activity: number; activeAt: number}
+export interface Presence {readonly peer: AuthoringPeer; readonly session: string; readonly account: string; readonly scope: string; readonly binding?: string; readonly nativePreview?: true; readonly resourceContext?: true; draftScope?:true; materialAuthor?:true; until: number; activity: number; activeAt: number}
 interface Challenge {
   id: string; session: string; hash: Buffer; expiresAt: number; attempts: number;
   recipient?: Recipient; messageId?: string; evidence?: string;
@@ -274,7 +274,7 @@ export class AuthoringSession {
     if (req.type === 'creatorOpen') {
       const association = await this.creator.discover(peer,req.accountId);
       if (association.association?.binding !== req.binding || association.association.scope !== req.scope) refusal();
-      const p = this.p = {peer,session:randomUUID(),account:req.accountId,scope:req.scope,binding:req.binding,nativePreview:req.nativePreview,resourceContext:req.resourceContext,draftScope:req.draftScope,until:this.now()+LEASE,activity:0,activeAt:this.now()};
+      const p = this.p = {peer,session:randomUUID(),account:req.accountId,scope:req.scope,binding:req.binding,nativePreview:req.nativePreview,resourceContext:req.resourceContext,draftScope:req.draftScope,materialAuthor:req.materialAuthor,until:this.now()+LEASE,activity:0,activeAt:this.now()};
       await this.creator.open(p,req.binding,req.wakeId);
       return {kind:'creatorSession',session:p.session,binding:req.binding,scope:p.scope,leaseMs:LEASE,...(p.resourceContext&&{resourceContext:true})};
     }
@@ -306,7 +306,7 @@ export class AuthoringSession {
       }
       if(result)return result;
     }
-    if (req.type === 'creatorContinue' || req.type === 'creatorPoll' || req.type === 'creatorCheck' || req.type === 'creatorAnswer' || req.type === 'creatorLogo' || req.type === 'creatorDeliver' || req.type === 'creatorPreview' || req.type === 'creatorAppConfirm') {
+    if (req.type === 'creatorMaterialEntry' || req.type === 'creatorContinue' || req.type === 'creatorPoll' || req.type === 'creatorCheck' || req.type === 'creatorAnswer' || req.type === 'creatorLogo' || req.type === 'creatorDeliver' || req.type === 'creatorPreview' || req.type === 'creatorAppConfirm') {
       return this.serial(()=>this.creator.request(p,req));
     }
     if(req.type==='localDraftAcknowledged')return this.serial(()=>this.ledger.run(db=>{

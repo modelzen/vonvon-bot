@@ -85,7 +85,7 @@ export class RecipeCreatorSupervisor {
       const {binding,scope}=discovered.association;
       if(expected&&(expected.binding!==binding||expected.scope!==scope))throw unavailable();
       const association={accountId,viewId,deviceId,deviceKey,botId,binding,scope};
-      const opened=expect(await rpc({type:'creatorOpen',accountId,botId,binding,scope,wakeId:discovered.wakeId,nativePreview:true,draftScope:true,...(source.client.supportsResourceContext&&{resourceContext:true})}),'creatorSession');
+      const opened=expect(await rpc({type:'creatorOpen',accountId,botId,binding,scope,wakeId:discovered.wakeId,nativePreview:true,draftScope:true,...(source.client.supportsMaterialAuthor&&{materialAuthor:true}),...(source.client.supportsResourceContext&&{resourceContext:true})}),'creatorSession');
       session=opened.session;
       if(opened.binding!==binding||opened.scope!==scope)throw unavailable();
       adopted=await this.authoring.adoptCreator({accountId,viewId,botId,lease:source,session,leaseMs:opened.leaseMs});check();
@@ -171,7 +171,7 @@ export class RecipeCreatorSupervisor {
   private draftSource(accountId:string,record:LocalRecipeDraftRecord,check:()=>void,source?:Continue['source']):DraftSource{
     check();const original=record.association;
     if(original.accountId!==accountId||source&&(source.viewId!==original.viewId||source.botId!==original.botId))throw unavailable();
-    if(record.draft.format==='rich-v2'&&(!record.work.source||!record.sourceCanonical||record.work.source.preparationId!==record.draft.sourceIntentId))
+    if(record.draft.format==='rich-v2'&&(!record.sourceCanonical||(record.work.source?record.work.source.preparationId:record.work.draftId)!==record.draft.sourceIntentId))
       throw new AuthoringError('本地草稿的来源资料尚未完整保存，请在原来源 Bot 中重新核对。');
     const linked=this.journal.associations(accountId).find(row=>row.viewId===original.viewId&&row.botId===original.botId);
     if(linked)checkVersionSource(original,linked);
@@ -378,7 +378,7 @@ export class RecipeCreatorSupervisor {
   }
   async continue(input:Continue):Promise<DesktopAuthoringReply>{
     const signal=this.account.lease?.(input.accountId);if(!signal)throw unavailable();
-    let selected:Pick<CreatorAssociation,'viewId'|'botId'>|undefined=input.entry.kind==='source'?input.entry:undefined;
+    let selected:Pick<CreatorAssociation,'viewId'|'botId'>|undefined=input.entry.kind==='source'||input.entry.kind==='materials'?input.entry:undefined;
     const check=()=>{const status=this.account.status();if(this.stop.signal.aborted||signal.aborted||signal!==this.account.lease?.(input.accountId)||status.kind!=='signedIn'||status.accountId!==input.accountId)throw unavailable();};
     let expected:CreatorAssociation|undefined;
     let localSource:DraftSource|undefined;
@@ -430,6 +430,9 @@ export class RecipeCreatorSupervisor {
     worker.context.check();
     const bot=snapshot.agents.find(bot=>bot.id===worker.association.botId);
     if(snapshot.stale||snapshot.host.kind!=='connected'||!bot?.running||bot.connection!=='connected'||!bot.tenant)throw unavailable();
+    if(input.entry.kind==='source'||input.entry.kind==='materials'){
+      if(bot.registrationId!==input.entry.registrationId||bot.registeredAt!==input.entry.registeredAt)throw unavailable();
+    }
     if(input.entry.kind==='source'){
       const entry=input.entry;
       const binding=snapshot.memberships.find(row=>row.agentId===bot.id&&row.groupId===entry.groupId);
@@ -443,6 +446,13 @@ export class RecipeCreatorSupervisor {
         selection:{kind:'draft',work:{draftId:roleDraft.draftId,source:null},name:roleDraft.name,version:roleDraft.version}}),'creatorAck');
       worker.context.check();
       return {kind:'creatorContinuing',...target,retryId:input.retryId,delivery:'queued'};
+    }
+    if(input.entry.kind==='materials'){
+      if(input.retryStartedAt===undefined)throw new AuthoringError('创作请求已过期，请重新打开创作入口。');
+      if(!worker.source.client.supportsMaterialAuthor)throw new AuthoringError('此设备尚不支持从资料创作配方，请更新来源设备的 Vonvon Bot。');
+      expect(await worker.context.rpc({type:'creatorMaterialEntry',botId:worker.association.botId,session:worker.session,retryId:input.retryId,issuedAt:input.retryStartedAt}),'creatorAck');
+      worker.context.check();
+      return {kind:'creatorContinuing',...target,retryId:input.retryId,delivery:'delivered'};
     }
     const result=await this.authoring.creatorBegin(worker.contextHandle,input,target);
     worker.context.check();

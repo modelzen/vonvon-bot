@@ -16,6 +16,7 @@ it.each([{retry:true},{initiative:true},{wake:true},{scheduled:{taskId:'one',run
     expect(await entry.call('recipe_resource_acquire',{versionId:'71111111-1111-4111-8111-111111111111'},{toolUseId:'turn'})).toMatchObject({ok:false});
     expect(await entry.call('recipe_resource_prepare',{groupId:'oc_group'},{toolUseId:'turn'})).toMatchObject({ok:false});
     expect(await entry.call('recipe_author_sources',{},{toolUseId:'turn'})).toMatchObject({ok:false});
+    expect(await entry.call('recipe_author_material',{action:'create',proposalId:'71111111-1111-4111-8111-111111111111'},{toolUseId:'turn'})).toMatchObject({ok:false});
     expect(await entry.call('recipe_author_create',{groupId:'oc_group',public:{name:'周报',summary:'',overview:'',version:''}},{toolUseId:'turn'})).toMatchObject({ok:false});
     expect(await entry.call('recipe_author_status',{},{toolUseId:'turn'})).toMatchObject({ok:false});
     expect(broker).not.toHaveBeenCalled();turn.close();entries.closeAll('shutdown');

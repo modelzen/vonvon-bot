@@ -23,7 +23,7 @@ function member(text:string){
   const bytes=Buffer.from(text),descriptor:RecipeRichPartDescriptor={kind:'text',objectId:randomUUID(),sha256:sha(bytes),bytes:bytes.length,mediaType:'text/plain;charset=utf-8'};
   return {descriptor,base64:bytes.toString('base64')};
 }
-function fixture(legacy=false){
+function fixture(legacy=false,groupless=false){
   const accountId=randomUUID(),draftId=randomUUID(),preparationId=randomUUID();
   const association=creatorAssociationSchema.parse({accountId,viewId:'local',deviceId:randomUUID(),deviceKey:Buffer.alloc(32,1).toString('base64url'),
     botId:'cli_local_publisher',binding:randomUUID(),scope:'c'.repeat(64)});
@@ -42,6 +42,7 @@ function fixture(legacy=false){
   const source=structuredClone(content);source.files=[{...entry,text:{kind:'part',objectId:unselected.descriptor.objectId}}];source.skills=[{...content.skills[0]!,fileIds:[entry.itemId]}];source.parts=[unselected.descriptor];
   record.sourceCanonical=Buffer.from(canonicalizeRichRecipeContent(source).canonicalUTF8).toString('base64url');
   if(legacy)record={association,work:{draftId,source:null},draft:{draftId,recipeId:null,revision:3,public:publicInfo,config:{role:'Only locally saved role.'}},members:[]};
+  if(groupless&&record.draft.format==='rich-v2'){record.work.source=null;record.draft.sourceIntentId=draftId;}
   const snapshot=creatorSnapshotSchema.parse({work:record.work,format:legacy?'role-v1':'rich-v2',recipeId:null,parent:null,revision:3,public:record.draft.public,
     contentSha256:legacy?sha('{"role":"Only locally saved role."}'):sha(doc.canonicalUTF8),parts:legacy?[]:content.parts,sections:[{title:'完整内容',pageHashes:[sha('review')]}]});
   const requestId=randomUUID();
@@ -343,4 +344,14 @@ it.each(['same parent','different version','different recipe','new recipe'] as c
   const publishedFile=recipeRichContentSchema.parse(JSON.parse(uploaded.bytes.toString())).files[0]!;
   expect(publishedFile.itemId===file.itemId).toBe(choice==='same parent');
   expect(publishedFile.originId===file.originId).toBe(choice==='same parent');
+});
+
+
+it('publishes a group-independent rich draft through normal native rich publication and recovers its receipt',async()=>{
+  const h=await harness(fixture(false,true));
+  const answer=await h.publisher.publish(h.account,h.row,h.record,h.check);
+  expect(answer?.kind).toBe('published');
+  expect(h.calls.some(call=>call.path.endsWith('/source-items'))).toBe(false);
+  const receipt=await h.publisher.receipt(h.account,h.row,h.check);
+  expect(receipt).toEqual(answer);
 });

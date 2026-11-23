@@ -129,7 +129,7 @@ it('does not append an old load-more response to a new search', async () => {
 it('keeps the empty studio focused on preparation without a blank-draft shortcut', async () => {
   h.request.mockResolvedValue({items: []});
   await act(async () => root.render(<Harness initial={{kind: 'workspace', tab: 'drafts'}}/>));
-  expect(document.body.textContent).toContain('点击「创作配方」，选择已有 Bot 和群聊，在私聊中开始。');
+  expect(document.body.textContent).toContain('点击「创作配方」，选择 Bot，在私聊中提供资料或整理已有群配置。');
   expect(document.body.textContent).not.toContain('手动');
   expect([...document.querySelectorAll('button')].filter(button => button.textContent === '创作配方')).toHaveLength(1);
   expect(h.request.mock.calls.map(([request]) => request.type)).toEqual(['drafts']);

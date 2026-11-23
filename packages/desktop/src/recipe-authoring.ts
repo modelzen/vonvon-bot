@@ -273,6 +273,7 @@ export class RecipeAuthoringController {
     const h=this.handles.get(handle);if(!h?.creator)throw changed();
     return this.enqueue(h,async()=>{
       await this.names(h);await this.present(h,true);
+      if(entry.kind==='materials')throw recheck();
       if(entry.kind==='version'){
         const account:NativeAccount={...this.account,request:(accountId,path,init,beforeSend)=>this.account.request(accountId,path,init,async()=>{await beforeSend?.();this.check(h);})};
         const detail=await communityRequest(account,{type:'detail',accountId:h.open.accountId,recipeId:entry.recipeId,versionId:entry.versionId});this.check(h);
@@ -297,7 +298,11 @@ export class RecipeAuthoringController {
         return handoffDelivery(await this.beginHandoff(h,scope,{type:'beginHandoff',...scope,groupName,conversation:true,...origin}));
       }
       const local=this.localDraft(h,entry.draftId,entry.revision),source=local.work.source;
-      if(local.draft.format!=='rich-v2'||!source||!local.sourceCanonical||source.identity!==await this.groupIdentity(h,source.groupId))throw recheck();
+      if(local.draft.format!=='rich-v2'||!local.sourceCanonical||source&&source.identity!==await this.groupIdentity(h,source.groupId))throw recheck();
+      if(!source){
+        expectKind(await this.daemon(h,{type:'creatorContinue',conversationRevision:entry.revision,conversationRetryId:retryId,selection:{kind:'draft',work:local.work,name:local.draft.public.name,version:local.draft.public.version}}),'creatorAck');
+        return continuation('delivered');
+      }
       const status=expectKind(await this.daemon(h,{type:'status'}),'status');
       if(!status.linked)throw recheck();
       const scope={retryId,groupId:source.groupId,draftId:entry.draftId};
