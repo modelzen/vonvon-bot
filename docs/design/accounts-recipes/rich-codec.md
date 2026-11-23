@@ -17,6 +17,7 @@ Private drafts use the same field model and allow empty public values, task text
 | Change | Caller fields |
 | --- | --- |
 | `setPublicText` | Stable `itemId`, public `field`, and its bounded text `value`. |
+| `addSetup` | Identity-free typed setup `value` and `source` (`accountClaim` or nonempty `releaseItems` parents). The server allocates stable item and origin IDs from the persisted operation seed. The exact request and source are covered by the device source-review digest. |
 | `setRoleText`, `setSetting`, `setRule`, `setTask`, `setSetup` | Stable `itemId` and an identity-free typed `value`. A setting cannot replace the card display. |
 | `setSkill`, `setFile` | Stable `itemId` and the editable name, or file name and text. File membership, use, and entry-file identity remain server-owned. |
 | `setCardReply`, `setCardBlock` | Stable setting or block `itemId` and identity-free values. A block's native `id` also remains server-owned. |

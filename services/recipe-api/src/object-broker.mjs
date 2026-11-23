@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { ApiError, UUID } from './errors.mjs';
+import {credentialField} from './credential-shapes.mjs';
 import { normalizeLogo, verifyNormalizedLogo } from './logo.mjs';
 import { boundedObjectBytes } from './object-storage.mjs';
 import { objectMemberScope, objectPackageScope } from './object-store.mjs';
@@ -15,7 +16,7 @@ function sameBytes(data, size, expected) {
   if (data === null || data.length !== size || hash(data) !== expected) throw new ApiError(409,'object_integrity');
 }
 
-export function createObjectBroker({store,storage,validateCanonicalManifest,authorizeRead}) {
+export function createObjectBroker({store,storage,validateCanonicalManifest,authorizeRead,recordTextChecks=false}) {
   async function checkFinal(kind,bytes) {
     if (kind === 'finalLogo') return verifyNormalizedLogo(bytes);
     if (kind === 'manifest') {
@@ -26,6 +27,7 @@ export function createObjectBroker({store,storage,validateCanonicalManifest,auth
     if (kind !== 'text') throw new ApiError(422,'invalid_object_kind');
     try {
       const text = new TextDecoder('utf-8',{fatal:true}).decode(bytes);
+      if (credentialField({config:{role:text}})) throw new ApiError(422,'credential_detected');
       if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text)) throw new Error();
     } catch { throw new ApiError(422,'invalid_object_text'); }
   }
@@ -78,6 +80,7 @@ export function createObjectBroker({store,storage,validateCanonicalManifest,auth
           const final = await readLane(m,'final');
           await checkFinal(kind,final);
           await call('saw_bytes',...scope,'final',final.length,hash(final));
+          if(recordTextChecks && kind==='text') await call('record_text_check',...scope,Boolean(final.toString('utf8').trim()));
           await removeLane(call,scope,m,'temp');
           return descriptor(await call('ready',...scope));
         } finally { await call('end_ingress',...scope); }

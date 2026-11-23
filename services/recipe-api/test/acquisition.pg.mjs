@@ -103,7 +103,7 @@ export async function checkAcquisitionBudget({sql,request,jwt,origin,v,v2,legacy
       update recipe_private.receipts set request_id='${collision.slice(3)}' where actor='${f.actor}' and subject_id='${f.rawVersion}'`);
     await expect(acquire(f.actor,v.versionId,collision,'00000000000000000000000000000000'),'conflict');
 
-    const definition = sql("select pg_get_functiondef('recipe_api.acquire(uuid,text,text)'::regprocedure)");
+    const definition = sql("select pg_get_functiondef('recipe_private.acquire_core(uuid,text,text)'::regprocedure)");
     const at = milliseconds => sql(definition.replace('wall := clock_timestamp();','wall := '+literal(new Date(milliseconds).toISOString())+'::timestamptz;'));
     const future = Date.UTC(2035,5,1,23,59,59);
     try {
