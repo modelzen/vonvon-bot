@@ -158,7 +158,8 @@ export async function openRichRecipeGenerationMetadata(input: Slot & {expected: 
     if (!files || files.length!==names.length || files.some((file,index)=>file.name!==names[index])) throw new Error('Missing staged recipe files');
     return new Map(files.map(file=>[file.name,Buffer.from(file.data,'base64')]));
   };
-  const metadata = await load(['manifest.json','receipt.json',...(pointer.selection==='effective'?['effective.json']:[])]);
+  const metadata = await load(['manifest.json','receipt.json']);
+  if (pointer.selection==='effective') metadata.set('effective.json',(await load(['effective.json'])).get('effective.json')!);
   const manifest = metadata.get('manifest.json')!;
   const baseline = await verifyRichRecipeRelease(pointer.release,manifest);
   if (!isDeepStrictEqual(JSON.parse(metadata.get('receipt.json')!.toString('utf8')),pointer)) throw new Error('Recipe generation receipt changed');
