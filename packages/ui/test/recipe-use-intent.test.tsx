@@ -71,7 +71,7 @@ async function draw() {
 }
 async function device(id:string,phase:'ready'|'failed'='ready') {await act(async()=>dispatch({type:'devices',value:devicesState({id,phase})}));}
 async function account(id:string) {await act(async()=>{status={...status,accountId:id}; dispatch({type:'account',value:status});});}
-const button=(text:string, scope:ParentNode=document)=>[...scope.querySelectorAll<HTMLButtonElement>('button')].find(el=>el.textContent===text);
+const button=(text:string, scope:ParentNode=document)=>[...scope.querySelectorAll<HTMLButtonElement>('button')].find(el=>(el.getAttribute('aria-label')??el.textContent)===text);
 async function click(text:string,scope:ParentNode=document) {const b=button(text,scope);expect(b,text).toBeDefined();await act(async()=>b!.click());}
 async function inGroup(id:string,label:string) {await click(label,document.querySelector('[data-scope="'+id+'"]')!);}
 const asRead={recipeId, versionId, revision:1,authorId:accountId,installedAt:1,sourceToken:token};

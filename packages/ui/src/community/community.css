@@ -140,14 +140,13 @@
  .community-detail-heading > .community-actions { width:100%; }
 }
 
-.community-page button.ui-button.ui-button--primary,button.ui-button.community-acquire-submit.ui-button--primary { background:var(--color-text); border-color:var(--color-text); color:var(--color-surface); }
-.community-page button.ui-button.ui-button--primary:hover:not(:disabled),button.ui-button.community-acquire-submit.ui-button--primary:hover:not(:disabled) { background:color-mix(in srgb,var(--color-text) 85%,var(--color-surface)); }
 
 .community-markdown h4 { font-size:15px; font-weight:620; line-height:1.5; margin:18px 0 8px; }
 
-.community-page button.ui-button.ui-button--primary:active:not(:disabled),button.ui-button.community-acquire-submit.ui-button--primary:active:not(:disabled) { background:var(--color-text); border-color:var(--color-text); }
 
 .community-studio-heading h2 { margin:0; font-size:28px; font-weight:650; letter-spacing:-.035em; }
 .community-studio-row > .community-recipe-mark { width:43px; height:43px; border-radius:11px; }
 .community-studio-row > div { flex:1; min-width:0; }
 .community-studio-row strong { font-size:16px; font-weight:600; }
+
+.community-page .today-back { width:auto; margin:0; padding:0; }
