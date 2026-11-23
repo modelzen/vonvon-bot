@@ -76,6 +76,11 @@ export function createRecipeWeb(env = process.env) {
     if (await native.handle(req, res, url)) return;
     if (['POST', 'PATCH', 'DELETE'].includes(req.method) && req.headers.origin !== publicOrigin) throw new WebError(403, 'invalid_origin');
     if (req.method === 'GET' && url.pathname === '/auth/session') return json(res, 200, login.status(req));
+    if (req.method === 'POST' && url.pathname === '/auth/continuation') {
+      if (!req.headers['content-type']?.startsWith('application/x-www-form-urlencoded')) throw new WebError(415, 'invalid_body');
+      const form = new URLSearchParams(await body(req, 4096));
+      return json(res, 200, login.consumeContinuation(req, form.get('returnTo'), form.get('continuationNonce')));
+    }
     if (req.method === 'POST' && url.pathname === '/auth/start') {
       if (!req.headers['content-type']?.startsWith('application/x-www-form-urlencoded')) throw new WebError(415, 'invalid_body');
       return login.start(req, res, new URLSearchParams(await body(req, 4096)));

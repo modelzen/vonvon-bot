@@ -132,3 +132,38 @@ test('forged browser origins cannot bypass the login admission budget', () => {
       { status: 429, message: 'busy' });
   } finally { login.stop(); }
 });
+
+test('only allowlisted acquisition flows return a one-use exact-version continuation', async t => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({access_token:'access',refresh_token:'refresh',expires_in:3600});
+  t.after(() => {globalThis.fetch = originalFetch;});
+  const login = createLogin({publicOrigin:'http://localhost:1234',supabaseOrigin:'http://localhost:1235',publishableKey:'test',providerNames:['github']});
+  t.after(() => login.stop());
+  const path = '/recipes/11111111-1111-4111-8111-111111111111/versions/22222222-2222-4222-8222-222222222222';
+  for (const [returnTo, continuation, expected] of [[path,'acquire',path],[path,'',undefined],['https://evil.example','acquire',undefined],['/library','acquire',undefined],[path,'redeem',undefined]]) {
+    const start = response();
+    login.start({headers:{}}, start, new URLSearchParams({provider:'github',returnTo,continuation,continuationNonce:'a'.repeat(64)}));
+    const finish = response();
+    await login.callback({headers:{cookie:cookie(start.headers['Set-Cookie'])}},finish,new URL('http://localhost:1234/auth/callback?code=ok'));
+    assert.equal(finish.headers.Location, returnTo.startsWith('https:') ? '/' : returnTo);
+    const req = {headers:{cookie:cookie(finish.headers['Set-Cookie'][1])}};
+    assert.equal(login.status(req).continuation, expected);
+    assert.equal(login.status(req).continuation, expected);
+    assert.equal(login.status(req).continuationNonce, undefined);
+    req.headers['x-vonvon-session'] = 'stale-session';
+    assert.throws(() => login.consumeContinuation(req, path, 'a'.repeat(64)), {status:409});
+    req.headers['x-vonvon-session'] = login.status(req).displaySession;
+    assert.deepEqual(login.consumeContinuation(req, path, 'b'.repeat(64)), {consumed:false});
+    assert.deepEqual(login.consumeContinuation(req, '/library', 'a'.repeat(64)), {consumed:false});
+    assert.equal(login.status(req).continuation, expected);
+    assert.deepEqual(login.consumeContinuation(req, path, 'a'.repeat(64)), {consumed:Boolean(expected)});
+    assert.deepEqual(login.consumeContinuation(req, path, 'a'.repeat(64)), {consumed:false});
+    assert.equal(login.status(req).continuation, undefined);
+  }
+  const start = response();
+  login.start({headers:{}},start,new URLSearchParams({provider:'github',returnTo:path,continuation:'acquire'}));
+  const failed = response();
+  await login.callback({headers:{cookie:cookie(start.headers['Set-Cookie'])}},failed,new URL('http://localhost:1234/auth/callback?error=access_denied'));
+  assert.equal(failed.headers.Location,path+'?auth=failed');
+  assert.equal(failed.headers['Set-Cookie'].length,1);
+});

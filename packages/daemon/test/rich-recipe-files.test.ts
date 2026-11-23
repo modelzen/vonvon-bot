@@ -6,7 +6,7 @@ import {dirname, join} from 'node:path';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import {canonicalizeRichRecipeContent, digestRichRecipeContent, type RecipeRichContent, type RecipeRichRelease} from '@vonvon/protocol';
 import {readSelectedRecipeFiles} from '../src/recipe/rich-source-files';
-import {openRichRecipeGeneration, stageRichRecipeGeneration} from '../src/recipe/rich-generation';
+import {openRichRecipeGeneration, openRichRecipeGenerationMetadata, stageRichRecipeGeneration} from '../src/recipe/rich-generation';
 
 let scratch: string;
 beforeEach(async () => {scratch = await realpath(await mkdtemp(join(tmpdir(), 'recipe-files-')));});
@@ -132,6 +132,41 @@ it('converges concurrent retries and never adopts a partial or conflicting gener
   const another = randomUUID();await mkdir(join(slot,another));
   await expect(stageRichRecipeGeneration({...x.input,generationId:another})).rejects.toThrow();
   expect(await readdir(join(slot,another))).toEqual([]);
+});
+
+it('binds metadata and selected bytes to the active generation while leaving full execution verification intact',async()=>{
+  const x=await fixture();
+  const staged=await stageRichRecipeGeneration({...x.input,effectiveSkills:{skills:[{...x.skill,fileIds:[x.doc.itemId]}],files:[{...x.doc,text:{kind:'inline',value:'retained entry'}}]}});
+  const input={...x.slot,expected:staged.pointer};
+  const index=await openRichRecipeGenerationMetadata(input);
+  expect(index.skills[0]!.fileIds).toEqual([x.doc.itemId]);
+  expect(index.files.map(file=>file.itemId)).toEqual([x.doc.itemId]);
+  expect(JSON.stringify(index)).not.toContain('retained entry');
+  expect((await index.readFiles([x.doc.itemId])).get(x.doc.itemId)).toBe('retained entry');
+  await expect(index.readFiles([x.ref.itemId])).rejects.toThrow();
+  await expect(openRichRecipeGenerationMetadata({...input,expected:{...staged.pointer,resolvedSha256:'0'.repeat(64)}})).rejects.toThrow();
+  await expect(openRichRecipeGenerationMetadata({...input,expected:{...staged.pointer,selection:'baseline'}})).rejects.toThrow();
+  const other=join(scratch,'another-bot');await mkdir(other);
+  await stageRichRecipeGeneration({...x.input,botDataRoot:other,effectiveSkills:{skills:[{...x.skill,fileIds:[x.doc.itemId]}],files:[{...x.doc,text:{kind:'inline',value:'retained entry'}}]}});
+  await expect(openRichRecipeGenerationMetadata({...input,botDataRoot:other})).rejects.toThrow();
+  const root=join(x.slot.botDataRoot,'recipe-generations',x.slot.installationId,x.slot.generationId);
+  const source=join(root,'parts',x.part.objectId);
+  await chmod(source,0o600);await writeFile(source,'corrupted unselected baseline');await chmod(source,0o400);
+  await expect(openRichRecipeGenerationMetadata(input)).resolves.toBeDefined();
+  await expect(openRichRecipeGeneration(input)).rejects.toThrow();
+  const manifest=join(root,'effective.json');
+  const old=await readFile(manifest);
+  const changed=JSON.parse(old.toString());changed.skills[0].name='forged name';
+  await chmod(manifest,0o600);await writeFile(manifest,canonicalizeRichRecipeContent(changed).canonicalUTF8);await chmod(manifest,0o400);
+  await expect(openRichRecipeGenerationMetadata(input)).rejects.toThrow();
+  await chmod(manifest,0o600);await writeFile(manifest,old);await chmod(manifest,0o400);
+  const effectiveRoot=join(root,'effective');
+  const selected=join(effectiveRoot,(await readdir(effectiveRoot))[0]!);
+  await chmod(selected,0o600);await writeFile(selected,'changed selected bytes');await chmod(selected,0o400);
+  await expect(index.readFiles([x.doc.itemId])).rejects.toThrow();
+  const receipt=join(root,'receipt.json');
+  await chmod(receipt,0o600);await writeFile(receipt,'{}');await chmod(receipt,0o400);
+  await expect(openRichRecipeGenerationMetadata(input)).rejects.toThrow();
 });
 
 it('rejects mismatched release, member digest, length, kind, malformed UTF-8 and incomplete references before staging', async () => {

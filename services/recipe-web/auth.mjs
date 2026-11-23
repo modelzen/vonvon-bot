@@ -74,7 +74,16 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
     stop() { clearInterval(purge); flows.clear(); sessions.clear(); },
     status(req) {
       const session = getSession(req);
-      return { signedIn: Boolean(session), ...(session && { displaySession: session.displaySession }), providers: available };
+      const continuation = session?.continuation;
+      return { ...(continuation && { continuation }), signedIn: Boolean(session), ...(session && { displaySession: session.displaySession }), providers: available };
+    },
+    consumeContinuation(req, path, nonce) {
+      const session = getSession(req);
+      if (!session || req.headers['x-vonvon-session'] !== session.displaySession) throw new WebError(409, 'session_changed');
+      if (!detailPath.test(path) || session.continuation !== path || session.continuationNonce !== nonce) return { consumed: false };
+      delete session.continuation;
+      delete session.continuationNonce;
+      return { consumed: true };
     },
     start(req, res, form) {
       const provider = form.get('provider');
@@ -83,7 +92,10 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
       if (flows.size >= 1024) throw new WebError(429, 'busy');
       const key = random(), verifier = random();
       flows.delete(cookieValue(req, flowName));
-      flows.set(key, { verifier, returnTo: returnPath(form.get('returnTo')), deadline: Date.now() + 10 * minute });
+      const returnTo = returnPath(form.get('returnTo'));
+      const continuationNonce = form.get('continuationNonce');
+      const continuation = form.get('continuation') === 'acquire' && detailPath.test(returnTo) && /^[a-f0-9]{64}$/.test(continuationNonce || '') ? returnTo : undefined;
+      flows.set(key, { verifier, returnTo, continuation, continuationNonce: continuation ? continuationNonce : undefined, deadline: Date.now() + 10 * minute });
       const authorize = new URL('/auth/v1/authorize', supabaseOrigin);
       authorize.searchParams.set('provider', provider);
       authorize.searchParams.set('redirect_to', publicOrigin + '/auth/callback');
@@ -108,7 +120,7 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
           if (flow.deadline > Date.now() && consume() && sessions.size < 4096) {
             sessions.delete(cookieValue(req, sessionName));
             const id = random();
-            sessions.set(id, { ...token, displaySession: random(), deadline: Date.now() + 8 * 60 * minute });
+            sessions.set(id, { ...token, continuation: flow.continuation, continuationNonce: flow.continuationNonce, displaySession: random(), deadline: Date.now() + 8 * 60 * minute });
             cookies.push(cookie(sessionName, id, 8 * 3600));
             location = flow.returnTo;
           }

@@ -46,16 +46,34 @@ const closeDialog = () => {++modalGeneration; releaseModal = undefined; dialog.c
 const dismissDialog = () => {releaseModal?.(); closeDialog();};
 const closeButton = () => button('关闭', dismissDialog, 'secondary');
 const labels = { github: 'GitHub', google: 'Google', apple: 'Apple' };
-function openLogin(next = location.pathname) {
+const continuationStorageKey = 'vv-recipe-login-continuation';
+function storedContinuation() {
+  try { return JSON.parse(window.sessionStorage.getItem(continuationStorageKey)); } catch { return null; }
+}
+function clearContinuation(nonce) {
+  try {
+    if (!nonce || storedContinuation()?.nonce === nonce) window.sessionStorage.removeItem(continuationStorageKey);
+  } catch { /* Login still works when tab storage is unavailable. */ }
+}
+function openLogin(next = location.pathname, continuation) {
+  clearContinuation();
+  let continuationNonce;
+  if (continuation === 'acquire') {
+    try {
+      continuationNonce = Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, '0')).join('');
+      window.sessionStorage.setItem(continuationStorageKey, JSON.stringify({path: next, nonce: continuationNonce}));
+    } catch { continuationNonce = undefined; }
+  }
   const forms = (session?.providers || []).filter(p => Object.hasOwn(labels, p)).map(p => {
     const form = el('form', null, 'provider'); form.method = 'post'; form.action = '/auth/start';
-    for (const [name, value] of Object.entries({ provider: p, returnTo: next })) {
+    for (const [name, value] of Object.entries({ provider: p, returnTo: next, ...(continuationNonce && {continuation, continuationNonce}) })) {
       const field = el('input'); field.type = 'hidden'; field.name = name; field.value = value; form.append(field);
     }
     const submit = el('button', '使用 ' + labels[p] + ' 登录', 'secondary'); form.append(submit); return form;
   });
   if (!forms.length) forms.push(el('p', '暂时无法登录，请稍后再试。', 'muted'));
   modal('登录', ...forms, group('actions', closeButton()));
+  if (continuationNonce) releaseModal = () => clearContinuation(continuationNonce);
 }
 function account() {
   if (!session?.signedIn) return openLogin();
@@ -207,17 +225,35 @@ async function detail(confirmed) {
   const data = confirmed ?? await readDetail(path, detailSession);
   if (!currentDetail()) return;
   if (path.toLowerCase() !== detailUrl(data).toLowerCase()) throw new Error('unconfirmed');
+  async function resumeAcquisition() {
+    const pending = storedContinuation();
+    if (!currentDetail() || session?.continuation !== path || pending?.path !== path || !/^[a-f0-9]{64}$/.test(pending.nonce)) return;
+    const result = await request('/auth/continuation', {method: 'POST', headers: {
+      'Content-Type': 'application/x-www-form-urlencoded', 'X-Vonvon-Session': detailSession,
+    }, body: new URLSearchParams({returnTo: path, continuationNonce: pending.nonce}).toString()});
+    if (!currentDetail()) return;
+    clearContinuation(pending.nonce);
+    delete session.continuation;
+    if (result.consumed && !data.acquired && !data.owned) {
+      const trigger = [...main.querySelectorAll('button')].find(b => b.textContent === '获取配方');
+      if (trigger) await claim(data, trigger, detailSession, currentDetail, true);
+    }
+  }
   const p = data.public; document.title = p.name + ' · Vonvon Bot';
   if (data.format === 'rich-v2') {
     const {renderRecipe} = await import('/viewer.mjs');
     if (!currentDetail()) return;
     renderRecipe(main, data, trigger => claim(data, trigger, detailSession, currentDetail));
+    await resumeAcquisition();
     return;
   }
   const sharing = button('分享链接', ev => copy(ev.currentTarget), 'secondary');
   const actions = group('actions', sharing);
   if (data.acquired || data.owned) actions.append(el('span', data.owned ? '我的作品' : '已获取', 'pill'));
-  else actions.append(button('获取配方', ev => claim(data, ev.currentTarget, detailSession, currentDetail)));
+  else {
+    const acquire = button('获取配方', ev => claim(data, ev.currentTarget, detailSession, currentDetail));
+    actions.append(acquire);
+  }
   const top = group('page-top detail-title', group('intro', el('p', 'Bot 配方', 'eyebrow'), el('h1', p.name), el('p', p.summary, 'muted')), actions);
   const meta = group('metrics panel', metric('版本', p.version), metric('获取方式', p.access === 'coded' ? '需要分享码' : '直接获取'));
   const content = el('section');
@@ -239,6 +275,7 @@ async function detail(confirmed) {
     const b = button(label, () => setTab(key), 'secondary'); b.dataset.tab = key; tabs.append(b);
   }
   main.replaceChildren(link('← 社区', '/', 'back'), top, tabs, content); setTab('intro');
+  await resumeAcquisition();
 }
 
 function newAcquisitionKey() {
@@ -249,24 +286,25 @@ function newAcquisitionKey() {
   const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
   return `a2.${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
 }
-async function claim(recipe, trigger, sessionId, currentDetail) {
+async function claim(recipe, trigger, sessionId, currentDetail, resumed = false) {
   if (!currentDetail()) return;
-  if (!session?.signedIn) return openLogin();
+  if (!session?.signedIn) return openLogin(detailUrl(recipe), 'acquire');
   const coded = recipe.public.access === 'coded';
+  const confirmation = coded || resumed;
   const logical = sessionId + ':' + recipe.versionId;
   const intent = claimIntents.get(logical) ?? {input: ''};
   claimIntents.set(logical, intent);
   const form = el('form'), field = el('input'), error = el('p', null, 'error');
   const confirm = el('button', '获取配方', 'button');
   field.value = intent.input;
-  if (coded) {
+  if (confirmation) {
     field.required = true; field.maxLength = 128; field.autocomplete = 'off'; field.placeholder = '输入分享码'; field.setAttribute('aria-label', '分享码');
-    form.append(field, error, group('actions', button('取消', () => {if (current()) dismissDialog();}, 'secondary'), confirm));
-    modal('输入分享码', form);
+    form.append(...(coded ? [field] : [el('p', '确认获取这个版本的配方？')]), error, group('actions', button('取消', () => {if (current()) dismissDialog();}, 'secondary'), confirm));
+    modal(coded ? '输入分享码' : '确认获取配方', form);
   }
   const modalId = modalGeneration;
-  const current = () => currentDetail() && (!coded || modalId === modalGeneration);
-  if (coded) {
+  const current = () => currentDetail() && (!confirmation || modalId === modalGeneration);
+  if (confirmation) {
     releaseModal = () => {if (currentDetail()) trigger.disabled = false;};
     field.addEventListener('input', () => {if (current()) intent.input = field.value;});
   }
@@ -276,7 +314,7 @@ async function claim(recipe, trigger, sessionId, currentDetail) {
     if (next.versionId !== recipe.versionId || next.recipeId !== recipe.recipeId) throw new Error('unconfirmed');
     if (next.owned || next.acquired) {
       claimIntents.delete(logical);
-      if (coded) closeDialog();
+      if (confirmation) closeDialog();
       message('已获取配方'); await detail(next);
     }
     return next;
@@ -309,25 +347,26 @@ async function claim(recipe, trigger, sessionId, currentDetail) {
           if (!current() || !next || next.owned || next.acquired) return;
           delete intent.submitted;
           const msg = e.code === 'operation_clock_skew' ? '已确认尚未获取。请校准设备时间后，再次点击获取，重新提交。' : '已确认尚未获取。请再次点击获取，重新提交。';
-          if (coded) error.textContent = msg; else message(msg);
-        } catch {if (current()) {if (coded) error.textContent = '获取结果暂未确认，请保留输入并重试。'; else message('获取结果暂未确认，请重试。');}}
+          if (confirmation) error.textContent = msg; else message(msg);
+        } catch {if (current()) {if (confirmation) error.textContent = '获取结果暂未确认，请保留输入并重试。'; else message('获取结果暂未确认，请重试。');}}
         return;
       }
       if (e.code === 'session_changed') {location.reload(); return;}
-      if (e.status === 401) {session.signedIn = false; accountButton.textContent = '登录'; openLogin(); return;}
+      if (e.status === 401) {session.signedIn = false; accountButton.textContent = '登录'; openLogin(detailUrl(recipe), 'acquire'); return;}
       if (e.code === 'invalid_code') delete intent.submitted;
       const msg = e.status === 429 ? '操作过于频繁，请保留输入。' + (e.retryAfter ? ` 请在 ${e.retryAfter} 秒后重试。` : '') :
         e.code === 'invalid_code' ? '这个分享码无法兑换此版本，请核对后重试。' : '获取结果暂未确认，请重试同一操作。';
-      if (coded) error.textContent = msg; else message(msg);
+      if (confirmation) error.textContent = msg; else message(msg);
     } finally {if (current()) confirm.disabled = trigger.disabled = false;}
   }
-  if (coded) form.addEventListener('submit', ev => {ev.preventDefault(); if (!confirm.disabled && field.value.trim()) submit();});
+  if (confirmation) form.addEventListener('submit', ev => {ev.preventDefault(); if (!confirm.disabled && (!coded || field.value.trim())) submit();});
   else await submit();
 }
 
 accountButton.addEventListener('click', account);
 dialog.addEventListener('cancel', ev => {ev.preventDefault(); dismissDialog();});
 try {
+  if (params.has('auth')) clearContinuation();
   session = await request('/auth/session');
   accountButton.hidden = false; accountButton.textContent = session.signedIn ? '账号' : '登录';
   if (location.pathname === '/') await home();
