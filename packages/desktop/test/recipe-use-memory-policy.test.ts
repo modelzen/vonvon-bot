@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { z } from 'zod';
-import { createClient, type ClientConnection } from '../../client/dist/client.js';
+import { createClient, type ClientConnection, type RpcError } from '../../client/dist/client.js';
 import {
   agentIdSchema,
   canonicalizeRichRecipeContent,
@@ -32,7 +32,8 @@ const legacyRequest = z.object({
   payload: z.discriminatedUnion('type', richRuntimeRequests),
 }).strict();
 
-function fixture(restore?: 'unissued' | 'issuing' | 'authorized' | 'applied' | 'appliedPending') {
+function fixture(restore?: 'unissued' | 'issuing' | 'authorized' | 'applied' | 'appliedPending',
+  writeError?: Pick<RpcError, 'code' | 'message' | 'details'>) {
   const folder = mkdtempSync(join(tmpdir(), 'recipe-memory-compat-'));
   folders.push(folder);
   const accountId = randomUUID(), recipeId = randomUUID(), versionId = randomUUID(),
@@ -96,6 +97,11 @@ function fixture(restore?: 'unissued' | 'issuing' | 'authorized' | 'applied' | '
           revision: 1, authorId: accountId, installedAt: 1, sourceToken: 'c'.repeat(64) } });
         return;
       }
+      if (writeError && frame.payload.type === 'richPrepare') {
+        steps.push('native:richPrepare');
+        receive(JSON.stringify({ type: 'error', id: frame.id, ...writeError }));
+        return;
+      }
       const parsed = legacyRequest.safeParse(JSON.parse(data));
       if (!parsed.success) {
         steps.push('rejected:' + frame.payload.type);
@@ -138,7 +144,6 @@ function fixture(restore?: 'unissued' | 'issuing' | 'authorized' | 'applied' | '
   if (restore === 'applied') journal.save({ ...saved, stage: 'done', outcome: 'applied' });
   else if (restore) journal.save({ ...saved, stage: 'operation',
     operation: { id: operationId, sha: hash, commitment: nonce }, richIntent: intent, action: 'confirm' });
-  // A fresh controller and journal instance reproduce a Main restart, without a new prepare.
   const main = new RecipeUseController(account, viewId => ({ client, viewId, pairedKey: pk, check() {} }),
     new RecipeJournal(join(folder, 'journal.json')));
   return {
@@ -151,11 +156,27 @@ function fixture(restore?: 'unissued' | 'issuing' | 'authorized' | 'applied' | '
 
 it('blocks zero-conflict historical memory on an old target before Main can expose confirmation', async () => {
   const f = fixture();
-  await expect(f.begin()).rejects.toThrow('更新');
+  await expect(f.begin()).rejects.toThrow('目标设备未接受本次排除配方记忆的安装请求，请先更新该设备，再重新打开配方。');
   expect(f.steps).toContain('rejected:richPrepare');
   expect(f.steps).not.toContain('native:richPrepare');
   expect(f.state.applied).toEqual([]);
   expect(f.sent.filter(frame => legacyRequest.safeParse(frame).success)).toEqual([]);
+  await f.client.close();
+});
+
+it.each([
+  { code: 'invalid_request', message: '配方审阅已过期。' },
+  { code: 'invalid_request', message: '请求参数无效。', details: { reason: 'stale_review' } },
+  { code: 'invalid_request', message: '请求参数无效。', details: {} },
+  { code: 'operation_failed', message: '请求参数无效。' },
+])('preserves an admitted write error $code / $message / $details without retrying', async writeError => {
+  const f = fixture(undefined, writeError);
+  await expect(f.begin()).rejects.toMatchObject({ name: 'RpcError', ...writeError });
+  expect(f.steps).toContain('native:richPrepare');
+  expect(f.sent.filter(frame => requestSchema.parse(frame).method === 'recipeInstall')).toEqual([
+    expect.objectContaining({ payload: expect.objectContaining({ type: 'richPrepare', memoryPolicy: 'exclude' }) }),
+  ]);
+  expect(f.state.applied).toEqual([]);
   await f.client.close();
 });
 

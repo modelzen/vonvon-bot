@@ -95,8 +95,9 @@ export class RecipeUseController {
       return reply;
     } catch (error) {
       this.check(h);
-      if ('memoryPolicy' in request && request.memoryPolicy === 'exclude' && error instanceof RpcError && error.code === 'invalid_request')
-        throw new RecipeUseError('目标设备尚不支持排除配方记忆，请先更新该设备，再重新打开配方。');
+      if ('memoryPolicy' in request && request.memoryPolicy === 'exclude' && error instanceof RpcError &&
+          error.code === 'invalid_request' && error.message === '请求参数无效。' && error.details === undefined)
+        throw new RecipeUseError('目标设备未接受本次排除配方记忆的安装请求，请先更新该设备，再重新打开配方。');
       throw error;
     }
   }
