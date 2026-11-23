@@ -685,6 +685,10 @@ covers(feishu.command('groups'), 'command.listJoinedGroups').description('List j
   .action(async (options: Json & { bot?: string; cursor?: string }) => {
     await (await import('./commands/feishu')).runFeishuGroups(options, io(options));
   });
+covers(feishu.command('group-identity <groupId>'), 'command.readGroupIdentity').description('Read one exact group name as the selected Bot, without announcement or member lists').option(...BOT).option(...JSON_FLAG)
+  .action(async (groupId: string, options: Json & {bot?: string}) => {
+    await (await import('./commands/feishu')).runFeishuGroupIdentity(groupId, options, io(options));
+  });
 type FeishuOptions = Json & { bot?: string; cursor?: string; limit?: number; name?: string };
 const FEISHU_CURSOR = ['--cursor <cursor>', 'Next page cursor'] as const;
 const FEISHU_LIMIT = ['--limit <n>', 'How many at most', Number] as const;

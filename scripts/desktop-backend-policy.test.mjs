@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
+import { Arch } from 'builder-util';
 import afterPack, { assertNoBundledClaude } from './desktop-backend-policy.mjs';
 import { stageDependencies } from './stage-daemon.mjs';
 
@@ -28,7 +29,7 @@ test('compact desktop staging excludes SDK/native dev dependencies even when pre
   await put(join(source, `node_modules/${sdk}-darwin-arm64/claude`), 'native fixture');
   await stageDependencies(source, daemon, { compact: true });
   await assertNoBundledClaude(daemon);
-  await afterPack({ appOutDir: root, electronPlatformName: 'darwin', packager: { appInfo: { productFilename: 'App' } } });
+  await afterPack({ appOutDir: root, electronPlatformName: 'darwin', arch: Arch.arm64, packager: { appInfo: { productFilename: 'App' } } });
 });
 
 for (const metadata of [
@@ -47,7 +48,7 @@ for (const name of [sdk, `${sdk}-darwin-arm64`, '@anthropic-ai/claude-code', '@a
   test(`afterPack rejects an undeclared nested Claude package: ${name}`, async t => {
     const { root, daemon, put } = await fixture(t);
     await put(join(daemon, 'node_modules/parent/node_modules', name, 'package.json'));
-    await assert.rejects(afterPack({ appOutDir: root, electronPlatformName: 'darwin', packager: { appInfo: { productFilename: 'App' } } }), /Claude must be user-installed/);
+    await assert.rejects(afterPack({ appOutDir: root, electronPlatformName: 'darwin', arch: Arch.arm64, packager: { appInfo: { productFilename: 'App' } } }), /Claude must be user-installed/);
   });
 }
 

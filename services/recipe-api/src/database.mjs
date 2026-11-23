@@ -16,7 +16,7 @@ const calls = Object.freeze({
   publishDraft: 'recipe_api.publish_draft($1::uuid,$2::int,$3::uuid)',
   library: 'recipe_api.library($1::uuid)',
   publications: 'recipe_api.publications()',
-  acquire: 'recipe_api.acquire($1::uuid,$2::text,$3::uuid)',
+  acquire: 'recipe_api.acquire($1::uuid,$2::text,$3::text)',
   issueCodes: 'recipe_api.issue_codes($1::uuid,$2::int,$3::uuid)',
   listCodes: 'recipe_api.list_codes($1::uuid,$2::uuid)',
   disableCode: 'recipe_api.disable_code($1::uuid)',
@@ -29,6 +29,7 @@ const calls = Object.freeze({
   redeemOperation: 'recipe_api.possess_operation($1::uuid,$2::bytea,$3::bytea,$4::bytea)',
   completeOperation: 'recipe_api.possess_operation($1::uuid,$2::bytea,$3::bytea,$4::bytea,$5::text)',
   registerAuthoring: 'recipe_api.register_authoring($1::uuid,$2::jsonb)',
+  recoverAuthoring: 'recipe_api.recover_authoring($1::uuid)',
   getAuthoring: 'recipe_api.get_authoring($1::uuid)',
   cancelAuthoring: 'recipe_api.cancel_authoring($1::uuid)',
   authorizeAuthoring: 'recipe_api.authorize_authoring($1::uuid,$2::jsonb,$3::bytea,$4::bytea,$5::bytea,$6::bigint)',
@@ -42,7 +43,7 @@ const businessErrors = new Map(Object.entries({
   conflict: 409, quota_exceeded: 422, rate_limited: 429, invalid_code: 422,
   operation_pending_limit: 429, operation_expired: 410, operation_clock_skew: 422,
   operation_cancelled: 409, invalid_operation_proof: 403,
-  proposal_active: 409,
+  proposal_active: 409, acquire_rate_limited: 429, request_upgrade_required: 409, integrity_error: 503,
 }));
 
 function makePool(connectionString) {
@@ -146,7 +147,9 @@ export async function openDatabase(url, codeKey, issuer) {
       if (err.code === 'P0001' && businessErrors.has(err.message)) {
         // SQL publishing/issuing quotas use UTC calendar days.
         const dayMs = 86_400_000;
-        const retryAfter = err.message === 'rate_limited'
+        const retryAfter = err.message === 'acquire_rate_limited'
+          ? (/^[1-9][0-9]{0,12}$/.test(err.detail ?? '') && Number.isSafeInteger(Number(err.detail)) ? Number(err.detail) : undefined)
+          : err.message === 'rate_limited'
           ? Math.ceil((dayMs - Date.now() % dayMs) / 1000) : err.message === 'operation_pending_limit' ? 300 : undefined;
         throw new ApiError(businessErrors.get(err.message), err.message, retryAfter);
       }
