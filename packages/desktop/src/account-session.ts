@@ -39,7 +39,7 @@ export interface NativeAccount {
   logout(): Promise<AccountStatus>;
   recipeLink?(recipeId: string, versionId: string): string;
   publicRequest?(path: string): Promise<Response>;
-  request(accountId: string, path: string, init?: RequestInit, beforeSend?: () => void): Promise<Response>;
+  request(accountId: string, path: string, init?: RequestInit, beforeSend?: () => void | Promise<void>): Promise<Response>;
   dispose(): Promise<void>;
 }
 
@@ -294,7 +294,9 @@ export function createAccountSession(options: {
       const headers = new Headers(init.headers);
       headers.set('Authorization', 'Bearer ' + access.token);
       const signals = init.signal ? AbortSignal.any([signal, init.signal]) : signal;
-      beforeSend?.();
+      await beforeSend?.();
+      signal.throwIfAborted();signals.throwIfAborted();
+      if(disposed||!credential||credential.accountId!==accountId||view.kind!=='signedIn'||view.accountId!==accountId)throw new AccountFault('invalid');
       // Member uploads also wait for normalization and private storage.
       const timeout = init.method === 'PUT' && privateObjectMember.test(path) ? 20_000 : undefined;
       const response = await transport(url, { ...init, headers, credentials: 'omit', redirect: 'error', cache: 'no-store', signal: requestSignal(signals, timeout) });

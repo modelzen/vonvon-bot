@@ -178,7 +178,7 @@ it('shows finite ambiguous sources without inferring a Bot from the active devic
   expect(document.querySelector('.authoring-source-list')?.textContent).toContain('家里');
   expect(document.querySelector('.authoring-source-list')?.textContent).not.toContain(B);
   await act(async () => document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());
-  expect(calls.find(request => request.type === 'open')).toMatchObject({viewId: B, botId: 'cli_author_b'});
+  expect(calls.some(request => request.type === 'open')).toBe(false);
   expect(calls.filter(request => request.type === 'creatorContinue').at(-1)).toMatchObject({entry: {kind: 'draft', draftId, revision: 1}, source: {viewId: B, botId: 'cli_author_b'}});
 });
 

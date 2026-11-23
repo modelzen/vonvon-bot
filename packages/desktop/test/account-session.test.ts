@@ -613,3 +613,26 @@ it('routes only canonical v1/v2 paths to the configured API and keeps public mem
   await a.logout();
   await expect(a.request(business,'/v2/authoring/'+version+'/authorize')).rejects.toThrow();
 });
+
+it('awaits final asynchronous creator approval after token refresh and never dispatches a changed card',async()=>{
+  const f=fixture(),account=f.create();await account.login();await waitFor(()=>expect(f.ack).toHaveBeenCalledOnce());
+  const refreshGate=deferred<Response>(),originalTime=Date.now();
+  f.rotate.mockImplementationOnce(()=>refreshGate.promise);
+  vi.spyOn(Date,'now').mockReturnValue(originalTime+3600_000);
+  let approved=true;
+  const creatorCheck=vi.fn(async()=>{await Promise.resolve();if(!approved)throw Error('creator approval changed');});
+  const operation=account.request(business,'/v1/creator-guard-test',{method:'POST',body:'{}'},creatorCheck);
+  const rejected=expect(operation).rejects.toThrow('creator approval changed');
+  await waitFor(()=>expect(f.rotate).toHaveBeenCalledOnce());expect(creatorCheck).not.toHaveBeenCalled();
+  approved=false;refreshGate.resolve(Response.json(sessionReply(true)));await rejected;
+  expect(creatorCheck).toHaveBeenCalledOnce();
+  expect(f.transport.mock.calls.filter(([url])=>new URL(String(url)).pathname==='/v1/creator-guard-test')).toEqual([]);
+});
+
+it('rechecks account ownership after an asynchronous final authorization callback',async()=>{
+  const f=fixture(),account=f.create();await account.login();await waitFor(()=>expect(f.ack).toHaveBeenCalledOnce());
+  const gate=deferred<void>(),entered=deferred<void>();
+  const operation=account.request(business,'/v1/creator-account-test',{method:'POST',body:'{}'},async()=>{entered.resolve();await gate.promise;});
+  const rejected=expect(operation).rejects.toThrow();await entered.promise;await account.logout();gate.resolve();await rejected;
+  expect(f.transport.mock.calls.filter(([url])=>new URL(String(url)).pathname==='/v1/creator-account-test')).toEqual([]);
+});

@@ -17,6 +17,7 @@ export type HandoffSelection = {
   lease:string;choices:Choice[];count:number;
 };
 export interface PrivateHandoff {
+  creator?:true;
   retryId:string;groupId:AuthoringHandoff['groupId'];groupName:string;identity:string;account:string;scope:string;binding:string;recipient:Recipient;
   session:string;expiresAt:number;sourceVersionId?:string;inherited?:Extract<RecipeAuthoringRequest,{type:'beginHandoff'}>['inherited'];edit?:Pick<Edit,'draftId'|'baseRevision'|'canonical'|'source'>;
   draftId?:string;baseRevision?:number;ref:string;generation:number;cardId?:string;messageId?:string;sendUuid:string;sentAt?:number;cardDirty?:true;

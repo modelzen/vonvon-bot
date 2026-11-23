@@ -97,6 +97,7 @@ function ContinueFlow({shell, accountId, entry, title, onBack, onWorkspace, view
   const association = useRef<Session | undefined>(undefined);
   const selectedSource = useRef<SourceChoice | undefined>(undefined);
   async function continueInChat(source?: SourceChoice) {
+    selectedSource.current = source;
     const reply = await shell.request({type: 'creatorContinue', accountId, entry, ...(source && entry.kind !== 'source' && {source})});
     if (!active.current) return;
     if (reply.kind !== 'creatorContinuing' && reply.kind !== 'creatorSourceRequired') throw new Error('未能确认私聊创作来源，请重试。');
@@ -121,8 +122,7 @@ function ContinueFlow({shell, accountId, entry, title, onBack, onWorkspace, view
   }
   async function start() {
     if (entry.kind === 'source') await associate({viewId: entry.viewId, botId: entry.botId});
-    else if (selectedSource.current) await associate(selectedSource.current);
-    else await continueInChat();
+    else await continueInChat(selectedSource.current);
   }
   async function run(action: () => Promise<void>) {
     if (locked.current) return;
@@ -184,7 +184,7 @@ function ContinueFlow({shell, accountId, entry, title, onBack, onWorkspace, view
       {flow.options.length ? <div className="authoring-source-list">{flow.options.map(option => <Button
         key={JSON.stringify([option.viewId, option.botId])}
         disabled={busy}
-        onClick={() => void run(() => associate({viewId: option.viewId, botId: option.botId}))}
+        onClick={() => void run(() => continueInChat({viewId: option.viewId, botId: option.botId}))}
       >{option.botName}<small>{devices?.devices.find(device => device.id === option.viewId)?.name ?? (option.viewId === 'local' ? '这台电脑' : '未登记的来源设备')}</small></Button>)}</div>
         : <p>没有可用来源。请恢复原设备和 Bot 的连接后重试。</p>}
     </>}

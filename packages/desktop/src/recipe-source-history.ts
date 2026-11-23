@@ -90,6 +90,14 @@ export class SourceHistory {
     if (saved?.group_id !== groupId) throw invalidAuthoring();
   }
 
+  operations(target:HistoryTarget){
+    return this.db().prepare(`
+      select operation, source, group_id from source_intents left join source_groups using(account, operation)
+      where account = ? and target = ? order by operation desc limit 8192
+    `).all(target.accountId,targetKey(target)).map(row=>({operationId:z.string().uuid().parse(row.operation),identity:z.string().regex(/^[a-f0-9]{64}$/).parse(row.source),
+      groupId:row.group_id===null?undefined:groupIdSchema.parse(row.group_id)}));
+  }
+
   page(target: HistoryTarget, source: string, before?: string) {
     if (before && this.source(target, before) !== source) throw invalidAuthoring();
     const rows = this.db().prepare(
