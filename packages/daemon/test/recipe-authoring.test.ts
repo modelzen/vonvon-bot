@@ -3266,7 +3266,7 @@ it('NATIVE PREVIEW sends the physical card through one durable readonly job into
     const finished=await f.ledger.run(db=>Object.values(db.links).find(l=>l.binding===f.association.binding)!.creator!.jobs[job.id]);
     expect(finished).toMatchObject({state:'finished',answerDigest:expect.any(String)});expect(finished?.result).toBeUndefined();
     f.navigation.acknowledge(f.navigation.pending()[0]!.navigationId);
-    await tap(f.choice);const [next]=await creatorJobs();expect(next!.id).not.toBe(job.id);
+    await tap(privateChoice('在 App 中预览'));const [next]=await creatorJobs();expect(next!.id).not.toBe(job.id);
     await f.executor.run(f.context,next!);expect(f.navigation.pending()).toHaveLength(1);
   }finally{f.history.history.close();}
 });
@@ -3359,13 +3359,13 @@ it.each(['role','rich','rich-paired'] as const)('APP PREPARE INTEGRATION drives 
   const fileParts=Array.from({length:3},(_,i)=>({itemId:randomUUID(),objectId:randomUUID(),bytes:Buffer.from('模拟文件正文 '+i)}));
   const logoPart={objectId:randomUUID(),bytes:Buffer.alloc(7224,4)};
   const texts=Object.fromEntries(fileParts.map(part=>[part.objectId,part.bytes.toString()]));
-  const objects=new Map([...fileParts,logoPart].map(part=>[part.objectId,part.bytes]));
+  const objects=new Map<string,Buffer>([...fileParts,logoPart].map(part=>[part.objectId,part.bytes]));
   const document=canonicalizeRichRecipeContent({format:'rich-v2',schemaVersion:2,public:{name:field('原生发布准备联调'),summary:field(''),overview:field('完整内容'),version:field('2')},
     role:{itemId:randomUUID(),originId:randomUUID(),text:{kind:'inline',value:'完整群角色'}},
     settings:[],rules:[],skills:[{itemId:randomUUID(),originId:randomUUID(),name:'模拟技能',entryFileId:fileParts[0]!.itemId,fileIds:fileParts.map(part=>part.itemId)}],files:fileParts.map((part,i)=>({itemId:part.itemId,originId:randomUUID(),name:i===0?'SKILL.md':'reference-'+i+'.md',use:i===0?'skillDescription':'reference',text:{kind:'part',objectId:part.objectId}})),
     tasks:[],memories:[],setup:[],parts:[...fileParts.map(part=>({objectId:part.objectId,kind:'text',sha256:digest(part.bytes),bytes:part.bytes.length,mediaType:'text/plain;charset=utf-8'})),
       {objectId:logoPart.objectId,kind:'finalLogo',sha256:digest(logoPart.bytes),bytes:logoPart.bytes.length,mediaType:'image/webp'}],finalLogo:{itemId:randomUUID(),originId:randomUUID(),objectId:logoPart.objectId}});
-  const manifest={objectId:randomUUID(),kind:'manifest',sha256:digest(document.canonicalUTF8),bytes:document.canonicalUTF8.length,mediaType:'application/json'};
+  const manifest={objectId:randomUUID(),kind:'manifest',sha256:digest(Buffer.from(document.canonicalUTF8)),bytes:document.canonicalUTF8.length,mediaType:'application/json'};
   const publicFields={name:'原生发布准备联调',summary:'',overview:'完整内容',version:'2',access:'direct' as const};
   const draft=format!=='role'?{draftId:work.draftId,recipeId:null,revision:2,public:publicFields,format:'rich-v2' as const,sourceIntentId:work.source!.preparationId,
     rich:{content:document.content,texts,canonical:Buffer.from(document.canonicalUTF8).toString('base64url')},logo:'data:image/webp;base64,'+logoPart.bytes.toString('base64')}:
@@ -3452,7 +3452,7 @@ it('NATIVE PREVIEW retries only the acknowledgement, ignores an SDK redelivery, 
     expect(f.requests).toHaveLength(reads);
     await click('first-click');expect(await creatorJobs()).toEqual([]);
     expect(f.navigation.pending()).toEqual([]);expect(f.opened).toHaveBeenCalledOnce();
-    await click('next-click');
+    await tap(privateChoice('在 App 中预览'),owner,chatId,tenant,'next-click');
     const [next]=await creatorJobs();expect(next!.id).not.toBe(job!.id);
     await f.executor.run(f.context,next!);expect(f.opened).toHaveBeenCalledTimes(2);
   }finally{f.history.history.close();}
@@ -3518,4 +3518,126 @@ it('NATIVE PREVIEW keeps an existing publication readable for an App without the
     expect(rendered).toContain('open_url');expect(rendered).toContain('确认发布 2');expect(rendered).toContain('继续修改内容');
     await tap(f.choice);expect(await creatorJobs()).toEqual([]);
   }finally{f.history.history.close();}
+});
+
+async function nativePreviewSdkReceiver(){
+  const {createBridgeChannel}=await import('../src/bot/bridge-channel');
+  const receive=createBridgeChannel(cfg.accounts.app!,'synthetic');
+  const register=Reflect.get(receive,'registerDispatcherHandlers');
+  register.call(receive);
+  const dispatcher=Reflect.get(receive,'dispatcher');
+  const seen:string[]=[];
+  receive.on('cardAction',async evt=>{seen.push(String(Reflect.get(evt.raw!,'event_id')));await dispatchAuthoring(evt);});
+  return {seen,close:()=>receive.disconnect(),click:(button:ReturnType<typeof privateChoice>,id:string)=>dispatcher.invoke({schema:'2.0',header:{event_type:'card.action.trigger',event_id:id},
+    event:{operator:{open_id:owner,tenant_key:tenant},context:{open_message_id:button.messageId,open_chat_id:chatId},action:{tag:'button',value:button.value}}},{needCheck:false})};
+}
+
+it('NATIVE SDK PREVIEW reopens the same physical offer after completion and still drops a redelivery',async()=>{
+  const f=await nativePreviewFixture(),sdk=await nativePreviewSdkReceiver();
+  try{
+    await sdk.click(f.choice,'sdk-first');
+    const [job]=await creatorJobs();expect(job?.task).toMatchObject({kind:'read',read:{kind:'openPreview'}});
+    await f.executor.run(f.context,job!);
+    f.navigation.acknowledge(f.navigation.pending()[0]!.navigationId);
+    await sdk.click(f.choice,'sdk-first');expect(await creatorJobs()).toEqual([]);
+    await sdk.click(privateChoice('在 App 中预览'),'sdk-deliberate-second');
+    expect(sdk.seen).toEqual(['sdk-first','sdk-deliberate-second']);
+    const [next]=await creatorJobs();expect(next?.id).toBeDefined();expect(next?.id).not.toBe(job!.id);
+    await f.executor.run(f.context,next!);
+    expect(f.opened).toHaveBeenCalledTimes(2);expect(messages.size).toBe(f.messageCount);
+    expect(f.requests.every(req=>req.method==='GET')).toBe(true);expect(f.published).not.toHaveBeenCalled();
+  }finally{await sdk.close();f.history.history.close();}
+});
+
+const nativePreviewCarrier=(f:Awaited<ReturnType<typeof nativePreviewFixture>>)=>f.ledger.run(db=>{
+  const s=Object.values(db.links).find(l=>l.binding===f.association.binding)!.creator!,owner=s.jobs[f.offer.job.id]!;
+  return {owner,card:s.cards[owner.offerRef!]!};
+});
+
+it('NATIVE SDK PREVIEW refreshes an offline physical card on reconnection without transferring confirmation',async()=>{
+  const f=await nativePreviewFixture(),sdk=await nativePreviewSdkReceiver();
+  try{
+    const before=await nativePreviewCarrier(f),oldApprove=privateChoice('确认发布');
+    service.disconnect(peer.id);textSend.mockClear();
+    await sdk.click(f.choice,'sdk-offline');
+    expect(JSON.stringify(textSend.mock.calls)).toContain('请先打开 App');
+    expect((await nativePreviewCarrier(f)).card).toMatchObject({session:before.card.session,generation:before.card.generation+1,needsUpdate:true,
+      previewRefresh:{owner:f.offer.job.id,cardId:before.card.cardId,messageId:before.card.messageId}});
+    await orch.shutdown();restart();orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});
+    await attachCreator();expect(session).not.toBe(before.card.session);
+    expect(await creatorJobs()).toEqual([]);
+    const ready=await nativePreviewCarrier(f);
+    expect(ready.owner).toEqual(before.owner);expect(ready.card.session).toBe(before.card.session);
+    expect(ready.card.previewRefresh).toBeUndefined();expect(ready.card.needsUpdate).toBeUndefined();
+    await sdk.click(f.choice,'sdk-offline');expect(sdk.seen).toEqual(['sdk-offline']);
+    await sdk.click(privateChoice('在 App 中预览',f.choice.messageId),'sdk-reconnected');
+    const [job]=await creatorJobs();expect(job).toBeDefined();
+    await f.executor.run({...f.context,session},job!);expect(f.opened).toHaveBeenCalledOnce();
+    await sdk.click(oldApprove,'sdk-old-approve');
+    await sdk.click(privateChoice('确认发布',f.choice.messageId),'sdk-new-approve');
+    expect(await rpc('creatorCheck',{id:f.offer.job.id})).toMatchObject({mode:'preview',job:before.owner.job});
+    expect(messages.size).toBe(f.messageCount);expect(f.requests.every(r=>r.method==='GET')).toBe(true);expect(f.published).not.toHaveBeenCalled();
+  }finally{await sdk.close();f.history.history.close();}
+});
+
+it.each(['drop','loseReply','conflict'] as const)('NATIVE SDK PREVIEW persists a %s refresh and retries from another linked peer without moving the carrier',async fault=>{
+  const f=await nativePreviewFixture(),sdk=await nativePreviewSdkReceiver();
+  try{
+    const before=await nativePreviewCarrier(f);
+    await sdk.click(f.choice,'sdk-refresh-first');const [job]=await creatorJobs();
+    updateFault=fault;
+    await expect(f.executor.run(f.context,job!)).rejects.toThrow('卡片等待更新');
+    const pending=await nativePreviewCarrier(f);
+    expect(pending.card).toMatchObject({generation:before.card.generation+1,needsUpdate:true,session:before.card.session,
+      previewRefresh:{owner:f.offer.job.id,cardId:before.card.cardId,messageId:before.card.messageId}});
+    expect(pending.owner).toEqual(before.owner);
+    service.disconnect(peer.id);await orch.shutdown();restart();orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});await attachCreator();
+    const updates=puts().length;
+    await creatorJobs();
+    expect((await nativePreviewCarrier(f)).card.needsUpdate).toBe(fault==='loseReply'?undefined:true);
+    updateFault=undefined;await creatorJobs();expect(puts().length).toBeGreaterThan(updates);
+    const refreshed=await nativePreviewCarrier(f);
+    expect(refreshed.card).toMatchObject({generation:before.card.generation+1,cardId:before.card.cardId,messageId:before.card.messageId,session:before.card.session});
+    expect(refreshed.card.needsUpdate).toBeUndefined();expect(refreshed.card.previewRefresh).toBeUndefined();expect(refreshed.owner).toEqual(before.owner);
+    await sdk.click(f.choice,'sdk-refresh-first');expect(sdk.seen).toEqual(['sdk-refresh-first']);
+    await sdk.click(privateChoice('在 App 中预览',f.choice.messageId),'sdk-refresh-again');
+    const [next]=await creatorJobs();expect(next?.id).toBeDefined();expect(next?.id).not.toBe(job!.id);
+    await f.executor.run({...f.context,session},next!);expect(f.opened).toHaveBeenCalledTimes(2);
+    expect(messages.size).toBe(f.messageCount);expect(f.requests.every(r=>r.method==='GET')).toBe(true);expect(f.published).not.toHaveBeenCalled();
+  }finally{await sdk.close();f.history.history.close();}
+});
+
+it('NATIVE SDK PREVIEW rejects old-generation approval and records a fresh approval exactly once',async()=>{
+  const f=await nativePreviewFixture(),sdk=await nativePreviewSdkReceiver();
+  try{
+    const before=await nativePreviewCarrier(f),oldApprove=privateChoice('确认发布');
+    await sdk.click(f.choice,'sdk-before-approve');const [job]=await creatorJobs();await f.executor.run(f.context,job!);
+    await sdk.click(oldApprove,'sdk-stale-approval');expect((await nativePreviewCarrier(f)).owner).toEqual(before.owner);
+    const freshApprove=privateChoice('确认发布',f.choice.messageId);
+    await sdk.click(freshApprove,'sdk-approve');
+    const approved=(await nativePreviewCarrier(f)).owner;
+    expect(approved.state).toBe('active');expect(approved.approvalGeneration).toBe(before.card.generation+1);
+    expect(approved.job).toMatchObject({id:before.owner.job.id,task:{command:before.owner.job.task.kind==='command'?before.owner.job.task.command:undefined,confirmation:{kind:'feishu-card'}}});
+    await sdk.click(freshApprove,'sdk-approve');await sdk.click(freshApprove,'sdk-approve-new-event');
+    expect((await nativePreviewCarrier(f)).owner).toEqual(approved);
+    expect(await rpc('creatorCheck',{id:f.offer.job.id})).toMatchObject({mode:'execute'});
+    const body=JSON.parse(cards.get(before.card.cardId!)!);
+    expect(body.body.elements.filter((e:{behaviors?:unknown})=>e.behaviors)).toHaveLength(3);
+    expect(f.requests.every(r=>r.method==='GET')).toBe(true);expect(f.published).not.toHaveBeenCalled();
+  }finally{await sdk.close();f.history.history.close();}
+});
+
+it.each(['active','unknown'] as const)('NATIVE SDK PREVIEW preserves an %s publication and its carrier generation',async state=>{
+  const f=await nativePreviewFixture(),sdk=await nativePreviewSdkReceiver();
+  try{
+    await sdk.click(privateChoice('确认发布'),'sdk-confirm');
+    if(state==='unknown')await rpc('creatorAnswer',{id:f.offer.job.id,answer:{kind:'unknown'}});
+    const before=await nativePreviewCarrier(f),preview=privateChoice('在 App 中预览',before.card.messageId);
+    await sdk.click(preview,'sdk-after-approval');
+    const jobs=await creatorJobs(),previews=jobs.filter(j=>j.task.kind==='read'&&j.task.read.kind==='openPreview');
+    expect(previews).toHaveLength(state==='unknown'?1:0);
+    if(previews[0])await f.executor.run(f.context,previews[0]);
+    service.disconnect(peer.id);await sdk.click(preview,'sdk-offline-after-approval');await attachCreator();await creatorJobs();
+    expect(await nativePreviewCarrier(f)).toEqual(before);expect(f.opened).toHaveBeenCalledTimes(state==='unknown'?1:0);expect(f.published).not.toHaveBeenCalled();
+  }finally{await sdk.close();f.history.history.close();}
 });
