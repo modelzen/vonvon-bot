@@ -20,6 +20,12 @@ const pending = (slice: ParitySlice, note: string): ParityEntry => ({ reason: 'p
 const dead = (slice: ParitySlice, note = 'the daemon answers unsupported'): ParityEntry => ({ reason: 'dead', slice, note });
 
 export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
+  'recipeInstall.prepare': {reason: 'desktop-only', note: 'the signed-in desktop prepares an existing Bot/group role installation'},
+  'recipeInstall.commit': {reason: 'desktop-only', note: 'the desktop hands over a scoped cloud operation ticket'},
+  'recipeInstall.status': {reason: 'desktop-only', note: 'the desktop recovers the durable installation receipt'},
+  'recipeInstall.cancel': {reason: 'desktop-only', note: 'the desktop cancels its prepared installation'},
+  'recipeInstall.issuing': {reason: 'desktop-only', note: 'the desktop durably marks authorization dispatch before contacting the account API'},
+  'recipeInstall.reconcile': {reason: 'desktop-only', note: 'the daemon verifies a negative cloud outcome before closing an uncertain dispatch'},
   'command.setAgentBadgeNumber': { reason: 'client-only', note: 'the printed employee number on the home page badge' },
   'command.setResponse': { reason: 'superseded', note: 'settings.save.project response (settings set)' },
   'command.setPermission': { reason: 'superseded', note: 'settings.save.project permission (settings set)' },

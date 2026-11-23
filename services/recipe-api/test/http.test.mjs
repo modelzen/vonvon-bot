@@ -105,6 +105,32 @@ test('credential-shaped text is rejected by field, including code-gated content'
   assert.equal(ok.status,200);
 });
 
+test('operation boundaries reject cloud targets, noncanonical keys, JWT forwarding and extra body bytes', async t => {
+  const {base,write,calls} = await fixture(t);
+  const op = '019a81cb-2a00-7000-8000-000000000001';
+  const binary = Buffer.alloc(32,9).toString('base64url');
+  const body = {purpose:'installBoundRole',versionId:id,manifestSha256:'a'.repeat(64),targetPublicKey:binary,
+    nonceCommitment:binary,generation:1};
+  const route='/v1/operations/'+op;
+  assert.equal((await write(route+'/authorize','POST',body,{'Idempotency-Key':''})).status,200);
+  assert.deepEqual(calls[0],[identity,'authorizeOperation',[op,body]]);
+  for (const change of [{botId:'private'},{chatId:'private'},{path:'/private'}, {accountId:author},
+    {generation:2},{deadline:Date.now()},{purpose:'prepareDraft'},{targetPublicKey:binary+'='},{nonceCommitment:'_'.repeat(43)}]) {
+    assert.equal((await write(route+'/authorize','POST',{...body,...change})).status,422);
+  }
+  assert.equal((await write('/v1/operations/'+id+'/cancel','POST',{})).status,422);
+  assert.equal((await write(route+'/authorize','POST',{...body,extra:'x'.repeat(2100)})).status,413);
+  const possession={ticket:binary,nonce:binary,proof:binary};
+  assert.equal((await write(route+'/redeem','POST',possession)).status,422);
+  const redeem=await fetch(base+route+'/redeem',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(possession)});
+  assert.equal(redeem.status,200);
+  assert.equal(calls[1][0],null);
+  assert.equal(calls[1][1],'redeemOperation');
+  assert.deepEqual(calls[1][2],[op,...Array(3).fill(Buffer.alloc(32,9))]);
+  assert.equal((await fetch(base+'/v1/versions/'+id+'/install-preview')).status,401);
+  assert.equal(calls.length,2);
+});
+
 async function oversizedUpload(t, base, chunked = false) {
   const url = new URL(base);
   const socket = createConnection({host:url.hostname, port:url.port});

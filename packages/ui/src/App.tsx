@@ -92,6 +92,8 @@ import {AdministratorsPanel} from './management/AdministratorsPanel';
 import {appCardFor, coreUpdatable, UpdatePanel} from './management/UpdatePanel';
 import {DesktopUpdateProvider, useDesktopUpdate} from './desktop-update';
 import {DesktopUpdateButton} from './DesktopUpdateButton';
+import {CommunityPage} from './community/CommunityPage';
+import {useCommunity} from './community/community-context';
 import {AccountPanel} from './accounts/AccountPanel';
 import {useAccountPage} from './accounts/account-page';
 
@@ -171,11 +173,12 @@ function DesktopApp() {
   const [setupProvider, setSetupProvider] = useState<SetupProvider>();
   const [setupAgentId, setSetupAgentId] = useState<AgentId>();
   const accountPage = useAccountPage();
+  const community = useCommunity();
   const [currentPage, setCurrentPage] = useState<Page>(() => typeof window !== 'undefined' && window.vonvonCardPreviewScope ? 'collaboration' : 'home');
-  const page = accountPage?.isOpen ? 'account' : currentPage;
+  const page = accountPage?.isOpen ? 'account' : community?.isOpen ? 'community' : currentPage;
   function setPage(next: Page) {
-    if (next === 'account' && accountPage) accountPage.open();
-    else {accountPage?.close(); setCurrentPage(next);}
+    if (next === 'community' && community) {accountPage?.close(); community.open();}
+    else {community?.close(); if (next === 'account' && accountPage) accountPage.open(); else {accountPage?.close(); setCurrentPage(next);}}
   }
   const [externalCoreAvailable, setExternalCoreAvailable] = useState(false);
   const connectedVersion = snapshot?.host.kind === 'connected' ? snapshot.host.version : undefined;
@@ -494,22 +497,31 @@ function DesktopApp() {
     if (modal?.kind === 'join' && modal.suspended) restore();
     else navigate(restore);
   }
-  function openSearchResult(entry: SearchEntry) {
-    if (!snapshot) return;
-    flushSync(() => setSearchOpen(false));
+  function openSearchResult(entry: SearchEntry) {flushSync(() => setSearchOpen(false)); openDestination(entry.destination);}
+  function openDestination(destination: Destination) {
+    if (!snapshot) {setSearchOpen(false); if (destination.page === 'collaboration') openList(destination.view ?? 'agents'); else openPage(destination.page, destination); return;}
+    setSearchOpen(false);
     navigate(() => {
       setJoinedTarget(undefined);
       setModal(current => current?.kind === 'join' && current.suspended ? null : current);
-      setPage(entry.destination.page);
+      setPage(destination.page);
       setSetupAgentId(undefined);
       setSettingsReturn(undefined);
       setFeatureId(undefined);
-      const target = routeFromSearch(entry.destination, snapshot);
-      if (target) {setRoute(target.route); if (target.route.kind === 'membership') {const memberId=target.route.id; setGroupTabs(current=>({...current,[memberId]:groupTabForSection(entry.destination.section)}));}}
-      setSearchTarget(target?.missing ? undefined : entry.destination.section ? entry.destination : undefined);
+      const target = routeFromSearch(destination, snapshot);
+      if (target) {setRoute(target.route); if (target.route.kind === 'membership') {const memberId=target.route.id; setGroupTabs(current=>({...current,[memberId]:groupTabForSection(destination.section)}));}}
+      setSearchTarget(target?.missing ? undefined : destination.section ? destination : undefined);
       setNotice(target?.missing ? {message: target.missing, error: false} : undefined);
     });
   }
+  useEffect(() => {
+    const departure = community?.departure;
+    if (!departure) return;
+    if (departure.deviceId !== device.id) {community.consumeDeparture(departure); return;}
+    if (!snapshot) return;
+    openDestination(departure.destination);
+    community.consumeDeparture(departure);
+  }, [community?.departure, snapshot, device.id]);
   async function register(agentId?: AgentId, provider?: SetupProvider) {
     if (!agentId && !provider && !snapshot?.agents.length) {openPage('setup'); return;}
     if (registrationPending.current) return;
@@ -553,6 +565,11 @@ function DesktopApp() {
     if (cancel) await run({ type: "cancelJob", jobId: cancel }, () => generation === modalGeneration.current);
     if (generation === modalGeneration.current) setModal(null);
   }
+  if (page === 'community') return <><AppShell page="community" view={view} title="社区" onNavigate={openPage} onOpenList={openList}
+    onSearch={() => setSearchOpen(true)} updateAction={<DesktopUpdateButton/>}
+    deviceSwitcher={shell?.devices ? <DeviceSwitcher onManage={() => openPage('devices')} onAccount={() => openPage('account')}/> : undefined}>
+    <div className="page-stack"><CommunityPage/></div>
+  </AppShell>{searchOpen && <SearchDialog open entries={searchEntries(snapshot, {externalCoreAvailable, schedules: searchSchedules, devices: Boolean(shell?.devices)})} onClose={() => setSearchOpen(false)} onSelect={openSearchResult}/>}</>;
   if (!snapshot) return <SnapshotPendingView/>;
   const member =
     selection.kind === "membership"
@@ -569,6 +586,7 @@ function DesktopApp() {
   const project = selection.kind === "project" ? snapshot.projects?.find((item) => item.id === selection.id) : undefined;
   const titles: Record<Page, string> = {
     home: "此刻",
+    community: "社区",
     settings: "设置",
     collaboration: route.kind === 'dm' ? `私聊 · ${agent?.name ?? 'Bot'}` : member
       ? `${group?.name ?? '飞书群'} · ${agent?.name ?? 'Bot'}`

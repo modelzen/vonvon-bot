@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { ServerInfo, VonvonClient } from '@vonvon/client/browser';
 import {
-  agentIdSchema, viewIdSchema, type AccountShell, type AccountStatus, type BackendInstallEventPayload, type CommandResult, type DesktopSnapshot, type DesktopUpdate, type DeviceEventPayload,
+  agentIdSchema, viewIdSchema, type AccountShell, type CommunityShell, type AccountStatus, type BackendInstallEventPayload, type CommandResult, type DesktopSnapshot, type DesktopUpdate, type DeviceEventPayload,
   type DevicesState, type LogEventPayload, type MachineReply, type ViewId,
 } from '@vonvon/protocol';
 import type { ShellCapabilities } from '../../ui/src/client-context.js';
@@ -26,6 +26,7 @@ export const desktopChannels = {
   close: 'desktop:client:close',
   subscribe: 'desktop:subscribe',
   external: 'desktop:shell:external',
+  community: 'desktop:community:request',
   accountStatus: 'desktop:account:status',
   accountLogin: 'desktop:account:login',
   accountCancel: 'desktop:account:cancel',
@@ -107,7 +108,7 @@ export type DesktopEvent =
 
 export type DesktopShell = Required<Pick<ShellCapabilities,
   'openExternal' | 'chooseExecutablePath' | 'chooseDirectoryPaths' | 'checkDesktopUpdate' | 'retryDesktopUpdate' | 'installDesktopUpdate' | 'onDesktopUpdate' |
-  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli' | 'service' | 'setLoginItem' | 'devices' | 'onLocalDeviceEvent' | 'quitKeepsDaemon' | 'onRemoteUpdate'>> & { account: AccountShell };
+  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli' | 'service' | 'setLoginItem' | 'devices' | 'onLocalDeviceEvent' | 'quitKeepsDaemon' | 'onRemoteUpdate'>> & { account: AccountShell; community: CommunityShell };
 
 export interface DesktopResources {
   uiIndex: string;

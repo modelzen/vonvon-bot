@@ -25,7 +25,13 @@ export interface BindGroupInput {
   noMention?: boolean;
   judge?: GroupDecision;
 }
-export type AdminGroupOp = { kind: 'joinedGroups'; cursor?: string } | { kind: 'groupMembers'; chatId: string; cursor?: string } | { kind: 'bindGroup'; input: BindGroupInput };
+export type AdminGroupOp = { kind: 'joinedGroups'; cursor?: string } | { kind: 'groupMembers'; chatId: string; cursor?: string }
+  | {kind: 'groupMembership'; chatId: string; identity: BotIdentity} | { kind: 'bindGroup'; input: BindGroupInput };
+export interface GroupMembership {inChat: true}
+export function parseGroupMembership(raw: unknown): GroupMembership {
+  if (!raw || typeof raw !== 'object' || !('inChat' in raw) || raw.inChat !== true) throw new GroupUpstreamError('无法确认机器人群成员身份');
+  return {inChat: true};
+}
 export interface JoinedGroups {
   groups: { chatId: string; name: string; bound: boolean; hasOtherBots?: boolean }[];
   nextCursor?: string;
@@ -115,7 +121,7 @@ function refused(phase: GroupPhase, reply: { code?: number; msg?: string }, fall
   throw error;
 }
 
-export function createGroupExecutor(channel: LarkChannel, identity: BotIdentity, projectsRootDir?: string): (op: AdminGroupOp) => Promise<JoinedGroups | GroupMembers | Project> {
+export function createGroupExecutor(channel: LarkChannel, identity: BotIdentity, projectsRootDir?: string): (op: AdminGroupOp) => Promise<JoinedGroups | GroupMembers | GroupMembership | Project> {
   const bot = { ...identity };
   const topicContext = createTopicContext(channel, undefined, createNameBook(channel), { stopping: () => false, track: p => p });
   async function bind(request: BindGroupInput): Promise<Project> {
@@ -136,6 +142,15 @@ export function createGroupExecutor(channel: LarkChannel, identity: BotIdentity,
     }
   }
   return async op => {
+    if (op.kind === 'groupMembership') {
+      const expected = op.identity;
+      if (expected.appId !== bot.appId || expected.tenant !== bot.tenant || expected.createdAt !== bot.createdAt
+        || expected.registrationId !== bot.registrationId) throw new AdminWriteError('机器人身份已改变，请重启后再试');
+      const membership = await channel.rawClient.im.v1.chatMembers.isInChat({path: {chat_id: op.chatId}}).catch(upstream('group-members'));
+      if (membership.code !== 0 || typeof membership.data?.is_in_chat !== 'boolean') refused('group-members', membership, '无法确认机器人群成员身份');
+      if (!membership.data.is_in_chat) throw new AdminWriteError('机器人不在此群中');
+      return {inChat: true};
+    }
     if (op.kind === 'bindGroup') {
       return bind(op.input);
     }
