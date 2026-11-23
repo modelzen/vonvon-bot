@@ -432,7 +432,6 @@ export async function chatRichProposal(op:LocalOperation,instruction:string,sign
     const sourcePublicValues={...rich.sourcePublicValues};
     for(const change of parsed.changes){
       if(change.op!=='setPublicText'||request.content.public[change.field].itemId!==change.itemId)throw new Error('创建时仅能填写公开介绍。');
-      if(!instruction.includes(change.value))throw new Error('请提供要公开的实际文案。');
       sourcePublicValues[change.field]??=request.content.public[change.field].value;
       request.content.public[change.field].value=change.value;
     }

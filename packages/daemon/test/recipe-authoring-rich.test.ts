@@ -118,3 +118,22 @@ it('applies explicit public commands to a reviewed creation snapshot without con
   }
   expect(parser.proposeRich).not.toHaveBeenCalled();
 });
+
+
+it('proposes generated creation text without changing the reviewed source or saving it',async()=>{
+  const {chatRichProposal,richReviewDigest}=await import('../src/recipe/authoring-rich-flow');
+  const content=fixture(),request=selectRichSnapshot(source(content));
+  const before=structuredClone(request),sourceCaptureDigest=richReviewDigest({request});
+  const op={view:{operationId:randomUUID()},rich:{request,newFields:[],sourcePublicValues:{}}} as unknown as Parameters<typeof chatRichProposal>[0];
+  const value='# 使用方式\n\n先整理问题，再生成答疑草稿。';
+  const parser={proposeRich:vi.fn().mockResolvedValue({kind:'proposal',commands:[{action:'setPublicText',target:'T1',text:value}]})};
+  const result=await chatRichProposal(op,'请创作概览，说明答疑配方的使用方式。',new AbortController().signal,parser);
+  if(result.kind!=='proposal'||!('content' in result.request))throw new Error('missing creation candidate');
+  expect(result.request.content.public.overview).toEqual({...content.public.overview,value});
+  expect(result.newFields).toEqual([content.public.overview.itemId]);
+  expect(result.request.origins).toEqual(before.origins);
+  expect(op.rich?.request).toEqual(before);
+  expect(op.rich?.newFields).toEqual([]);
+  expect(richReviewDigest({request})).toBe(sourceCaptureDigest);
+  expect(parser.proposeRich).toHaveBeenCalledWith(expect.objectContaining({phase:'create',selected:[expect.objectContaining({kind:'publicText',field:'overview'})]}),expect.any(AbortSignal));
+});

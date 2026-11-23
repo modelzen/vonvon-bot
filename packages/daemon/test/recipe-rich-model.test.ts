@@ -58,7 +58,7 @@ it.each([
   await expect(run([target],[{action:'setPublicText',target:'T1',text:'新名称'}]).answer).rejects.toThrow('公开文案目标');
 });
 
-it.each(['','   ','新 名称','模型改写的新名称'])('rejects empty or ungrounded public text %j',async text=>{
+it.each(['','   '])('rejects empty public text %j',async text=>{
   await expect(run([publicItem()],[{action:'setPublicText',target:'T1',text}]).answer).rejects.toThrow();
 });
 
@@ -124,4 +124,14 @@ it('rejects malformed top-level identity metadata and mismatched clarify command
     {kind:'clarify',commands:[{action:'setPublicText',target:'T1',text:'新名称'}]},
     {kind:'proposal',commands:[]},
   ])await expect(proposeRich({instruction:'把名称改为新名称',selected:[publicItem()],phase:'edit'},signal(),{proposeRich:vi.fn().mockResolvedValue(raw)})).rejects.toThrow();
+});
+
+it('accepts AI-authored Markdown as an explicitly selected public candidate',async()=>{
+  const target=publicItem('overview'),text='# 使用方式\n\n先整理问题，再生成答疑草稿。';
+  const {answer}=run([target],[{action:'setPublicText',target:'T1',text}],'请创作 Markdown 概览，说明答疑配方的使用方式。');
+  await expect(answer).resolves.toEqual({kind:'proposal',changes:[{op:'setPublicText',itemId:target.itemId,field:'overview',value:text}],omitted:[]});
+});
+
+it.each(['/Users/private/example','api_key: secret','ou_private123'])('rejects sensitive AI-authored public text %j',async text=>{
+  await expect(run([publicItem()],[{action:'setPublicText',target:'T1',text}],'请帮我创作名称').answer).rejects.toThrow('敏感');
 });
