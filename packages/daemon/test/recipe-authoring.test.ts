@@ -1560,8 +1560,8 @@ it('routes an unquoted R1 version and role edit with four retained links through
   expect(await ledger.run(db=>Object.keys(db.links))).toHaveLength(4);
 });
 
-async function anotherAuthor(){
-  const author={id:randomUUID(),device:peer.device},accountId=randomUUID();
+async function anotherAuthor(accountId:string=randomUUID(),device:string=peer.device){
+  const author={id:randomUUID(),device};
   const opened=kind(await service.request(author,recipeAuthoringRequestSchema.parse({type:'open',botId:appId,accountId})),'session');
   const request=(type:string,extra:object={})=>service.request(author,recipeAuthoringRequestSchema.parse({type,botId:appId,session:opened.session,...extra}));
   const challenge=kind(await request('beginLink'),'challenge');
@@ -2122,7 +2122,7 @@ it('invalidates a superseded preview, keeps an uncertain work frozen and allows 
   expect(await rpc('creatorCheck',{id:meta.id})).toMatchObject({mode:'receipt'});
 },25000);
 
-it('starts from a private real-group menu, adopts the actual rich handoff and wakes the exact saved revision without reading or running memory/setup/tasks',async()=>{
+it.each(['none','account','scope'])('starts from a private real-group menu and wakes the exact saved revision with unrelated %s work and no memory/setup/tasks',async(otherWork)=>{
   await link();await attachCreator();
   await orch.onMessage(msg('/recipe create'));
   await tap(privateChoice('PRIVATE-GROUP-SENTINEL'));
@@ -2150,10 +2150,17 @@ it('starts from a private real-group menu, adopts the actual rich handoff and wa
   expect(jobs).toHaveLength(1);
   expect(jobs[0]?.task).toMatchObject({kind:'read',read:{kind:'draft',work:{draftId:destinationDraftId,source:{preparationId:op.operationId,groupId}}}});
   expect(await rpc('creatorCheck',{id:jobs[0]!.id})).toMatchObject({mode:'read'});
+  if(otherWork!=='none'){
+    const other=await anotherAuthor(otherWork==='scope'?account:randomUUID(),otherWork==='scope'?randomUUID():peer.device);
+    await other.request('edit',{draftId:randomUUID(),baseRevision:1});
+  }
   const {savedRichPreview}=await import('./fixtures/rich-desktop-authoring.mjs');
   const main=await savedRichPreview({accountId:account,botId:appId,deviceId:peer.device,session,draftJob:jobs[0]!,content,daemon:input=>service.request(peer,input)});
   try{
     await main.run(jobs[0]!);
+    const {AuthoringJournal,linkKey}=await import('../src/recipe/authoring-journal');
+    const current=await new AuthoringJournal(root,()=>clock).run(db=>db.links[linkKey(jobs[0]!.scope,account)]?.creator?.current);
+    expect(current?.kind==='draft'&&current.snapshot.work.draftId).toBe(destinationDraftId);
     const source=privateChoice('配方、来源与版本'),role=privateChoice('群角色');
     expect([...cards.values()].at(-1)).toContain('Bot fixture');
     await tap(source);
@@ -2562,4 +2569,48 @@ it('preserves both accounts when a different sender quotes a pending selection t
   expect(await ledger.run(db=>[db.handoffs![h.retryId]!.phase.state,db.operations[op.operationId]!.contextOpen])).toEqual(['selecting',true]);
   expect(await service.onMessage({...msg('/recipe end'),replyToMessageId:card})).toBe(true);
   expect(await ledger.run(db=>[db.handoffs![h.retryId]!.phase.state,db.operations[op.operationId]!.contextOpen])).toEqual(['cancelled',true]);
+});
+
+it.each(['before','awaiting','dispatched','reselected'])('preserves the selected work when an old draft snapshot arrives %s',async(timing)=>{
+  await link();await attachCreator();
+  const work={draftId:randomUUID(),source:null};
+  const snapshot={work,format:'role-v1',recipeId:null,parent:null,revision:2,public:{name:'旧草稿 A',summary:'简介',overview:'概览',version:'2',access:'direct'},
+    contentSha256:digest('角色'),parts:[],sections:[{title:'角色',pageHashes:[digest('角色')]}]};
+  await rpc('creatorContinue',{selection:{kind:'draft',work,name:'旧草稿 A',version:'2'}});
+  const read=(await creatorJobs()).find(j=>j.task.kind==='read'&&j.task.read.kind==='draft'&&j.task.read.work.draftId===work.draftId)!;
+  expect(read).toBeDefined();
+  if(timing==='before')await rpc('creatorAnswer',{id:read.id,answer:{kind:'snapshot',snapshot}});
+  await service.onMessage(msg('/recipe create'));
+  await tap(privateChoice('PRIVATE-GROUP-SENTINEL'));
+  await tap(privateChoice('群角色'));await tap(privateChoice('确认所选来源'));
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  const oldDraftFocused=()=>ledger.run(db=>Object.values(db.links).some(l=>l.creator?.current?.kind==='draft'&&l.creator.current.snapshot.work.draftId===work.draftId));
+  if(timing==='awaiting'){
+    await rpc('creatorAnswer',{id:read.id,answer:{kind:'snapshot',snapshot}});
+    expect(await oldDraftFocused()).toBe(false);
+  }
+  const request=kind(await rpc('workflow'),'workflow').handoff!;
+  const handoff=kind(await rpc('answerHandoff',{request,attestations:[]}),'handoff').handoff;
+  const op=await status(handoff.operationId!),draftId=randomUUID();
+  await rpc('richAdvance',{operationId:op.operationId,destinationDraftId:draftId,authorization:{...await auth(op,'dispatch'),format:'rich-v2'}});
+  if(timing==='reselected')await rpc('creatorContinue',{selection:{kind:'draft',work,name:'旧草稿 A',version:'2'}});
+  if(timing==='dispatched'||timing==='reselected'){
+    await rpc('creatorAnswer',{id:read.id,answer:{kind:'snapshot',snapshot}});
+    expect(privateChoice('确认发布')).toBeDefined();
+  }
+  const focusedBeforeInstruction=await oldDraftFocused(),sourceState=(await status(op.operationId)).state;
+  proposeRich.mockImplementationOnce(async(input:RichModelInput)=>({kind:'proposal',commands:[{action:'omit',target:'T'+(input.selected.findIndex(i=>i.kind==='role')+1),valueJson:'null'}]}));
+  await service.onMessage(msg('请排除群角色'));
+  const oldOp=await ledger.run(db=>Object.values(db.operations).some(o=>o.view.draftId===work.draftId));
+  const observed={parserCalls:proposeRich.mock.calls.length,oldDraftOperation:oldOp,oldDraftFocused:focusedBeforeInstruction};
+  if(timing==='reselected'){
+    expect(observed).toEqual({parserCalls:0,oldDraftOperation:true,oldDraftFocused:true});
+    expect((await status(op.operationId)).state).toBe(sourceState);
+    return;
+  }
+  expect(observed).toEqual({parserCalls:1,oldDraftOperation:false,oldDraftFocused:false});
+  const preview=kind(await rpc('richInspect',{operationId:op.operationId,preview:true}),'richCandidate');
+  if(!('content'in preview.request))throw Error('missing source content');
+  expect(preview.request.content.role).toBeUndefined();
 });

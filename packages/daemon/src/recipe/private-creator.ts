@@ -760,7 +760,14 @@ export class PrivateCreator{
           this.noPendingSave(db,p,link,q.work);
           r.state='finished';invalidate(s,snap.work.draftId);
           (s.sources??={})[snap.work.draftId]=snap.work.source;
-          if(s.focusDraft===snap.work.draftId||!s.focusDraft&&Object.keys(s.sources).length===1){
+          const context=_l.context&&_l.context.until>this.now()?db.operations[_l.context.operationId]:undefined;
+          const otherContext=context&&context.bot===_l.bot&&context.accountId===p.account&&context.scope===p.scope&&context.binding===_l.binding&&
+            sameRecipient(context.recipient,_l.recipient)&&!context.revoked&&context.contextOpen&&(context.contextUntil??0)>this.now()&&
+            (context.terminalAt===undefined||context.view.state==='completed')&&context.view.draftId!==snap.work.draftId&&
+            !(context.view.receipt?.status==='accepted'&&context.view.receipt.draftId===snap.work.draftId);
+          const otherHandoff=Object.values(db.handoffs??{}).some(h=>h.creator&&h.account===p.account&&h.scope===p.scope&&h.binding===_l.binding&&
+            sameRecipient(h.recipient,_l.recipient)&&h.expiresAt>this.now()&&['selecting','awaitingAttestations'].includes(h.phase.state)&&h.draftId!==snap.work.draftId);
+          if(s.focusDraft===snap.work.draftId||!s.focusDraft&&Object.keys(s.sources).length===1&&!otherContext&&!otherHandoff){
             s.current={kind:'draft',snapshot:snap};s.focusUntil=this.now()+ttl;
           }
           const cmd:CreatorCommand={kind:'publish',snapshot:snap,snapshotDigest:snapshotHash(snap)};
