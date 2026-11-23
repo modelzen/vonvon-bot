@@ -2,6 +2,9 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEq
 import { createLoginAdmission, WebError } from './auth.mjs';
 
 const minute = 60_000;
+const maxCodeBytes = 2048, ivBytes = 12, tagBytes = 16;
+const maxReceiptChars = Math.ceil((ivBytes + maxCodeBytes + tagBytes) * 4 / 3);
+const receiptScope = flow => Buffer.from('vonvon/native/callback-receipt/v1:' + flow.id + ':' + flow.expiresAt);
 const providerSet = new Set(['github', 'google', 'apple']);
 const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
 const flowRoute = /^\/auth\/native\/flows\/([A-Za-z0-9_-]{43})(?:\/(authorize|ack))?$/;
@@ -40,7 +43,7 @@ async function object(req, required, optional = []) {
 export function createNativeLogin({ publicOrigin, supabaseOrigin, publishableKey, providerNames, now = Date.now }) {
   const available = supabaseOrigin && /^sb_publishable_[A-Za-z0-9_-]+$/.test(publishableKey || '')
     ? [...new Set(providerNames.filter(provider => providerSet.has(provider)))] : [];
-  const flows = new Map(), tickets = new Map(), browsers = new Map(), receipts = new Map();
+  const flows = new Map(), tickets = new Map(), browsers = new Map();
   const admit = createLoginAdmission({ now });
   const key = randomBytes(32);
   const secure = new URL(publicOrigin).protocol === 'https:';
@@ -53,8 +56,7 @@ export function createNativeLogin({ publicOrigin, supabaseOrigin, publishableKey
     tickets.delete(flow.ticket);
     delete flow.ticket;
     delete flow.authorizeUrl;
-    delete flow.code;
-    for (const [id, receipt] of receipts) if (receipt.flowId === flow.id) receipts.delete(id);
+    delete flow.confirmedReceipt;
   }
 
   function expire(flow) {
@@ -71,27 +73,31 @@ export function createNativeLogin({ publicOrigin, supabaseOrigin, publishableKey
         clearSecrets(flow); browsers.delete(flow.browser); flows.delete(id);
       }
     }
-    for (const [id, receipt] of receipts) if (receipt.expiresAt <= now()) receipts.delete(id);
   }
   const purge = setInterval(prune, minute);
   purge.unref();
 
-  function seal(code, flowId) {
-    const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', key, iv);
-    cipher.setAAD(Buffer.from(flowId));
-    return { iv, bytes: Buffer.concat([cipher.update(code, 'utf8'), cipher.final()]), tag: cipher.getAuthTag() };
+  function sealReceipt(code, flow) {
+    const iv = randomBytes(ivBytes), cipher = createCipheriv('aes-256-gcm', key, iv, { authTagLength: tagBytes });
+    cipher.setAAD(receiptScope(flow));
+    return Buffer.concat([iv, cipher.update(code, 'utf8'), cipher.final(), cipher.getAuthTag()]).toString('base64url');
   }
 
-  function unseal(code, flowId) {
-    const decipher = createDecipheriv('aes-256-gcm', key, code.iv);
-    decipher.setAAD(Buffer.from(flowId)); decipher.setAuthTag(code.tag);
-    return Buffer.concat([decipher.update(code.bytes), decipher.final()]).toString('utf8');
+  function openReceipt(receipt, flow) {
+    if (typeof receipt !== 'string' || receipt.length > maxReceiptChars) throw new WebError(400, 'invalid_body');
+    const bytes = Buffer.from(receipt, 'base64url');
+    if (bytes.length <= ivBytes + tagBytes || bytes.toString('base64url') !== receipt) throw new WebError(400, 'invalid_body');
+    const decipher = createDecipheriv('aes-256-gcm', key, bytes.subarray(0, ivBytes), { authTagLength: tagBytes });
+    decipher.setAAD(receiptScope(flow)); decipher.setAuthTag(bytes.subarray(-tagBytes));
+    try {
+      return Buffer.concat([decipher.update(bytes.subarray(ivBytes, -tagBytes)), decipher.final()]).toString('utf8');
+    } catch { throw new WebError(401, 'invalid_receipt'); }
   }
 
   function view(flow) {
     expire(flow);
     return { status: nativeStatus[flow.status], state: flow.state, expiresAt: flow.expiresAt,
-      ...(flow.provider && { provider: flow.provider }), ...(flow.status === 'ready' && { code: unseal(flow.code, flow.id) }) };
+      ...(flow.provider && { provider: flow.provider }), ...(flow.status === 'ready' && { code: openReceipt(flow.confirmedReceipt, flow) }) };
   }
 
   function live(flow) {
@@ -139,7 +145,7 @@ export function createNativeLogin({ publicOrigin, supabaseOrigin, publishableKey
   }
 
   return {
-    stop() { clearInterval(purge); flows.clear(); tickets.clear(); browsers.clear(); receipts.clear(); key.fill(0); },
+    stop() { clearInterval(purge); flows.clear(); tickets.clear(); browsers.clear(); key.fill(0); },
     async handle(req, res, url) {
       const route = flowRoute.exec(url.pathname), create = url.pathname === '/auth/native/flows';
       if (route || create) {
@@ -184,22 +190,12 @@ export function createNativeLogin({ publicOrigin, supabaseOrigin, publishableKey
         throw new WebError(404, 'not_found');
       }
       if (req.method === 'GET' && url.pathname === '/auth/native/callback') {
-        prune();
         const flow = flows.get(browsers.get(browserKey(req)));
         const code = url.searchParams.get('code');
         let location = '/auth/native/complete';
-        if (flow && expire(flow).status === 'authorized' && url.searchParams.size === 1 &&
-            url.searchParams.getAll('code').length === 1 && code && code.length <= 2048) {
-          const pending = [...receipts].filter(([, value]) => value.flowId === flow.id);
-          if (pending.length >= 4) receipts.delete(pending[0][0]);
-          if (receipts.size >= 2048) {
-            for (const [id, value] of receipts) {
-              if (!value.confirmed) { receipts.delete(id); break; }
-            }
-          }
-          const receipt = random();
-          receipts.set(digest(receipt).toString('hex'), { flowId: flow.id, code: seal(code, flow.id), expiresAt: flow.expiresAt });
-          location += '#receipt=' + receipt;
+        if (flow?.status === 'authorized' && flow.expiresAt > now() && url.searchParams.size === 1 &&
+            code && Buffer.byteLength(code) <= maxCodeBytes) {
+          location += '#receipt=' + sealReceipt(code, flow);
         }
         res.writeHead(303, { Location: location }); res.end(); return true;
       }
@@ -229,14 +225,11 @@ export function createNativeLogin({ publicOrigin, supabaseOrigin, publishableKey
         json(res, browserView(flow)); return true;
       }
       if (url.pathname === '/auth/native/complete' && req.method === 'POST') {
-        const data = await object(req, ['receipt']);
-        if (!canonicalToken(data.receipt)) throw new WebError(400, 'invalid_body');
-        const receipt = receipts.get(digest(data.receipt).toString('hex'));
-        if (!receipt || receipt.flowId !== flow.id || receipt.expiresAt <= now()) throw new WebError(401, 'invalid_receipt');
-        if (flow.status === 'authorized') {
-          flow.code = receipt.code; delete receipt.code; receipt.confirmed = true; flow.status = 'ready';
-          for (const [id, pending] of receipts) if (pending.flowId === flow.id && pending !== receipt) receipts.delete(id);
-        } else if (!receipt.confirmed || flow.status !== 'ready') throw new WebError(409, 'flow_conflict');
+        const { receipt } = await object(req, ['receipt']);
+        if (expire(flow).status === 'authorized') {
+          openReceipt(receipt, flow);
+          flow.confirmedReceipt = receipt; flow.status = 'ready';
+        } else if (flow.status !== 'ready' || flow.confirmedReceipt !== receipt) throw new WebError(401, 'invalid_receipt');
         json(res, browserView(flow)); return true;
       }
       if (url.pathname === '/auth/native/cancel' && req.method === 'POST') {

@@ -200,14 +200,12 @@ test('a late cancelled tab cannot assign its callback code to a newer cookie flo
   await f.authorize(a);
   assert.equal((await f.native('/' + a.flowId, { method: 'DELETE', token: a.pollToken })).status, 200);
   const b = await f.launch(await f.create()); await f.authorize(b);
-  for (let i = 0; i < 8; i++) {
-    const late = await f.callback({ ...a, cookie: b.cookie }, 'late-code-from-a-' + i);
-    assert.ok(late.receipt);
-    assert.equal((await f.browser('complete', { ...a, cookie: b.cookie }, { body: { receipt: late.receipt } })).status, 401);
-  }
+  const current = await f.callback(b, 'current-code-from-b');
+  const lateTab = { ...a, cookie: b.cookie }, late = await f.callback(lateTab, 'late-code-from-a');
+  assert.ok(late.receipt);
+  assert.equal((await f.browser('complete', lateTab, { body: { receipt: late.receipt } })).status, 401);
   const result = await f.native('/' + b.flowId, { token: b.pollToken }).then(data);
   assert.equal(result.status, 'provider'); assert.equal(result.code, undefined);
-  const current = await f.callback(b, 'current-code-from-b');
   assert.ok(current.receipt);
   assert.equal((await f.browser('complete', b, { body: { receipt: current.receipt } })).status, 200);
   assert.equal((await f.browser('complete', b, { body: { receipt: current.receipt } })).status, 200);
@@ -215,7 +213,25 @@ test('a late cancelled tab cannot assign its callback code to a newer cookie flo
   assert.equal((await f.native('/' + a.flowId, { token: a.pollToken }).then(data)).status, 'cancelled');
 });
 
-test('callback redelivery replaces bounded pending receipts and preserves confirmed retries', async t => {
+test('completion rejects corrupted or oversized receipts and still accepts the original at the code size limit', async t => {
+  const f = await fixture(t), flow = await f.launch(await f.create());
+  await f.authorize(flow);
+  const code = 'é'.repeat(1024);
+  assert.equal((await f.callback(flow, code + '!')).receipt, '');
+  const { receipt } = await f.callback(flow, code);
+  assert.ok(receipt);
+  const complete = value => f.browser('complete', flow, { body: { receipt: value } });
+  for (const value of [null, '', receipt + '=', 'a'.repeat(3000)]) assert.equal((await complete(value)).status, 400);
+  assert.equal((await complete('a'.repeat(4096))).status, 413);
+  const changed = Buffer.from(receipt, 'base64url');
+  changed[changed.length - 1] ^= 1;
+  assert.equal((await complete(changed.toString('base64url'))).status, 401);
+  assert.equal((await f.native('/' + flow.flowId, { token: flow.pollToken }).then(data)).status, 'provider');
+  assert.equal((await complete(receipt)).status, 200);
+  assert.equal((await f.native('/' + flow.flowId, { token: flow.pollToken }).then(data)).code, code);
+});
+
+test('the first receipt remains usable across callback redelivery, and only its confirmation is repeatable', async t => {
   const f = await fixture(t), flow = await f.launch(await f.create());
   await f.authorize(flow);
   const receipts = [];
@@ -224,16 +240,13 @@ test('callback redelivery replaces bounded pending receipts and preserves confir
     assert.ok(callback.receipt);
     receipts.push(callback.receipt);
   }
-  for (const receipt of receipts.slice(0, 4)) {
-    assert.equal((await f.browser('complete', flow, { body: { receipt } })).status, 401);
-  }
-  const receipt = receipts.at(-1);
+  const receipt = receipts[0];
   for (let i = 0; i < 2; i++) {
     assert.equal((await f.browser('complete', flow, { body: { receipt } })).status, 200);
     const ready = await f.native('/' + flow.flowId, { token: flow.pollToken }).then(data);
-    assert.equal(ready.status, 'code'); assert.equal(ready.code, 'synthetic-code-7');
+    assert.equal(ready.status, 'code'); assert.equal(ready.code, 'synthetic-code-0');
   }
-  for (const orphan of receipts.slice(4, -1)) {
+  for (const orphan of receipts.slice(1)) {
     assert.equal((await f.browser('complete', flow, { body: { receipt: orphan } })).status, 401);
   }
   assert.equal((await f.callback(flow)).receipt, '');
