@@ -19,6 +19,7 @@ export default defineConfig([
     splitting: false,
     dts: false,
     external,
+    noExternal: ['zod'],
     define,
   },
   {
@@ -31,6 +32,7 @@ export default defineConfig([
     splitting: false,
     dts: true,
     external,
+    noExternal: ['zod'],
     define,
   },
 ]);
