@@ -178,6 +178,33 @@ it('reconciles an uncertain resource delivery with the original identity and tar
   expect(externalCalls).toHaveLength(1);
 });
 
+it('automatically reconciles one uncertain delivery using its original request', async () => {
+  const normal = authoring;
+  let attempts = 0;
+  authoring = async request => {
+    const reply = await normal(request);
+    return reply.kind === 'resourceHandoff' && ++attempts === 1 ? {...reply, delivery: 'unknown'} : reply;
+  };
+  await openResource(); vi.useFakeTimers(); await click('前往私聊');
+  await act(async () => {await vi.advanceTimersByTimeAsync(1500);});
+  expect(calls).toHaveLength(2); expect(calls[1]).toEqual(calls[0]);
+  expect(externalCalls).toHaveLength(1);
+  expect(dialog('交给 Bot')?.textContent).toContain('私聊引导已发送');
+});
+
+it('keeps persistent uncertainty explicit after one automatic reconciliation', async () => {
+  const normal = authoring;
+  authoring = async request => {
+    const reply = await normal(request);
+    return reply.kind === 'resourceHandoff' ? {...reply, delivery: 'unknown'} : reply;
+  };
+  await openResource(); vi.useFakeTimers(); await click('前往私聊');
+  await act(async () => {await vi.advanceTimersByTimeAsync(30_000);});
+  expect(calls).toHaveLength(2); expect(calls[1]).toEqual(calls[0]);
+  expect(externalCalls).toHaveLength(0);
+  expect(dialog('交给 Bot')?.textContent).toContain('尚未确认');
+});
+
 it('reopens only the original Bot chat after its confirmed resource delivery', async () => {
   externalFailure = true;
   await openResource(); await click('前往私聊');

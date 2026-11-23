@@ -18,6 +18,6 @@ export function renderRecipe(host: HTMLElement, recipe: RecipeDetail, acquire: (
     <RecipeDetails recipe={recipe} share={<CopyButton value={location.origin + location.pathname}/>}
       action={recipe.owned || recipe.acquired ? <span className="community-muted">{recipe.owned ? '我的作品' : '已获取'}</span> :
         <GlowButton variant="dark" onClick={event => acquire(event.currentTarget)}>获取配方</GlowButton>}/>
-    {(recipe.owned || recipe.acquired) && <p className="community-access-note">配方已保存在当前账号。在 Vonvon Bot App 登录同一账号后，可将它添加到群聊。</p>}
+    {(recipe.owned || recipe.acquired) && <p className="community-access-note">配方已保存在当前账号。在 Vonvon Bot App 登录同一账号后，可将它交给 Bot，再在私聊中说明如何调整配置。</p>}
   </div>));
 }

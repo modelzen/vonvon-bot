@@ -28,7 +28,7 @@ export function RecipeResourceDialog({recipe, intents, onClose}: {recipe: Recipe
   const active = useRef(false), locked = useRef(false);
   const invalidated = useRef(false), owner = useRef({});
   const intent = useRef<Intent | undefined>(undefined);
-  const opened = useRef(false), polls = useRef(0);
+  const opened = useRef(false), polls = useRef(0), unknownRetries = useRef(0);
   const [flow, setFlow] = useState<Flow>({kind: 'choice'});
   const [snapshot, setSnapshot] = useState<DesktopSnapshot>();
   const [botId, setBotId] = useState<AgentId>();
@@ -127,8 +127,14 @@ export function RecipeResourceDialog({recipe, intents, onClose}: {recipe: Recipe
     await handoff();
   }
   useEffect(() => {
-    if (changed || busy || flow.kind !== 'delivery' || flow.reply.delivery !== 'pending' || polls.current >= 20) return;
-    const timer = setTimeout(() => {polls.current++; void run(handoff);}, 1500);
+    if (changed || busy || flow.kind !== 'delivery') return;
+    const pending = flow.reply.delivery === 'pending' && polls.current < 20;
+    const uncertain = flow.reply.delivery === 'unknown' && unknownRetries.current < 1;
+    if (!pending && !uncertain) return;
+    const timer = setTimeout(() => {
+      if (uncertain) unknownRetries.current++; else polls.current++;
+      void run(handoff);
+    }, 1500);
     return () => clearTimeout(timer);
   }, [flow, busy, changed]);
   useEffect(() => {
@@ -157,7 +163,7 @@ export function RecipeResourceDialog({recipe, intents, onClose}: {recipe: Recipe
     if (selected.session) retireLink(selected, selected.session);
     delete selected.owner; delete selected.session;
     const next: Intent = {bot: selected.bot, key: selected.key, requestId: crypto.randomUUID(), owner: owner.current};
-    intents.set(next.key, next); intent.current = next; polls.current = 0;
+    intents.set(next.key, next); intent.current = next; polls.current = 0; unknownRetries.current = 0;
     setFlow({kind: 'reconcile'});
     await handoff();
   }
