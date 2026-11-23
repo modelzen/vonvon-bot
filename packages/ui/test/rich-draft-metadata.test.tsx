@@ -212,7 +212,7 @@ it('keeps the original displayed draft while recovering an uncertain publication
   const prepared = authoringSend;
   authoringSend = async request => {
     if (request.type === 'confirmPublication') {attempts++; return {kind: 'publicationResult', result: {kind: 'pending'}};}
-    if (attempts) return {kind: 'publicationRecovery', result: {kind: 'published', publication: receipt}};
+    if (attempts) return {kind: 'publicationResult', result: {kind: 'published', publication: receipt}};
     return prepared(request);
   };
   await draw(); await click('发布到社区'); await click('确认发布');
@@ -225,9 +225,31 @@ it('keeps the original displayed draft while recovering an uncertain publication
     {type: 'confirmPublication', accountId, reviewId: otherAccount},
   ]);
   expect(authoringRequests.filter(request => request.type === 'preparePublication')).toEqual([
-    {type: 'preparePublication', accountId, draft},
+    {type: 'preparePublication', accountId, draft}, {type: 'preparePublication', accountId, draft},
   ]);
   expect(requests.filter(request => request.type === 'publishDraft')).toEqual([]);
+});
+
+it('offers a fresh explicit confirmation when an unknown request has no receipt and its original draft remains readable', async () => {
+  const prepared = authoringSend;
+  let confirmations = 0;
+  authoringSend = async request => {
+    if (request.type === 'confirmPublication') {
+      confirmations++;
+      return {kind: 'publicationResult', result: confirmations === 1 ? {kind: 'pending'} : {kind: 'published', publication: {accountId, draftId, recipeId: accountId, versionId: otherAccount, revision: 1}}};
+    }
+    return prepared(request);
+  };
+  await draw(); await click('发布到社区'); await click('确认发布');
+  await click('核对发布结果');
+  expect(confirmations).toBe(1);
+  expect(authoringRequests.filter(request => request.type === 'preparePublication')).toEqual([
+    {type: 'preparePublication', accountId, draft}, {type: 'preparePublication', accountId, draft},
+  ]);
+  expect(authoringRequests.filter(request => request.type === 'recoverPublication')).toEqual([]);
+  await click('确认发布');
+  expect(confirmations).toBe(2);
+  expect(document.body.textContent).toContain('已发布到社区');
 });
 
 it('discards a confirmation and a delayed preparation when chat saves a newer revision', async () => {
