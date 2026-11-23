@@ -14,6 +14,7 @@ vi.mock('react', async original => ({...await original<typeof import('react')>()
   useEffect: (effect: () => (() => void) | void, deps?: unknown[]) => {const i = h.ei++; const old = h.effects[i]; if (old?.deps && deps && deps.every((value, at) => Object.is(value, old.deps![at]))) return; h.pending.push(() => {old?.cleanup?.(); h.effects[i] = {deps, cleanup: effect() || undefined};});},
 }));
 vi.mock('../src/community/community-context', () => ({useCommunity: () => ({shell: {request: h.request}, route: h.route, catalog: h.catalog, setCatalog: (next: any) => {h.catalog = typeof next === 'function' ? next(h.catalog) : next;}, open: (next: any) => {h.route = next;}})}));
+vi.mock('../src/client-context', () => ({useShellCapabilities: () => undefined}));
 vi.mock('../src/account-context', () => ({useAccount: () => ({supported: true, status: h.accountId ? {kind: 'signedIn', accountId: h.accountId} : {kind: 'signedOut'}, login: h.login}), accountStatusText: () => '登录'}));
 vi.mock('../src/settings/DraftGuard', () => ({useDraft: () => {}, useDraftGuard: () => ({navigate: (action: () => void) => action()})}));
 const recipe: RecipeDetail = {recipeId: '22222222-2222-4222-8222-222222222222', versionId: '33333333-3333-4333-8333-333333333333', revision: 1,
@@ -77,4 +78,27 @@ it('does not use a late acquisition receipt to replace the page after navigating
   finish({acquired: true}); await flush(); all = render();
   expect(all.some(node => node.type === RecipeDetails)).toBe(false);
   expect(all.some(node => typeof node.props.children === 'string' && node.props.children.includes('已获取，已保存在你的账号中'))).toBe(false);
+});
+
+it('confirms author withdrawal, reads uncertain outcomes without resubmitting, and hides management on public routes', async () => {
+  let withdrawn=false;
+  h.route={...h.route,privateView:true};
+  h.request.mockImplementation(async request=>{
+    if(request.type==='detail')return {...recipe,format:'rich-v2',owned:true,state:withdrawn?'withdrawn':'listed'};
+    if(request.type==='shareLink')return {url:'https://community.example/version'};
+    if(request.type==='withdraw'){withdrawn=true;throw new Error('暂时离线');}
+    return {};
+  });
+  render();await flush();let all=render();
+  all.find(node=>node.props.children==='撤下此版本'&&node.props.onClick)!.props.onClick();
+  all=render();all.find(node=>node.props.children==='关闭'&&node.props.onClick)!.props.onClick();
+  expect(h.request.mock.calls.filter(([r])=>r.type==='withdraw')).toHaveLength(0);
+  all=render();all.find(node=>node.props.children==='撤下此版本'&&node.props.onClick)!.props.onClick();
+  all=render();all.find(node=>node.props.children==='确认撤下')!.props.onClick();await flush();
+  all=render();all.find(node=>node.props.children==='重新读取结果')!.props.onClick();await flush();
+  all=render();expect(h.request.mock.calls.filter(([r])=>r.type==='withdraw')).toHaveLength(1);
+  expect(all.some(node=>node.props.title==='此版本已撤下')).toBe(true);
+  expect(all.some(node=>node.props.children==='撤下此版本'&&node.props.onClick)).toBe(false);
+  h.route={...h.route,privateView:false};render();await flush();all=render();
+  expect(all.find(node=>node.type===RecipeDetails)!.props.management).toBeUndefined();
 });

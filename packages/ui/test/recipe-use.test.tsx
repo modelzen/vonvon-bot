@@ -13,6 +13,8 @@ import {desktopChannels} from '../../desktop/src/ipc-contract';
 import {DesktopRootView} from '../src/devices/DesktopRoot';
 import {useCommunity} from '../src/community/community-context';
 import {RecipeSourcePanel} from '../src/recipes/RecipeSourcePanel';
+import {RecipeUseDialog} from '../src/recipes/RecipeUseDialog';
+import {SettingValue} from '../src/community/RichConfiguration';
 import {useRecipeUse} from '../src/recipes/recipe-use-context';
 import {DraftGuardProvider} from '../src/settings/DraftGuard';
 import {A, B, devicesState, fakeShell, newClient} from './devices-fixture';
@@ -46,6 +48,7 @@ let accountListener: ((status: AccountStatus) => void) | undefined;
 let useReply: (request: RecipeUseRequest) => RecipeUseReply | Promise<RecipeUseReply>;
 let sourceReply: (request: DesktopRecipeSourceRequest) => DesktopRecipeSourceReply | Promise<DesktopRecipeSourceReply>;
 let acquired: boolean;
+let detailRead: (() => Promise<typeof detail>) | undefined;
 
 function Launcher() {
   const community = useCommunity()!;
@@ -80,7 +83,7 @@ beforeEach(() => {
   vi.stubGlobal('matchMedia', () => ({matches: true, addEventListener() {}, removeEventListener() {}}));
   document.body.innerHTML = '<div id="root"></div>';
   root = createRoot(document.getElementById('root')!);
-  requests = []; sourceRequests = []; communityRequests = []; acquired = true;
+  requests = []; sourceRequests = []; communityRequests = []; acquired = true; detailRead = undefined;
   status = {kind: 'signedIn', accountId, displayName: 'Synthetic', provider: 'github', persistence: 'memory'};
   const account: AccountShell = {status: async () => status, onStatus: listener => {accountListener = listener; listener(status); return () => {};}, login: async () => status, cancelLogin: async () => status, logout: async () => ({kind: 'signedOut'})};
   useReply = request => request.type === 'begin' ? {kind: 'choose', handle} : request.type === 'join' || request.type === 'retry' ? {kind: 'prepared', handle, groupId, review: baseReview} : request.type === 'confirm' || request.type === 'resume' ? {kind: 'applied', handle, groupId} : {kind: 'closed'};
@@ -90,7 +93,7 @@ beforeEach(() => {
     if (channel === desktopChannels.recipeSource) {const request = desktopRecipeSourceRequestSchema.parse(raw); sourceRequests.push(request); return {ok: true, value: await sourceReply(request)};}
     if (channel === desktopChannels.community) {
       const request = communityRequestSchema.parse(raw); communityRequests.push(request);
-      const result = request.type === 'detail' ? {...detail, versionId: request.versionId, acquired}
+      const result = request.type === 'detail' ? {...(detailRead ? await detailRead() : detail), versionId: request.versionId, acquired}
         : request.type === 'shareLink' ? {url: 'https://example.invalid/recipe'}
         : request.type === 'acquire' ? (acquired = true, {recipeId, versionId: request.versionId, owned: false, acquired: true})
         : request.type === 'catalog' ? {hero: detail, items: [], nextCursor: null} : {items: []};
@@ -367,4 +370,187 @@ it('only dismisses uncertain join tracking after the user confirms that no group
   expect(document.body.textContent).toContain('不表示建群已取消');
   await click('确认结束跟踪'); expect(requests.at(-1)).toEqual({type: 'dismissJoin', handle});
   expect(document.body.textContent).not.toContain('配方已应用');
+});
+
+it('automatically prepares a conflict-free rich review once and shows actual version content before confirmation', async () => {
+  useReply = request => request.type === 'richResolve' ? {kind: 'richPrepared', handle, groupId, reviewToken: token}
+    : {kind: 'richReview', handle, groupId, reviewToken: token, conflicts: []};
+  await draw(); await click('预览已知群');
+  expect(requests.filter(request => request.type === 'richResolve')).toEqual([{type: 'richResolve', handle, reviewToken: token, choices: {}}]);
+  expect(requests.some(request => request.type === 'confirm')).toBe(false);
+  expect(document.body.textContent).toContain('配方内容');
+  expect(document.body.textContent).not.toContain('完整配置已核对');
+  expect(document.body.textContent).not.toContain(botId);
+  expect(document.body.textContent).not.toContain(groupId);
+  await click('能力'); expect(document.body.textContent).toContain('新职责');
+  expect(button('确认应用到这个群').disabled).toBe(false);
+});
+
+it('does not repeatedly auto-prepare an unchanged rich review or continue while it is closed', async () => {
+  useReply = () => ({kind: 'richReview', handle, groupId, reviewToken: token, conflicts: []});
+  await draw(); await click('预览已知群'); await draw();
+  expect(requests.filter(request => request.type === 'richResolve')).toHaveLength(1);
+  await click('稍后继续'); await draw();
+  expect(requests.filter(request => request.type === 'richResolve')).toHaveLength(1);
+  expect(requests.some(request => request.type === 'confirm')).toBe(false);
+});
+
+it('keeps conflict decisions explicit and presents the retained local value beside recipe content', async () => {
+  const itemId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  useReply = request => request.type === 'richResolve' ? {kind: 'richPrepared', handle, groupId, reviewToken: token}
+    : {kind: 'richReview', handle, groupId, reviewToken: token, conflicts: [{itemId, kind: '本群角色', base: null, local: '本群专属职责', incoming: '新职责'}]};
+  await draw(); await click('预览已知群');
+  expect(requests.some(request => request.type === 'richResolve')).toBe(false);
+  expect(button('预览所选内容').disabled).toBe(true);
+  await pick(`input[name="${itemId}"]`); await click('预览所选内容');
+  expect(document.body.textContent).toContain('保留本群设置');
+  expect(document.body.textContent).toContain('本群专属职责');
+  expect(requests.at(-1)).toEqual({type: 'richResolve', handle, reviewToken: token, choices: {[itemId]: 'local'}});
+  expect(requests.some(request => request.type === 'confirm')).toBe(false);
+});
+
+it('blocks confirmation when content cannot be read and retries the same fixed version', async () => {
+  detailRead = async () => {throw new Error('offline');};
+  useReply = () => ({kind: 'richPrepared', handle, groupId, reviewToken: token});
+  await draw(); await click('预览已知群');
+  expect(button('确认应用到这个群').disabled).toBe(true);
+  expect(document.body.textContent).toContain('暂时无法读取配方内容');
+  detailRead = async () => detail;
+  await click('重新读取配方');
+  expect(button('确认应用到这个群').disabled).toBe(false);
+  expect(communityRequests.filter(request => request.type === 'detail')).toEqual([
+    {type: 'detail', accountId, recipeId, versionId}, {type: 'detail', accountId, recipeId, versionId},
+  ]);
+});
+
+it('discards private version content arriving after an account switch', async () => {
+  let release: ((value: typeof detail) => void) | undefined;
+  detailRead = () => new Promise(resolve => {release = resolve;});
+  useReply = () => ({kind: 'richPrepared', handle, groupId, reviewToken: token});
+  await draw(); await click('预览已知群');
+  expect(button('确认应用到这个群').disabled).toBe(true);
+  await act(async () => accountListener!({...status as Extract<AccountStatus, {kind: 'signedIn'}>, accountId: otherAccount}));
+  await act(async () => release!({...detail, public: {...detail.public, overview: '旧账号私有内容'}}));
+  expect(document.body.textContent).not.toContain('旧账号私有内容');
+  expect(button('确认应用到这个群')).toBeUndefined();
+  expect(requests.some(request => request.type === 'confirm')).toBe(false);
+});
+
+
+it('renders real conflict values without internal relationships or translating free text', async () => {
+  const parent = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const block = JSON.stringify({parentItemId: parent, id: 'context', kind: 'context', name: 'constructor', template: 'default', mystery: parent});
+  const setting = JSON.stringify({field: 'presentation.cardDisplay', value: {version: 1, blocks: [parent], reply: {streamText: true}}});
+  useReply = () => ({kind: 'richReview', handle, groupId, reviewToken: token, conflicts: [
+    {itemId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', kind: 'cardBlock', base: null, local: block, incoming: null},
+    {itemId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', kind: 'role', base: null, local: JSON.stringify({text: 'default'}), incoming: JSON.stringify({text: 'prototype'})},
+    {itemId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', kind: 'settings', base: null, local: setting, incoming: setting},
+  ]});
+  await draw(); await click('预览已知群');
+  const fields = [...document.querySelectorAll('fieldset')].map(element => element.textContent);
+  expect(fields[0]).toContain('constructor');
+  expect(fields[0]).toContain('default');
+  expect(fields[0]).toContain('移除此项');
+  expect(fields[1]).toContain('default');
+  expect(fields[1]).toContain('prototype');
+  expect(document.body.textContent).not.toContain(parent);
+  expect(document.body.textContent).not.toContain('parentItemId');
+  expect(document.body.textContent).not.toContain('mystery');
+});
+
+it('reuses successful fixed-version details when group-name verification temporarily becomes busy', async () => {
+  let notify: ((value: typeof snapshot) => void) | undefined;
+  client.watchSnapshots = listener => {notify = listener; listener(snapshot); return () => {};};
+  useReply = () => ({kind: 'richPrepared', handle, groupId, reviewToken: token});
+  await draw(); await click('预览已知群');
+  expect(button('确认应用到这个群').disabled).toBe(false);
+  detailRead = async () => {throw new Error('offline');};
+  await act(async () => notify!({...snapshot, agents: snapshot.agents.map(agent => ({...agent, running: false}))}));
+  expect(communityRequests.filter(request => request.type === 'detail')).toHaveLength(1);
+  expect(button('确认应用到这个群').disabled).toBe(false);
+  expect(document.body.textContent).toContain('以下是配方原文。本次冲突中选择保留的内容列在下方；未变更的项目可能沿用本群现有设置。');
+  expect(requests.some(request => request.type === 'confirm')).toBe(false);
+});
+
+it('keeps generic enum display compatible without reading inherited dictionary properties', async () => {
+  await act(async () => root.render(<><SettingValue value="default"/><SettingValue value="constructor"/><SettingValue value="prototype"/><SettingValue value={{constructor: 'prototype', text: 'default'}}/></>));
+  expect(document.body.textContent).toContain('默认');
+  expect(document.body.textContent).toContain('constructor');
+  expect(document.body.textContent).toContain('prototype');
+  expect(document.body.textContent).toContain('default');
+});
+
+it.each(['account', 'recipe', 'version', 'handle', 'token'] as const)('does not reuse content after the %s scope changes', async change => {
+  const session = {id: 1, recipe: {recipeId, versionId, name: '配方', version: '1'}, accountId, device: {id: A, name: '设备', isRemote: true, mode: 'full' as const, capabilities: []}, client, botId};
+  const reply = {kind: 'richPrepared' as const, handle, groupId, reviewToken: token};
+  async function render() {
+    await act(async () => root.render(<DesktopRootView state={devicesState({id: A, phase: 'ready'})} fallback={client} shell={shell} renderApp={() => <RecipeUseDialog session={session} visible reply={reply} busy={false} paused={false} accountChanged={false} unavailable={false} needsRecovery={false} groupId={groupId} groupName="群聊" community={shell.community} onRefreshGroupName={() => {}} onSelectBot={() => {}} onSelectGroup={() => {}} onClose={() => {}} onRecover={() => {}} onRequest={async () => {}}/>}/>));
+  }
+  await render();
+  expect(button('确认应用到这个群').disabled).toBe(false);
+  detailRead = async () => {throw new Error('offline');};
+  if (change === 'account') session.accountId = otherAccount;
+  if (change === 'recipe') session.recipe.recipeId = nextVersion;
+  if (change === 'version') session.recipe.versionId = nextVersion;
+  if (change === 'handle') reply.handle = nextVersion;
+  if (change === 'token') reply.reviewToken = newToken;
+  await render();
+  expect(button('确认应用到这个群').disabled).toBe(true);
+  expect(document.body.textContent).toContain('暂时无法读取配方内容');
+  expect(communityRequests.filter(request => request.type === 'detail')).toHaveLength(2);
+});
+
+it.each(['rules', 'files', 'tasks', 'memories', 'setup'])('keeps %s prose and names verbatim', async kind => {
+  const itemId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const content = JSON.stringify({name: 'constructor', title: 'constructor', text: 'default', instruction: 'default', instructions: 'default'});
+  useReply = () => ({kind: 'richReview', handle, groupId, reviewToken: token, conflicts: [{itemId, kind, base: null, local: content, incoming: null}]});
+  await draw(); await click('预览已知群');
+  expect(document.querySelector('fieldset')!.textContent).toContain('default');
+  expect(document.querySelector('fieldset')!.textContent).not.toContain('默认');
+  if (['files', 'tasks', 'setup'].includes(kind)) expect(document.querySelector('fieldset')!.textContent).toContain('constructor');
+});
+
+it('distinguishes a real parent-only card order conflict and retains the chosen order', async () => {
+  const {defaultCardDisplay} = await import('@vonvon/protocol');
+  const {recipeSnapshot, mergeRecipeItems} = await import('../../daemon/src/recipe/rich-merge');
+  const {localRecipeItems, applyNativeRecipeFields} = await import('../../daemon/src/recipe/rich-settings');
+  const id = (n: number) => `0000000${n}-1111-4111-8111-111111111111`;
+  const native = defaultCardDisplay().blocks.slice(0, 3);
+  const portable = native.map(({source: _source, language: _language, sample: _sample, script: _script, ...block}, index) => ({...block, itemId: id(index + 1), originId: id(index + 1)}));
+  const snapshotFor = (order: number[]) => recipeSnapshot({format: 'rich-v2', schemaVersion: 2, public: {name: '排序', summary: '', overview: '', version: '1'}, rules: [], skills: [], files: [], tasks: [], memories: [], setup: [], settings: [{itemId: id(4), originId: id(4), field: 'presentation.cardDisplay', value: {version: 1, blocks: order.map(index => portable[index]!)}}]}, () => '');
+  const base = snapshotFor([0, 1, 2]);
+  const row = {richRecipe: {resolved: base}, presentation: {cardDisplay: {version: 1, blocks: [1, 0, 2].map(index => native[index]!)}}} as unknown as import('../../daemon/src/project/registry').Project;
+  const incoming = snapshotFor([0, 2, 1]);
+  const local = localRecipeItems(row, incoming);
+  const {conflicts} = mergeRecipeItems(base, local, incoming);
+  expect(conflicts).toHaveLength(1);
+  const review = {kind: 'richReview' as const, handle, groupId, reviewToken: token, conflicts: conflicts.map(item => ({itemId: item.itemId, kind: item.local!.kind, base: JSON.stringify(item.base!.value), local: JSON.stringify(item.local!.value), incoming: JSON.stringify(item.incoming!.value)}))};
+  for (const side of ['local', 'incoming'] as const) {
+    const destination = structuredClone(row);
+    applyNativeRecipeFields(destination, mergeRecipeItems(base, local, incoming, {[id(4)]: side}).resolved, base);
+    expect(destination.presentation?.cardDisplay?.blocks.map(block => block.name)).toEqual((side === 'local' ? [1, 0, 2] : [0, 2, 1]).map(index => native[index]!.name));
+  }
+  useReply = request => request.type === 'richResolve' ? {kind: 'richPrepared', handle, groupId, reviewToken: token} : review;
+  await draw(); await click('预览已知群');
+  const sides = [...document.querySelectorAll('.recipe-use-compare')];
+  expect(sides[0]?.textContent).toContain('卡片块2 → 卡片块1 → 卡片块3');
+  expect(sides[1]?.textContent).toContain('卡片块1 → 卡片块3 → 卡片块2');
+  expect(document.body.textContent).not.toContain(id(1));
+  await pick(`input[name="${id(4)}"]`); await click('预览所选内容');
+  expect(document.querySelector('.recipe-use-retained')?.textContent).toContain('卡片块2 → 卡片块1 → 卡片块3');
+});
+
+it('uses the same card block numbers after a missing block and in the retained summary', async () => {
+  const ids = ['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'];
+  const setting = (order: string[]) => JSON.stringify({field: 'presentation.cardDisplay', value: {version: 1, blocks: order}});
+  useReply = request => request.type === 'richResolve' ? {kind: 'richPrepared', handle, groupId, reviewToken: token} : {kind: 'richReview', handle, groupId, reviewToken: token, conflicts: [{itemId: versionId, kind: 'settings', base: setting(ids), local: setting([ids[2]!, ids[0]!]), incoming: setting([ids[1]!, ids[2]!, ids[0]!])}]};
+  await draw(); await click('预览已知群');
+  expect(document.querySelectorAll('.recipe-use-compare')[0]?.textContent).toContain('卡片块3 → 卡片块1');
+  expect(document.querySelectorAll('.recipe-use-compare')[1]?.textContent).toContain('卡片块2 → 卡片块3 → 卡片块1');
+  await pick(`input[name="${versionId}"]`); await click('预览所选内容');
+  expect(document.querySelector('.recipe-use-retained')?.textContent).toContain('卡片块3 → 卡片块1');
+  for (const id of ids) expect(document.body.textContent).not.toContain(id);
+  await act(async () => accountListener!({...status as Extract<AccountStatus, {kind: 'signedIn'}>, accountId: otherAccount}));
+  expect(document.querySelector('.recipe-use-retained')).toBeNull();
+  expect(button('确认应用到这个群')).toBeUndefined();
 });

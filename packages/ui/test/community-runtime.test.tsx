@@ -192,6 +192,7 @@ it('recovers a lost code-batch receipt using the same key while retaining only s
   await click('重试上一批');
   const issues = calls.filter(request => request.type === 'issueCodes');
   expect(issues).toHaveLength(2); expect(issues[1]).toEqual(issues[0]);
+  expect(document.querySelector('.community-codes [role="status"]')?.textContent).toBe('本次已生成 3 枚分享码。');
   expect(document.querySelector('.community-code-text')).toBeNull();
   expect(document.querySelector('.community-codes')?.textContent).not.toContain(available.code);
   expect(document.querySelector('.community-codes')?.textContent).toContain('复制分享码');

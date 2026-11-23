@@ -20,13 +20,14 @@ export const recipePublicSchema = z.object({name: text(60), summary: text(240), 
 export const recipeConfigSchema = z.object({role: bytes(16384), setup: z.object({steps: z.array(z.object({kind: z.enum(['config','tool','context']), title: text(80), instructions: bytes(2048), required: z.boolean(), check: bytes(512).optional()}).strict()).min(1).max(8)}).strict().optional()}).strict();
 export type RecipeConfig = z.infer<typeof recipeConfigSchema>;
 export type RecipePublic = z.infer<typeof recipePublicSchema>;
-const creator = z.object({authorId:id,displayName:text(60).refine(value=>Boolean(value.trim())&&!/@/.test(value))}).strict();
+export const publicDisplayNameSchema = z.string().refine(value => wellFormed(value) && !/[@\u0000-\u001f\u007f-\u009f]/.test(value)).transform(value => value.replace(/^ +| +$/g, '')).refine(value => Array.from(value).length >= 1 && Array.from(value).length <= 60);
+const creator = z.object({authorId:id,displayName:publicDisplayNameSchema}).strict();
 const richView = z.object({content: recipeRichContentSchema, texts: z.record(id, bytes(131072)), canonical: z.string().max(1401000)}).strict();
 const display = {format: z.enum(['role-v1','rich-v2']).optional(), creator: creator.optional(), hasDisplayLogo: z.boolean().optional(), logo: z.string().max(180000).regex(/^data:image\/webp;base64,[A-Za-z0-9+/=]+$/).optional()};
 const summary = z.object({recipeId: id, versionId: id, revision, public: recipePublicSchema.partial({summary: true, overview: true}), ...display}).strict();
 export const recipeSummarySchema = summary;
 export type RecipeSummary = z.infer<typeof summary>;
-export const recipeDetailSchema = summary.extend({public: recipePublicSchema, owned: z.boolean(), acquired: z.boolean(), config: recipeConfigSchema.optional(), rich: richView.optional()}).strict().superRefine((value, ctx) => {
+export const recipeDetailSchema = summary.extend({public: recipePublicSchema, state: z.enum(['listed','withdrawn']).optional(), owned: z.boolean(), acquired: z.boolean(), config: recipeConfigSchema.optional(), rich: richView.optional()}).strict().superRefine((value, ctx) => {
   const permitted = value.owned || value.acquired || value.public.access === 'direct';
   if(value.format==='rich-v2'&&(Boolean(value.rich)!==permitted||Boolean(value.config)))ctx.addIssue({code:'custom',message:'Invalid rich configuration visibility'});
   if(value.rich&&value.format!=='rich-v2')ctx.addIssue({code:'custom',message:'Missing rich format'});
@@ -60,6 +61,8 @@ export const richMetadataReceiptSchema = z.object({requestId:metadataRequestId,d
 const changes = {public: recipePublicSchema, config: recipeConfigSchema};
 export const communityRequestSchema = z.discriminatedUnion('type', [
   richMetadataRequestSchema,
+  z.object({type: z.literal('profile'), ...privateRequest}).strict(),
+  z.object({type: z.literal('saveProfile'), ...privateRequest, ...request, displayName: publicDisplayNameSchema}).strict(),
   z.object({type:z.literal('recoverRichDraftMetadata'),...privateRequest,draftId:id}).strict(),
   z.object({type: z.literal('shareLink'), ...version}).strict(),
   z.object({type: z.literal('catalog'), accountId: id.optional(), query: text(120).optional(), ...catalogPage}).strict(),
@@ -75,6 +78,7 @@ export const communityRequestSchema = z.discriminatedUnion('type', [
   z.object({type: z.literal('deleteDraft'), ...privateRequest, ...request, draftId: id, revision}).strict(),
   z.object({type:z.literal('publishDraft'),...privateRequest,...request,draftId:id,revision,format:z.literal('rich-v2').optional(),canonical:z.string().min(1).max(1401000).regex(/^[A-Za-z0-9_-]+$/).optional()}).strict(),
   z.object({type: z.literal('acquire'), ...privateRequest, requestId: acquisitionKeySchema, versionId: id, code: z.string().regex(/^[a-z0-9-]{1,128}$/i).optional()}).strict(),
+  z.object({type: z.literal('withdraw'), ...privateRequest, versionId: id}).strict(),
   z.object({type: z.literal('codes'), ...privateRequest, versionId: id, ...page}).strict(),
   z.object({type: z.literal('issueCodes'), ...privateRequest, ...request, versionId: id, count: z.number().int().min(1).max(100)}).strict(),
   z.object({type: z.literal('disableCode'), ...privateRequest, ...request, codeId: id}).strict(),
@@ -91,6 +95,9 @@ const richMetadataOutcomeSchema = z.discriminatedUnion('status',[
     z.object({status:z.literal('uncertain')}).strict(),
   ]);
 export const communityResponseSchemas = {
+  withdraw: z.literal(''),
+  profile: creator,
+  saveProfile: creator,
   saveRichDraftMetadata:richMetadataOutcomeSchema,
   recoverRichDraftMetadata:z.union([z.object({status:z.literal('current'),draft:recipeRichDraftSchema}).strict(),richMetadataOutcomeSchema]),
   shareLink: z.object({url: z.string().url().max(2048)}).strict(),

@@ -49,6 +49,9 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   const [publications, setPublications] = useState<RecipeSummary[]>();
   const [detail, setDetail] = useState<RecipeDetail>();
   const [shareUrl, setShareUrl] = useState<string>();
+  const uncertainWithdrawals = useRef(new Set<string>());
+  const [withdrawal, setWithdrawal] = useState<'closed' | 'confirm' | 'uncertain'>('closed');
+  useEffect(() => setWithdrawal('closed'), [route]);
   const [codeDialog, setCodeDialog] = useState(false);
   const codeInput = useRef<HTMLInputElement>(null);
   useEffect(() => setCodeDialog(false), [route]);
@@ -160,6 +163,27 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
     }
     await reconcile();
   }
+  async function withdraw() {
+    if (!accountId || !detail?.owned || route.kind !== 'detail' || !route.privateView) return;
+    const selected = detail, current = generation.current;
+    const active = () => live.current && current === generation.current;
+    if (withdrawal === 'confirm') {
+      uncertainWithdrawals.current.add(selected.versionId);
+      setWithdrawal('uncertain');
+      await shell.request({type: 'withdraw', accountId, versionId: selected.versionId});
+      if (!active()) return;
+    }
+    const next = await shell.request({type: 'detail', accountId, recipeId: selected.recipeId, versionId: selected.versionId});
+    if (!active()) return;
+    if (next.recipeId !== selected.recipeId || next.versionId !== selected.versionId || !next.owned || !next.state) throw new Error('撤下结果尚未确认，请重新读取。');
+    setDetail(next);
+    uncertainWithdrawals.current.delete(selected.versionId);
+    setWithdrawal('closed');
+    if (next.state === 'withdrawn') {
+      setNotice('此版本已撤下。已有获取者仍可查看和重新添加，已安装的配置会保留。');
+      community.setCatalog(old => ({...old, result: undefined}));
+    } else setNotice('已确认此版本仍在发布中。如需撤下，请重新确认。');
+  }
   const login = <div className="community-empty"><h2>登录后继续</h2><p>{accountStatusText(account.status, account.supported)}</p><GlowButton variant="dark" disabled={!account.supported || account.status?.kind === 'signingIn'} onClick={() => void account.login()}>登录</GlowButton></div>;
   const privatePage = route.kind === 'library' || route.kind === 'workspace' || route.kind === 'draft' || route.kind === 'detail' && route.privateView;
   const sourceDialog=preparation&&<RecipeAuthoringPage {...preparation} onBack={()=>setPreparation(undefined)} onSaved={draftId=>{setPreparation(undefined);open({kind:'draft',draftId});}}/>;
@@ -193,10 +217,12 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
       </>}
       {route.kind === 'detail' && detail && <>
         <RecipeDetails recipe={detail} share={shareUrl && <CopyButton key={shareUrl} value={shareUrl}/>} action={detail.owned || detail.acquired ? <GlowButton variant="dark" disabled={!community.onUse} onClick={() => community.onUse?.(detail)}>添加到群聊</GlowButton> : <GlowButton variant="dark" disabled={busy} onClick={() => {if (detail.public.access === 'coded' && accountId) {setError(undefined); setCodeDialog(true);} else void run(acquire);}}>获取配方</GlowButton>}
-          management={route.privateView && detail.owned ? <div className="community-actions"><Button onClick={() => detail.format==='rich-v2'?setPreparation({parent:{versionId:detail.versionId}}):open({kind:'draft',source:detail})}>准备新版</Button></div> : undefined}/>
+          management={route.privateView && detail.owned ? <div className="community-actions"><Button onClick={() => detail.format==='rich-v2'?setPreparation({parent:{versionId:detail.versionId}}):open({kind:'draft',source:detail})}>准备新版</Button>{detail.format === 'rich-v2' && detail.state !== 'withdrawn' && <Button disabled={busy} onClick={() => {setError(undefined); setWithdrawal(uncertainWithdrawals.current.has(detail.versionId) ? 'uncertain' : 'confirm');}}>撤下此版本</Button>}</div> : undefined}/>
+        {detail.state === 'withdrawn' && <InlineNotice title="此版本已撤下">已停止新的获取和分享码兑换。已有获取者仍可查看和重新添加，已安装的配置会保留。</InlineNotice>}
+        {route.privateView && detail.owned && <Dialog open={withdrawal !== 'closed'} size="sm" title={withdrawal === 'uncertain' ? '确认撤下结果' : '撤下此版本'} onClose={busy ? undefined : () => setWithdrawal('closed')} footer={<><Button disabled={busy} onClick={() => setWithdrawal('closed')}>关闭</Button><Button disabled={busy} onClick={() => void run(withdraw)}>{busy ? '正在处理…' : withdrawal === 'uncertain' ? '重新读取结果' : '确认撤下'}</Button></>}><p>撤下后，此版本将从社区目录和搜索中移除，停止新的获取，尚未使用的分享码也会停用。</p><p>已有获取者仍可查看和重新添加，已安装的配置不会删除。你仍可在创作中心管理此版本。</p>{error && <InlineNotice title="操作未完成" tone="warning">{error}</InlineNotice>}</Dialog>}
         {!detail.owned && !detail.acquired && detail.public.access === 'coded' && accountId && <Dialog open={codeDialog} size="sm" title="获取配方" description={`${detail.public.name} · 版本 ${detail.public.version}`} initialFocusRef={codeInput} onClose={busy ? undefined : () => setCodeDialog(false)} footer={<><Button disabled={busy} onClick={() => setCodeDialog(false)}>取消</Button><GlowButton type="submit" form="community-acquire-code" variant="dark" disabled={busy || !code.trim()}>获取配方</GlowButton></>}><form id="community-acquire-code" className="community-code-form" onSubmit={event => {event.preventDefault(); if (!busy && code.trim()) void run(acquire);}}><label>分享码<input ref={codeInput} aria-label="分享码" placeholder="作者提供的分享码" autoComplete="off" value={code} maxLength={128} onChange={event => editCode(detail.versionId, event.target.value)}/></label>{error && <InlineNotice title="获取未完成" tone="warning">{error}</InlineNotice>}</form></Dialog>}
         {(detail.owned || detail.acquired) && !community.onUse && <p className="community-muted">已保存在账号中。请使用最新版 Vonvon Bot 桌面应用，把配方添加到群聊。</p>}
-        {route.privateView && detail.owned && detail.public.access === 'coded' && <RecipeCodes key={detail.versionId} shell={shell} accountId={accountId!} versionId={detail.versionId}/>}
+        {route.privateView && detail.owned && detail.state !== 'withdrawn' && detail.public.access === 'coded' && <RecipeCodes key={detail.versionId} shell={shell} accountId={accountId!} versionId={detail.versionId}/>}
       </>}
       {sourceDialog}
       {busy && <p role="status" className="community-muted">正在读取社区…</p>}
@@ -236,7 +262,7 @@ function RecipeCodes({shell, accountId, versionId}: {shell: CommunityShell; acco
         throw error;
       }
     })}>{pendingIssue.current ? '重试上一批' : '生成分享码'}</Button></div>
-    {batch && <p role="status" className="community-muted">本批 {batch.items.length} 枚：{batch.items.filter(item => item.status === 'available').length} 枚可用，{batch.items.filter(item => item.status === 'redeemed').length} 枚已兑换，{batch.items.filter(item => item.status === 'disabled').length} 枚已停用。</p>}
+    {batch && <p role="status" className="community-muted">本次已生成 {batch.items.length} 枚分享码。</p>}
     {codes && <><CopyButton key={codes} value={codes} label="复制分享码"/></>}
     {page?.items.length === 0 && <p className="community-muted">没有分享码。</p>}
     {Boolean(page?.items.length) && <div className="community-list">{page?.items.map(item => <div className="community-list-row" key={item.codeId}><div><strong>…{item.suffix}</strong><small>{{available: '可用', redeemed: '已兑换', disabled: '已停用'}[item.status]}{item.redeemedAt ? ' · ' + new Date(item.redeemedAt).toLocaleString() : ''}</small></div>{item.status === 'available' && <><Button disabled={busy} onClick={() => void run(async () => {const result = await shell.request({type: 'revealCode', accountId, codeId: item.codeId, requestId: requestId('reveal:' + item.codeId)}); if (live.current) setCodes(result.code ?? '');})}>准备复制</Button><Button disabled={busy} onClick={() => setDisable(item.codeId)}>停用</Button></>}</div>)}</div>}

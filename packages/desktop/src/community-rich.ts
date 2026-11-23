@@ -1,11 +1,11 @@
 import {createHash} from 'node:crypto';
 import {z} from 'zod';
 import {decodeRichRecipeContent, verifyRichRecipeRelease, recipeRichManifestObjectSchema, recipeRichReleaseSchema,
-  recipePublicSchema, recipeRoleDraftSchema, recipeSummarySchema, type RecipeDetail, type RecipeDraft, type CommunityResponses} from '@vonvon/protocol';
+  publicDisplayNameSchema, recipePublicSchema, recipeRoleDraftSchema, recipeSummarySchema, type RecipeDetail, type RecipeDraft, type CommunityResponses} from '@vonvon/protocol';
 import type {NativeAccount} from './account-session.js';
 
 const uuid = z.string().uuid();
-const creator = z.object({authorId:uuid,displayName:z.string().min(1).max(60).refine(value=>value===value.trim()&&!/[@\p{Cc}]/u.test(value))}).strict();
+const creator = z.object({authorId:uuid,displayName:publicDisplayNameSchema}).strict();
 const access = z.enum(['direct','coded']);
 const revision = z.number().int().positive().max(2147483647);
 export const richCloudDetailSchema = z.object({recipeId: uuid, versionId: uuid, revision, public: recipePublicSchema,
@@ -101,7 +101,7 @@ export function richCommunity(account: NativeAccount, accountId: string | undefi
       let logo = loaded?.logo;
       if (!logo && value.hasDisplayLogo) logo = 'data:image/webp;base64,' + (await read(`/v2/versions/${versionId}/display-logo`, 131072)).toString('base64');
       return {recipeId, versionId, revision: value.revision, public: value.public, format: 'rich-v2', creator: value.creator,
-        owned: value.owned, acquired: value.acquired, hasDisplayLogo: value.hasDisplayLogo, ...(loaded ? {rich: loaded.rich} : {}), ...(logo ? {logo} : {})};
+        state: value.state, owned: value.owned, acquired: value.acquired, hasDisplayLogo: value.hasDisplayLogo, ...(loaded ? {rich: loaded.rich} : {}), ...(logo ? {logo} : {})};
     },
     draft: draftRead,
   };
