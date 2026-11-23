@@ -225,7 +225,7 @@ test('installs: checks the signed manifest and the hash, unpacks, sets up, insta
   // owner 2026-11-02: plain words only, nothing about systemd, linger or sudo when it all worked
   const done = lines.indexOf('装好了。Vonvon Bot 已在后台运行，开机自动启动。');
   assert.ok(done >= 0, run.stdout);
-  assert.deepEqual(lines.slice(done + 1), ['试一下：`vonvon --version`', '重开一个终端，或 `. ~/.bashrc`（zsh 用 `. ~/.zshrc`）再运行 `vonvon`。', '要从别的电脑连过来管理？看 https://vonvon.bot/docs/remote/', '']);
+  assert.deepEqual(lines.slice(done + 1), ['试一下：`vonvon --version`', '重开一个终端，或 `. ~/.bashrc`（zsh 用 `. ~/.zshrc`）再运行 `vonvon`。', '要从别的电脑连过来管理？看 https://vonvon.cc/docs/remote/', '']);
   assert.doesNotMatch(run.stdout, /保持这个账号登录着/);
   assert.doesNotMatch(run.stdout, /systemd|linger|sudo/);
   if (openssl3) assert.doesNotMatch(run.stdout, /没能核对发布签名/);
@@ -692,7 +692,7 @@ test('on a Mac both scripts point to the desktop installer and exit 2: nothing w
     assert.equal(run.code, 2, run.stderr);
     assert.equal(run.stdout, '');
     // devices.md §15「安装脚本：在 Mac 上」
-    assert.equal(run.stderr, 'Mac 请下载安装包：https://vonvon.bot/get/ ，安装包里已经带了服务端和 vonvon 命令。这个脚本只用于 Linux，什么都没动。\n');
+    assert.equal(run.stderr, 'Mac 请下载安装包：https://vonvon.cc/get/ ，安装包里已经带了服务端和 vonvon 命令。这个脚本只用于 Linux，什么都没动。\n');
     await shim(f.shims, 'id', `case "$1" in -u) echo 0 ;; *) echo root ;; esac`);
   }
   assert.deepEqual(await readdir(f.home), []);
@@ -705,7 +705,7 @@ test('on a Mac both scripts point to the desktop installer and exit 2: nothing w
   const run = await f.run('uninstall.sh');
   assert.equal(run.code, 2, run.stderr);
   // devices.md §15「卸载脚本：在 Mac 上」
-  assert.equal(run.stderr, '这个脚本只卸载 Linux 上的服务端。Mac 上的 Vonvon Bot 是桌面端安装包装的，说明见 https://vonvon.bot/get/\n');
+  assert.equal(run.stderr, '这个脚本只卸载 Linux 上的服务端。Mac 上的 Vonvon Bot 是桌面端安装包装的，说明见 https://vonvon.cc/get/\n');
   assert.equal(await f.exists(join(f.root, 'releases', '1.0.0', 'standalone.json')), true);
   assert.deepEqual(await f.calls(), []);
   assert.equal(await f.exists(join(f.shims, 'mktemp.log')), false);
@@ -729,7 +729,7 @@ test('on any other system both scripts exit 2 first, with the only-Linux text: b
       assert.equal(run.code, 2, `${system} ${script}: ${run.stderr}`);
       assert.equal(run.stdout, '', `${system} ${script}`);
       // devices.md §15「安装脚本：不是 Linux、也不是 Mac」
-      assert.equal(run.stderr, `这个安装脚本只支持 Linux（这台是 ${shown}）。Mac、Windows 请下载 Vonvon Bot 桌面端安装包：https://vonvon.bot/get/\n`, `${system} ${script}`);
+      assert.equal(run.stderr, `这个安装脚本只支持 Linux（这台是 ${shown}）。Mac、Windows 请下载 Vonvon Bot 桌面端安装包：https://vonvon.cc/get/\n`, `${system} ${script}`);
     }
     await mkdir(join(f.root, 'releases', '1.0.0'), { recursive: true });
     await writeFile(join(f.root, 'releases', '1.0.0', 'standalone.json'), '{}');

@@ -132,7 +132,7 @@ it.runIf(canBindAlias)('names a paired client in the request, and never takes a 
     expect(await paired.client.machine({ type: 'applyCoreUpdate' })).toEqual({ type: 'done', message: '开始更新…' });
     const apply = await nextRequest(shell, 'apply');
     expect(apply.by).toBe('「笔记本」');
-    await report(shell, apply.requestId, 'unavailable', { message: '这个安装包没有可用的签名更新源，请到官网下载新版本：https://vonvon.bot/get/' });
+    await report(shell, apply.requestId, 'unavailable', { message: '这个安装包没有可用的签名更新源，请到官网下载新版本：https://vonvon.cc/get/' });
     expect(await paired.client.machine({ type: 'coreUpdateStatus' })).toMatchObject({ status: { phase: 'error', message: expect.stringContaining('没有可用的签名更新源') } });
     await paired.client.close();
   } finally {

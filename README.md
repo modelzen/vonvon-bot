@@ -7,10 +7,10 @@
 <p align="center">在飞书里交代任务，用自己设备上的 Codex 或 Claude Code 来做。</p>
 
 <p align="center">
-  <a href="https://vonvon.bot/get/">下载</a> ·
-  <a href="https://vonvon.bot/docs/quickstart/">快速开始</a> ·
-  <a href="https://vonvon.bot/docs/">使用文档</a> ·
-  <a href="https://vonvon.bot/changelog/">更新日志</a>
+  <a href="https://vonvon.cc/get/">下载</a> ·
+  <a href="https://vonvon.cc/docs/quickstart/">快速开始</a> ·
+  <a href="https://vonvon.cc/docs/">使用文档</a> ·
+  <a href="https://vonvon.cc/changelog/">更新日志</a>
 </p>
 
 Vonvon Bot 把飞书机器人连到你配置好的编程助手。比如在群里说「查一下这次构建失败的原因」，Bot 会在这个群配置的工作目录里查文件、跑命令，再把进度和结果发回飞书。群成员可以直接在飞书里使用，Bot 运行所在的设备需要开着并联网。
@@ -33,11 +33,11 @@ Vonvon Bot 把飞书机器人连到你配置好的编程助手。比如在群里
 | Windows | 下载桌面端，按 x64 或 ARM64 选择安装包。 |
 | Linux | 支持 glibc 2.28+ 的 x64 和 arm64。按下载页的命令安装服务端，用命令行或其他设备上的桌面端管理。 |
 
-安装前可查看 [下载与系统要求](https://vonvon.bot/get/)。连接服务器见 [远程连接指南](https://vonvon.bot/docs/remote/)，旧 Bridge 用户可查看 [迁移指南](https://vonvon.bot/docs/bridge-import/)。
+安装前可查看 [下载与系统要求](https://vonvon.cc/get/)。连接服务器见 [远程连接指南](https://vonvon.cc/docs/remote/)，旧 Bridge 用户可查看 [迁移指南](https://vonvon.cc/docs/bridge-import/)。
 
 ## 反馈和贡献
 
-遇到安装、登录或连接问题，可以先查 [常见问题与排错](https://vonvon.bot/docs/troubleshooting/)。欢迎报告 Bug、提出功能建议，或帮忙改进中文文档。[新建 Issue](https://github.com/modelzen/vonvon-bot/issues/new/choose)
+遇到安装、登录或连接问题，可以先查 [常见问题与排错](https://vonvon.cc/docs/troubleshooting/)。欢迎报告 Bug、提出功能建议，或帮忙改进中文文档。[新建 Issue](https://github.com/modelzen/vonvon-bot/issues/new/choose)
 
 如果想从源码构建或提交代码，可以从 [贡献指南](CONTRIBUTING.md) 开始。参与讨论时请遵守 [社区行为准则](CODE_OF_CONDUCT.md)。发现安全漏洞时，请走 [私下报告渠道](SECURITY.md)。
 

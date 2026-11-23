@@ -33,9 +33,9 @@ it('points at the download page without asking GitHub, only on macOS', async () 
   const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
   try {
     Object.defineProperty(process, 'platform', { value: 'darwin' });
-    expect(await run({ check: true })).toContain('https://vonvon.bot/get/');
+    expect(await run({ check: true })).toContain('https://vonvon.cc/get/');
     Object.defineProperty(process, 'platform', { value: 'linux' });
-    expect(await run({ check: true })).not.toContain('https://vonvon.bot/get/');
+    expect(await run({ check: true })).not.toContain('vonvon.cc');
     expect(fetcher).not.toHaveBeenCalled();
   } finally {
     Object.defineProperty(process, 'platform', platform);

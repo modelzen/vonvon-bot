@@ -10,8 +10,8 @@ set -eu
 
 BASE_URL="https://dl.vonvon.cc/bot/server"
 GLOBAL_BASE_URL="https://vonvon-linux-download.amber2clay.workers.dev/bot/server"
-GUIDE_URL="https://vonvon.bot/docs/remote/"
-DESKTOP_DOWNLOAD="https://vonvon.bot/get/"
+GUIDE_URL="https://vonvon.cc/docs/remote/"
+DESKTOP_DOWNLOAD="https://vonvon.cc/get/"
 SERVER_MARKER="# Vonvon Bot server CLI v1"
 # 服务端发布清单的签名公钥（server-3 C2，SPKI PEM），和 packages/daemon/server-update.json 是同一把。
 # 发布前换成真的那把（server-5 4.2）；空着时脚本不安装。

@@ -80,7 +80,7 @@ describe('buildDoctorCard', () => {
   it('embeds a copy-paste prompt carrying the site, version, log paths and config, without the old bridge name or repo', () => {
     const prompt = codeBlock(buildDoctorCard(info()));
     expect(prompt).toContain('我在用 Vonvon Bot');
-    expect(prompt).toContain('https://vonvon.bot');
+    expect(prompt).toContain('https://vonvon.cc');
     expect(prompt).not.toMatch(/github\.com|feishu-codex-bridge（|bridge 版本|项目仓库|issues/);
     expect(prompt).toContain('v0.1.2');
     expect(prompt).toContain('codex-cli 0.45.0');
@@ -123,9 +123,9 @@ describe('buildDoctorCard', () => {
       }
     };
     walk(buildDoctorCard(info()));
-    expect(urls).toContain('https://vonvon.bot');
+    expect(urls).toContain('https://vonvon.cc');
     // The group invite link lives on the site only, so a changed group never needs a new release.
-    expect(urls).toContain('https://vonvon.bot/#community');
+    expect(urls).toContain('https://vonvon.cc/#community');
     expect(urls.some(url => url.includes('feishu.cn/client/chat/chatter/add_by_link'))).toBe(false);
     expect(urls.some(url => url.includes('github.com'))).toBe(false);
     const text = JSON.stringify(buildDoctorCard(info()));

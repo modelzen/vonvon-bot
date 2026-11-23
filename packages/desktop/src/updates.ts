@@ -35,7 +35,7 @@ function isNewer(latest:string,current:string):boolean {
   for(let i=0;i<3;i++) { if(a[i] !== b[i]) return (a[i] ?? 0) > (b[i] ?? 0); }
   return false;
 }
-const downloadPage = 'https://vonvon.bot/get/';
+const downloadPage = 'https://vonvon.cc/get/';
 interface Lookup { result:DesktopUpdate; latest?:string; feedURL?:string }
 export class DesktopUpdater {
   private feedURL?:string;

@@ -69,7 +69,7 @@ export async function runStandaloneSetup(options: { installRoot: string; version
   await checkedRoot(installRoot);
   if (!VERSION.test(version)) throw badArgs(`版本号不对：${version}`);
   // Only Linux has a script-installed server (owner 2026-11-01): Mac and Windows get theirs inside the desktop app.
-  if (d.platform !== 'linux') throw new CommandError('failed', '只有 Linux 用安装脚本装服务端；Mac、Windows 请下载安装包：https://vonvon.bot/get/', { reason: 'unsupported_platform' });
+  if (d.platform !== 'linux') throw new CommandError('failed', '只有 Linux 用安装脚本装服务端；Mac、Windows 请下载安装包：https://vonvon.cc/get/', { reason: 'unsupported_platform' });
   let previous: string | null;
   // switchCurrent refuses a release without its standalone.json naming this version
   try { ({ previous } = await switchCurrent(installRoot, version)); }

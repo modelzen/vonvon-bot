@@ -38,7 +38,7 @@ describe('desktop update port', () => {
     const driver = new Driver();
     const fetch = vi.fn();
     const updater = new DesktopUpdater({ current: '1.0.0', signed: false, driver, fetch });
-    await expect(updater.check()).resolves.toMatchObject({ state: 'unavailable', message: expect.stringContaining('https://vonvon.bot/get/') });
+    await expect(updater.check()).resolves.toMatchObject({ state: 'unavailable', message: expect.stringContaining('https://vonvon.cc/get/') });
     await expect(updater.install()).rejects.toThrow('请先检查桌面更新');
     expect(fetch).not.toHaveBeenCalled();
     expect(driver.checkForUpdates).not.toHaveBeenCalled();
@@ -148,7 +148,7 @@ describe('desktop update port', () => {
     writeFileSync(join(h.statePath, 'x'), '');
     const failure = await h.updater.retry().catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(DesktopUpdateError);
-    expect((failure as Error).message).toContain('https://vonvon.bot/get/');
+    expect((failure as Error).message).toContain('https://vonvon.cc/get/');
     expect(h.fetch).not.toHaveBeenCalled();
   });
 

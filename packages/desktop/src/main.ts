@@ -28,7 +28,7 @@ import { REMOTE_UPDATE_TEXT, startRemoteSelfUpdate, type RemoteSelfUpdate } from
 import { ConnectionError, RpcError } from '@vonvon/client/browser';
 
 /** 应用内更新没生效时给用户的手动下载地址，和设置页里的链接一致。 */
-const downloadPage = 'https://vonvon.bot/get/';
+const downloadPage = 'https://vonvon.cc/get/';
 const restartDeadlineMs = 60_000;
 const stopDeadlineMs = 60_000;
 /** A manual start cancels passive reconnection without a connection-lost dialog. */
