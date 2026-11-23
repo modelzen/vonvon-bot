@@ -25,7 +25,7 @@ export function candidateCardDetails(payload?: string): CandidateCardDetails | u
     if (patch.schemaVersion !== 1 || freezePayload(patch).payload !== payload) return;
     const changes = authoringChangeSchema.array().max(16).parse(patch.changes);
     const fields = changes.map(change => ({
-      label:change.op === 'setPublicText' ? fieldLabels[change.field] : change.op === 'setDraftRole' ? '角色' : '使用前准备',
+      label:change.op === 'setPublicText' ? fieldLabels[change.field] : change.op === 'setDraftRole' ? '角色' : '旧补充说明',
       valueJson:JSON.stringify(change.value),
     }));
     return {draftId:patch.draftId, revision:patch.baseRevision, payloadDigest:digest(bytes), fields};
@@ -37,11 +37,10 @@ export async function parseChanges(instruction: string, options: {
   parser?: DraftInstructionParser; signal: AbortSignal; readField?: (field: PublicField) => Promise<DraftField | undefined>;
 }): Promise<DraftInterpretation> {
   if ([...instruction].length > 2000 || hasLocalPath(instruction)) throw new Error('请在 App 编辑。');
-  const match = /^\/recipe\s+(name|summary|overview|version|role|setup)(?:\s+([\s\S]*))?$/i.exec(instruction);
+  const match = /^\/recipe\s+(name|summary|overview|version|role)(?:\s+([\s\S]*))?$/i.exec(instruction);
   if (match) {
     const field = match[1]!.toLowerCase(), value = match[2] ?? '';
-    const change = field === 'role' ? {op:'setDraftRole', value} :
-      field === 'setup' ? {op:'setSetup', value:JSON.parse(value)} : {op:'setPublicText',field,value};
+    const change = field === 'role' ? {op:'setDraftRole', value} : {op:'setPublicText',field,value};
     return {kind:'proposal',changes:[authoringChangeSchema.parse(change)]};
   }
   if (instruction.startsWith('/')) return {kind:'unavailable'};

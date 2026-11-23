@@ -89,7 +89,10 @@ test('real PostgreSQL API, member broker and shipped Web modules preserve rich s
   assert.equal(anonymous.window.document.querySelector('main h2').textContent, '配方介绍');
   assert.equal(anonymous.window.document.querySelector('main strong').textContent, '公开说明');
   assert.match(anonymous.window.document.querySelector('main img').src, /^data:image\/webp;base64,/);
-  const expected = {'模型与权限': '推荐模型', '能力': '样例技能', '沟通方式': '智能会话', '记忆': '完整正文', '任务': '每日整理', '使用前准备': '核对本地环境'};
+  assert.deepEqual([...anonymous.window.document.querySelectorAll('[aria-label="配方详细信息"] button')].map(button=>button.textContent), ['概览','模型与权限','能力','沟通方式','记忆','任务']);
+  assert.equal(anonymous.find('使用前准备'), undefined);
+  assert.match(anonymous.window.document.querySelector('.community-additional-notes').textContent, /核对本地环境/);
+  const expected = {'模型与权限': '推荐模型', '能力': '样例技能', '沟通方式': '智能会话', '记忆': '完整正文', '任务': '每日整理'};
   for (const [tab, text] of Object.entries(expected)) {await anonymous.click(tab); assert.match(anonymous.text(), new RegExp(text));}
   assert.equal(anonymous.window.document.querySelector('main script, main img[src="x"]'), null);
   assert.equal(anonymous.window.document.querySelector('main').innerHTML.includes('<script>alert(1)</script>'), false);
@@ -98,6 +101,8 @@ test('real PostgreSQL API, member broker and shipped Web modules preserve rich s
   assert.equal(anonymous.window.document.querySelector('input[aria-label="手动复制"]').value, fixture.publicOrigin + directPath);
   const locked = await browser(t, fixture, codedPath);
   assert.equal(locked.find('能力'), undefined); assert.match(locked.text(), /获取此版本后/);
+  assert.equal(locked.window.document.querySelector('.community-additional-notes'), null);
+  assert.doesNotMatch(locked.text(), /核对本地环境/);
   assert.equal(locked.calls.some(call => call.path.includes('/objects/')), false);
   await locked.click('获取配方'); assert.match(locked.window.document.querySelector('dialog').textContent, /GitHub/);
   const reader = await fixture.login('reader'), other = await fixture.login('other'), author = await fixture.login('author');
@@ -163,6 +168,34 @@ test('real PostgreSQL API, member broker and shipped Web modules preserve rich s
   for (const asset of [directPath, '/viewer.mjs', '/viewer.css', '/app.mjs', '/vendor/markdown-it.mjs']) assert.equal((await fetch(packageHost + asset)).status, 200, asset);
   assert.equal((await fetch(packageHost + '/api/v2' + directPath)).status, 200);
   console.log('PASS real HTTP: exact-version rich direct full tabs; coded intro only; normalized Logo; code retry and opaque-key recovery; cross-account/CSRF; XSS text; legacy detail.');
+});
+
+test('the shipped creator UI removes incomplete legacy notes and publishes the same PostgreSQL draft',async t=>{
+  const fixture=await richFixture(t);
+  const original={public:{name:'旧稿兼容验证',summary:'私人草稿',overview:'公开介绍保持原样',version:'1.0',access:'coded'},config:{role:'PRIVATE_ROLE_KEEP',setup:{steps:[{kind:'tool',title:'',instructions:'',required:true}]}}};
+  const draft=await fixture.request('/v1/drafts',original,{key:crypto.randomUUID()});
+  const rejected=await fetch(fixture.apiHost+'/v1/drafts/'+draft.draftId+'/publish',{method:'POST',headers:{authorization:'Bearer '+fixture.tokens.author,'content-type':'application/json','idempotency-key':crypto.randomUUID(),'if-match':'"1"'},body:'{}'});
+  assert.equal(rejected.ok,false);assert.equal((await rejected.json()).error.code,'incomplete_setup');
+  const author=await fixture.login('author'),studio=await browser(t,fixture,'/studio',author);
+  await studio.click('打开');
+  assert.equal(studio.window.document.querySelector('[data-field="instructions"]'),null);
+  assert.equal(studio.window.document.querySelector('#additional-notes').hidden,false);
+  await studio.click('移除旧补充说明');
+  assert.equal(studio.calls.some(call=>call.options.method==='PATCH'),false);
+  const before=await fixture.request('/v1/drafts/'+draft.draftId);
+  assert.deepEqual(before.config.setup,original.config.setup);
+  await studio.click('保存草稿');await until(()=>studio.window.document.querySelector('#notice').textContent==='私人草稿已保存。');
+  const saved=await fixture.request('/v1/drafts/'+draft.draftId);
+  assert.equal(saved.draftId,draft.draftId);assert.equal(saved.revision,2);
+  assert.deepEqual(saved.config,{role:'PRIVATE_ROLE_KEEP'});assert.equal(saved.public.overview,original.public.overview);
+  await studio.click('预览发布');assert.equal(studio.window.document.querySelector('#confirm').open,true);
+  await studio.click('确认发布');await until(()=>studio.window.document.querySelector('#notice').textContent==='本版本已发布。');
+  const writes=studio.calls.filter(call=>call.options.method==='PATCH'||call.path.endsWith('/publish'));
+  assert.deepEqual(writes.map(call=>call.path),['/api/v1/drafts/'+draft.draftId,'/api/v1/drafts/'+draft.draftId+'/publish']);
+  assert.equal(writes[1].options.headers['if-match'],'"2"');
+  const path=new URL(studio.window.document.querySelector('#published').href).pathname;
+  const published=await fixture.request('/v1'+path);
+  assert.deepEqual(published.config,{role:'PRIVATE_ROLE_KEEP'});assert.equal(published.public.overview,original.public.overview);
 });
 
 test('OAuth continuation resumes shipped rich-v2 direct and coded confirmation without acquiring', async t => {

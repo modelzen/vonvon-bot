@@ -1,5 +1,7 @@
 # Rich-v2 content codec
 
+Product clarification (2026-11-14): setup is an ordinary skill. The legacy structured setup fields and codec operations below remain wire-format history for reading existing development fixtures and preserving immutable bytes; new interactive authoring does not create or manage those steps. Authors describe dependencies and when to run their setup skill in the overview. There is no preparation completion state or dedicated setup navigation. Task activation remains independently reviewed. See [PRD](prd.md#配方里的-setup-怎么用).
+
 The shared protocol adds an explicit `rich-v2` variant. It does not change v1 manifests, serializers, proof purposes, generations, payloads, receipts, or historical quota bytes. No rich writer is enabled by this slice.
 
 ## Content and release identity

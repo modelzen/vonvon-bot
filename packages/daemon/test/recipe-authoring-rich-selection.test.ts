@@ -10,17 +10,19 @@ import type {ManagedSourceItem,ManagedSourceSelection} from '../src/recipe/autho
 it('requires explicit managed skill and filename choices while retaining provenance',async()=>{
  const account=randomUUID(),versionId=randomUUID(),entry=randomUUID(),ref=randomUUID(),skill=randomUUID(),setup=randomUUID();
  const item=(kind:ManagedSourceItem['kind'],itemId:string,value:Record<string,unknown>):ManagedSourceItem=>({kind,itemId,originId:randomUUID(),value,parents:[{versionId,itemId,baselineSha256:'1'.repeat(64)}],authorId:account,access:'direct'});
- const managed=[item('skills',skill,{name:'helper',entryFileId:entry,fileIds:[entry,ref]}),item('files',entry,{name:'SKILL.md',use:'skillDescription',text:'ENTRY_SENTINEL'}),item('files',ref,{name:'reference.md',use:'reference',text:'REFERENCE_SENTINEL'}),item('setup',setup,{kind:'tool',title:'确认工具',instructions:'SETUP_SENTINEL',required:true,action:{kind:'manual'}})];
+ const managed=[item('skills',skill,{name:'setup',entryFileId:entry,fileIds:[entry,ref]}),item('files',entry,{name:'SKILL.md',use:'skillDescription',text:'ENTRY_SENTINEL'}),item('files',ref,{name:'reference.md',use:'reference',text:'REFERENCE_SENTINEL'}),item('setup',setup,{kind:'tool',title:'确认工具',instructions:'SETUP_SENTINEL',required:true,action:{kind:'manual'}})];
  const native={bot:{appId:'test-rich-selection'},channel:{},managedSources:async(_row:unknown,_root:string,selection?:ManagedSourceSelection)=>selection?managed:managed.filter(item=>item.kind==='skills'||item.kind==='files').map(item=>{const {text:_,...value}=item.value;return {...item,value};})} as unknown as RichNativeOptions;
  const options={includeBotMemories:false,includeTasks:false,skills:[] as {skill:string;files:string[]}[]};
  const empty=await readRichSource(native,'scope',account,'group',options);
+ expect(empty.content.setup).toEqual([]);expect(empty.evidence.has(setup)).toBe(false);
  expect(empty.content.skills).toEqual([]);expect(empty.content.files).toEqual([]);
  const prepare=(inv:typeof empty,selected:string[])=>preparedRich({type:'richPrepare',groupId:'group',selection:{options,selected,reviewToken:inv.lease,sourceAttested:true,public:{name:'',summary:'',overview:'',version:''},access:'direct',setup:[]},attestations:[{versionId,authorId:account,access:'direct',items:managed.map(m=>m.parents[0])}]} as unknown as Parameters<typeof preparedRich>[0],inv,account);
  const excluded=prepare(empty,[]);expect(excluded.members).toEqual([]);expect(JSON.stringify(excluded.request)).not.toMatch(/ENTRY_SENTINEL|REFERENCE_SENTINEL|SETUP_SENTINEL/);
+ expect(()=>preparedRich({type:'richPrepare',groupId:'group',selection:{options,selected:[],reviewToken:empty.lease,sourceAttested:true,public:{name:'',summary:'',overview:'',version:''},access:'direct',setup:[{kind:'tool',title:'新的步骤',instructions:'不要创建',required:true,action:{kind:'manual'}}]},attestations:[]} as unknown as Parameters<typeof preparedRich>[0],empty,account)).toThrow('普通技能');
  const choices=await richSkillOptions(native,'group');expect(choices).toHaveLength(1);expect(choices[0]!.files).toEqual(['SKILL.md','reference.md']);expect(JSON.stringify(choices)).not.toMatch(/ENTRY_SENTINEL|REFERENCE_SENTINEL|SETUP_SENTINEL/);
  options.skills=[{skill:choices[0]!.name,files:['SKILL.md']}];
  const inventory=await readRichSource(native,'scope',account,'group',options);
- expect(inventory.content.skills[0]!.fileIds).toEqual([entry]);expect(inventory.content.files.map(f=>f.itemId)).toEqual([entry]);
+ expect(inventory.content.skills[0]!.name).toBe('setup');expect(inventory.content.setup).toEqual([]);expect(inventory.content.skills[0]!.fileIds).toEqual([entry]);expect(inventory.content.files.map(f=>f.itemId)).toEqual([entry]);
  expect(inventory.evidence.get(skill)).toEqual({kind:'managed',parents:managed[0]!.parents});
  const prepared=prepare(inventory,[skill,entry]);
  expect(inventory.lease).not.toBe(empty.lease);

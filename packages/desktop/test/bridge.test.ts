@@ -700,6 +700,21 @@ describe('desktop IPC boundary', () => {
     expect(openExternal).toHaveBeenCalledTimes(2);
   });
 
+  it('opens safe recipe documents only when explicitly requested through the App bridge',async()=>{
+    const h=harness();
+    const {shell}=createDesktopFacades({invoke:async(channel,...args)=>h.invoke(channel,...args),receive:()=>()=>{}});
+    const links=['https://my.feishu.cn/share/base/ExampleReference6','https://vonvon.cc/docs/troubleshooting/','http://example.com/guide'];
+    for(const url of links){await shell.openExternal(url,'recipe-document');expect(openExternal).toHaveBeenLastCalledWith(url);}
+    for(const url of links)await expect(openAllowedExternal(url)).rejects.toThrow('Unsupported external link');
+    for(const value of [
+      {kind:'recipe-document',url:'javascript:alert(1)'}, {kind:'recipe-document',url:'data:text/html,test'},
+      {kind:'recipe-document',url:'https://user:pass@example.com'}, {kind:'recipe-document',url:'//example.com'},
+      {kind:'recipe-document',url:'not a URL'}, {kind:'recipe-document',url:'https://example.com',extra:true},
+      {kind:'unrecognized',url:'https://example.com'},
+    ])await expect(openAllowedExternal(value)).rejects.toThrow('Unsupported external link');
+    expect(openExternal).toHaveBeenCalledTimes(3);await h.bridge.dispose();
+  });
+
   it('removes earlier handlers if bridge installation fails', () => {
     failRegistration.channel = desktopChannels.directory;
     expect(() => harness()).toThrow('registration failed');

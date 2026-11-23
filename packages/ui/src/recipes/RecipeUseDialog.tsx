@@ -1,5 +1,5 @@
 import {useState} from 'react';
-import {backendLabel, groupIdSchema, type AgentId, type DesktopRecipeReview, type DesktopSnapshot, type RecipeSetup, type RecipeUseReply, type RecipeUseRequest} from '@vonvon/protocol';
+import {backendLabel, groupIdSchema, type AgentId, type DesktopRecipeReview, type DesktopSnapshot, type RecipeUseReply, type RecipeUseRequest} from '@vonvon/protocol';
 import {JoinGroupDialog, type JoinGroupDraft} from '../JoinGroupDialog';
 import {SelectJoinBotDialog} from '../SelectJoinBotDialog';
 import {Button, FormField, InlineNotice} from '../reference/components/ui';
@@ -87,7 +87,7 @@ export function RecipeUseDialog(props: Props) {
           <Button disabled={!canAct} onClick={() => setDismiss(false)}>返回核对</Button>
           <Button disabled={!canAct} onClick={() => void onRequest({type: 'dismissJoin', handle: reply.handle})}>确认结束跟踪</Button>
         </>}>飞书群可能已经创建。结束跟踪不会删除群聊或改变现有连接，也不表示建群已取消。之后可从 Bot 已加入的群中连接。</InlineNotice>}
-        {reply?.kind === 'applied' && <InlineNotice title="配方已应用" tone="success">已更新这个 Bot 在目标群中的所选配置。任务保持暂停，请进入使用设置逐项核对。</InlineNotice>}
+        {reply?.kind === 'applied' && <InlineNotice title="配方已应用" tone="success">已更新这个 Bot 在目标群中的所选配置。</InlineNotice>}
         {reply?.kind === 'rejected' && <InlineNotice title="本次未应用" tone="warning">{reply.reason || '本次操作已经结束。'}{reply.groupId && '群聊已保留，可以在这个群重新预览。'}</InlineNotice>}
         {!reply && <p role="status">{session.botId ? '正在读取配方和目标群…' : '正在读取目标设备的 Bot…'}</p>}
         {reply?.kind === 'choose' && !agent && <InlineNotice title="Bot 暂不可用" tone="warning">请在原设备恢复 Bot 后，重新核对原操作。</InlineNotice>}
@@ -104,21 +104,21 @@ function pendingDetail(phase: 'joining' | 'installing' | 'cancelling') {
   return {joining: '群聊可能已经创建或连接，请先核对进度。', installing: '目标设备与云端尚未确认全部完成，请先核对进度。', cancelling: '取消尚未确认；如果应用已经开始，会继续核对实际结果。'}[phase];
 }
 type Resolution = Extract<RecipeUseRequest, {type: 'resolve'}>['resolution'];
-type ReviewDraft = {role?: 'keep' | 'replace' | 'custom'; text?: string; setup?: 'keep' | 'replace'};
+type ReviewDraft = {role?: 'keep' | 'replace' | 'custom'; text?: string};
 function RecipeReview({review, draft, onChange, prepared, busy, acceptedResolution, onResolve, onConfirm}: {draft: ReviewDraft; onChange: (draft: ReviewDraft) => void; review: DesktopRecipeReview; prepared: boolean; busy: boolean; acceptedResolution?: Resolution; onResolve: (resolution: Resolution) => Promise<void>; onConfirm: () => Promise<void>}) {
-  const {role, setup, text = review.currentRole} = draft;
+  const {role, text = review.currentRole} = draft;
+  if(review.setupChoiceRequired||review.currentSetup||review.incomingSetup||review.baseSetup)return <InlineNotice title="请更新目标设备" tone="warning">目标设备使用旧版配方安装流程，请更新后重新预览。群内配置保持原样。</InlineNotice>;
   const tooLong = [...text].length > 5000;
-  const ready = (!review.roleChoiceRequired || role !== undefined) && (!review.setupChoiceRequired || setup !== undefined) && !(role === 'custom' && tooLong);
+  const ready = (!review.roleChoiceRequired || role !== undefined) && !(role === 'custom' && tooLong);
   function resolve() {
     if (!ready) return;
-    void onResolve({...(role && {role: role === 'custom' ? {kind: 'custom', text} : {kind: role}}), ...(setup && {setup})});
+    void onResolve({...(role && {role: role === 'custom' ? {kind: 'custom', text} : {kind: role}})});
   }
   return <div className="recipe-use-review">
     <p>{prepared ? '请核对本次内容，再确认应用。' : '内容存在差异，请选择保留或替换。内容变化后需要重新选择。'}</p>
     {prepared && acceptedResolution && <div className="recipe-use-selection" role="status">
       {acceptedResolution.role && <p>本群角色：{{keep: '保留群内当前', replace: '使用本次配方', custom: '使用手动合并内容'}[acceptedResolution.role.kind]}</p>}
       {acceptedResolution.role?.kind === 'custom' && <CompareText title="合并后将应用" text={acceptedResolution.role.text}/>}
-      {acceptedResolution.setup && <p>使用准备：{acceptedResolution.setup === 'keep' ? '保留群内当前' : '使用本次配方'}</p>}
     </div>}
     <section aria-label="角色对比"><h3>本群角色</h3><div className="recipe-use-comparison">
       {review.baseRole !== undefined && <CompareText title="上次配方" text={review.baseRole}/>}
@@ -129,22 +129,13 @@ function RecipeReview({review, draft, onChange, prepared, busy, acceptedResoluti
       </fieldset>}
       {!prepared && role === 'custom' && <FormField label="合并后的本群角色" error={tooLong ? '本群角色最多 5000 字。' : undefined}><textarea aria-label="合并后的本群角色" value={text} disabled={busy} onChange={event => onChange({...draft, text: event.target.value})}/><small>{[...text].length} / 5000 字</small></FormField>}
     </section>
-    {(review.currentSetup || review.incomingSetup || review.baseSetup) && <section aria-label="使用准备对比"><h3>使用准备</h3><div className="recipe-use-comparison">
-      {review.baseSetup && <CompareSetup title="上次配方" setup={review.baseSetup}/>}
-      <CompareSetup title="群内当前" setup={review.currentSetup}/><CompareSetup title="本次配方" setup={review.incomingSetup}/>
-    </div><p className="recipe-use-note">这些是使用说明。获取或应用配方不会自动执行其中的步骤。</p>
-      {!prepared && review.setupChoiceRequired && <fieldset className="recipe-use-choices"><legend>选择使用准备</legend>{([['keep', '保留群内当前'], ['replace', '使用本次配方']] as const).map(([value, label]) => <label key={value}><input type="radio" name="recipe-setup" checked={setup === value} disabled={busy} onChange={() => onChange({...draft, setup: value})}/>{label}</label>)}</fieldset>}
-    </section>}
     <div className="recipe-use-review__action"><Button variant="primary" loading={busy} disabled={busy || !prepared && !ready} onClick={() => prepared ? void onConfirm() : resolve()}>{prepared ? '确认应用到这个群' : '预览所选内容'}</Button></div>
   </div>;
 }
 function CompareText({title, text}: {title: string; text: string}) {return <div className="recipe-use-compare"><h4>{title}</h4><pre>{text || '未设置'}</pre></div>;}
-function CompareSetup({title, setup}: {title: string; setup?: RecipeSetup}) {
-  return <div className="recipe-use-compare"><h4>{title}</h4>{setup ? <ol>{setup.steps.map((step, index) => <li key={index}><strong>{step.title}{step.required ? ' · 必需' : ' · 可选'}</strong><p>{step.instructions}</p>{step.check && <small>检查方式：{step.check}</small>}</li>)}</ol> : <p>未设置</p>}</div>;
-}
 
 function RichInstallReview({reply,busy,onRequest}:{reply:Extract<RecipeUseReply,{kind:'richReview'|'richPrepared'}>;busy:boolean;onRequest:(request:RecipeUseRequest)=>Promise<void>}) {
   const [choices,setChoices]=useState<Record<string,'local'|'incoming'>>({});
-  if(reply.kind==='richPrepared')return <InlineNotice title="完整配置已核对"><p>只应用到所选 Bot 与群，保留其他群与 Bot 的配置。任务默认暂停。</p><Button variant="primary" disabled={busy} onClick={()=>void onRequest({type:'confirm',handle:reply.handle})}>确认应用此版本</Button></InlineNotice>;
+  if(reply.kind==='richPrepared')return <InlineNotice title="完整配置已核对"><p>只应用到所选 Bot 与群，保留其他群与 Bot 的配置。如包含任务，可在群聊设置的「配方任务」中核对并启用。</p><Button variant="primary" disabled={busy} onClick={()=>void onRequest({type:'confirm',handle:reply.handle})}>确认应用此版本</Button></InlineNotice>;
   return <section><h3>核对本群差异</h3>{reply.conflicts.length===0?<p>没有需要决定的冲突项。</p>:reply.conflicts.map(item=><fieldset key={item.itemId}><legend>{item.kind}</legend><div className="community-editor-grid"><div><h4>当前本群</h4><pre>{item.local??'未指定'}</pre></div><div><h4>配方新版</h4><pre>{item.incoming??'移除此项'}</pre></div></div><label><input type="radio" name={item.itemId} checked={choices[item.itemId]==='local'} onChange={()=>setChoices(old=>({...old,[item.itemId]:'local'}))}/>保留本群</label><label><input type="radio" name={item.itemId} checked={choices[item.itemId]==='incoming'} onChange={()=>setChoices(old=>({...old,[item.itemId]:'incoming'}))}/>使用配方</label></fieldset>)}<Button variant="primary" disabled={busy||reply.conflicts.some(item=>!choices[item.itemId])} onClick={()=>void onRequest({type:'richResolve',handle:reply.handle,reviewToken:reply.reviewToken,choices})}>确认这些选择并预览应用</Button></section>;
 }

@@ -31,7 +31,7 @@ const secondHandle = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const name = '多语言配方🦉和很长的名字'.repeat(5);
 const setup = {steps: [{kind: 'config' as const, title: '准备账号', instructions: '阅读并手动准备，不自动执行。', required: true}]};
 const detail = {recipeId, versionId, revision: 1, public: {name, summary: '帮助 Bot 协作', overview: '说明', version: '1.0', access: 'direct' as const}, config: {role: '新职责', setup}, owned: false, acquired: true};
-const baseReview = {reviewToken: token, currentRole: '当前职责', baseRole: '上次职责', incomingRole: '新职责', currentSetup: setup, baseSetup: setup, incomingSetup: setup, roleChoiceRequired: false, setupChoiceRequired: false};
+const baseReview = {reviewToken: token, currentRole: '当前职责', baseRole: '上次职责', incomingRole: '新职责', roleChoiceRequired: false, setupChoiceRequired: false};
 const snapshot = desktopSnapshotSchema.parse({revision: 1, observedAt: 1, stale: false, host: {kind: 'connected', ownership: 'owned', version: 'test'},
   agents: [{id: botId, name: '原目标🦉机器人', enabled: true, running: true, connection: 'connected', activation: 'active'}], groups: [{id: groupId, name: '已连接的群'}], memberships: [],
   tools: [{tool: 'codex', installation: 'installed', authentication: 'signedIn', version: '1'}], jobs: [], application: {platform: 'macos', version: 'test', loginItem: false, dataPath: '/synthetic'}});
@@ -537,13 +537,13 @@ it.each(['role','create','bind'] as const)('keeps unsent %s text and choices for
   dispatch({type:'devices',value:devices.state()});
   let recovered = false;
   useReply = () => kind === 'role'
-    ? {...prepared,handle:recovered ? secondHandle : handle,kind:'review',review:{...baseReview,roleChoiceRequired:true,setupChoiceRequired:true}}
+    ? {...prepared,handle:recovered ? secondHandle : handle,kind:'review',review:{...baseReview,roleChoiceRequired:true,setupChoiceRequired:false}}
     : {kind:'choose',handle:recovered ? secondHandle : handle};
   try {
     await draw();
     if (kind === 'role') {
       await inGroup(groupId,'检查新版'); await inGroup(groupId,'预览更新');
-      await act(async () => {document.querySelector<HTMLInputElement>('input[name="recipe-role"][value="custom"]')!.click(); document.querySelector<HTMLInputElement>('input[name="recipe-setup"]')!.click();});
+      await act(async () => {document.querySelector<HTMLInputElement>('input[name="recipe-role"][value="custom"]')!.click();});
     } else {
       await click('打开配方'); await click('添加到群聊');
       await act(async () => document.querySelector<HTMLInputElement>('input[name="join-bot"]')!.click()); await click('下一步');
@@ -622,7 +622,7 @@ it('discards the private review draft when recovery presents changed content or 
   expect(requests.every(r => r.type==='begin')).toBe(true);
 });
 
-it('opens installed rich setup through the real shell source facade, labels manual evidence and confirms exact task conditions',async()=>{
+it('opens only recipe tasks through the real shell source facade and confirms exact task conditions',async()=>{
   const projected=projectedSnapshot();readSnapshot=async()=>projected;
   const normal=services,setupCalls:unknown[]=[];const stepId='11111111-1111-4111-8111-111111111112',nativeStep='11111111-1111-4111-8111-111111111113';let readiness='pending',taskState='paused';
   services=async(channel,raw,...rest)=>{
@@ -637,9 +637,8 @@ it('opens installed rich setup through the real shell source facade, labels manu
   facade=createDesktopFacades({receive:listener=>{dispatch=listener;return()=>{};},invoke:services});dispatch({type:'account',value:status});dispatch({type:'devices',value:devicesState({id:A,phase:'ready'})});
   const destinations:unknown[]=[];const opened=(event:Event)=>destinations.push((event as CustomEvent).detail);window.addEventListener('vonvon:open-setting',opened);
   try{
-    await draw();const scope=document.querySelector('[data-scope="'+groupId+'"]')!;expect(scope.textContent).toContain('使用设置');expect(scope.textContent).toContain('尚未核对');
-    await click('我已手动核对',scope);expect(scope.textContent).toContain('本人已手动确认');expect(scope.textContent).not.toContain('已由当前设备核验');
-    await click('前往设置',scope);expect(destinations[0]).toMatchObject({page:'collaboration',selection:{kind:'membership',id:projected.memberships[0]!.id},section:'权限'});
+    await draw();const scope=document.querySelector('[data-scope="'+groupId+'"]')!;expect(scope.textContent).toContain('配方任务');expect(scope.textContent).not.toContain('核对报告');expect(scope.textContent).not.toContain('本群权限');
+    expect([...scope.querySelectorAll('button')].some(button=>['我已手动核对','前往设置'].includes(button.textContent??''))).toBe(false);expect(destinations).toEqual([]);
     await click('核对并启用',scope);const dialog=document.querySelector('[role="dialog"]')!;expect(dialog.textContent).toContain('核对所选文档，准备待确认摘要。');expect(dialog.textContent).toContain('每周一 09:00');expect(dialog.textContent).toContain('目标设备上此 Bot 的管理员配置');
     await click('启用此任务',dialog);expect(setupCalls.at(-1)).toMatchObject({type:'setup',viewId:A,botId,groupId,sourceToken:token,action:{kind:'enableTask',taskToken:'e'.repeat(64),token:'d'.repeat(64)}});expect(JSON.stringify(setupCalls.at(-1))).not.toContain('actor');
   }finally{window.removeEventListener('vonvon:open-setting',opened);}

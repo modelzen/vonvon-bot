@@ -203,6 +203,19 @@ it('shows exact typed candidate content without renderer accept, and distinguish
   expect(cloudCalls.some(request=>request.type==='deleteDraft')).toBe(false);
 });
 
+it('retains complete read-only instructions and requirement labels in an older in-flight candidate',async()=>{
+  linked=true;await draw();await chooseSource();await prepare();
+  authoring=async request=>request.type==='inspectCandidate'?{kind:'candidate',operation:operations[0]!,payloadDigest:evidence,
+    content:{public:{name:'旧候选',summary:'待确认',overview:'原介绍',version:'1',access:'direct'},config:{role:'原角色',setup:{steps:[
+      {kind:'tool',title:'旧工具说明',instructions:'请先核对工具。',required:true,check:'确认可用'},
+      {kind:'context',title:'旧上下文说明',instructions:'按需补充资料。',required:false},
+    ]}}}}:defaultAuthoring(request);
+  operations=[{...operations[0]!,state:'candidate',payloadDigest:evidence}];
+  await click('重新核验并继续');await click('在 App 核对候选');
+  for(const value of ['旧工具说明','请先核对工具。','确认可用','必需','旧上下文说明','按需补充资料。','可选'])expect(text()).toContain(value);
+  expect(calls.some(request=>request.type==='accept')).toBe(false);
+});
+
 it('backs off foreground waiting polls and shows errors without reporting success',async()=>{
   vi.useFakeTimers();linked=true;await draw();await chooseSource();await prepare();
   let fail=true;authoring=async request=>{if(request.type==='status'&&fail)throw new Error('当前账号已不是 Bot 管理员，请重新核验。');return defaultAuthoring(request);};
@@ -582,7 +595,7 @@ it('edits rich public metadata through native attested chat and preserves newer 
   const publish=[...document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='预览发布');expect(publish?.disabled).toBe(false);
 });
 
-it('discards delayed inventory across memory ABA and offers an individual setup opt-out',async()=>{
+it('discards delayed inventory across memory ABA and never selects legacy setup metadata',async()=>{
   const {readFileSync}=await import('node:fs');const {resolve}=await import('node:path');
   const content=JSON.parse(readFileSync(resolve(process.cwd(),'../protocol/test/fixtures/recipe-rich-v2.content.json'),'utf8'));
   content.parts=[];content.skills=[];content.files=[];content.memories=[];delete content.finalLogo;
@@ -613,7 +626,7 @@ it('discards delayed inventory across memory ABA and offers an individual setup 
   expect(text()).toContain('记忆不包含');
   const step=content.setup[0];
   const checkbox=[...document.querySelectorAll('label')].find(l=>l.textContent==='准备步骤 · '+step.title)?.querySelector<HTMLInputElement>('input');
-  expect(checkbox).toBeDefined();expect(checkbox!.checked).toBe(true);await act(async()=>checkbox!.click());
+  expect(checkbox).toBeUndefined();expect(text()).not.toContain('SETUP_SENTINEL');
   const attest=[...document.querySelectorAll('label')].find(l=>l.textContent?.includes('我已核对来源和全部所选内容'))!.querySelector<HTMLInputElement>('input')!;
   await act(async()=>attest.click());await click('确认让 Bot 准备私人草稿');
   const prepared=calls.find(r=>r.type==='richPrepare');expect(prepared).toMatchObject({selection:{reviewToken:'5'.repeat(64),options:{includeBotMemories:false}}});

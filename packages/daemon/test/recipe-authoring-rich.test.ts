@@ -43,13 +43,14 @@ describe('explicit rich source review',()=>{
     content.setup[0]!.instructions='未核对的修改';
     expect(()=>verifyFrozenRich(op,dest,reviewed,response())).toThrow();
   });
-  it('bounds model inputs, verifies typed selected references and treats setup suggestions only as data',async()=>{
-    const item=fixture().setup[0]!, input={phase:'create' as const,instruction:'请建议一个准备步骤',selected:[{kind:'setup' as const,itemId:item.itemId,value:item.title}]};
+  it('treats setup as a normal selected skill and rejects structured setup suggestions',async()=>{
+    const item={...id(),name:'setup'}, input={phase:'edit' as const,instruction:'把技能名称保持为 setup',selected:[{kind:'skill' as const,itemId:item.itemId,value:{name:'setup'}}]};
     expect(JSON.stringify(checkedRichInput(input))).not.toContain(item.itemId);
-    const parser={proposeRich:vi.fn().mockResolvedValue({kind:'proposal',commands:[{action:'addSetup',target:'',
-      valueJson:JSON.stringify({kind:'tool',title:'检查工具',instructions:'请确认工具已安装。',action:{kind:'manual'},required:true})}]})};
+    const parser={proposeRich:vi.fn().mockResolvedValue({kind:'proposal',commands:[{action:'edit',target:'T1',valueJson:JSON.stringify({name:'setup'})}]})};
     const answer=await proposeRich(input,new AbortController().signal,parser);
-    expect(answer.kind==='proposal' && answer.setup[0]?.action.kind).toBe('manual');
+    expect(answer.kind==='proposal' && answer.changes[0]).toMatchObject({op:'setSkill',itemId:item.itemId,value:{name:'setup'}});
+    parser.proposeRich.mockResolvedValue({kind:'proposal',commands:[{action:'addSetup',target:'',valueJson:'{}'}]});
+    await expect(proposeRich(input,new AbortController().signal,parser)).rejects.toThrow();
     parser.proposeRich.mockResolvedValue({kind:'proposal',commands:[{action:'remove',target:'T2',valueJson:'null'}]});
     await expect(proposeRich(input,new AbortController().signal,parser)).rejects.toThrow();
   });
@@ -74,14 +75,31 @@ it('derives the exact selected text-package digest and verifies each broker rece
   expect(richReviewDigest(local)).not.toBe(wireDigest(bound));
 });
 
-it('adds a model-suggested inert step to an empty saved draft, preserving reviewed ancestry',async()=>{
+it('edits an overview with setup instructions without manufacturing structured steps',async()=>{
   const {chatRichProposal}=await import('../src/recipe/authoring-rich-flow');
-  const c=fixture(),selected=c.public.name.itemId,draftId=randomUUID();
-  c.setup=[];
-  const origin={kind:'releaseItem' as const,versionId:randomUUID(),itemId:randomUUID(),baselineSha256:'1'.repeat(64)};
-  const parser={proposeRich:vi.fn().mockResolvedValue({kind:'proposal',commands:[{action:'addSetup',target:'',
-    valueJson:JSON.stringify({kind:'tool',title:'确认工具',instructions:'在使用前检查可用工具。',required:true,action:{kind:'manual'}})}]})};
-  const operation={view:{draftId,baseRevision:3},rich:{base:{canonical:Buffer.from(canonicalizeRichRecipeContent(c).canonicalUTF8).toString('base64url'),selected:[selected],origins:{[selected]:origin}}}};
-  const result=await chatRichProposal(operation as Parameters<typeof chatRichProposal>[0],'给我建议使用前的步骤',new AbortController().signal,parser);
-  expect(result.kind==='proposal'&&'payload' in result.request&&result.request.payload.changes[0]).toMatchObject({op:'addSetup',source:{kind:'releaseItems',parents:[{versionId:origin.versionId,itemId:origin.itemId}]}});
+  const c=fixture(),selected=c.public.overview.itemId,draftId=randomUUID();
+  const canonical=Buffer.from(canonicalizeRichRecipeContent(c).canonicalUTF8).toString('base64url');
+  const value='使用前请让 Bot 运行 setup 技能。';
+  const parser={proposeRich:vi.fn().mockResolvedValue({kind:'proposal',commands:[{action:'edit',target:'T1',valueJson:JSON.stringify(value)}]})};
+  const operation={view:{draftId,baseRevision:3},rich:{base:{canonical,selected:[selected,c.setup[0]!.itemId]}}};
+  const result=await chatRichProposal(operation as Parameters<typeof chatRichProposal>[0],'把概览改为：'+value,new AbortController().signal,parser);
+  expect(result.kind==='proposal'&&'payload' in result.request&&result.request.payload.changes).toEqual([{op:'setPublicText',field:'overview',itemId:selected,value}]);
+  expect(parser.proposeRich.mock.calls[0]?.[0].selected).not.toEqual(expect.arrayContaining([expect.objectContaining({kind:'setup'})]));
+});
+
+it('rejects every creation path for structured steps while preserving their historical confirmation text',async()=>{
+  const {typedRichEdit,richCardReview,richEditTargets}=await import('../src/recipe/authoring-rich-flow');
+  const content=fixture(),canonical=Buffer.from(canonicalizeRichRecipeContent(content).canonicalUTF8).toString('base64url');
+  const step=content.setup[0]!,{itemId:_item,originId:_origin,...value}=step;
+  const sourceIntentId=randomUUID(),req={type:'richEdit' as const,draftId:randomUUID(),baseRevision:1,canonical,selected:[content.public.name.itemId],source:{sourceIntentId,canonical}};
+  for(const change of [{op:'addSetup',value,source:{kind:'accountClaim'}},{op:'setSetup',itemId:step.itemId,value},
+    {op:'copyItem',source:{kind:'setup',itemId:step.itemId}},
+    {op:'includeCandidate',value:{kind:'setup',source:{sourceIntentId,candidateId:step.itemId,expectedRevision:1}}}]){
+    expect(()=>typedRichEdit({...req,changes:[change]} as Parameters<typeof typedRichEdit>[0])).toThrow('普通技能');
+  }
+  expect(richEditTargets(content,[content.public.name.itemId,step.itemId])).toHaveLength(1);
+  expect(()=>richEditTargets(content,[content.public.name.itemId,randomUUID()])).toThrow('不存在');
+  const request=selectRichSnapshot(source(content));
+  const review=richCardReview({view:{operationId:sourceIntentId},rich:{request,newFields:[content.public.name.itemId]}} as Parameters<typeof richCardReview>[0]);
+  expect(JSON.parse(review!.fields.find(field=>field.label==='旧补充说明')!.valueJson)).toEqual(value);
 });
