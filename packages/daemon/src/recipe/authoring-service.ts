@@ -1,4 +1,4 @@
-import {richSkillOptions,readRichSource,preparedRich,richReviewDigest,bindRichMembers,richMemberCap,richCardReview,typedRichEdit,chatRichProposal,type RichLocalDraft,type RichNativeOptions} from './authoring-rich-flow';
+import {richSkillOptions,readRichSource,preparedRich,richReviewDigest,bindRichMembers,richMemberCap,richCardReview,typedRichEdit,chatRichProposal,richEditCardContext,type RichLocalDraft,type RichNativeOptions} from './authoring-rich-flow';
 import {postRichStage,verifyFrozenRich} from './authoring-rich-proof';
 import {itemsOf,wireDigest} from './authoring-rich-snapshot';
 import {decodeRichRecipeContent,richFreezeInputSchema} from '@vonvon/protocol';
@@ -79,6 +79,13 @@ function reconciliationOf(op: LocalOperation): AuthoringReconciliation {
   return {operationId,purpose,targetPublicKey,nonceCommitment,draftId,baseRevision,createdAt,receipt,...(op.view.format&&{format:op.view.format})};
 }
 function refusal(): never { throw new Error('身份、来源或草稿上下文已改变，请回到 App 核对。'); }
+function richInstructionReply(result:Exclude<Awaited<ReturnType<typeof chatRichProposal>>,{kind:'proposal'}>){
+  if('message' in result)return result.message+commandHelp;
+  if(result.kind==='clarify')return clarify;
+  if(result.kind==='refuse')return privateOnly;
+  const reason=result.kind==='busy'?'所选 Provider 暂时繁忙':result.kind==='timeout'?'这条草稿指令解析超时':'当前无法解析这条草稿指令';
+  return reason+'，尚未生成新候选。请稍后重新发送，或使用以下命令。'+commandHelp;
+}
 
 export class AuthoringService {
   private p?: Presence;
@@ -580,18 +587,19 @@ export class AuthoringService {
     const pending = await this.change(p,id,op => {
       const c = op.carrier;
       if (cardUpdate(op,this.now()) !== 'pending') return;
-      return {cardId:c.cardId!, messageId:c.messageId!, seq:c.seq, ref:c.ref, mode:c.mode, recipient:op.recipient, details:c.mode === 'confirm' ? editCandidate(op) : undefined};
+      return {cardId:c.cardId!, messageId:c.messageId!, seq:c.seq, ref:c.ref, mode:c.mode, recipient:op.recipient, details:c.mode === 'confirm' ? editCandidate(op) : undefined,
+        editing:c.mode==='richEdit'?richEditCardContext(op):undefined};
     });
     if (!pending) return;
     this.present(p);
     if (!isAdmin(this.opts.cfg,pending.recipient.openId)) refusal();
-    const {cardId,messageId,seq,ref,mode,recipient,details} = pending;
-    let result = await this.im.update(cardId,seq,ref,mode,details);
+    const {cardId,messageId,seq,ref,mode,recipient,details,editing} = pending;
+    let result = await this.im.update(cardId,seq,ref,mode,details,editing);
     if (result === 'conflict') {
       // A duplicate UUID or old sequence is not an acknowledgement of these bytes.
       const current = await this.change(p,id,op => op.carrier.cardId === cardId && op.carrier.ref === ref);
       this.present(p);
-      if (current && isAdmin(this.opts.cfg,recipient.openId) && await this.im.shows(messageId,recipient.chatId,ref,mode,details).catch(() => false)) result = 'updated';
+      if (current && isAdmin(this.opts.cfg,recipient.openId) && await this.im.shows(messageId,recipient.chatId,ref,mode,details,editing).catch(() => false)) result = 'updated';
     }
     await this.change(p,id,op => {
       const c = op.carrier;
@@ -642,7 +650,7 @@ export class AuthoringService {
       this.present(p);
       const createdAt = this.now();
       const details = op.carrier.mode === 'confirm' ? editCandidate(op) : undefined;
-      const cardId = await this.im.create(op.carrier.ref,op.carrier.mode,details);
+      const cardId = await this.im.create(op.carrier.ref,op.carrier.mode,details,op.carrier.mode==='richEdit'?richEditCardContext(op):undefined);
       op = await this.change(p,id,row => {
         row.carrier.cardId = cardId; row.carrier.createdAt = createdAt;
         if (details && candidateConfirmation(row.carrier.ref,details)) row.carrier.previewDigest = details.payloadDigest;
@@ -751,39 +759,41 @@ export class AuthoringService {
       }
       if (!selected || !selected.contextOpen || (selected.contextUntil ?? 0) <= this.now()) { await reply(selected ? expiredContext : appChoose); return true; }
       if (selected.seenInstructions?.includes(msg.messageId) || selected.instructionId === msg.messageId) return true;
-      if(selected.view.format==='rich-v2'&&selected.view.state==='completed'){
-        const saved=selected.view.receipt;
-        if(saved?.status!=='accepted'||!selected.richSaved||!this.opts.parser?.proposeRich){await reply(appChoose);return true;}
-        await this.allowed(p,recipient);
-        const rich={base:selected.richSaved};
-        const attempt=new AbortController();this.parsing=attempt;
-        try{
-          const signal=AbortSignal.any([attempt.signal,this.lifetime.signal,AbortSignal.timeout(Math.max(1,Math.min(28000,p.until-this.now())))]);
-          const result=await chatRichProposal({...selected,rich,view:{...selected.view,purpose:'editDraft',draftId:saved.draftId,baseRevision:saved.revision}},cmd,signal,{proposeRich:this.opts.parser.proposeRich});
-          await this.allowed(p,recipient);
-          if(result.kind!=='proposal'){await reply(result.kind==='clarify'?clarify:privateOnly);return true;}
-          await this.change(p,selected.view.operationId,row=>{if(!row.contextOpen||(row.contextUntil??0)<=this.now()||row.view.receipt?.status!=='accepted'||row.view.receipt.revision!==saved.revision)refusal();});
-          await this.start(p,recipient,{draftId:saved.draftId,baseRevision:saved.revision,instructionId:msg.messageId,rich:{base:selected.richSaved,request:richFreezeInputSchema.parse(result.request)}});
-        }finally{this.parsing=undefined;}
-        return true;
-      }
-      if(selected.view.format==='rich-v2'&&selected.view.state!=='completed'){
-        if(!['waiting','candidate'].includes(selected.view.state)||!this.opts.parser?.proposeRich){await reply(unavailable);return true;}
+      if(selected.view.format==='rich-v2'){
+        const completed=selected.view.state==='completed',saved=selected.view.receipt;
+        if(completed&&(saved?.status!=='accepted'||!selected.richSaved)){await reply(appChoose);return true;}
+        if(!completed&&!['waiting','candidate'].includes(selected.view.state)){await reply(appChoose);return true;}
         await this.validate(p,selected);
         const ref=await this.change(p,selected.view.operationId,row=>{
-          if(row.carrier.ref!==selected.carrier.ref||!row.contextOpen||(row.contextUntil??0)<=this.now()||(row.seenInstructions?.length??0)>=32)refusal();
+          if(row.carrier.ref!==selected.carrier.ref||!row.contextOpen||(row.contextUntil??0)<=this.now()||
+            row.view.state!==selected.view.state||(row.seenInstructions?.length??0)>=32)refusal();
           (row.seenInstructions??=[]).push(msg.messageId); this.interact(p); row.contextUntil=this.now()+CONTEXT;
-          setCard(row,'richEdit');row.view.state='waiting';delete row.view.payloadDigest;return row.carrier.ref;
+          if(!completed){setCard(row,'richEdit');row.view.state='waiting';delete row.view.payloadDigest;delete row.proposalDigest;}
+          return row.carrier.ref;
         });
+        // Withdraw the previous confirmation before parsing; a failed instruction must not leave a stale save button visible.
+        await this.refresh(p,selected.view.operationId);
         const attempt=new AbortController();this.parsing=attempt;
         try{
           const signal=AbortSignal.any([attempt.signal,this.lifetime.signal,AbortSignal.timeout(Math.min(28000,Math.max(1,p.until-this.now())))]);
-          const result=await chatRichProposal(selected,cmd,signal,{proposeRich:this.opts.parser.proposeRich});
+          const context=completed&&saved?.status==='accepted'?{...selected,rich:{base:selected.richSaved!},
+            view:{...selected.view,purpose:'editDraft' as const,draftId:saved.draftId,baseRevision:saved.revision}}:selected;
+          const result=await chatRichProposal(context,cmd,signal,this.opts.parser?.proposeRich?{proposeRich:this.opts.parser.proposeRich}:undefined);
           await this.validate(p,selected);
-          if(result.kind!=='proposal'){await this.refresh(p,selected.view.operationId);await reply(result.kind==='clarify'?clarify:privateOnly);return true;}
+          if(result.kind!=='proposal'){await this.refresh(p,selected.view.operationId);await reply(richInstructionReply(result));return true;}
           const request=richFreezeInputSchema.parse(result.request);
+          if(completed&&saved?.status==='accepted'){
+            await this.change(p,selected.view.operationId,row=>{
+              if(!row.contextOpen||(row.contextUntil??0)<=this.now()||row.view.state!=='completed'||
+                row.view.receipt?.status!=='accepted'||row.view.receipt.revision!==saved.revision||
+                wireDigest(row.richSaved)!==wireDigest(selected.richSaved))refusal();
+            });
+            await this.start(p,recipient,{draftId:saved.draftId,baseRevision:saved.revision,instructionId:msg.messageId,
+              rich:{base:selected.richSaved,request}});
+            return true;
+          }
           await this.change(p,selected.view.operationId,row=>{
-            if(!row.rich||!row.contextOpen||(row.contextUntil??0)<=this.now()||row.carrier.ref!==ref)refusal();
+            if(!row.rich||!row.contextOpen||(row.contextUntil??0)<=this.now()||row.carrier.ref!==ref||row.view.state!=='waiting')refusal();
             row.rich.request=request;
             if(result.newFields)row.rich.newFields=result.newFields;
             if('content' in request)row.rich.members=row.rich.members?.filter(m=>m.kind==='finalLogo'||request.content.files.some(f=>f.itemId===m.itemId));

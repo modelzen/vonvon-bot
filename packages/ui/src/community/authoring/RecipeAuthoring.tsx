@@ -21,6 +21,10 @@ export type AuthoringSource = {botId: AgentId; groupId: GroupId};
 type DraftTarget = Pick<RecipeDraft, 'draftId' | 'revision'> & {format?: 'rich-v2'; changes?: RecipeRichDraftChange[]; access?: 'direct'|'coded';selected?:string[];logo?:string};
 type Props = {parent?:{recipeId:string;versionId:string};source?: AuthoringSource; draft?: DraftTarget; onStarted?:()=>void;onSaved: (draftId: string, revision: number) => void; onBack?: () => void};
 
+function hasRichEditScope(input:Pick<DraftTarget,'selected'|'changes'|'logo'|'access'>) {
+  return Boolean(input.selected?.length || input.changes?.length || input.logo || input.access);
+}
+
 function eligibleSelection(inventory:RichLocalInventory,ids:readonly string[]) {
   const legacy=new Set(inventory.content.setup.map(item=>item.itemId));
   const chosen=new Set(ids.filter(id=>!inventory.unavailable.includes(id)&&!legacy.has(id)));
@@ -114,6 +118,7 @@ function AuthoringFlow({shell, onStarted,parent,accountId, botId, botName, tenan
   const watched = useRef(new Set<string>());
   const onSavedRef = useRef(onSaved); onSavedRef.current = onSaved;
   const notified = useRef(new Set<string>());
+  const emptyRichEdit = draft?.format === 'rich-v2' && !hasRichEditScope(draft);
   function remember(next: Session) {sessionRef.current = next; setSession(next);}
   function operation(next: DesktopAuthoringOperation) {
     const current = sessionRef.current;
@@ -138,6 +143,7 @@ function AuthoringFlow({shell, onStarted,parent,accountId, botId, botName, tenan
     const owner = sessionRef.current;
     const epoch = lifetime.current;
     if (!owner || !('handle' in input) || input.handle !== owner.handle) return;
+    if(input.type==='richEdit'&&!hasRichEditScope(input))throw new Error('请先选择本次允许聊天修改的内容，或在 App 填写修改。');
     if(input.type==='richEdit'||input.type==='richPrepare')onStarted?.();
     const reply = await shell.request(input);
     if (!live.current || epoch !== lifetime.current || sessionRef.current?.handle !== owner.handle) return;
@@ -227,7 +233,7 @@ function AuthoringFlow({shell, onStarted,parent,accountId, botId, botName, tenan
       </>}
     </section>}
     {session?.linked && <section className="authoring-step"><h3>{draft ? '继续编辑这份草稿' : '核对要分享的内容'}</h3><p>Bot 只向已验证的本人私聊发送操作卡。先核对完整可移植配置，再选择要分享的内容。记忆默认不带，公开介绍单独填写。</p>
-      {draft ? <><p className="community-muted">草稿 {draft.draftId} · 修订 {draft.revision}</p><GlowButton variant="dark" disabled={busy || pending} onClick={() => void run(async () => {if (handle) await request(draft.format === 'rich-v2' ? {type:'richEdit',handle,draftId:draft.draftId,baseRevision:draft.revision,selected:draft.selected??[],...(draft.changes?.length?{changes:draft.changes}:{}),...(draft.access?{access:draft.access}:{}),...(draft.logo?{logo:draft.logo}:{})} : {type: 'edit', handle, draftId: draft.draftId, baseRevision: draft.revision});})}>发送继续编辑卡片</GlowButton></> : <>
+      {draft ? <><p className="community-muted">草稿 {draft.draftId} · 修订 {draft.revision}</p>{emptyRichEdit&&<InlineNotice title="先选择要修改的内容">请在上方勾选允许本次聊天修改的内容，或先在 App 填写修改。</InlineNotice>}<GlowButton variant="dark" disabled={busy || pending || emptyRichEdit} onClick={() => void run(async () => {if (handle && !emptyRichEdit) await request(draft.format === 'rich-v2' ? {type:'richEdit',handle,draftId:draft.draftId,baseRevision:draft.revision,selected:draft.selected??[],...(draft.changes?.length?{changes:draft.changes}:{}),...(draft.access?{access:draft.access}:{}),...(draft.logo?{logo:draft.logo}:{})} : {type: 'edit', handle, draftId: draft.draftId, baseRevision: draft.revision});})}>发送继续编辑卡片</GlowButton></> : <>
         <details><summary>仅角色兼容草稿</summary>        {!source ? <GlowButton variant="dark" disabled={busy || pending} onClick={() => void run(reviewSource)}>读取并核对来源</GlowButton> : <><p><strong>{source.groupName}</strong> · {source.target.botName}</p><h4>角色与规则</h4><pre className="authoring-preview">{source.role || '本群没有可导出的文字角色。'}</pre>{source.untracked && <InlineNotice title="请确认来源归属" tone="warning">这些文字没有可验证的配方来源。仅在你拥有分享权、且没有混入他人受限内容时继续。</InlineNotice>}<label className="community-checkbox"><input type="checkbox" checked={attested} onChange={event => setAttested(event.target.checked)}/>我已核对来源和内容，确认有权分享，且不包含私人信息或凭据</label><div className="community-actions"><GlowButton variant="dark" disabled={busy || pending || !attested} onClick={() => void run(async () => {if (handle && groupId) await request({type: 'prepare', handle, groupId, reviewToken: source.reviewToken, sourceAttested: true});})}>发送私人草稿卡片</GlowButton><Button disabled={busy} onClick={() => void run(reviewSource)}>重新读取来源</Button></div></>}</details>
         <details><summary>选择额外分享的技能、记忆与任务</summary><label className="community-checkbox"><input type="checkbox" checked={includeMemories} onChange={e=>{setIncludeMemories(e.target.checked);setInventory(undefined);setAttested(false);}}/>包含可分享的 Bot 记忆</label>
         <label className="community-checkbox"><input type="checkbox" checked={includeTasks} onChange={e=>{setIncludeTasks(e.target.checked);setInventory(undefined);setAttested(false);}}/>包含本群任务</label>
