@@ -369,3 +369,41 @@ it('cold recovery leaves an absent publication as a normal read failure and igno
   expect(published).not.toHaveBeenCalled();
   expect(document.body.textContent).toContain('新账号作品');
 });
+it('INCREMENT readable draft requires a second explicit confirmation on its renewed review',async()=>{
+  const firstReview=otherAccount,secondReview=draftId;
+  const receipt={accountId,draftId,recipeId:accountId,versionId:otherAccount,revision:1};
+  let prepares=0;
+  authoringSend=async request=>{
+    if(request.type==='preparePublication'){
+      expect(request.draft).toEqual(draft);
+      return {kind:'publicationReady',reviewId:++prepares===1?firstReview:secondReview,draftId,revision:draft.revision,public:draft.public};
+    }
+    if(request.type==='confirmPublication')return {kind:'publicationResult',result:request.reviewId===firstReview?{kind:'pending'}:{kind:'published',publication:receipt}};
+    throw Error('unexpected authoring request '+request.type);
+  };
+  await draw();await click('发布到社区');await click('确认发布');
+  await click('核对发布结果');
+  expect(document.querySelector('h1')?.textContent).toBe(draft.public.name);
+  expect(button('确认发布').disabled).toBe(false);
+  expect(published).not.toHaveBeenCalled();
+  expect(authoringRequests.map(row=>row.type)).toEqual(['preparePublication','confirmPublication','preparePublication']);
+  await click('确认发布');
+  expect(authoringRequests.filter(row=>row.type==='confirmPublication').map(row=>row.reviewId)).toEqual([firstReview,secondReview]);
+  expect(published).toHaveBeenCalledExactlyOnceWith(receipt);
+  expect(requests.map(row=>row.type)).toEqual(['draft']);
+});
+
+it('INCREMENT a newer readable revision cannot renew confirmation of the old pending draft',async()=>{
+  const prepared=authoringSend;
+  authoringSend=async request=>{
+    if(request.type==='confirmPublication')return {kind:'publicationResult',result:{kind:'pending'}};
+    if(request.type==='recoverPublication')return {kind:'publicationRecovery',result:{kind:'pending'}};
+    return prepared(request);
+  };
+  await draw();await click('发布到社区');await click('确认发布');
+  draft=richDraft(2,{name:'修订 2'});await saved(2);
+  expect(document.querySelector('h1')?.textContent).toBe('修订 2');
+  await click('核对发布结果');await click('核对发布结果');
+  expect(authoringRequests.map(row=>row.type)).toEqual(['preparePublication','confirmPublication','recoverPublication','recoverPublication']);
+  expect(published).not.toHaveBeenCalled();
+});
