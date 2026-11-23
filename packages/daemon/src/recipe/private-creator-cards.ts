@@ -1,5 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import type {CreatorAnswer,CreatorCommand,CreatorRead,CreatorSelection,CreatorSnapshot,CreatorWork,InheritedPublication} from '@vonvon/protocol';
+import {recipePublicationMetadataIssue} from '@vonvon/protocol';
 import {button,card,linkButton} from '../card/cards';
 import type {Presence} from './authoring-service';
 import type {CreatorLedger,JobRecord,VersionSelection} from './private-creator';
@@ -66,15 +67,16 @@ export class CreatorCards {
   approvalCard(p:Presence,s:CreatorLedger,row:JobRecord,retry:boolean){
     const task=row.job.task;if(task.kind!=='command')throw new Error('需要具体的已选操作。');
     const c=task.command,work=c.kind==='publish'?c.snapshot.work:'work'in c?c.work:undefined;
+    const incomplete=c.kind==='publish'?recipePublicationMetadataIssue(c.snapshot.public):undefined;
     const choices:Option[]=[];
     const workName=row.workName??'所选草稿',versionName=row.version?row.version.name+' · '+row.version.version:'所选版本';
     let title:string, text:string, label:string;
     if(c.kind==='publish'){
       const snap=c.snapshot,pub=snap.public;
-      title='预览发布';label='确认发布 '+pub.version;
-      text=[pub.name+' · '+pub.version,pub.access==='coded'?'凭分享码获取':'直接获取','草稿修订 '+snap.revision,
+      title=incomplete?'完善发布信息':'预览发布';label='确认发布 '+pub.version;
+      text=[(pub.name||'未命名配方')+' · '+(pub.version||'未指定版本'),pub.access==='coded'?'凭分享码获取':'直接获取','草稿修订 '+snap.revision,...(incomplete?[incomplete]:[]),
         ...(!p.nativePreview&&!snap.appPreviewUrl?['请打开 App 的「我的配方」查看完整内容。']:[])].join('\n');
-      if(!retry)choices.push({label:'继续修改内容',choice:{kind:'edit',id:row.job.id}});
+      if(!retry||incomplete)choices.push({label:'继续修改内容',choice:{kind:'edit',id:row.job.id}});
     }else if(c.kind==='metadata'){
       title='采用公开信息修改';label='采用修改';
       const field={name:'名称',summary:'简介',overview:'概览',version:'显示版本',access:'获取方式',logo:'Logo'}[c.change.field];
@@ -93,7 +95,7 @@ export class CreatorCards {
       choices.push({label:'查看完整新值',choice:{kind:'detailPage',id:row.job.id,page:0}});
     }
     if(retry){title='核对原请求';text+='\n上次操作的结果尚未确定。重新确认后会核验同一次请求。';label='重新确认并重试';}
-    choices.unshift({label,choice:{kind:'approve',id:row.job.id,retry}});
+    if(!incomplete)choices.unshift({label,choice:{kind:'approve',id:row.job.id,retry}});
     if(c.kind==='publish'&&p.nativePreview)choices.unshift({label:'在 App 中预览',choice:{kind:'read',read:{kind:'openPreview',work:c.snapshot.work,snapshotDigest:c.snapshotDigest}}});
     const card=this.newCard(s,p,title,text,choices,work?.draftId);
     if(c.kind==='publish'&&!p.nativePreview&&c.snapshot.appPreviewUrl)card.appPreviewUrl=c.snapshot.appPreviewUrl;

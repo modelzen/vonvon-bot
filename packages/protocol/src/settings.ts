@@ -96,8 +96,11 @@ const smartPrompt = z.object({
 export const profile = z.object({ persona: z.string().max(30000), memory: z.string().max(30000) });
 /** 角色设定（记忆设计 2.3）：`SOUL.md` 的两段。读取不卡长度（旧文件可以很长），写入的上限由 daemon 查。 */
 export const roleSettings = z.object({ identity: z.string().max(70000), notes: z.string().max(70000) });
-/** 补充职责（原"本群个性"）：绑定行的 `supplement`。 */
-const projectRole = z.object({ supplement: z.string().max(30000) });
+export const WORK_RULES_MAX_BYTES = 16 * 1024;
+export const workRulesSchema = z.string().refine(value => new TextEncoder().encode(value).byteLength <= WORK_RULES_MAX_BYTES,
+  { message: `工作规则最多 ${WORK_RULES_MAX_BYTES} UTF-8 字节` });
+/** 补充职责与仅用于群执行的工作规则。 */
+const projectRole = z.object({ supplement: z.string().max(30000), workRules: workRulesSchema.optional() });
 const groupProfile = profile.extend({ inheritPersona: z.boolean(), inheritMemory: z.boolean() });
 const modelAccess = z.object({
   backend: z.string().min(1).max(1000),

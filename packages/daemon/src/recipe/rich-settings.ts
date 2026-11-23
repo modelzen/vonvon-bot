@@ -136,13 +136,3 @@ export function applyNativeRecipeFields(row: Project, resolved: LocalRecipeItem[
     }
   }
 }
-
-export function recipeSmartRules(project: Project): Project['smartRules'] {
-  const items = project.richRecipe?.resolved.filter((i) => i.kind === 'rules' && i.value.purpose !== 'work');
-  if (!items?.length) return project.smartRules;
-  const select = (field: 'respond' | 'newTopic', purpose: 'smartRespond' | 'smartNewTopic') =>
-    [project.smartRules?.[field], ...items.filter((i) => i.value.purpose === purpose).map((i) => String(i.value.text))]
-      .filter(Boolean)
-      .join('\n');
-  return { respond: select('respond', 'smartRespond'), newTopic: select('newTopic', 'smartNewTopic') };
-}

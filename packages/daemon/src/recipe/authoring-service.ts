@@ -26,7 +26,7 @@ import { operationUuid } from './manifest';
 export interface AuthoringPeer {id: string; device: string}
 export type AuthoringIpc = {kind: 'recipeAuthoring'; peer: AuthoringPeer; request: RecipeAuthoringRequest} |
   {kind: 'recipeAuthoringDisconnect'; peer: AuthoringPeer};
-export interface Presence {readonly peer: AuthoringPeer; readonly session: string; readonly account: string; readonly scope: string; readonly binding?: string; readonly nativePreview?: true; until: number; activity: number; activeAt: number}
+export interface Presence {readonly peer: AuthoringPeer; readonly session: string; readonly account: string; readonly scope: string; readonly binding?: string; readonly nativePreview?: true; readonly resourceContext?: true; until: number; activity: number; activeAt: number}
 interface Challenge {
   id: string; session: string; hash: Buffer; expiresAt: number; attempts: number;
   recipient?: Recipient; messageId?: string; evidence?: string;
@@ -253,9 +253,9 @@ export class AuthoringSession {
     if (req.type === 'creatorOpen') {
       const association = await this.creator.discover(peer,req.accountId);
       if (association.association?.binding !== req.binding || association.association.scope !== req.scope) refusal();
-      const p = this.p = {peer,session:randomUUID(),account:req.accountId,scope:req.scope,binding:req.binding,nativePreview:req.nativePreview,until:this.now()+LEASE,activity:0,activeAt:this.now()};
+      const p = this.p = {peer,session:randomUUID(),account:req.accountId,scope:req.scope,binding:req.binding,nativePreview:req.nativePreview,resourceContext:req.resourceContext,until:this.now()+LEASE,activity:0,activeAt:this.now()};
       await this.creator.open(p,req.binding,req.wakeId);
-      return {kind:'creatorSession',session:p.session,binding:req.binding,scope:p.scope,leaseMs:LEASE};
+      return {kind:'creatorSession',session:p.session,binding:req.binding,scope:p.scope,leaseMs:LEASE,...(p.resourceContext&&{resourceContext:true})};
     }
     if (req.type === 'close') {
       if (this.p?.peer.id === peer.id && this.p.session === req.session) this.disconnect(peer.id);
@@ -274,6 +274,7 @@ export class AuthoringSession {
     if (!p || p.peer.id !== peer.id || p.peer.device !== peer.device || p.session !== req.session) refusal();
     this.present(p);
     p.until = this.now()+LEASE;
+    if (req.type === 'resourceHandoff') refusal(); // The resource broker owns this action.
     if (req.type === 'creatorContinue' || req.type === 'creatorPoll' || req.type === 'creatorCheck' || req.type === 'creatorAnswer' || req.type === 'creatorLogo' || req.type === 'creatorDeliver' || req.type === 'creatorPreview' || req.type === 'creatorAppConfirm') {
       return this.serial(()=>this.creator.request(p,req));
     }

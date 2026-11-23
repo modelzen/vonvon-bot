@@ -31,3 +31,31 @@ it('requires explicit managed skill and filename choices while retaining provena
  managed.forEach(m=>{m.access='coded';m.authorId=randomUUID();});
  const coded=await readRichSource(native,'scope',account,'group',options);expect(coded.evidence.get(skill)).toEqual({kind:'unresolved'});expect(()=>prepare(coded,[skill,entry])).toThrow('来源');
 });
+
+
+it('lets an explicit ordinary field replace legacy work rules without removing skill evidence', async () => {
+ const account=randomUUID(),versionId=randomUUID(),entry=randomUUID(),skill=randomUUID(),work=randomUUID();
+ const managed:ManagedSourceItem[]=[
+  {kind:'rules',itemId:work,originId:randomUUID(),value:{purpose:'work',text:'OLD_WORK'},parents:[{versionId,itemId:work,baselineSha256:'1'.repeat(64)}],authorId:account,access:'direct'},
+  {kind:'skills',itemId:skill,originId:randomUUID(),value:{name:'skill',entryFileId:entry,fileIds:[entry]},parents:[{versionId,itemId:skill,baselineSha256:'1'.repeat(64)}],authorId:account,access:'direct'},
+  {kind:'files',itemId:entry,originId:randomUUID(),value:{name:'SKILL.md',use:'skillDescription',text:'SKILL_BODY'},parents:[{versionId,itemId:entry,baselineSha256:'1'.repeat(64)}],authorId:account,access:'direct'},
+ ];
+ const native={bot:{appId:'test-rich-selection'},channel:{},managedSources:async()=>managed} as unknown as RichNativeOptions;
+ const choices=await richSkillOptions(native,'group');
+ const options={includeBotMemories:false,includeTasks:false,skills:[{skill:choices[0]!.name,files:['SKILL.md']}]};
+ const legacy=await readRichSource(native,'scope',account,'group',options);
+ expect(legacy.content.rules.map(rule=>rule.text)).toEqual([{kind:'inline',value:'OLD_WORK'}]);
+ try {
+  Object.assign(state.row,{workRules:'NORMAL_WORK'});
+  const normal=await readRichSource(native,'scope',account,'group',options);
+  expect(normal.content.rules.map(rule=>rule.text)).toEqual([{kind:'inline',value:'NORMAL_WORK'}]);
+  expect(normal.evidence.has(work)).toBe(false);
+  expect(normal.evidence.get(normal.content.rules[0]!.itemId)).toEqual({kind:'native'});
+  expect(normal.content.skills).toHaveLength(1);expect(normal.content.files).toHaveLength(1);
+  expect(normal.evidence.get(skill)).toEqual({kind:'managed',parents:managed[1]!.parents});
+  Object.assign(state.row,{workRules:''});
+  expect((await readRichSource(native,'scope',account,'group',options)).content.rules).toEqual([]);
+  managed[1]!.access='coded';managed[1]!.authorId=randomUUID();
+  expect((await readRichSource(native,'scope',account,'group',options)).evidence.get(skill)).toEqual({kind:'unresolved'});
+ } finally { Reflect.deleteProperty(state.row,'workRules'); }
+});

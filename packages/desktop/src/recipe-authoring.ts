@@ -79,7 +79,7 @@ type Handle = {
 };
 type CreatorContinuation=Extract<DesktopAuthoringReply,{kind:'creatorContinuing'}>;
 type CreatorContinue=Extract<DesktopAuthoringRequest,{type:'creatorContinue'}>;
-type Action = Exclude<DesktopAuthoringRequest, Open | DraftSourceOpen | Restore | CreatorContinue | {type:'preparePublication'|'confirmPublication'|'recoverPublication'}>;
+type Action = Exclude<DesktopAuthoringRequest, Open | DraftSourceOpen | Restore | CreatorContinue | {type:'resourceHandoff'|'preparePublication'|'confirmPublication'|'recoverPublication'}>;
 type SessionRequest = Extract<RecipeAuthoringRequest,{session:string}>;
 type ScopedRequest<T = SessionRequest> = T extends SessionRequest ? Omit<T, 'session' | 'botId'> : never;
 const changed = () => new AuthoringError('账号或设备连接已改变，请重新打开原来的配方操作。');
@@ -1210,7 +1210,7 @@ export class RecipeAuthoringController {
   }
   async request(raw: DesktopAuthoringRequest) {
     const r = desktopAuthoringRequestSchema.parse(raw);
-    if(r.type==='creatorContinue'||r.type==='preparePublication'||r.type==='confirmPublication'||r.type==='recoverPublication')throw recheck();
+    if(r.type==='resourceHandoff'||r.type==='creatorContinue'||r.type==='preparePublication'||r.type==='confirmPublication'||r.type==='recoverPublication')throw recheck();
     if (r.type === 'restoreHandoff') return desktopAuthoringReplySchema.parse(await this.restoreHandoff(r));
     if (r.type === 'openDraftSource') return desktopAuthoringReplySchema.parse(await this.openDraftSource(r));
     if (r.type === 'open') return desktopAuthoringReplySchema.parse(await this.open(r));

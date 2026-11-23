@@ -292,6 +292,16 @@ it('APP PUBLICATION prepares exact readonly bytes without publishing and confirm
   expect(f.rpcs.filter(r=>r.type==='creatorAppConfirm')).toHaveLength(1);
 });
 
+it('requires the public name, summary and version before preparing publication', async () => {
+  for (const field of ['name', 'summary', 'version'] as const) {
+    const f = await publicationFixture();
+    f.draft.public[field] = '  ';
+    await expect(f.prepare()).rejects.toThrow('请在 Bot 私聊中补充');
+    expect(f.rpcs.filter(request => request.type === 'creatorPreview' || request.type === 'creatorAppConfirm')).toEqual([]);
+    expect(f.request.mock.calls.some(([, , init]) => init?.method === 'POST')).toBe(false);
+  }
+});
+
 it('APP PUBLICATION diagnostics identify a failed stage without logging error messages or arbitrary names',async()=>{
   const f=await publicationFixture(),warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
   try{

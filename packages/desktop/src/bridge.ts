@@ -12,7 +12,7 @@ import {
 } from '@vonvon/protocol';
 import { DeviceConnectionsError, type DeviceConnections, type ViewChange, type ViewSession } from './connections.js';
 import { communityRequest, CommunityError } from './community-api.js';
-import {RecipeUseController, type RecipeDeviceLease} from './recipe-use.js';
+import type {RecipeDeviceLease} from './recipe-use.js';
 import {RecipeAuthoringController} from './recipe-authoring.js';
 import {AuthoringJournal} from './recipe-authoring-journal.js';
 import {AuthoringError} from './recipe-authoring-cloud.js';
@@ -20,7 +20,6 @@ import {RecipeCreatorSupervisor,type CreatorSourceLease} from './recipe-creator-
 import {RecipeCreatorExecutor} from './recipe-creator.js';
 import {RecipeCreatorJournal} from './recipe-creator-journal.js';
 import {MetadataJournal} from './community-metadata-journal.js';
-import {RecipeJournal} from './recipe-use-journal.js';
 import {RecipeUseError, changed} from './recipe-use-cloud.js';
 import type { NativeAccount } from './account-session.js';
 import { RegistryError } from './device-registry.js';
@@ -443,7 +442,6 @@ export function installBridge(
     }};
   };
   const metadataJournal = new MetadataJournal(recipeJournalPath && recipeJournalPath+'.metadata');
-  const recipes = new RecipeUseController(account, captureRecipeDevice, new RecipeJournal(recipeJournalPath));
   const authoringJournal=new AuthoringJournal(authoringJournalPath);
   const authoring = new RecipeAuthoringController(account, captureRecipeDevice, authoringJournal, onAuthoringSaved);
   const creatorJournal=new RecipeCreatorJournal(authoringJournalPath&&authoringJournalPath+'.creator');
@@ -599,8 +597,10 @@ export function installBridge(
     register(desktopChannels.hide, 0, noArg, async () => { actions.hide(); });
     register(desktopChannels.quit, 0, noArg, () => actions.confirmQuit());
     register(desktopChannels.quitKeepsDaemon, 0, () => { localOnly(); }, () => actions.quitKeepsDaemon());
-    register(desktopChannels.recipeSource,1,value=>desktopRecipeSourceRequestSchema.parse(value),value=>recipes.source(value));
+    const retiredRecipeInstallation = (): never => {throw new RecipeUseError('请在「我的配方」中将配方交给 Bot，再在私聊中说明如何调整配置。');};
+    register(desktopChannels.recipeSource,1,value=>desktopRecipeSourceRequestSchema.parse(value),retiredRecipeInstallation);
     register(desktopChannels.recipeAuthoring, 1, value => desktopAuthoringRequestSchema.parse(value), async value => {
+      if(value.type==='resourceHandoff')return creator.resourceHandoff(value);
       if(value.type==='creatorContinue')return creator.continue(value);
       if(value.type==='preparePublication')return creator.preparePublication(value);
       if(value.type==='confirmPublication')return creator.confirmPublication(value);
@@ -612,7 +612,7 @@ export function installBridge(
       }
       return reply;
     });
-    register(desktopChannels.recipeUse,1,value=>recipeUseRequestSchema.parse(value),value=>recipes.request(value));
+    register(desktopChannels.recipeUse,1,value=>recipeUseRequestSchema.parse(value),retiredRecipeInstallation);
     register(desktopChannels.recipePreviewPending, 0, noArg, async () => recipePreview.pending());
     register(desktopChannels.recipePreviewAcknowledge, 1, value => draftPreviewNavigationIdSchema.parse(value), async value => {
       const actor=account.status();recipePreview.acknowledge(value,actor.kind==='signedIn'?actor.accountId:undefined);

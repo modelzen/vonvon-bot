@@ -24,7 +24,10 @@
 .community-empty { text-align:center; color:var(--color-text-secondary); padding:38px 24px; border:1px solid var(--color-border); background:var(--color-surface); border-radius:14px; }
 .community-empty h2 { color:var(--color-text); font-size:19px; font-weight:620; }
 .community-muted { color:var(--color-text-secondary); font-size:13px; line-height:1.65; }
-.community-workspace-section { display:grid; gap:12px; background:var(--color-surface); border:1px solid var(--color-border); border-radius:14px; padding:22px; }
+.community-workspace-section { display:grid; gap:12px; }
+.community-library-entry { display:grid; gap:8px; align-content:start; }
+.community-library-update { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:0 4px; color:var(--color-text-secondary); font:inherit; font-size:12px; border:0; background:none; cursor:pointer; text-align:left; }
+.community-library-update:hover { color:var(--color-text); }
 .community-workspace-section > h2 { margin:0; font-size:16px; }
 .community-list { display:grid; gap:0; overflow:hidden; border:0; border-radius:0; }
 .community-list-row { display:flex; align-items:center; gap:12px; background:var(--color-surface); border-bottom:1px solid var(--color-border); min-width:0; padding:16px 0; }

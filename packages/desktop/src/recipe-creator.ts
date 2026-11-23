@@ -1,6 +1,6 @@
 import {isDeepStrictEqual} from 'node:util';
 import {z} from 'zod';
-import {creatorSnapshotSchema,recipeAuthoringReplySchema,validateWritableRichRecipeContent,recipePublicSchema,richMetadataRequestSchema,
+import {creatorSnapshotSchema,recipeAuthoringReplySchema,validateWritableRichRecipeContent,recipePublicSchema,recipePublicationMetadataIssue,richMetadataRequestSchema,
   communityResponseSchemas,type CreatorJob,type CreatorAnswer,type CreatorRead,type CreatorWork,type CreatorVersion,type CreatorSnapshot,type RecipeDraft,type CommunityRequest,
   type DesktopAuthoringReply,type DraftPreviewLocator,type AuthoringPublished,type AuthoringSaved,type RecipeAuthoringRequest,type RecipeAuthoringReply} from '@vonvon/protocol';
 import type {NativeAccount} from './account-session.js';
@@ -9,6 +9,7 @@ import {creatorDraft,creatorJson,creatorCodes,publicationReceipt,issueReceipt,me
 import {MetadataJournal} from './community-metadata-journal.js';
 import {communityRequest,CommunityError} from './community-api.js';
 import {inheritedPublication,UnsupportedLegacyPublication} from './recipe-publication-inheritance.js';
+import {recipeResourceReader} from './recipe-resource.js';
 import {richCommunity} from './community-rich.js';
 import {richAuthoringCloud} from './recipe-authoring-rich-cloud.js';
 import {authoringCloud} from './recipe-authoring-cloud.js';
@@ -68,6 +69,24 @@ export class RecipeCreatorExecutor {
     }};
   }
 
+  private async resourceAnswer(context:CreatorContext,job:CreatorJob):Promise<CreatorAnswer> {
+    const task=job.task;
+    const native=this.account;
+    const mode=task.kind==='resourceAcquire'?'execute':'read';
+    const account:NativeAccount={...native,status:()=>native.status(),lease:id=>native.lease?.(id),request:(id,path,init,beforeSend)=>{
+      if(id!==context.association.accountId)throw invalid();
+      return native.request(id,path,init,async()=>{
+        await beforeSend?.();
+        if((await this.checked(context,job)).mode!==mode)throw invalid();
+        context.check();
+      });
+    }};
+    const reader=recipeResourceReader(account), id=context.association.accountId;
+    if(task.kind==='resourceRead')return {kind:'resourceSnapshot',snapshot:await reader.readExact(id,task.target,context.check)};
+    if(task.kind==='resourceLatest')return {kind:'resourceLatest',latest:await reader.latest(id,task.target,task.revision,context.check)};
+    if(task.kind==='resourceAcquire')return {kind:'resourceAcquired',outcome:await reader.acquireExact(id,task.target,task.requestId,context.check)};
+    throw invalid();
+  }
   private async verifyWork(context:CreatorContext,job:CreatorJob,work:CreatorWork){
     if(!work.source)return;
     const {association}=context,prior=this.authoring.history.locator(association.accountId,work.source.preparationId);
@@ -260,6 +279,8 @@ export class RecipeCreatorExecutor {
     let request:CommunityRequest;
     switch(command.kind){
       case 'publish': {
+        const issue=recipePublicationMetadataIssue(command.snapshot.public);
+        if(issue)throw new Error(issue);
         const stored=this.journal.snapshot(command.snapshotDigest);
         if(!stored||!isDeepStrictEqual(stored.association,context.association)||!isDeepStrictEqual(stored.snapshot,command.snapshot)||creatorSnapshotDigest(command.snapshot)!==command.snapshotDigest)throw invalid();
         const current=await this.freeze(context,job,command.snapshot.work);
@@ -443,6 +464,16 @@ export class RecipeCreatorExecutor {
   }
   async run(context:CreatorContext,job:CreatorJob){
     const checked=await this.checked(context,job);
+    if(job.task.kind==='resourceRead'||job.task.kind==='resourceLatest'||job.task.kind==='resourceAcquire'){
+      if(checked.mode!==(job.task.kind==='resourceAcquire'?'execute':'read'))throw invalid();
+      let answer:CreatorAnswer;
+      try{answer=await this.resourceAnswer(context,job);}
+      catch{context.check();answer={kind:'rejected',reason:'unavailable'};}
+      await this.checked(context,job);
+      expect(await context.rpc({type:'creatorAnswer',botId:context.association.botId,session:context.session,id:job.id,answer}),'creatorAck');
+      context.check();
+      return;
+    }
     if(checked.mode==='preview'||job.task.kind==='read'&&checked.mode!=='read')throw invalid();
     if(job.task.kind==='deliverCodes'){
       if(checked.mode!=='delivery')throw invalid();

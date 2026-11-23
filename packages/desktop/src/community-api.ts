@@ -1,4 +1,5 @@
 import {boundedJson} from './community-response.js';
+import {recipeResourceReader} from './recipe-resource.js';
 import {saveRichMetadata} from './community-metadata.js';
 import {MetadataJournal} from './community-metadata-journal.js';
 import {decodeRichRecipeContent} from '@vonvon/protocol';
@@ -12,7 +13,7 @@ export class CommunityError extends Error {
 }
 const fallback = '社区请求未完成，请稍后重试同一操作。';
 
-function endpoint(r: Exclude<CommunityRequest, {type: 'shareLink'|'saveRichDraftMetadata'|'recoverRichDraftMetadata'}>): {path: string; method?: string; body?: unknown; revision?: number} {
+function endpoint(r: Exclude<CommunityRequest, {type: 'shareLink'|'saveRichDraftMetadata'|'recoverRichDraftMetadata'|'latestVersion'}>): {path: string; method?: string; body?: unknown; revision?: number} {
   switch (r.type) {
     case 'withdraw': return {path: `/v2/versions/${r.versionId}/withdraw`, method: 'POST', body: {}};
     case 'profile': return {path: '/v2/me/profile'};
@@ -54,6 +55,8 @@ export async function communityRequest<T extends CommunityRequest['type']>(accou
   });
   try {
     const check = () => {if (changed) throw new CommunityError('账号已切换，请重新打开社区。', 'session_changed');};
+    if (r.type === 'latestVersion') return await recipeResourceReader(account).latest(r.accountId,
+      {recipeId: r.recipeId, versionId: r.versionId}, r.revision, check) as CommunityResponses[T];
     const rich = richCommunity(account, r.accountId, check);
     if (r.type === 'catalog') return await rich.catalog(r.query, r.cursor) as CommunityResponses[T];
     if (r.type === 'library') return await rich.library(r.cursor) as CommunityResponses[T];

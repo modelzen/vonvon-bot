@@ -4,7 +4,8 @@
 .authoring-source-list button { display:grid; gap:8px; padding:20px; border:1px solid var(--color-border); border-radius:10px; background:var(--color-surface); color:var(--color-text); text-align:left; cursor:pointer; font:inherit; min-width:0; }
 .authoring-source-list button:focus-visible { outline:2px solid var(--color-accent); outline-offset:3px; }
 .authoring-command { display:grid; gap:8px; font-size:12px; }
-.authoring-command input { font-family:monospace; width:100%; padding:10px; box-sizing:border-box; color:var(--color-text); background:var(--color-surface); border:1px solid var(--color-border); border-radius:7px; }
+.authoring-command input, .authoring-command select { width:100%; padding:10px; box-sizing:border-box; color:var(--color-text); background:var(--color-surface); border:1px solid var(--color-border); border-radius:7px; }
+.authoring-command input { font-family:monospace; }
 @media(max-width:680px) { .authoring-source-list { grid-template-columns:1fr; } }
 
 .recipe-source-dialog { display: grid; gap: 16px; color: var(--color-text); }

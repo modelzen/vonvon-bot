@@ -26,6 +26,10 @@ export interface SessionRecord {
   /** Present only when this binding points at a Bridge-owned native session
    * registered for one-time resume titling. Manual /resume records omit it. */
   titleJobKey?: string;
+  /** The native Codex thread that accepted feedback_prepare on start. */
+  feedbackToolSessionId?: string;
+  /** The native Codex thread that accepted both private-chat resource tools. */
+  resourceToolSessionId?: string;
   model?: string;
   effort?: ReasoningEffort;
   /** Session override; omitted inherits the project's current default. */
@@ -409,7 +413,10 @@ function earlierAfter(held: Pick<SessionRecord, 'sessionId' | 'earlier'>, next: 
 function put(store: StoreFile, rec: SessionRecord): void {
   const idx = store.sessions.findIndex((s) => s.threadId === rec.threadId);
   if (idx === -1) { store.sessions.push(rec); return; }
-  const earlier = earlierAfter(store.sessions[idx]!, rec.sessionId);
+  const held = store.sessions[idx]!;
+  const earlier = earlierAfter(held, rec.sessionId);
+  if (held.feedbackToolSessionId === rec.sessionId) rec = {...rec, feedbackToolSessionId: rec.sessionId};
+  if (held.resourceToolSessionId === rec.sessionId) rec = {...rec, resourceToolSessionId: rec.sessionId};
   store.sessions[idx] = earlier ? { ...rec, earlier } : rec;
 }
 

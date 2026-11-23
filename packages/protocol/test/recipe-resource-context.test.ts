@@ -1,6 +1,7 @@
 import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {expect, it} from 'vitest';
+import {requestSchema} from '../src/rpc.js';
 import {canonicalizeRichRecipeContent} from '../src/recipe-rich-codec.js';
 import {RECIPE_RICH_LIMITS, type RecipeRichContent} from '../src/recipe-rich.js';
 import {
@@ -117,7 +118,7 @@ it('delivers 1 MiB with all 130 memory-free member references through the encryp
   const {snapshot, fileBodies} = largePackage();
   expect(snapshot.release.logicalBytes).toBe(1048576);
   expect(Object.keys(snapshot.members)).toHaveLength(130);
-  const body = Buffer.from(JSON.stringify({type: 'request', id: id(1), params: {snapshot}}));
+  const body = Buffer.from(JSON.stringify(requestSchema.parse({type:'request',id:id(1),method:'recipeAuthoring',payload:{type:'creatorAnswer',botId:'cli_resource',session:id(2),id:id(3),answer:{kind:'resourceSnapshot',snapshot}}})));
   const key = generateStaticKey().key;
   const init = createInitiator(generateStaticKey().key, key.publicKey), remote = createResponder(key);
   remote.readMessage1(init.message1());
@@ -126,8 +127,9 @@ it('delivers 1 MiB with all 130 memory-free member references through the encryp
   expect(frame.length).toBe(body.length + 25);
   expect(frame.length).toBeLessThan(RESOURCE_SNAPSHOT_WIRE_BYTES);
   expect(frame.length).toBeLessThan(4_000_000);
-  const received = JSON.parse(decodeFrame(reply.channel.decrypt(frame)).body.toString('utf8')).params.snapshot;
-  const docs = await openResourceSnapshot(received);
+  const received=requestSchema.parse(JSON.parse(decodeFrame(reply.channel.decrypt(frame)).body.toString('utf8')));
+  if(received.method!=='recipeAuthoring'||received.payload.type!=='creatorAnswer'||received.payload.answer.kind!=='resourceSnapshot')throw Error('unexpected resource envelope');
+  const docs = await openResourceSnapshot(received.payload.answer.snapshot);
   const first = docs.readPage({kind:'index'});
   expect(first.nextCursor).toBeTruthy();
   const entries = index(docs), text = new Map(entries.map(entry => [entry.documentId, read(docs, entry)]));

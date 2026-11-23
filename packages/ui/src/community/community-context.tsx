@@ -5,6 +5,7 @@ import type {CommunityShell, RecipeDetail, CommunityResponses, DraftPreviewNavig
 import {useActiveDevice, useClient, useShellCapabilities} from '../client-context';
 import type {RecipeGroupTarget} from '../recipes/recipe-use-context';
 import {useOptionalDraftGuard} from '../settings/DraftGuard';
+import type {ResourceHandoffIntents} from './RecipeResourceDialog';
 
 export type RecipeWorkspaceTab = 'acquired' | 'drafts' | 'published';
 export type CommunityRoute = {kind: 'catalog'} | {kind: 'workspace'; tab: RecipeWorkspaceTab} | {kind: 'detail'; recipe: {recipeId: string; versionId: string}; from?: RecipeWorkspaceTab; privateView?: boolean; useTarget?: RecipeGroupTarget} | {kind: 'draft'; draftId: string; expectedRevision?: number; navigationId?: string};
@@ -16,6 +17,7 @@ type CommunityContextValue = {
   catalog: {generation: number; query: string; search: string; result?: CommunityResponses['catalog']; scrollTop: number};
   setCatalog: Dispatch<SetStateAction<CommunityContextValue['catalog']>>;
   invalidateCatalog: () => void;
+  resourceIntents: ResourceHandoffIntents;
   onUse?: (recipe: RecipeDetail) => void;
 };
 const Context = createContext<CommunityContextValue | undefined>(undefined);
@@ -25,6 +27,9 @@ export function CommunityProvider({shell, onUse, children}: {shell?: CommunitySh
   const [departure, setDeparture] = useState<CommunityDeparture>();
   const account = useAccount();
   const accountId = account.status?.kind === 'signedIn' ? account.status.accountId : undefined;
+  const resourceOwner = useRef<{accountId?: string; intents: ResourceHandoffIntents}>({accountId, intents: new Map()});
+  if (resourceOwner.current.accountId !== accountId) resourceOwner.current = {accountId, intents: new Map()};
+  const resourceIntents = resourceOwner.current.intents;
   const preview = useShellCapabilities()?.recipePreview;
   const guard = useOptionalDraftGuard();
   const client = useClient();
@@ -126,11 +131,11 @@ export function CommunityProvider({shell, onUse, children}: {shell?: CommunitySh
   const value = useMemo(() => ({shell, isOpen, route, onUse: onUse ? (recipe: RecipeDetail) => {
     const current = currentUse.current;
     if (current.isOpen && current.route.kind === 'detail' && current.route.recipe.recipeId === recipe.recipeId && current.route.recipe.versionId === recipe.versionId) current.onUse?.(recipe, current.useTarget);
-  } : undefined, catalog, setCatalog, invalidateCatalog, departure,
+  } : undefined, catalog, setCatalog, invalidateCatalog, resourceIntents, departure,
     leave: (next: CommunityDeparture) => {clearPendingPreview(); setDeparture(next); setOpen(false); clearUseTarget();},
     consumeDeparture: (expected: CommunityDeparture) => setDeparture(current => current === expected ? undefined : current),
     open: (next?: CommunityRoute) => {if (next) clearPendingPreview(); setDeparture(undefined); if (next) setRoute({route: next.kind === 'detail' ? {...next, recipe: {recipeId: next.recipe.recipeId, versionId: next.recipe.versionId}} : next, owner: accountId, deviceId: device.id, client}); setOpen(true);}, close: () => {clearPendingPreview(); setDeparture(undefined); setOpen(false); clearUseTarget();},
-  }), [shell, isOpen, route, onUse, useTarget, accountId, device.id, client, catalog, departure, preview]);
+  }), [shell, isOpen, route, onUse, useTarget, accountId, device.id, client, catalog, departure, preview, resourceIntents]);
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }
 export function useCommunity() {return useContext(Context);}

@@ -11,12 +11,22 @@ import {useDraftGuard} from '../settings/DraftGuard';
 import {useCommunity, type CommunityRoute, type RecipeWorkspaceTab} from './community-context';
 import {CopyButton, RecipeCard, RecipeDetails, RecipeMark} from './RecipeContent';
 import {RecipeDraftPage} from './RecipeDraftPage';
+import {RecipeResourceDialog} from './RecipeResourceDialog';
 import {RecipeAuthoringPage} from './authoring/RecipeAuthoring';
 import {Dialog} from '../reference/components/ui/Dialog';
 import './community.css';
 
 export function uniqueRecipes<T extends {versionId: string}>(before: T[], incoming: T[]): T[] {
   const seen = new Set(before.map(item => item.versionId)); return [...before, ...incoming.filter(item => !seen.has(item.versionId) && Boolean(seen.add(item.versionId)))];
+}
+
+function acquiredRecipes(versions: RecipeSummary[]) {
+  const recipes = new Map<string, RecipeSummary>();
+  for (const version of versions) {
+    const prior = recipes.get(version.recipeId);
+    if (!prior || version.revision > prior.revision) recipes.set(version.recipeId, version);
+  }
+  return [...recipes.values()];
 }
 
 export function CommunityPage() {
@@ -33,6 +43,8 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   const {navigate} = useDraftGuard();
   const route = community.route;
   const authoring = useShellCapabilities()?.recipeAuthoring;
+  const [handoff, setHandoff] = useState<RecipeDetail>();
+  useEffect(() => setHandoff(undefined), [route]);
   const [preparation,setPreparation]=useState<{parent?:{recipeId:string;versionId:string};draft?:RecipeDraft}>();
   useEffect(()=>setPreparation(undefined),[route]);
   const [tab, setTab] = useState<'recipes' | 'rental'>('recipes');
@@ -181,8 +193,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
         editCode(selected.versionId, '');
         setCodeDialog(false);
         invalidateWorkspace('acquired');
-        setNotice('已获取，已保存在你的账号中。可以稍后从「我的配方」的「已获取」添加到群聊。');
-        community.onUse?.(next);
+        setNotice('已保存在「我的配方」的「已获取」。可以交给 Bot，再告诉它你想如何调整配置。');
       }
       return next;
     };
@@ -229,7 +240,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
     setWithdrawal('closed');
     invalidateWorkspace('published');
     if (next.state === 'withdrawn') {
-      setNotice('此版本已撤下。已有获取者仍可查看和重新添加，已安装的配置会保留。');
+      setNotice('此版本已撤下。已有获取者仍可查看此版本，已保存的群配置会保留。');
       invalidateCatalog();
     } else setNotice('已确认此版本仍在发布中。如需撤下，请重新确认。');
   }
@@ -261,23 +272,38 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
       {route.kind === 'workspace' && <>
         <div className="community-heading community-studio-heading"><div><h2>我的配方</h2><p>查看已获取的配方，继续创作，管理已发布版本与分享码。</p></div><div className="community-actions"><GlowButton variant="dark" onClick={() => setPreparation({})}>创作配方</GlowButton></div></div>
         <nav className="community-workspace-tabs" aria-label="我的配方内容">{([['acquired', '已获取'], ['drafts', '创作中'], ['published', '已发布']] as const).map(([value, label]) => <button key={value} type="button" aria-current={workspaceTab === value ? 'page' : undefined} onClick={() => open({kind: 'workspace', tab: value})}>{label}</button>)}</nav>
-        <section hidden={workspaceTab !== 'acquired'} className="community-workspace-section">{library?.items.length === 0 && <div className="community-empty"><h2>还没有获取配方</h2><p>从社区获取后，任何设备登录这个账号都可以继续使用。</p></div>}<div className="community-grid">{library?.items.map(recipe => <RecipeCard key={recipe.versionId} recipe={recipe} context="library" onOpen={() => open({kind: 'detail', recipe: {recipeId: recipe.recipeId, versionId: recipe.versionId}, from: 'acquired'})}/>)}</div>
+        <section hidden={workspaceTab !== 'acquired'} className="community-workspace-section">{library?.items.length === 0 && <div className="community-empty"><h2>还没有获取配方</h2><p>从社区获取后，任何设备登录这个账号都可以继续使用。</p></div>}<div className="community-grid">{library && acquiredRecipes(library.items).map(recipe => <RecipeLibraryCard key={recipe.versionId} recipe={recipe} shell={shell} accountId={accountId!} onOpen={target => open({kind: 'detail', recipe: target, from: 'acquired'})}/>)}</div>
         {library?.nextCursor && <div><Button disabled={busy} onClick={() => void run(async () => {const current = generation.current; const next = await shell.request({type: 'library', accountId: accountId!, cursor: library.nextCursor!}); if (live.current && current === generation.current) setLibrary(old => old ? {...old, items: uniqueRecipes(old.items, next.items), nextCursor: next.nextCursor} : next);})}>加载更多</Button></div>}</section>
         <section hidden={workspaceTab !== 'drafts'} className="community-workspace-section">{drafts?.length === 0 && <p className="community-muted">还没有创作中的配方。点击「创作配方」，选择已有 Bot 和群聊，在私聊中开始。</p>}{Boolean(drafts?.length) && <div className="community-list">{drafts?.map(draft => <div className="community-list-row community-studio-row" key={draft.draftId}><RecipeMark name={draft.public.name}/><div><strong>{draft.public.name || '未命名配方'}</strong>{draft.public.summary && <p className="community-row-summary">{draft.public.summary}</p>}<small>{draft.public.version || '未指定版本'} · 创作中</small></div><Button onClick={() => open({kind: 'draft', draftId: draft.draftId})}>查看配方</Button></div>)}</div>}</section>
         <section hidden={workspaceTab !== 'published'} className="community-workspace-section">{publications?.length === 0 && <p className="community-muted">发布后，你可以在这里维护版本和分享码。</p>}{Boolean(publications?.length) && <div className="community-list">{publications?.map(recipe => <div className="community-list-row community-studio-row" key={recipe.versionId}><RecipeMark name={recipe.public.name} logo={recipe.logo}/><div><strong>{recipe.public.name}</strong>{recipe.public.summary && <p className="community-row-summary">{recipe.public.summary}</p>}<small>{recipe.public.version} · {recipe.public.access === 'coded' ? '凭分享码获取' : '直接获取'}</small></div><Button onClick={() => open({kind: 'detail', recipe: {recipeId: recipe.recipeId, versionId: recipe.versionId}, privateView: true, from: 'published'})}>管理此版本</Button></div>)}</div>}</section>
       </>}
       {route.kind === 'detail' && detail && <>
-        <RecipeDetails recipe={detail} share={shareUrl && <CopyButton key={shareUrl} value={shareUrl}/>} action={detail.owned || detail.acquired ? <GlowButton variant="dark" disabled={!community.onUse} onClick={() => community.onUse?.(detail)}>添加到群聊</GlowButton> : <GlowButton variant="dark" disabled={busy} onClick={() => {if (detail.public.access === 'coded' && accountId) {setError(undefined); setCodeDialog(true);} else void run(acquire);}}>获取配方</GlowButton>}
+        <RecipeDetails recipe={detail} share={shareUrl && <CopyButton key={shareUrl} value={shareUrl}/>} action={detail.owned || detail.acquired ? <GlowButton variant="dark" disabled={!authoring} onClick={() => setHandoff(detail)}>交给 Bot</GlowButton> : <GlowButton variant="dark" disabled={busy} onClick={() => {if (detail.public.access === 'coded' && accountId) {setError(undefined); setCodeDialog(true);} else void run(acquire);}}>获取配方</GlowButton>}
           management={route.privateView && detail.owned ? <div className="community-actions"><Button disabled={!authoring} onClick={() => setPreparation({parent: {recipeId: detail.recipeId, versionId: detail.versionId}})}>创作新版本</Button>{detail.format === 'rich-v2' && detail.state !== 'withdrawn' && <Button disabled={busy} onClick={() => {setError(undefined); setWithdrawal(uncertainWithdrawals.current.has(detail.versionId) ? 'uncertain' : 'confirm');}}>撤下此版本</Button>}</div> : undefined}/>
-        {detail.state === 'withdrawn' && <InlineNotice title="此版本已撤下">已停止新的获取和分享码兑换。已有获取者仍可查看和重新添加，已安装的配置会保留。</InlineNotice>}
-        {route.privateView && detail.owned && <Dialog open={withdrawal !== 'closed'} size="sm" title={withdrawal === 'uncertain' ? '确认撤下结果' : '撤下此版本'} onClose={busy ? undefined : () => setWithdrawal('closed')} footer={<><Button disabled={busy} onClick={() => setWithdrawal('closed')}>关闭</Button><Button disabled={busy} onClick={() => void run(withdraw)}>{busy ? '正在处理…' : withdrawal === 'uncertain' ? '重新读取结果' : '确认撤下'}</Button></>}><p>撤下后，此版本将从社区目录和搜索中移除，停止新的获取，尚未使用的分享码也会停用。</p><p>已有获取者仍可查看和重新添加，已安装的配置不会删除。你仍可在我的配方管理此版本。</p>{error && <InlineNotice title="操作未完成" tone="warning">{error}</InlineNotice>}</Dialog>}
+        {detail.state === 'withdrawn' && <InlineNotice title="此版本已撤下">已停止新的获取和分享码兑换。已有获取者仍可查看此版本，已保存的群配置会保留。</InlineNotice>}
+        {route.privateView && detail.owned && <Dialog open={withdrawal !== 'closed'} size="sm" title={withdrawal === 'uncertain' ? '确认撤下结果' : '撤下此版本'} onClose={busy ? undefined : () => setWithdrawal('closed')} footer={<><Button disabled={busy} onClick={() => setWithdrawal('closed')}>关闭</Button><Button disabled={busy} onClick={() => void run(withdraw)}>{busy ? '正在处理…' : withdrawal === 'uncertain' ? '重新读取结果' : '确认撤下'}</Button></>}><p>撤下后，此版本将从社区目录和搜索中移除，停止新的获取，尚未使用的分享码也会停用。</p><p>已有获取者仍可查看此版本，已保存的群配置不会删除。你仍可在我的配方管理此版本。</p>{error && <InlineNotice title="操作未完成" tone="warning">{error}</InlineNotice>}</Dialog>}
         {!detail.owned && !detail.acquired && detail.public.access === 'coded' && accountId && <Dialog open={codeDialog} size="sm" title="获取配方" description={`${detail.public.name} · 版本 ${detail.public.version}`} initialFocusRef={codeInput} onClose={busy ? undefined : () => setCodeDialog(false)} footer={<><Button disabled={busy} onClick={() => setCodeDialog(false)}>取消</Button><GlowButton type="submit" form="community-acquire-code" variant="dark" disabled={busy || !code.trim()}>获取配方</GlowButton></>}><form id="community-acquire-code" className="community-code-form" onSubmit={event => {event.preventDefault(); if (!busy && code.trim()) void run(acquire);}}><label>分享码<input ref={codeInput} aria-label="分享码" placeholder="作者提供的分享码" autoComplete="off" value={code} maxLength={128} onChange={event => editCode(detail.versionId, event.target.value)}/></label>{error && <InlineNotice title="获取未完成" tone="warning">{error}</InlineNotice>}</form></Dialog>}
-        {(detail.owned || detail.acquired) && !community.onUse && <p className="community-muted">已保存在账号中。请使用最新版 Vonvon Bot 桌面应用，把配方添加到群聊。</p>}
+        {(detail.owned || detail.acquired) && !authoring && <p className="community-muted">已保存在账号中。请使用最新版 Vonvon Bot 桌面应用，将配方交给自己的 Bot。</p>}
         {route.privateView && detail.owned && detail.state !== 'withdrawn' && detail.public.access === 'coded' && <RecipeCodes key={detail.versionId} shell={shell} accountId={accountId!} versionId={detail.versionId}/>}
       </>}
       {sourceDialog}
+      {handoff && <RecipeResourceDialog key={handoff.versionId} recipe={handoff} intents={community.resourceIntents} onClose={() => setHandoff(undefined)}/>}
       {busy && <p role="status" className="community-muted">正在读取社区…</p>}
     </>}
+  </div>;
+}
+
+function RecipeLibraryCard({recipe, shell, accountId, onOpen}: {recipe: RecipeSummary; shell: CommunityShell; accountId: string; onOpen: (target: {recipeId: string; versionId: string}) => void}) {
+  const [latest, setLatest] = useState<Extract<CommunityResponses['latestVersion'], {status: 'current' | 'newer'}>>();
+  useEffect(() => {
+    let active = true;
+    void shell.request({type: 'latestVersion', accountId, recipeId: recipe.recipeId, versionId: recipe.versionId, revision: recipe.revision}).then(value => {
+      if (active && value.status === 'newer' && value.target.recipeId === recipe.recipeId && value.revision > recipe.revision && value.target.versionId !== recipe.versionId) setLatest(value);
+    }).catch(() => {});
+    return () => {active = false;};
+  }, [shell, accountId, recipe.recipeId, recipe.versionId, recipe.revision]);
+  return <div className="community-library-entry"><RecipeCard recipe={recipe} context="library" onOpen={() => onOpen(recipe)}/>
+    {latest && <button type="button" className="community-library-update" onClick={() => onOpen(latest.target)}><span>有新版本 · {latest.version}</span><span>查看<ChevronRight size={12}/></span></button>}
   </div>;
 }
 

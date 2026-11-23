@@ -1,5 +1,6 @@
 import {useEffect, useRef, useState} from 'react';
 import type {AuthoringPublished, CommunityShell, RecipeDraft} from '@vonvon/protocol';
+import {recipePublicationMetadataIssue} from '@vonvon/protocol';
 import {BackButton} from '../BackButton';
 import {GlowButton} from '../GlowButton';
 import {useShellCapabilities} from '../client-context';
@@ -42,6 +43,7 @@ function DraftSession({shell, accountId, draftId, expectedRevision, onBack, onDe
   const publicationLocked = publicationBusy || publication.kind === 'pending' || publication.kind === 'published';
   const requiredRevision = useRef(expectedRevision ?? 0);
   const draft = 'draft' in read ? read.draft : undefined;
+  const publicationIssue = draft ? recipePublicationMetadataIssue(draft.public) : undefined;
   const current = read.kind === 'ready';
   const displayed = useRef<RecipeDraft | undefined>(undefined);
   displayed.current = current ? draft : undefined;
@@ -167,10 +169,10 @@ function DraftSession({shell, accountId, draftId, expectedRevision, onBack, onDe
     {publication.kind === 'published' && <InlineNotice title="已发布到社区">这份配方已发布，可以在我的配方中管理版本与分享码。</InlineNotice>}
     {draft && expectedRevision !== undefined && expectedRevision !== draft.revision && <InlineNotice title="配方已有更新">链接指向修订 {expectedRevision}，这里展示当前修订 {draft.revision}。请查看当前内容后再发布。</InlineNotice>}
     {draft && <>
-      <RecipeDetails draft recipe={draft} heading={<header className="community-detail-heading recipe-draft-heading">
+      <RecipeDetails draft recipe={draft} overviewFooter={publicationIssue && <p role="status" className="community-muted">{publicationIssue}</p>} heading={<header className="community-detail-heading recipe-draft-heading">
         <RecipeMark name={draft.public.name} logo={draft.format === 'rich-v2' ? draft.logo : undefined}/>
         <div><h1>{draft.public.name || '未命名配方'}</h1><p>创作中 · 仅自己可见</p>{draft.public.summary && <p>{draft.public.summary}</p>}</div>
-        <div className="community-actions"><Button title="让原来源 Bot 发送引导卡，并打开本人私聊" disabled={!current || deleting || publicationLocked || !onContinueInChat} onClick={() => onContinueInChat?.(draft)}>继续创作</Button><GlowButton variant="dark" disabled={!current || deleting || publicationLocked || !authoring} onClick={() => void prepare(draft)}>{publication.kind === 'preparing' ? '正在准备…' : publication.kind === 'publishing' ? '正在发布…' : publication.kind === 'published' ? '已发布' : '发布到社区'}</GlowButton></div>
+        <div className="community-actions"><Button title="让原来源 Bot 发送引导卡，并打开本人私聊" disabled={!current || deleting || publicationLocked || !onContinueInChat} onClick={() => onContinueInChat?.(draft)}>继续创作</Button><GlowButton variant="dark" disabled={!current || deleting || publicationLocked || !authoring || Boolean(publicationIssue)} onClick={() => void prepare(draft)}>{publication.kind === 'preparing' ? '正在准备…' : publication.kind === 'publishing' ? '正在发布…' : publication.kind === 'published' ? '已发布' : '发布到社区'}</GlowButton></div>
       </header>}/>
       {!onContinueInChat && <p className="community-muted">请在已关联的 Bot 私聊中继续创作。</p>}
       <div className="recipe-draft-footer"><Button variant="ghost" disabled={!current || deleting || publicationLocked} onClick={() => {setDeleteError(undefined); setDeletion(draft);}}>删除未发布配方</Button></div>

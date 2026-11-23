@@ -29,6 +29,22 @@ function fixture() {
 }
 
 describe('native community boundary', () => {
+  it('checks resource versions as account metadata without acquiring or reading group state', async () => {
+    const f = fixture(), signal = new AbortController();
+    Object.assign(f.account, {lease: (id: string) => id === accountId ? signal.signal : undefined});
+    vi.mocked(f.account.request).mockImplementation(async (_id, _path, _init, beforeSend) => {
+      await beforeSend?.();
+      return Response.json({recipeId, versionId: draftId, revision: 2, version: '2.0', entitled: false, format: 'rich-v2', access: 'coded'});
+    });
+    expect(await communityRequest(f.account, {type: 'latestVersion', accountId, recipeId, versionId, revision: 1})).toEqual({
+      status: 'newer', target: {recipeId, versionId: draftId}, revision: 2, version: '2.0', format: 'rich-v2', access: 'coded',
+    });
+    expect(f.account.request).toHaveBeenCalledExactlyOnceWith(accountId, `/v2/recipes/${recipeId}/latest-install-version`, {signal: signal.signal}, expect.any(Function));
+    expect(f.account.publicRequest).not.toHaveBeenCalled();
+    f.emit({kind: 'signedOut'});
+    await expect(communityRequest(f.account, {type: 'latestVersion', accountId, recipeId, versionId, revision: 1})).rejects.toThrow('账号已切换');
+    expect(f.account.request).toHaveBeenCalledTimes(1);
+  });
   it('loads the public profile with GET and saves only an explicitly supplied name', async () => {
     const f = fixture();
     const profile = {authorId: accountId, displayName: '社区作者'};

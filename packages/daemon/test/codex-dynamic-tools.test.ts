@@ -43,6 +43,34 @@ describe('dynamicTools on thread/start', () => {
     expect(names({ schedule: false, feishu: true, documentsOnly: true })).not.toContain(FEISHU_API);
     expect(names({ schedule: true, feishu: true, feishuEdit: true, feishuApi: true })).toContain(FEISHU_API);
   });
+  it('offers feedback preparation before setup, then answers through only the current SDK turn', async () => {
+    let enabled = false;
+    const f = codexToolsFixture(() => enabled);
+    const session = await f.open();
+    expect(f.starts()[0]?.dynamicTools).toEqual([expect.objectContaining({name: 'vonvon_bot', tools: expect.arrayContaining([
+      expect.objectContaining({type: 'function', name: 'feedback_prepare', inputSchema: expect.objectContaining({type: 'object'})}),
+    ])})]);
+    expect(session.thread.startedWithFeedbackTool).toBe(true);
+    const calls = [{tool: 'feedback_prepare', args: {summary: {kind: 'bug', title: '标题', description: '说明'}}}];
+    const user = 'ou_member';
+    await session.turn(person(user), calls);
+    expect(f.answers().at(-1)).toEqual({success: false, text: expect.stringContaining('/feedback setup')});
+    enabled = true;
+    const prepare = vi.fn(async () => ({operationId: 'operation', trackingCode: 'fixture'}));
+    const feedback = {chatId: 'oc_group', openId: user, messageId: 'om_' + user, attachments: [], prepare};
+    await session.turn(person(user, {feedback}), calls);
+    expect(f.answers().at(-1)).toEqual({success: true, text: expect.stringContaining('fixture')});
+    await session.turn(person(user, {feedback, triggerMessageId: 'old-message'}), calls);
+    expect(f.answers().at(-1)?.success).toBe(false);
+    expect(prepare).toHaveBeenCalledOnce();
+  });
+  it.each([{kind: 'p2p', chatId: 'oc_private'}, {kind: 'doc', docId: 'doc'}] as const)('keeps preparation out of a $kind Codex session', async place => {
+    const f = codexToolsFixture(() => true);
+    const session = await f.open('start', true, place);
+    expect(f.starts()[0]?.dynamicTools).not.toEqual([expect.objectContaining({tools: expect.arrayContaining([expect.objectContaining({name: 'feedback_prepare'})])})]);
+    await session.turn(person(OWNER), [{tool: 'feedback_prepare', args: {summary: {kind: 'bug', title: '标题', description: '说明'}}}]);
+    expect(f.answers().at(-1)?.success).toBe(false);
+  });
   it('answers calls to the tools it offers, and no others', () => {
     for (const tool of [...scheduleToolNames, ...feishuToolNames, FEISHU_DOC_EDIT, FEISHU_API]) expect(offeredTool('vonvon_bot', tool)).toBe(true);
     expect(offeredTool('vonvon_bot', 'memory_add')).toBe(false);

@@ -39,7 +39,7 @@ const sectionsOf = (a: Assembled): readonly Section[] => a.dm ? DM_SECTIONS : SE
 
 function nextSections(src: ContextSources, a: Assembled): ContextPreviewReply['next']['sections'] {
   const size: Record<Section, number> = {
-    identity: chars(a.identity), role: chars(src.soul.trim()), supplement: chars(src.supplement.trim()),
+    identity: chars(a.identity), role: chars(src.soul.trim()), supplement: chars(src.supplement.trim()) + chars(src.workRules ?? ''),
     botMemory: chars(a.botMemory), projectMemory: chars(a.projectTrusted) + chars(a.projectUntrusted), dmMemory: chars(a.dmTrusted) + chars(a.dmUntrusted),
   };
   return sectionsOf(a).map(key => {

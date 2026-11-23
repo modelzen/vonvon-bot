@@ -13,7 +13,7 @@ const recipe = {recipeId: '11111111-1111-4111-8111-111111111111', versionId: '22
   public: {name: '会议纪要', summary: '保留会议决定', overview: '', version: '1.2', access: 'coded' as const}, owned: false, acquired: false};
 const shell = {request: async (request: {type: string; cursor?: string}) => {
   h.requests.push(request.type);
-  if (request.type === 'library') return {items: request.cursor ? [{...recipe, versionId: '33333333-3333-4333-8333-333333333333', public: {...recipe.public, name: '第二份配方'}}] : [recipe], nextCursor: h.paginated && !request.cursor ? 'next-page' : null};
+  if (request.type === 'library') return {items: request.cursor ? [{...recipe, recipeId: '55555555-5555-4555-8555-555555555555', versionId: '33333333-3333-4333-8333-333333333333', public: {...recipe.public, name: '第二份配方'}}] : [recipe], nextCursor: h.paginated && !request.cursor ? 'next-page' : null};
   if (request.type === 'drafts' || request.type === 'publications') return {items: []};
   if (request.type === 'catalog') return {hero: recipe, items: [], nextCursor: null};
   if (request.type === 'detail') return {...recipe, acquired: h.acquired};
@@ -72,7 +72,7 @@ it.each(['已获取', '我的配方'])('routes the catalog %s shortcut to the ac
   expect([...document.querySelectorAll('.community-workspace-tabs button')].map(button => button.textContent)).toEqual(['已获取', '创作中', '已发布']);
   await click('创作中');
   await click('已发布');
-  expect(h.requests).toEqual(['catalog', 'library', 'drafts', 'publications']);
+  expect(h.requests.filter(type => type !== 'latestVersion')).toEqual(['catalog', 'library', 'drafts', 'publications']);
   expect(document.querySelector('.community-workspace-tabs')?.textContent).not.toContain('0');
 });
 it('retains acquired pagination when returning from its detail and offers no publisher controls to an acquirer', async () => {

@@ -1,7 +1,7 @@
 import {isDeepStrictEqual} from 'node:util';
 import {randomUUID} from 'node:crypto';
 import {z} from 'zod';
-import {creatorChatTargetSchema,deviceReplySchema,recipeAuthoringReplySchema,type DesktopAuthoringReply,type DesktopAuthoringRequest,type RecipeAuthoringRequest,type RecipeAuthoringReply,type RecipeDraft,type CreatorWork,type CreatorAnswer,type CreatorJob,type GroupId} from '@vonvon/protocol';
+import {creatorChatTargetSchema,deviceReplySchema,recipeAuthoringReplySchema,recipePublicationMetadataIssue,type DesktopAuthoringReply,type DesktopAuthoringRequest,type RecipeAuthoringRequest,type RecipeAuthoringReply,type RecipeDraft,type CreatorWork,type CreatorAnswer,type CreatorJob,type GroupId} from '@vonvon/protocol';
 import type {NativeAccount} from './account-session.js';
 import type {RecipeDeviceLease} from './recipe-use.js';
 import {RecipeAuthoringController} from './recipe-authoring.js';
@@ -13,7 +13,7 @@ import {creatorDraft} from './recipe-creator-cloud.js';
 
 type Continue=Extract<DesktopAuthoringRequest,{type:'creatorContinue'}>;
 export interface CreatorSourceLease extends RecipeDeviceLease {signal:AbortSignal;release():void}
-type Worker={botName:string;contextHandle:string;association:CreatorAssociation;source:CreatorSourceLease;session:string;stop:()=>void;context:CreatorContext;busy:boolean;queue:Promise<void>;timer:ReturnType<typeof setInterval>};
+type Worker={resourceContext:boolean;botName:string;contextHandle:string;association:CreatorAssociation;source:CreatorSourceLease;session:string;stop:()=>void;context:CreatorContext;busy:boolean;queue:Promise<void>;timer:ReturnType<typeof setInterval>};
 type DraftSource={kind:'resolved';work:CreatorWork;selected?:Pick<CreatorAssociation,'viewId'|'botId'>;original?:NonNullable<ReturnType<AuthoringJournal['history']['locator']>>};
 type PublicationReview={worker:Worker;signal:AbortSignal;draft:RecipeDraft;job:CreatorJob;snapshotDigest:string;confirmationId:string;expiresAt:number;sent:boolean};
 type PublicationPreparationStage='account'|'source'|'association'|'worker'|'workerSource'|'queue'|'daemonPreview'|'prepareExecution'|'existingExecution'|'freezePreview'|'compareDraft'|'review';
@@ -23,6 +23,8 @@ const unavailable=()=>new Error('请先在 App 关联原来源 Bot，并保持�
 function expect<K extends RecipeAuthoringReply['kind']>(reply:RecipeAuthoringReply,kind:K){if(reply.kind!==kind)throw unavailable();return reply as Extract<RecipeAuthoringReply,{kind:K}>;}
 export class RecipeCreatorSupervisor {
   private readonly workers=new Map<string,Worker>();
+  private resourceQueue:Promise<void>=Promise.resolve();
+  private readonly resourceLinks=new Map<string,{handle:string;lease:AbortSignal}>();
   private readonly opening=new Map<string,Promise<Worker|undefined>>();
   private readonly reviews=new Map<string,PublicationReview>();
   private readonly stop=new AbortController();
@@ -80,7 +82,7 @@ export class RecipeCreatorSupervisor {
       const {binding,scope}=discovered.association;
       if(expected&&(expected.binding!==binding||expected.scope!==scope))throw unavailable();
       const association={accountId,viewId,deviceId,deviceKey,botId,binding,scope};
-      const opened=expect(await rpc({type:'creatorOpen',accountId,botId,binding,scope,wakeId:discovered.wakeId,nativePreview:true}),'creatorSession');
+      const opened=expect(await rpc({type:'creatorOpen',accountId,botId,binding,scope,wakeId:discovered.wakeId,nativePreview:true,...(source.client.supportsResourceContext&&{resourceContext:true})}),'creatorSession');
       session=opened.session;
       if(opened.binding!==binding||opened.scope!==scope)throw unavailable();
       adopted=await this.authoring.adoptCreator({accountId,viewId,botId,lease:source,session,leaseMs:opened.leaseMs});check();
@@ -94,7 +96,7 @@ export class RecipeCreatorSupervisor {
         this.workers.delete(key);clearInterval(worker.timer);source.signal.removeEventListener('abort',halt);signal.removeEventListener('abort',halt);
         adoptedStop();source.release();
       };
-      worker={botName:adopted.botName,contextHandle:handle,association,source,session,context,busy:false,queue:Promise.resolve(),stop:halt,timer:setInterval(()=>{void this.tick(worker);},Math.max(250,Math.min(3000,Math.floor(opened.leaseMs/3))))};
+      worker={resourceContext:opened.resourceContext===true,botName:adopted.botName,contextHandle:handle,association,source,session,context,busy:false,queue:Promise.resolve(),stop:halt,timer:setInterval(()=>{void this.tick(worker);},Math.max(250,Math.min(3000,Math.floor(opened.leaseMs/3))))};
       worker.timer.unref();this.workers.set(key,worker);
       source.signal.addEventListener('abort',halt,{once:true});signal.addEventListener('abort',halt,{once:true});
       this.journal.remember(association);void this.tick(worker);return worker;
@@ -219,6 +221,8 @@ export class RecipeCreatorSupervisor {
     }catch{throw new AuthoringError('发布结果尚未确认，请在原账号中重试核对同一次请求。');}
   }
   async preparePublication(input:Extract<DesktopAuthoringRequest,{type:'preparePublication'}>):Promise<DesktopAuthoringReply>{
+    const issue=recipePublicationMetadataIssue(input.draft.public);
+    if(issue)throw new AuthoringError(issue);
     let stage:PublicationPreparationStage='account';
     try {
       const signal=this.account.lease?.(input.accountId);if(!signal)throw unavailable();
@@ -319,6 +323,49 @@ export class RecipeCreatorSupervisor {
       if(error instanceof AuthoringError)throw error;
       throw new AuthoringError('发布结果尚未确认。请保持原来源 Bot 在线，重新读取草稿后核对同一次请求。');
     }
+  }
+  resourceHandoff(input:Extract<DesktopAuthoringRequest,{type:'resourceHandoff'}>):Promise<DesktopAuthoringReply>{
+    // Preserve App selection order across snapshot and association reads. The native worker processes cloud jobs separately.
+    const turn=this.resourceQueue.then(()=>this.beginResourceHandoff(input));
+    this.resourceQueue=turn.then(()=>{},()=>{});
+    return turn;
+  }
+  private async beginResourceHandoff(input:Extract<DesktopAuthoringRequest,{type:'resourceHandoff'}>):Promise<DesktopAuthoringReply>{
+    const {accountId,viewId,botId,target,requestId}=input;
+    const linkKey=JSON.stringify([accountId,viewId,botId,requestId]);
+    const worker=await this.open(accountId,viewId,botId);
+    if(!worker){
+      const accountLease=this.account.lease?.(accountId);if(!accountLease)throw unavailable();
+      const source=await this.retain(viewId,AbortSignal.any([accountLease,this.stop.signal]));
+      try{
+        this.check(accountId,accountLease,source);
+        if(!source.client.supportsResourceContext)throw new AuthoringError('此设备尚不支持配方资源交付。');
+      }finally{source.release();}
+      for(const [key,association] of this.resourceLinks)if(association.lease.aborted)this.resourceLinks.delete(key);
+      const linking=this.resourceLinks.get(linkKey);
+      if(linking?.lease===accountLease){
+        const prior=await this.authoring.request({type:'status',handle:linking.handle}).catch(()=>undefined);
+        if(prior?.kind==='session'&&!prior.linked)return {kind:'handoffLinkRequired',session:prior};
+      }
+      const session=await this.authoring.request({type:'open',accountId,viewId,botId});
+      if(session.kind!=='session'||session.linked)throw unavailable();
+      if(this.resourceLinks.size>=64)this.resourceLinks.delete(this.resourceLinks.keys().next().value!);
+      this.resourceLinks.set(linkKey,{handle:session.handle,lease:accountLease});
+      return {kind:'handoffLinkRequired',session};
+    }
+    this.resourceLinks.delete(linkKey);
+    if(!worker.resourceContext)throw new AuthoringError('此设备尚不支持配方资源交付。');
+    worker.context.check();
+    const snapshot=await worker.source.client.snapshot();
+    worker.context.check();
+    const bot=snapshot.agents.find(row=>row.id===botId);
+    if(snapshot.stale||snapshot.host.kind!=='connected'||!bot?.running||bot.connection!=='connected'||!bot.tenant)throw unavailable();
+    const chat=creatorChatTargetSchema.parse({accountId,viewId,botId,botName:bot.name,tenant:bot.tenant});
+    const state=expect(await worker.context.rpc({type:'resourceHandoff',botId,session:worker.session,target,requestId}),'resourceHandoff');
+    worker.context.check();
+    if(state.requestId!==requestId||!isDeepStrictEqual(state.target,target))throw unavailable();
+    if(state.delivery==='pending')void this.tick(worker);
+    return {...state,...chat};
   }
   async continue(input:Continue):Promise<DesktopAuthoringReply>{
     const signal=this.account.lease?.(input.accountId);if(!signal)throw unavailable();

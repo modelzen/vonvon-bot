@@ -1432,3 +1432,21 @@ it('continues through the public shell IPC on its fixed local source after hide 
   expect(calls.filter(r=>r.type==='open'||r.type==='close')).toEqual([]);
   await h.bridge.dispose();expect(calls.filter(r=>r.type==='close')).toEqual([{type:'close',botId,session}]);
 });
+
+it('routes exact resource intents through the native owner and refuses retired installer entry points', async () => {
+  const h = harness(), accountId = REMOTE_A, botId = agentIdSchema.parse('cli_resource');
+  const target = {recipeId: REMOTE_A, versionId: REMOTE_B};
+  const input = {type: 'resourceHandoff' as const, accountId, viewId: 'local', botId, target, requestId: REMOTE_B};
+  const deliver = vi.spyOn(RecipeCreatorSupervisor.prototype, 'resourceHandoff').mockImplementation(async request => ({
+    kind: 'resourceHandoff', accountId: request.accountId, viewId: request.viewId, botId: request.botId,
+    target: request.target, requestId: request.requestId, tenant: 'feishu', botName: '资源 Bot', delivery: 'sent',
+  }));
+  try {
+    const {shell} = createDesktopFacades({invoke: (channel, ...args) => h.invoke(channel, ...args), receive: () => () => {}});
+    expect(await shell.recipeAuthoring.request(input)).toMatchObject({kind: 'resourceHandoff', target, delivery: 'sent'});
+    expect(deliver).toHaveBeenCalledExactlyOnceWith(input);
+    expect(await h.invoke(desktopChannels.recipeUse, {type: 'begin', accountId, viewId: 'local', botId, ...target})).toMatchObject({ok: false});
+    expect(await h.invoke(desktopChannels.recipeSource, {type: 'read', viewId: 'local', botId, groupId: 'oc_resource'})).toMatchObject({ok: false});
+    expect(h.account.request).not.toHaveBeenCalled();
+  } finally {deliver.mockRestore(); await h.bridge.dispose();}
+});

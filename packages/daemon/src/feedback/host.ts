@@ -9,7 +9,7 @@ import type {Project} from '../project/registry';
 import {writeFileAtomic} from '../server/atomic-file';
 import {directFeedbackAttachments, type FeedbackDownload} from './attachments';
 import {FeedbackChatController, feedbackAuthorizationMessage, type FeedbackChatAuthorization, type FeedbackChatIm} from './chat';
-import {configuredFeedback, feedbackInstallation, setupDestination, type GroupFeedbackConfig} from './config';
+import {configuredFeedback, feedbackBinding, setupDestination, type FeedbackBinding, type GroupFeedbackConfig} from './config';
 import {feedbackActorFromMessage, feedbackActionFromEvent} from './events';
 import {FeedbackSubmissionService} from './service';
 import type {FeedbackActor, FeedbackDestination, FeedbackGateway, FeedbackStore} from './types';
@@ -27,7 +27,7 @@ interface Dependencies {
   bot: {appId: string; botId: string}; registration: string; root: string;
   project(chatId: string): Project | undefined;
   allowed(project: Project, openId?: string): boolean;
-  configure(actor: FeedbackActor, destination: FeedbackDestination, installation: string): Promise<void>;
+  configure(actor: FeedbackActor, destination: FeedbackDestination, binding: FeedbackBinding): Promise<void>;
   checkBot(): Promise<void>;
   im(message?: NormalizedMessage): FeedbackChatIm;
   download: FeedbackDownload;
@@ -54,8 +54,8 @@ export function createFeedbackHost(deps: Dependencies): FeedbackHost {
     running.add(work);
     return work.finally(() => running.delete(work));
   }
-  function serial<T>(actor: FeedbackActor, fn: (file: string) => Promise<T>): Promise<T> {
-    const key = createHash('sha256').update(JSON.stringify([deps.registration, actor.tenantKey, actor.openId, actor.chatId])).digest('hex');
+  function serial<T>(actor: FeedbackActor, bindingIncarnation: string, fn: (file: string) => Promise<T>): Promise<T> {
+    const key = createHash('sha256').update(JSON.stringify([deps.registration, bindingIncarnation, actor.tenantKey, actor.openId, actor.chatId])).digest('hex');
     const work = (lanes.get(key) ?? Promise.resolve()).then(() => fn(join(deps.root, 'reviews', key + '.json')));
     const tail = work.then(() => {}, () => {}).finally(() => {if (lanes.get(key) === tail) lanes.delete(key);});
     lanes.set(key, tail);
@@ -67,7 +67,7 @@ export function createFeedbackHost(deps: Dependencies): FeedbackHost {
   }
   function checkConfig(actor: FeedbackActor, expected: GroupFeedbackConfig) {
     lifetime.signal.throwIfAborted();
-    if (!isDeepStrictEqual(config(deps.project(actor.chatId), actor.openId), expected)) throw new Error('反馈配方或目标已变化，请重新发起。');
+    if (!isDeepStrictEqual(config(deps.project(actor.chatId), actor.openId), expected)) throw new Error('群绑定或反馈目标已变化，请重新发起。');
   }
   return {
     enabled(chatId) {return !lifetime.signal.aborted && !!config(deps.project(chatId));},
@@ -79,7 +79,7 @@ export function createFeedbackHost(deps: Dependencies): FeedbackHost {
       const attachments = directFeedbackAttachments(message);
       return {chatId: actor.chatId, openId: actor.openId, messageId: actor.messageId, attachments: attachments.refs,
         prepare(input, signal, checkTurn) {
-          return track(() => serial(actor, async file => {
+          return track(() => serial(actor, saved.bindingIncarnation, async file => {
             const stop = AbortSignal.any([signal, lifetime.signal]);
             const check = async () => {
               await deps.checkBot();
@@ -117,8 +117,8 @@ export function createFeedbackHost(deps: Dependencies): FeedbackHost {
       if (message.rawContentType !== 'text') return true;
       const actor = feedbackActorFromMessage(deps.bot, message);
       if (!actor) return true;
-      const installation = message.chatType === 'group' && command.startsWith('/feedback setup')
-        ? feedbackInstallation(deps.project(actor.chatId)) : undefined;
+      const binding = message.chatType === 'group' && command.startsWith('/feedback setup')
+        ? feedbackBinding(deps.project(actor.chatId)) : undefined;
       await track(async () => {
         const im = deps.im(message);
         try {
@@ -128,15 +128,15 @@ export function createFeedbackHost(deps: Dependencies): FeedbackHost {
           } else if (message.chatType === 'group' && /^\/feedback setup(?:\s|$)/.test(command)) {
             const destination = setupDestination(command);
             if (!destination) {await im.reply(actor, '用法：/feedback setup <含 table 的飞书 Base 链接> <飞书表单分享链接>'); return;}
-            if (!installation) {await im.reply(actor, '请先安装反馈配方并启用本群。'); return;}
-            await deps.configure(actor, destination, installation);
+            if (!binding) {await im.reply(actor, '请先绑定并启用本群。'); return;}
+            await deps.configure(actor, destination, binding);
             await im.reply(actor, '本群已配置反馈接收目标。成员可在本人私聊发送 /feedback authorize。');
           } else {
             const current = config(deps.project(actor.chatId), actor.openId);
             if (current) await controller(current.destination, im).onMessage(message);
-            else await im.reply(actor, '请让管理员在安装反馈配方的群聊中配置接收目标。');
+            else await im.reply(actor, '请让 Bot 管理员在本群发送 /feedback setup 配置接收目标。');
           }
-        } catch {await im.reply(actor, '反馈操作未完成。请核对本 Bot 的配置、群配方及管理员权限。');}
+        } catch {await im.reply(actor, '反馈操作未完成。请核对群绑定、反馈目标及 Bot 管理员权限。');}
       });
       return true;
     },
@@ -145,7 +145,9 @@ export function createFeedbackHost(deps: Dependencies): FeedbackHost {
       if (!action) return;
       const {botId, appId, tenantKey, openId, chatId} = action.confirmation;
       const actor = {botId, appId, tenantKey, openId, chatId, messageId: action.messageId};
-      await track(() => serial(actor, async file => {
+      const bindingIncarnation = deps.project(chatId)?.bindingIncarnation;
+      if (!bindingIncarnation) return;
+      await track(() => serial(actor, bindingIncarnation, async file => {
         const im = deps.im();
         try {
           const slot = await readSlot(file);
@@ -155,7 +157,7 @@ export function createFeedbackHost(deps: Dependencies): FeedbackHost {
           const checkAudience = () => {
             lifetime.signal.throwIfAborted();
             const project = deps.project(chatId);
-            if (!project || !deps.allowed(project, openId)) throw new Error('Audience changed');
+            if (!project || project.bindingIncarnation !== bindingIncarnation || !deps.allowed(project, openId)) throw new Error('Audience changed');
           };
           checkAudience();
           if (operation.state === 'prepared') {

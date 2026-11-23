@@ -80,6 +80,8 @@ async function openDraft() {
   await draw(); await click('社区'); await click('我的配方'); await click('创作中'); await click('查看配方');
 }
 async function defaultAuthoring(request: DesktopAuthoringRequest): Promise<DesktopAuthoringReply> {
+  if (request.type === 'resourceHandoff') return {kind: 'resourceHandoff', accountId: request.accountId, viewId: request.viewId, botId: request.botId,
+    botName: 'Bot A', tenant: 'feishu', target: request.target, requestId: request.requestId, delivery: 'sent'};
   if (request.type === 'creatorContinue') return {kind: 'creatorContinuing', delivery: request.entry.kind === 'draft' ? 'queued' : 'delivered', retryId: request.retryId, accountId: request.accountId, viewId: request.source?.viewId ?? (request.entry.kind === 'source' ? request.entry.viewId : A), botId: request.source?.botId ?? (request.entry.kind === 'source' ? request.entry.botId : botA), tenant: 'feishu', botName: 'Bot A'};
   if (request.type === 'open') {
     const handle = `00000000-0000-4000-8000-${String(++nextHandle).padStart(12, '0')}`;
@@ -138,6 +140,115 @@ afterEach(async()=>{await act(async()=>root.unmount());vi.useRealTimers();Reflec
 async function draw(view=A) {
   await act(async()=>{emit({type:'devices',value:devicesState({id:view})});emit({type:'account',value:status});root.render(<DesktopRoot fallback={facade.client} shell={facade.shell}/>);});
 }
+
+async function openResource() {
+  const normal = cloud;
+  cloud = async request => request.type === 'library' ? {items: [{recipeId: accountB, versionId: draftId, revision: 1, public: draft.public}], nextCursor: null}
+    : request.type === 'latestVersion' ? {status: 'unknown'} : normal(request);
+  await draw(); await click('社区'); await click('我的配方');
+  await act(async () => document.querySelector<HTMLButtonElement>('.community-card')!.click());
+  await click('交给 Bot');
+}
+
+it('hands an exact acquired resource to private chat without selecting or writing a group', async () => {
+  await openResource();
+  expect(calls).toEqual([]);
+  expect(document.querySelector('select')?.getAttribute('aria-label')).toBe('接收配方的 Bot');
+  expect(document.querySelectorAll('select')).toHaveLength(1);
+  await click('前往私聊');
+  expect(calls).toEqual([{type: 'resourceHandoff', accountId: accountA, viewId: A, botId: botA,
+    target: {recipeId: accountB, versionId: draftId}, requestId: expect.any(String)}]);
+  expect(externalCalls).toHaveLength(1);
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('私聊引导已发送');
+  expect(cloudCalls.some(request => ['saveDraft', 'publishDraft', 'acquire'].includes(request.type))).toBe(false);
+});
+
+it('reconciles an uncertain resource delivery with the original identity and target', async () => {
+  const normal = authoring;
+  let attempts = 0;
+  authoring = async request => {
+    const reply = await normal(request);
+    return reply.kind === 'resourceHandoff' && ++attempts === 1 ? {...reply, delivery: 'unknown'} : reply;
+  };
+  await openResource(); await click('前往私聊');
+  expect(externalCalls).toHaveLength(0);
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('尚未确认');
+  await click('核对交付');
+  expect(calls).toHaveLength(2); expect(calls[1]).toEqual(calls[0]);
+  expect(externalCalls).toHaveLength(1);
+});
+
+it('reopens only the original Bot chat after its confirmed resource delivery', async () => {
+  externalFailure = true;
+  await openResource(); await click('前往私聊');
+  expect(calls.filter(request => request.type === 'resourceHandoff')).toHaveLength(1);
+  externalFailure = false; await click('打开 Bot 私聊');
+  expect(externalCalls).toHaveLength(2); expect(externalCalls[1]).toBe(externalCalls[0]);
+  expect(calls.filter(request => request.type === 'resourceHandoff')).toHaveLength(1);
+});
+
+it('links the first verified private recipient before repeating the same resource intent', async () => {
+  const normal = authoring;
+  authoring = async request => {
+    if (request.type === 'resourceHandoff' && !linked) {
+      const session = await defaultAuthoring({type: 'open', accountId: request.accountId, viewId: request.viewId, botId: request.botId});
+      if (session.kind !== 'session') throw new Error('Fixture expected a session');
+      return {kind: 'handoffLinkRequired', session};
+    }
+    return normal(request);
+  };
+  await openResource(); await click('前往私聊');
+  expect(document.querySelector<HTMLInputElement>('[aria-label="私聊关联命令"]')?.value).toContain('/recipe link ');
+  recipient = true; await click('我已发送，核对收件人'); await click('确认是我的私聊');
+  const deliveries = calls.filter(request => request.type === 'resourceHandoff');
+  expect(deliveries).toHaveLength(2); expect(deliveries[1]).toEqual(deliveries[0]);
+  expect(externalCalls).toHaveLength(1);
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('私聊引导已发送');
+});
+
+it('discards a late resource handoff after switching accounts', async () => {
+  const normal = authoring;
+  let finish: (() => void) | undefined;
+  authoring = async request => {
+    if (request.type === 'resourceHandoff') await new Promise<void>(resolve => {finish = resolve;});
+    return normal(request);
+  };
+  await openResource();
+  await act(async () => {
+    [...document.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === '前往私聊')!.click();
+  });
+  await act(async () => {emit({type: 'account', value: signedIn(accountB)}); finish?.();});
+  expect(externalCalls).toHaveLength(0);
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+});
+
+it('offers a newer recipe from the account library without changing a group or claiming access', async () => {
+  const normal = cloud;
+  cloud = async request => request.type === 'library' ? {items: [{recipeId: accountB, versionId: draftId, revision: 1, public: draft.public}], nextCursor: null}
+    : request.type === 'latestVersion' ? {status: 'newer', target: {recipeId: accountB, versionId: operationId}, revision: 2, version: '2.0', format: 'rich-v2', access: 'coded'}
+      : normal(request);
+  await draw(); await click('社区'); await click('我的配方');
+  expect(document.querySelector('.community-library-update')?.textContent).toContain('有新版本 · 2.0');
+  expect(calls).toEqual([]);
+  expect(cloudCalls.some(request => request.type === 'acquire')).toBe(false);
+  await act(async () => document.querySelector<HTMLButtonElement>('.community-library-update')!.click());
+  expect(cloudCalls.filter(request => request.type === 'detail')).toEqual([{type: 'detail', accountId: accountA, recipeId: accountB, versionId: operationId}]);
+  expect(calls).toEqual([]);
+});
+
+it('shows one account resource with its newest acquired version', async () => {
+  const normal = cloud;
+  cloud = async request => request.type === 'library' ? {items: [
+    {recipeId: accountB, versionId: draftId, revision: 1, public: draft.public},
+    {recipeId: accountB, versionId: operationId, revision: 2, public: {...draft.public, version: '2.0'}},
+  ], nextCursor: null} : request.type === 'latestVersion' ? {status: 'unknown'} : normal(request);
+  await draw(); await click('社区'); await click('我的配方');
+  expect(document.querySelectorAll('.community-card')).toHaveLength(1);
+  expect(document.querySelector('.community-card-footer')?.textContent).toContain('2.0');
+  expect(cloudCalls.filter(request => request.type === 'latestVersion')).toMatchObject([{versionId: operationId, revision: 2}]);
+  await act(async () => document.querySelector<HTMLButtonElement>('.community-card')!.click());
+  expect(cloudCalls.filter(request => request.type === 'detail')).toEqual([{type: 'detail', accountId: accountA, recipeId: accountB, versionId: operationId}]);
+});
 
 
 it('keeps My Recipes readonly and starts known draft continuation directly without choosing another source', async () => {
@@ -441,4 +552,215 @@ it('does not open a newly inferred chat when a legacy request lost both its repl
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain('之前创作的私聊');
   expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain('打开 Bot 私聊');
   expect(externalCalls).toHaveLength(0);
+});
+
+it('retains the unresolved delivery identity when its dialog reopens', async () => {
+  const normal = authoring;
+  authoring = async r => {const v = await normal(r); return v.kind === 'resourceHandoff' ? {...v,delivery:'unknown'} : v;};
+  await openResource(); await click('前往私聊');
+  expect(dialog('交给 Bot')?.textContent).toContain('尚未确认');
+  await act(async () => [...dialog('交给 Bot')!.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent==='关闭')!.click());
+  await click('交给 Bot'); await click('前往私聊');
+  const ids=calls.filter(r=>r.type==='resourceHandoff').map(r=>r.requestId);
+  expect(ids).toHaveLength(2); expect(ids[0]).toBe(ids[1]);
+  expect(externalCalls).toHaveLength(0);
+});
+
+it('reconciles delivery after a consumed first-link challenge', async () => {
+  const normal = authoring;
+  let failDelivery = true;
+  authoring = async r => {
+    if(r.type==='resourceHandoff'&&!linked){
+      const session=await defaultAuthoring({type:'open',accountId:r.accountId,viewId:r.viewId,botId:r.botId});
+      if(session.kind!=='session') throw Error('invalid fixture');
+      return {kind:'handoffLinkRequired',session};
+    }
+    if(r.type==='resourceHandoff'&&linked&&failDelivery) {failDelivery=false;throw Error('transient transport failure');}
+    if(r.type==='confirmLink'&&linked) throw Error('consumed challenge');
+    return normal(r);
+  };
+  await openResource(); await click('前往私聊');
+  recipient=true; await click('我已发送，核对收件人'); await click('确认是我的私聊');
+  expect(linked).toBe(true); expect(dialog('交给 Bot')?.textContent).toContain('transient transport failure');
+  const before=calls.filter(r=>r.type==='resourceHandoff').length;
+  await click('核对交付');
+  expect(dialog('交给 Bot')?.textContent).toContain('私聊引导已发送');
+  expect(calls.filter(r=>r.type==='resourceHandoff')).toHaveLength(before+1);
+  expect(calls.filter(r=>r.type==='confirmLink')).toHaveLength(1);
+});
+
+it('reports a chat-opening failure while keeping delivery confirmed', async () => {
+  externalFailure=true; await openResource(); await click('前往私聊');
+  expect(dialog('交给 Bot')?.textContent).toContain('私聊引导已发送');
+  expect(dialog('交给 Bot')?.textContent).toContain('未能打开私聊');
+  expect(dialog('交给 Bot')?.textContent).not.toContain('交付尚未完成');
+  expect(externalCalls).toHaveLength(1);
+});
+
+async function arrangeFirstLink(afterLink?: (request: DesktopAuthoringRequest) => Promise<DesktopAuthoringReply>) {
+  authoring = async r=>{
+    if(r.type==='resourceHandoff'&&!linked){
+      const session=await defaultAuthoring({type:'open',accountId:r.accountId,viewId:r.viewId,botId:r.botId});
+      if(session.kind!=='session')throw Error('fixture session');
+      return {kind:'handoffLinkRequired',session};
+    }
+    return afterLink ? afterLink(r) : defaultAuthoring(r);
+  };
+}
+it('reconciles a lost confirmation reply through the original resource intent', async () => {
+  await arrangeFirstLink(async request=>{
+    if(request.type==='confirmLink'){
+      if(linked)throw Error('consumed challenge');
+      await defaultAuthoring(request);
+      throw Error('confirmation reply lost');
+    }
+    return defaultAuthoring(request);
+  });
+  await openResource(); await click('前往私聊'); recipient=true;
+  await click('我已发送，核对收件人'); await click('确认是我的私聊');
+  expect(linked).toBe(true); expect(dialog('交给 Bot')?.textContent).toContain('confirmation reply lost');
+  await click('核对交付');
+  expect(dialog('交给 Bot')?.textContent).toContain('私聊引导已发送');
+  expect(calls.filter(r=>r.type==='resourceHandoff')).toHaveLength(2);
+  expect(calls.filter(r=>r.type==='confirmLink')).toHaveLength(1);
+});
+it('shows each inspected recipient fact before confirmation', async () => {
+  await arrangeFirstLink(); await openResource(); await click('前往私聊'); recipient=true;
+  await click('我已发送，核对收件人');
+  expect(dialog('交给 Bot')?.textContent).toContain('确认是我的私聊');
+  for(const fact of ['ou_verified',groupA,'tenant_verified']) expect(dialog('交给 Bot')?.textContent).toContain(fact);
+});
+it('discards a late receipt after an A to B to A device round trip', async () => {
+  let resolveHandoff!:()=>void;
+  authoring=async r=>{
+    if(r.type==='resourceHandoff')await new Promise<void>(resolve=>resolveHandoff=resolve);
+    return defaultAuthoring(r);
+  };
+  await openResource(); await click('前往私聊');
+  await act(async()=>emit({type:'devices',value:devicesState({id:B})}));
+  expect(dialog('交给 Bot')?.textContent).toContain('账号或设备已切换');
+  await act(async()=>emit({type:'devices',value:devicesState({id:A})}));
+  await act(async()=>resolveHandoff());
+  expect(externalCalls).toHaveLength(0);
+});
+it('releases a late native handle after its dialog closes', async () => {
+  let resolveLink!:()=>void;
+  authoring=async r=>{
+    if(r.type==='resourceHandoff'){
+      await new Promise<void>(resolve=>resolveLink=resolve);
+      const session=await defaultAuthoring({type:'open',accountId:r.accountId,viewId:r.viewId,botId:r.botId});
+      if(session.kind!=='session')throw Error('fixture session');
+      return {kind:'handoffLinkRequired',session};
+    }
+    return defaultAuthoring(r);
+  };
+  await openResource(); await click('前往私聊');
+  await act(async()=>[...dialog('交给 Bot')!.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent==='关闭')!.click());
+  await act(async()=>resolveLink());
+  expect(sessions.size).toBe(0);
+  expect(calls.some(r=>r.type==='detach')).toBe(true);
+});
+
+it('keeps the newer dialog ownership when the same native link handle arrives late', async () => {
+  let finish: (() => void) | undefined, shared: Session | undefined, attempts = 0;
+  authoring = async request => {
+    if (request.type !== 'resourceHandoff') return defaultAuthoring(request);
+    if (!shared) {
+      const value = await defaultAuthoring({type: 'open', accountId: request.accountId, viewId: request.viewId, botId: request.botId});
+      if (value.kind !== 'session') throw new Error('Fixture expected a session');
+      shared = value;
+    }
+    if (++attempts === 1) await new Promise<void>(resolve => {finish = resolve;});
+    return {kind: 'handoffLinkRequired', session: shared};
+  };
+  await openResource(); await click('前往私聊');
+  await act(async () => [...dialog('交给 Bot')!.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === '关闭')!.click());
+  await click('交给 Bot'); await click('前往私聊');
+  expect(document.querySelector('[aria-label="私聊关联命令"]')).not.toBeNull();
+  await act(async () => finish?.());
+  expect(calls.filter(request => request.type === 'detach')).toEqual([]);
+  expect(sessions.size).toBe(1);
+  await act(async () => [...dialog('交给 Bot')!.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === '关闭')!.click());
+  expect(sessions.size).toBe(0);
+});
+
+it('preserves an unresolved resource intent after leaving and returning to the community', async () => {
+  const normal = authoring;
+  authoring = async request => {
+    const reply = await normal(request);
+    return reply.kind === 'resourceHandoff' ? {...reply, delivery: 'unknown'} : reply;
+  };
+  await openResource(); await click('前往私聊');
+  await act(async () => [...dialog('交给 Bot')!.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === '关闭')!.click());
+  await click('Bot'); await click('社区');
+  await click('交给 Bot'); await click('前往私聊');
+  const requests = calls.filter(request => request.type === 'resourceHandoff');
+  expect(requests).toHaveLength(2); expect(requests[1]).toEqual(requests[0]);
+});
+
+it('starts a new explicit delivery after the former request definitely failed', async () => {
+  const normal = authoring;
+  let failed = false;
+  authoring = async request => {
+    const reply = await normal(request);
+    if (reply.kind === 'resourceHandoff' && !failed) {failed = true; return {...reply, delivery: 'unavailable'};}
+    return reply;
+  };
+  await openResource(); await click('前往私聊'); await click('重新交付');
+  const requests = calls.filter(request => request.type === 'resourceHandoff');
+  expect(requests).toHaveLength(2); expect(requests[1]?.requestId).not.toBe(requests[0]?.requestId);
+  expect(requests[1]?.target).toEqual(requests[0]?.target);
+  expect(externalCalls).toHaveLength(1);
+});
+
+it('keeps incomplete publication metadata in private preview and guides back to Bot chat', async () => {
+  draft.public = {...draft.public, name: '', summary: '', version: ''};
+  await openDraft();
+  expect(document.querySelector('h1')?.textContent).toBe('未命名配方');
+  expect(document.body.textContent).toContain('请在 Bot 私聊中补充名称、简介、版本后再发布');
+  const publish = [...document.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === '发布到社区');
+  expect(publish?.disabled).toBe(true);
+  expect(calls.some(request => request.type === 'preparePublication')).toBe(false);
+  await click('继续创作');
+  expect(calls).toMatchObject([{type: 'creatorContinue', entry: {kind: 'draft', draftId, revision: 1}}]);
+});
+
+it('releases a terminal failed intent before closing and reopening the delivery dialog', async () => {
+  const normal = authoring;
+  authoring = async request => {
+    const reply = await normal(request);
+    return reply.kind === 'resourceHandoff' ? {...reply, delivery: 'unavailable'} : reply;
+  };
+  await openResource(); await click('前往私聊');
+  await act(async () => [...dialog('交给 Bot')!.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === '关闭')!.click());
+  await click('交给 Bot'); await click('前往私聊');
+  const requests = calls.filter(request => request.type === 'resourceHandoff');
+  expect(requests).toHaveLength(2); expect(requests[1]?.requestId).not.toBe(requests[0]?.requestId);
+  expect(externalCalls).toHaveLength(0);
+});
+
+it('keeps the original Bot on an explicit retry when another Bot becomes the only online choice', async () => {
+  const normal = authoring;
+  let failed = false;
+  authoring = async request => {
+    const reply = await normal(request);
+    if (reply.kind === 'resourceHandoff' && !failed) {failed = true; return {...reply, delivery: 'unavailable'};}
+    return reply;
+  };
+  await openResource(); await click('前往私聊');
+  const next = {...snapshot(B), revision: 2};
+  deviceSnapshot = () => next;
+  await act(async () => emit({type: 'snapshot', view: A, value: next}));
+  await click('重新交付');
+  expect(calls.filter(request => request.type === 'resourceHandoff')).toHaveLength(1);
+  expect(externalCalls).toHaveLength(0);
+  expect(dialog('交给 Bot')?.textContent).toContain('接收 Bot：Bot A');
+  expect(dialog('交给 Bot')?.textContent).toContain('原 Bot 暂不可用');
+  const restored = {...snapshot(A), revision: 3};
+  deviceSnapshot = () => restored;
+  await act(async () => emit({type: 'snapshot', view: A, value: restored}));
+  await click('核对交付');
+  const requests = calls.filter(request => request.type === 'resourceHandoff');
+  expect(requests).toHaveLength(2); expect(requests[1]?.botId).toBe(botA);
+  expect(externalCalls).toHaveLength(1);
 });
