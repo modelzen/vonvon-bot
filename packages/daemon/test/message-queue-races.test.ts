@@ -63,6 +63,7 @@ vi.mock('../src/card/run-card-stream', () => ({
 }));
 vi.mock('../src/voice/inbound', async original => ({ ...await original<object>(), ingestVoice: fake.voice }));
 import { createAgentEntries, type AgentEntries } from '../src/agent/entry/registry';
+import type { FeedbackHost } from '../src/feedback/host';
 import type { AgentEntry } from '../src/agent/types';
 import { createOrchestrator } from '../src/bot/handle-message';
 import type { AppConfig } from '../src/config/schema';
@@ -120,12 +121,12 @@ function message(text: string): NormalizedMessage {
   return { messageId: `msg-${++seq}`, chatId: 'chat', chatType: 'group', threadId: 'topic',
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false };
 }
-function setup(policy: 'steer' | 'queue' = 'steer', entries?: AgentEntries, sessionTitles?: NonNullable<AppConfig['preferences']>['sessionTitles']) {
+function setup(policy: 'steer' | 'queue' = 'steer', entries?: AgentEntries, sessionTitles?: NonNullable<AppConfig['preferences']>['sessionTitles'], feedback?: FeedbackHost) {
   const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: policy, access: { ownerOpenId: 'owner', admins: ['owner'] }, completionReminder: { mode: 'manual' }, sessionTitles } };
   const channel = { send: fake.send, rawClient: { im: { v1: { message: { get: async () => ({ data: { items: [{ thread_id: 'new-topic' }] } }) }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
-  orchestrator = createOrchestrator(channel as never, cfg, '/test', undefined, { entries });
+  orchestrator = createOrchestrator(channel as never, cfg, '/test', undefined, { entries, feedback });
   return orchestrator;
 }
 beforeEach(() => {
@@ -788,6 +789,26 @@ describe('agent entry orchestration', () => {
     run.turns[1]!.resolve();
     await until(() => expect(fake.final).toHaveBeenCalled());
     await until(async () => expect(await grant.call('session_info', {})).toMatchObject({ result: { turn: 'none' } }));
+  });
+  it('carries each actual feedback source through topic launch and queued turns', async () => {
+    const registry = entries(), open = vi.spyOn(registry, 'openTurn');
+    const run = thread();
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const feedback: FeedbackHost = {enabled: () => true, onMessage: async () => false, onAction: async () => {}, close: async () => {},
+      bind: msg => ({openId: msg.senderId, messageId: msg.messageId, chatId: msg.chatId,
+        attachments: [{ref: msg.messageId, name: '截图'}], prepare: async () => {throw new Error('unused');}})};
+    const o = setup('queue', registry, undefined, feedback);
+    const first = human('first');
+    await o.onMessage(first);
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const second = {...human('second'), senderId: 'another'};
+    await o.onMessage(second);
+    run.turns[0]!.resolve();
+    await until(() => expect(run.consumed).toHaveLength(2));
+    expect(open.mock.calls.map(([,facts]) => [facts.feedback?.openId, facts.feedback?.messageId]))
+      .toEqual([[first.senderId, first.messageId], [second.senderId, second.messageId]]);
+    expect(run.consumed[1]!.text).toContain(JSON.stringify([{ref: second.messageId, name: '截图'}]));
+    run.turns[1]!.resolve();
   });
   it('revokes a failed resume grant before reopening with a distinct grant', async () => {
     const registry = entries(), run = thread();

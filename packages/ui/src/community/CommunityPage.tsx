@@ -163,7 +163,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   const login = <div className="community-empty"><h2>登录后继续</h2><p>{accountStatusText(account.status, account.supported)}</p><GlowButton variant="dark" disabled={!account.supported || account.status?.kind === 'signingIn'} onClick={() => void account.login()}>登录</GlowButton></div>;
   const privatePage = route.kind === 'library' || route.kind === 'workspace' || route.kind === 'draft' || route.kind === 'detail' && route.privateView;
   const sourceDialog=preparation&&<RecipeAuthoringPage {...preparation} onBack={()=>setPreparation(undefined)} onSaved={draftId=>{setPreparation(undefined);open({kind:'draft',draftId});}}/>;
-  if (route.kind === 'draft' && accountId) return <><RecipeEditor key={route.draftId ?? route.source?.versionId ?? 'new'} shell={shell} accountId={accountId} draftId={route.draftId} source={route.source}
+  if (route.kind === 'draft' && accountId) return <><RecipeEditor key={route.draftId ?? route.source?.versionId ?? 'new'} shell={shell} accountId={accountId} draftId={route.draftId} knownRichDraft={drafts?.some(draft => draft.draftId === route.draftId && draft.format === 'rich-v2')} source={route.source}
     onContinueInChat={authoring ? draft=>setPreparation({draft}) : undefined} chatContinuationUnavailable={authoring?undefined:'此设备暂不支持聊天草稿，仍可在这里编辑发布信息。'}
     onBack={() => open({kind: 'workspace'})} onPublished={recipe => {community.setCatalog(old=>({...old,result:undefined}));setNotice(recipe.firstCode ? '本版本已发布。首枚分享码已生成，可在分享码管理中复制。' : '本版本已发布。'); community.open({kind: 'detail', recipe: {recipeId: recipe.recipeId, versionId: recipe.versionId}, privateView: true});}}/>{sourceDialog}</>;
   return <div className="community-page">
