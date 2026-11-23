@@ -10,6 +10,20 @@ type Access = { token: string; expiresAt: number };
 type Persistence = 'secure' | 'memory';
 type Avatar = { accountId: string; url: string; dataUrl?: string; retryAt?: number };
 
+const uuidSegment = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+const publicDetail = new RegExp('^/v[12]/recipes/' + uuidSegment + '/versions/' + uuidSegment + '$');
+const publicVersionObject = new RegExp('^/v2/versions/' + uuidSegment + '/(?:display-logo|objects/' + uuidSegment + ')$');
+function apiUrl(path: string, origin: string, publicRead = false) {
+  const pathname = path.split('?', 1)[0]!;
+  if (!/^\/v[12]\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+$/.test(pathname) || path.includes('#') || /[\r\n\t]/.test(path))
+    throw new AccountFault('invalid');
+  const url = new URL(path, origin);
+  if (url.origin !== origin || url.pathname !== pathname || url.hash) throw new AccountFault('invalid');
+  if (publicRead && !(/^\/v[12]\/community\/recipes$/.test(pathname) || !path.includes('?') && (publicDetail.test(pathname) || publicVersionObject.test(pathname))))
+    throw new AccountFault('invalid');
+  return url;
+}
+
 export interface NativeAccount {
   lease?(accountId: string): AbortSignal | undefined;
   status(): AccountStatus;
@@ -213,16 +227,14 @@ export function createAccountSession(options: {
       return `${deployment.webOrigin}/recipes/${recipeId}/versions/${versionId}`;
     },
     async publicRequest(path) {
-      if (!deployment || disposed || !/^\/v1\/(?:community\/recipes(?:\?[^#]*)?|recipes\/[0-9a-f-]+\/versions\/[0-9a-f-]+)$/.test(path)) throw new AccountFault('invalid');
-      const url = new URL(path, deployment.apiOrigin);
-      if (url.origin !== deployment.apiOrigin || url.hash) throw new AccountFault('invalid');
+      if (!deployment || disposed) throw new AccountFault('invalid');
+      const url = apiUrl(path, deployment.apiOrigin, true);
       return transport(url, {credentials: 'omit', redirect: 'error', cache: 'no-store', signal: requestSignal(owner.signal)});
     },
     async request(accountId, path, init = {}, beforeSend) {
       const signal = owner.signal;
-      if (!deployment || disposed || !credential || credential.accountId !== accountId || !path.startsWith('/v1/')) throw new AccountFault('invalid');
-      const url = new URL(path, deployment.apiOrigin);
-      if (url.origin !== deployment.apiOrigin || !url.pathname.startsWith('/v1/') || url.hash) throw new AccountFault('invalid');
+      if (!deployment || disposed || !credential || credential.accountId !== accountId) throw new AccountFault('invalid');
+      const url = apiUrl(path, deployment.apiOrigin);
       if (!access || access.expiresAt - Date.now() <= 30_000) await refresh(signal);
       signal.throwIfAborted();
       if (!access || view.kind !== 'signedIn' || view.accountId !== accountId) throw new AccountFault('invalid');

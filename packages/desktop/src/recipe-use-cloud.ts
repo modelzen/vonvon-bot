@@ -77,7 +77,7 @@ export function recipeCloud(account: NativeAccount, lease: RecipeAccountLease) {
   }
   return {
     async latest(recipeId: string) {
-      const reply = recipeLatestSchema.parse(unwrap(await read('/v1/recipes/' + recipeId + '/latest-install-version')));
+      const reply = recipeLatestSchema.parse(unwrap(await read('/v2/recipes/' + recipeId + '/latest-install-version')));
       if (reply.recipeId !== recipeId) throw invalid();
       return reply;
     },

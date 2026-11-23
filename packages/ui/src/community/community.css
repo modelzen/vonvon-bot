@@ -76,3 +76,12 @@
 .community-codes { display:grid; gap:16px; }
 .community-codes h2 { font-size:17px; margin:0; }
 @media(max-width:680px) { .community-grid,.community-editor-grid { grid-template-columns:1fr; } .community-detail-layout { grid-template-columns:1fr; gap:20px; } .community-detail-layout nav { flex-direction:row; overflow:auto; } .community-detail-layout nav button { white-space:nowrap; } .community-heading { align-items:flex-start; } .community-heading .community-actions { justify-content:flex-end; } .community-card--hero { padding:42px 22px 26px; } .community-list-row { align-items:flex-start; flex-wrap:wrap; } }
+.community-recipe-mark { object-fit: cover; flex-shrink: 0; }
+.community-rich-settings { display: grid; gap: 16px; }
+.community-rich-settings > div { border-bottom: 1px solid var(--color-border); padding-bottom: 16px; }
+.community-rich-settings dt { color: var(--color-text-secondary); font-size: 13px; }
+.community-rich-settings dd { margin: 6px 0 0; overflow-wrap: anywhere; }
+.community-config details { margin: 12px 0; }
+.community-config summary { cursor: pointer; min-height: 40px; display: flex; align-items: center; }
+.community-logo-editor { display: grid; gap: 12px; }
+.community-logo-editor > img { width: 192px; height: 192px; object-fit: cover; border-radius: 16px; border: 1px solid var(--color-border); }

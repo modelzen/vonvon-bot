@@ -1,3 +1,6 @@
+import {isDeepStrictEqual} from 'node:util';
+import {join,dirname} from 'node:path';
+import {ManagedTasks,type ManagedTaskDefinition,type ManagedPointer} from './managed';
 import { randomBytes } from 'node:crypto';
 import { readFile, rename } from 'node:fs/promises';
 import { scheduledTaskViewSchema } from '@vonvon/protocol';
@@ -14,6 +17,7 @@ export interface ScheduleStore {
   get(taskId: string): StoredTask | undefined;
   mutateConfig<T>(fn: (tasks: StoredTask[], touch: (task: StoredTask) => void) => T): Promise<T>;
   mutateRuntime<T>(fn: (tasks: StoredTask[]) => T): Promise<T>;
+  managed?: {stage(install:string,generation:string,definitions:ManagedTaskDefinition[]):Promise<void>; review(id:string):string|undefined; consent(id:string, expected:string, choices:{actor:string;timeZone:string}):Promise<void>; wake():void};
   onChange(listener: () => void): () => void;
 }
 
@@ -94,9 +98,11 @@ function bound(task: StoredTask): void {
 }
 
 export function createScheduleStore(file: string, deps: {
-  now: () => number; log: typeof log; diagnostics: (event: ScheduleDiagnosticEvent) => void; newRevision?: () => string;
+  now: () => number; log: typeof log; diagnostics: (event: ScheduleDiagnosticEvent) => void; newRevision?: () => string; activeRecipe?: (chat:string)=>ManagedPointer|undefined;
 }): ScheduleStore {
   let tasks: StoredTask[] = [];
+  const managed=deps.activeRecipe ? new ManagedTasks(()=>join(dirname(file),'recipe-schedules.json'),deps.activeRecipe,parseTask) : undefined;
+  const view=()=>[...tasks,...(managed?.all() ?? [])];
   let pending: Promise<unknown> = Promise.resolve();
   const listeners = new Set<() => void>();
   const enqueue = <T>(operation: () => Promise<T>): Promise<T> => {
@@ -105,20 +111,27 @@ export function createScheduleStore(file: string, deps: {
     return result;
   };
   const mutate = <T>(fn: (draft: StoredTask[]) => T): Promise<T> => enqueue(async () => {
-    const draft = structuredClone(tasks);
+    const managedBefore=managed?.all() ?? [];
+    const draft = structuredClone([...tasks,...managedBefore]);
     const result = fn(draft);
     for (const task of draft) bound(task);
     // Read the draft back the way load() will. Writing something load() quarantines would lose every task of the bot
     // at the next start, so refuse it here and keep memory and the file as they were.
+    const managedIds=new Set(managedBefore.map(t=>t.id));
+    const managedDraft=draft.filter(t=>managedIds.has(t.id));
+    const ordinary=draft.filter(t=>!managedIds.has(t.id));
+    const managedChanged=!isDeepStrictEqual(managedDraft,managedBefore);
+    if(managedChanged && !isDeepStrictEqual(ordinary,tasks))throw new Error('混合配方与普通任务的修改需分别提交');
     let committed: StoredTask[];
     try {
-      committed = parseFile(JSON.parse(JSON.stringify({ version: 1, tasks: draft })));
+      committed = parseFile(JSON.parse(JSON.stringify({ version: 1, tasks: ordinary })));
     } catch (error) {
       deps.log.warn('schedule', 'store-write-invalid', { error });
       throw new Error(`schedule store refused an invalid write: ${describeInvalid(error)}`, { cause: error });
     }
     // Write the parsed copy (names trimmed), so memory, the file and the next load() are the same.
-    await writeFileAtomic(file, JSON.stringify({ version: 1, tasks: committed }), { durable: true });
+    if(managedChanged) await managed!.persist(managedDraft);
+    else await writeFileAtomic(file, JSON.stringify({ version: 1, tasks: committed }), { durable: true });
     tasks = committed;
     for (const listener of listeners) {
       try { listener(); } catch (error) { deps.log.warn('schedule', 'listener-failed', { error }); }
@@ -126,10 +139,12 @@ export function createScheduleStore(file: string, deps: {
     return result;
   });
   return {
+    ...(managed ? {managed:{stage:(i:string,g:string,defs:ManagedTaskDefinition[])=>enqueue(()=>managed.stage(i,g,defs)),review:(id:string)=>managed.review(id),consent:(id:string,expected:string,choices:{actor:string;timeZone:string})=>enqueue(async()=>{await managed.consent(id,expected,choices,deps.now());for(const listener of listeners)listener();}),wake:()=>{for(const listener of listeners)listener();}}} : {}),
     load: () => enqueue(async () => {
+      await managed?.load();
       let text: string;
       try { text = await readFile(file, 'utf8'); } catch (error) {
-        if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return { interrupted: [] };
+        if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return { interrupted: view().filter(t=>t.inflight) };
         throw error;
       }
       let loaded: StoredTask[];
@@ -141,11 +156,11 @@ export function createScheduleStore(file: string, deps: {
         return { interrupted: [] };
       }
       tasks = loaded;
-      return { interrupted: structuredClone(tasks.filter(task => task.inflight)) };
+      return { interrupted: structuredClone(view().filter(task => task.inflight)) };
     }),
-    all: () => structuredClone(tasks),
-    byChat: chatId => structuredClone(tasks.filter(task => task.chatId === chatId)),
-    get: taskId => structuredClone(tasks.find(task => task.id === taskId)),
+    all: () => structuredClone(view()),
+    byChat: chatId => structuredClone(view().filter(task => task.chatId === chatId)),
+    get: taskId => structuredClone(view().find(task => task.id === taskId)),
     mutateConfig: fn => mutate(draft => fn(draft, task => {
       task.revision = deps.newRevision?.() ?? randomBytes(8).toString('hex');
       task.updatedAt = deps.now();

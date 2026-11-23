@@ -167,6 +167,17 @@ describe('durable role installation', () => {
     expect((await row())?.supplement).toBe('新编辑');
     expect((await row())?.recipeInstall).toBeUndefined();
   });
+  it('rejects a recipe source edit even when the settings revision is unchanged', async () => {
+    const current = manifest(), installed = await ready(current);
+    await store().apply(botId, installed.operationId, async () => {});
+    const pending = await ready({...current, versionId: randomUUID(), revision: 2});
+    const before = (await row())!.projectSettingsRevision;
+    const ignoredVersionId = randomUUID();
+    await mutateProjectByChatId(groupId, value => { value.recipeInstall!.ignoredVersionId = ignoredVersionId; }, undefined, location(botId));
+    expect((await row())!.projectSettingsRevision).toBe(before);
+    expect(await store().apply(botId, pending.operationId, async () => {})).toMatchObject({status: 'rejected', reason: '群设置已改变'});
+    expect((await row())?.recipeInstall?.ignoredVersionId).toBe(ignoredVersionId);
+  });
   it('keeps the receipt across unbind/rebind and never applies an old operation to the new slot', async () => {
     const result = await ready(), original = (await row())!.bindingIncarnation;
     await removeProject('Fixture group');
@@ -533,6 +544,8 @@ describe('wire and security boundaries', () => {
     const file = botPaths(botId).projectsFile, raw = JSON.parse(await readFile(file, 'utf8'));
     delete raw.projects[0].bindingIncarnation; delete raw.projects[0].projectSettingsRevision;
     raw.projects[0].supplement = '历史职责';
+    const untouched = {...raw.projects[0], name: 'Other legacy group', chatId: 'oc_legacy_other'};
+    raw.projects.push(untouched);
     await writeFile(file, JSON.stringify(raw));
     const input = prepare();
     if (input.type !== 'prepare') throw new Error('fixture');
@@ -541,12 +554,29 @@ describe('wire and security boundaries', () => {
     const saved = JSON.parse(await readFile(file, 'utf8'));
     expect(saved.projects[0].bindingIncarnation).toMatch(/^[a-f0-9-]{36}$/);
     expect(saved.projects[0].projectSettingsRevision).toBe(0);
+    expect(saved.projects[1]).toEqual(untouched);
     expect(Object.keys(saved.recipeInstallOperations ?? {})).toHaveLength(0);
     await removeProject('Fixture group'); await bind();
     expect((await row())?.bindingIncarnation).not.toBe(saved.projects[0].bindingIncarnation);
     expect(await store().prepare({...input, reviewToken: review.reviewToken, resolution: {role: {kind: 'replace'}}})).toMatchObject({kind: 'review'});
     const after = JSON.parse(await readFile(file, 'utf8'));
     expect(Object.keys(after.recipeInstallOperations ?? {})).toHaveLength(0);
+  });
+  it('names only the selected legacy binding when reading an installed recipe source', async () => {
+    const installed = await ready();
+    await store().apply(botId, installed.operationId, async () => {});
+    const file = botPaths(botId).projectsFile, raw = JSON.parse(await readFile(file, 'utf8'));
+    delete raw.projects[0].bindingIncarnation; delete raw.projects[0].projectSettingsRevision;
+    const untouched = {name: 'Other legacy group', chatId: 'oc_legacy_other', cwd: '/tmp', blank: false, createdAt: 1};
+    raw.projects.push(untouched);
+    await writeFile(file, JSON.stringify(raw));
+    const request = recipeInstallRequestSchema.parse({type: 'source', botId, groupId});
+    if (request.type !== 'source') throw new Error('fixture');
+    expect(await store().source(request)).toMatchObject({kind: 'source', source: {recipeId: manifest().recipeId}});
+    const saved = JSON.parse(await readFile(file, 'utf8'));
+    expect(saved.projects[0].bindingIncarnation).toMatch(/^[a-f0-9-]{36}$/);
+    expect(saved.projects[0].projectSettingsRevision).toBe(0);
+    expect(saved.projects[1]).toEqual(untouched);
   });
   it('refuses preparation when the live Bot is not in the group without creating a nonce or operation', async () => {
     const memberStore = new RecipeStore({targetPublicKey: device.keypair.publicKey, location,
@@ -665,6 +695,7 @@ describe('wire and security boundaries', () => {
       const principal = {kind: 'bot-session' as const, sessionId: 's', appId: botId, place, chatId: groupId};
       expect(await authorize({principal, protocolVersion: 2, negotiated: true, scope: null}, request, {})).toMatchObject({ok: false});
       await expect(recipeInstallRpc(undefined, principal, request.payload)).rejects.toThrow('主人');
+      await expect(recipeInstallRpc(undefined,principal,recipeInstallRequestSchema.parse({type:'richSetup',botId,groupId,action:{kind:'read'}}))).rejects.toThrow('主人');
     }
     const owner = {principal: {kind: 'owner' as const, via: 'local' as const}, protocolVersion: 2, negotiated: true};
     expect(await authorize({...owner, scope: {bot: 'cli_other_fixture'}}, request, {})).toMatchObject({ok: false});

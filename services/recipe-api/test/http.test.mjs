@@ -38,6 +38,23 @@ test('public routes distinguish a visitor from an expired supplied credential', 
   assert.equal(calls.length,1);
 });
 
+test('source history is an authenticated read and only accepts operation IDs', async t => {
+  const {base,calls} = await fixture(t);
+  const url = base+'/v1/authoring/source-history';
+  const op = '0192e22b-b000-7e93-a120-26c58d462039';
+  const get = (body, token='valid') => fetch(url, {method:'POST',
+    headers:{'content-type':'application/json',...(token ? {authorization:'Bearer '+token} : {})},
+    body:JSON.stringify(body),
+  });
+  assert.equal((await get({operationIds:[op]})).status,200);
+  assert.deepEqual(calls[0],[identity,'sourceHistory',[[op]]]);
+  assert.equal((await get({operationIds:[op]},null)).status,401);
+  assert.equal((await get({operationIds:[op],chatId:'private'})).status,422);
+  assert.equal((await get({operationIds:[op,op.toUpperCase()]})).status,422);
+  assert.equal((await get({operationIds:['x'.repeat(2048)]})).status,413);
+  assert.equal(calls.length,1);
+});
+
 test('draft writes validate and preserve operation identity and revision',async t => {
   const {write,calls} = await fixture(t);
   assert.equal((await write('/v1/drafts','POST',draft)).status,200);
@@ -200,4 +217,16 @@ test('a stalled rejected upload closes within a bounded wait and does not block 
   assert.equal((await write('/v1/drafts', 'POST', draft)).status, 200);
   await upload.closed;
   assert.equal(calls.length, 1);
+});
+
+test('only acquisition accepts generation-prefixed UUIDv7 keys and retains exact raw payload', async t => {
+  const {write,calls} = await fixture(t);
+  const key = 'a2.01932a00-0000-7abc-8def-0123456789ab';
+  assert.equal((await write('/v1/versions/'+id+'/redeem','POST',{code:'Ab-cD'},{'Idempotency-Key':key})).status,200);
+  assert.deepEqual(calls.at(-1),[identity,'acquire',[id,'Ab-cD',key]]);
+  assert.equal((await write('/v1/versions/'+id+'/acquire','POST',{}, {'Idempotency-Key':id})).status,200);
+  assert.equal((await write('/v1/drafts','POST',draft,{'Idempotency-Key':key})).status,400);
+  for (const invalid of [key.replace('-7abc-', '-4abc-'),key.replace('-8def-', '-0def-'),'a2.'+id,key+', '+id]) {
+    assert.equal((await write('/v1/versions/'+id+'/acquire','POST',{}, {'Idempotency-Key':invalid})).status,400);
+  }
 });

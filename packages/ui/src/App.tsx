@@ -46,7 +46,7 @@ import {
   StatusBadge,
   Toggle,
 } from "./reference/components/ui";
-import { ConfirmDialog,Dialog } from "./reference/components/ui/Dialog";
+import { ConfirmDialog,Dialog,hasOpenDialog } from "./reference/components/ui/Dialog";
 import {
   conversationCopy,
   type AgentId,
@@ -250,7 +250,7 @@ function DesktopApp() {
   useEffect(() => {
     function keydown(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-        event.preventDefault(); setSearchOpen(true);
+        event.preventDefault(); if (!hasOpenDialog()) setSearchOpen(true);
       }
     }
     window.addEventListener('keydown', keydown);
@@ -476,7 +476,7 @@ function DesktopApp() {
   }
   // devices-ui-3: the paired toast sits outside App and asks for 设备 → 已配对的设备 this way (on 应用与启动 until 2026-11-03).
   const openSetting = useRef<(destination: Destination) => void>(() => undefined);
-  openSetting.current = destination => { navigate(() => { setModal(current => current?.kind === 'join' && current.suspended ? null : current); setJoinedTarget(undefined); setPage(destination.page); setSetupAgentId(undefined); setFeatureId(undefined); setSettingsReturn(undefined); setSearchTarget(destination.section ? destination : undefined); }); };
+  openSetting.current = openDestination;
   useEffect(() => {
     const open = (event: Event) => { const detail = (event as CustomEvent<Destination | undefined>).detail; if (detail?.page) openSetting.current(detail); };
     window.addEventListener(OPEN_SETTING_EVENT, open);
@@ -566,7 +566,7 @@ function DesktopApp() {
     if (generation === modalGeneration.current) setModal(null);
   }
   if (page === 'community') return <><AppShell page="community" view={view} title="社区" onNavigate={openPage} onOpenList={openList}
-    onSearch={() => setSearchOpen(true)} updateAction={<DesktopUpdateButton/>}
+    onSearch={() => {if (!hasOpenDialog()) setSearchOpen(true);}} updateAction={<DesktopUpdateButton/>}
     deviceSwitcher={shell?.devices ? <DeviceSwitcher onManage={() => openPage('devices')} onAccount={() => openPage('account')}/> : undefined}>
     <div className="page-stack"><CommunityPage/></div>
   </AppShell>{searchOpen && <SearchDialog open entries={searchEntries(snapshot, {externalCoreAvailable, schedules: searchSchedules, devices: Boolean(shell?.devices)})} onClose={() => setSearchOpen(false)} onSelect={openSearchResult}/>}</>;
@@ -677,7 +677,7 @@ function DesktopApp() {
         onNavigate={openPage}
         selectedFeature={featureId}
         onFeatureNavigate={id => navigate(() => {setJoinedTarget(undefined); setModal(current => current?.kind === 'join' && current.suspended ? null : current); setFeatureId(id);})}
-        onSearch={() => setSearchOpen(true)}
+        onSearch={() => {if (!hasOpenDialog()) setSearchOpen(true);}}
         deviceSwitcher={shell?.devices ? <DeviceSwitcher onManage={() => openPage('devices')} onAccount={() => openPage('account')}/> : undefined}
         onOpenList={openList}
         backLabel={`返回 ${settingsReturn?.label ?? parentLabel}`}
