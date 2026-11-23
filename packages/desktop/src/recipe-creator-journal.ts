@@ -1,6 +1,6 @@
 import {isDeepStrictEqual} from 'node:util';
 import {createHash,randomUUID} from 'node:crypto';
-import {closeSync,fsyncSync,mkdirSync,openSync,readFileSync,renameSync,statSync,unlinkSync,writeFileSync} from 'node:fs';
+import {closeSync,fsyncSync,mkdirSync,openSync,opendirSync,readFileSync,renameSync,statSync,unlinkSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {z} from 'zod';
 import {agentIdSchema,viewIdSchema,recipeBinary32Schema,creatorCommandSchema,creatorConfirmationSchema,creatorSnapshotSchema,creatorRequests,communityRequestSchema} from '@vonvon/protocol';
@@ -69,6 +69,32 @@ export class RecipeCreatorJournal {
     this.write('version-'+association.accountId+'-'+uuid.parse(versionId),creatorAssociationSchema,association);
   }
   command(accountId:string,id:string){return this.read('command-'+uuid.parse(accountId)+'-'+uuid.parse(id),command);}
+  publications(accountId:string,draftId:string){
+    const prefix='command-'+uuid.parse(accountId)+'-';uuid.parse(draftId);
+    let keys:string[];
+    if(!this.dir)keys=[...this.memory.keys()].filter(key=>key.startsWith(prefix));
+    else {
+      keys=[];
+      let directory:ReturnType<typeof opendirSync>;
+      try{directory=opendirSync(this.dir);}
+      catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return [];throw error;}
+      try {
+        let scanned=0;
+        for(let entry=directory.readSync();entry;entry=directory.readSync()){
+          if(++scanned>16384)throw new Error('创作记录过多，请稍后重试');
+          if(entry.isFile()&&entry.name.startsWith(prefix)&&/^command-[a-f0-9-]{36}-[a-f0-9-]{36}\.json$/.test(entry.name))keys.push(entry.name.slice(0,-5));
+        }
+      }finally{directory.closeSync();}
+    }
+    if(keys.length>4096)throw new Error('创作记录过多，请稍后重试');
+    const rows:CreatorCommandRecord[]=[];
+    for(const key of keys){
+      const row=this.read(key,command);
+      if(row&&row.association.accountId===accountId&&row.command.kind==='publish'&&row.command.snapshot.work.draftId===draftId&&row.request.type==='publishDraft'&&
+        row.request.accountId===accountId&&row.request.requestId===row.id&&row.request.draftId===draftId&&row.request.revision===row.command.snapshot.revision)rows.push(row);
+    }
+    return rows;
+  }
   save(row:CreatorCommandRecord){
     const previous=this.command(row.association.accountId,row.id);
     if(previous && (!isDeepStrictEqual(previous.command,row.command)||!isDeepStrictEqual(previous.request,row.request)||

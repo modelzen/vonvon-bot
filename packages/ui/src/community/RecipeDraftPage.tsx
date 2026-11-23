@@ -14,19 +14,20 @@ type Props = {
   draftId: string;
   expectedRevision?: number;
   onBack: () => void;
+  onPublished?: (publication: AuthoringPublished) => void;
   onContinueInChat?: (draft: RecipeDraft) => void;
 };
 type Read = {kind: 'loading'} | {kind: 'ready'; draft: RecipeDraft} | {kind: 'failed'; message: string; draft?: RecipeDraft};
 type Confirmation = {reviewId: string; draft: RecipeDraft};
 type Publication = {kind: 'idle'} | {kind: 'preparing'} | {kind: 'confirm'; confirmation: Confirmation} |
-  {kind: 'publishing'; confirmation: Confirmation} | {kind: 'pending'; draft: RecipeDraft; message?: string} |
+  {kind: 'publishing'; confirmation: Confirmation} | {kind: 'pending'; message?: string} |
   {kind: 'failed'; message: string} | {kind: 'published'; publication: AuthoringPublished};
 
 export function RecipeDraftPage(props: Props) {
   return <DraftSession key={`${props.accountId}:${props.draftId}:${props.expectedRevision ?? 0}`} {...props}/>;
 }
 
-function DraftSession({shell, accountId, draftId, expectedRevision, onBack, onContinueInChat}: Props) {
+function DraftSession({shell, accountId, draftId, expectedRevision, onBack, onContinueInChat, onPublished}: Props) {
   const authoring = useShellCapabilities()?.recipeAuthoring;
   const [read, setRead] = useState<Read>({kind: 'loading'});
   const [refresh, setRefresh] = useState(0);
@@ -61,11 +62,34 @@ function DraftSession({shell, accountId, draftId, expectedRevision, onBack, onCo
       if (next.draftId !== draftId || next.revision < requiredRevision.current) throw new Error('尚未读取到最新内容，请重试。');
       requiredRevision.current = next.revision;
       setRead({kind: 'ready', draft: next});
-    }).catch(reason => {
-      if (active) setRead(old => ({kind: 'failed', message: reason instanceof Error ? reason.message : '暂时无法读取配方。', draft: 'draft' in old ? old.draft : undefined}));
+    }).catch(async reason => {
+      if (!active) return;
+      setRead(old => ({kind: 'failed', message: reason instanceof Error ? reason.message : '暂时无法读取配方。', draft: 'draft' in old ? old.draft : undefined}));
+      await recover(() => active && alive.current, true);
     });
     return () => {active = false;};
   }, [shell, accountId, draftId, refresh]);
+  function published(receipt: AuthoringPublished) {
+    if (receipt.accountId !== accountId || receipt.draftId !== draftId) throw new Error('发布回执与这份配方不一致，请重新核对。');
+    setPublication({kind: 'published', publication: receipt});
+    onPublished?.(receipt);
+  }
+  async function recover(active = () => alive.current, automatic = false) {
+    if (!authoring || publicationActive.current) return;
+    publicationActive.current = true;
+    try {
+      const reply = await authoring.request({type: 'recoverPublication', accountId, draftId});
+      if (!active()) return;
+      if (reply.kind !== 'publicationRecovery') throw new Error('发布结果尚未确认。');
+      if (reply.result.kind === 'published') published(reply.result.publication);
+      else if (reply.result.kind === 'pending') setPublication({kind: 'pending'});
+      else if (!automatic) setPublication({kind: 'failed', message: '未找到已提交的发布请求，请重新读取草稿后确认发布。'});
+    } catch (reason) {
+      if (active()) setPublication({kind: 'pending', message: reason instanceof Error ? reason.message : '发布结果尚未确认。'});
+    } finally {
+      publicationActive.current = false;
+    }
+  }
   function reload() {
     setPublication({kind: 'idle'});
     setRead(old => ({kind: 'failed', message: '正在读取最新内容…', draft: 'draft' in old ? old.draft : undefined}));
@@ -80,7 +104,8 @@ function DraftSession({shell, accountId, draftId, expectedRevision, onBack, onCo
       if (!alive.current) return;
       if (result.kind === 'publicationResult') {
         if (result.result.kind === 'published' && (result.result.publication.accountId !== accountId || result.result.publication.draftId !== selected.draftId)) throw new Error('发布回执与这份配方不一致，请重新核对。');
-        setPublication(result.result.kind === 'published' ? {kind: 'published', publication: result.result.publication} : {kind: 'pending', draft: selected});
+        if (result.result.kind === 'published') published(result.result.publication);
+        else setPublication({kind: 'pending'});
       } else if (result.kind === 'publicationReady' && result.draftId === selected.draftId && result.revision === selected.revision &&
         JSON.stringify(result.public) === JSON.stringify(selected.public) && displayed.current === selected) {
         setPublication({kind: 'confirm', confirmation: {reviewId: result.reviewId, draft: selected}});
@@ -102,10 +127,10 @@ function DraftSession({shell, accountId, draftId, expectedRevision, onBack, onCo
       if (!alive.current) return;
       if (result.kind !== 'publicationResult') throw new Error('发布结果尚未确认。');
       if (result.result.kind === 'published' && (result.result.publication.accountId !== accountId || result.result.publication.draftId !== confirmation.draft.draftId)) throw new Error('发布回执与这份配方不一致，请重新核对。');
-      setPublication(result.result.kind === 'published' ? {kind: 'published', publication: result.result.publication} :
-        {kind: 'pending', draft: confirmation.draft});
+      if (result.result.kind === 'published') published(result.result.publication);
+      else setPublication({kind: 'pending'});
     } catch (reason) {
-      if (alive.current) setPublication({kind: 'pending', draft: confirmation.draft,
+      if (alive.current) setPublication({kind: 'pending',
         message: reason instanceof Error ? reason.message : '发布结果尚未确认。'});
     } finally {
       publicationActive.current = false;
@@ -131,9 +156,9 @@ function DraftSession({shell, accountId, draftId, expectedRevision, onBack, onCo
   return <div className="community-page recipe-draft-page">
     <BackButton label="返回我的配方" onClick={onBack}/>
     {read.kind === 'loading' && <p role="status">正在读取配方…</p>}
-    {read.kind === 'failed' && <InlineNotice title="配方尚未更新" tone="warning" actions={<Button onClick={() => setRefresh(value => value + 1)}>重新读取</Button>}>{read.message}</InlineNotice>}
+    {read.kind === 'failed' && publication.kind !== 'pending' && publication.kind !== 'published' && <InlineNotice title="配方尚未更新" tone="warning" actions={<Button onClick={() => setRefresh(value => value + 1)}>重新读取</Button>}>{read.message}</InlineNotice>}
     {publication.kind === 'failed' && <InlineNotice title="尚未准备好发布" tone="warning" actions={<Button onClick={reload}>重新读取</Button>}>{publication.message}</InlineNotice>}
-    {publication.kind === 'pending' && <InlineNotice title="正在核对发布结果" tone="warning" actions={<Button onClick={() => void prepare(publication.draft)}>核对发布结果</Button>}>{publication.message || '本次发布尚未确认。继续核对同一次请求即可。'}</InlineNotice>}
+    {publication.kind === 'pending' && <InlineNotice title="正在核对发布结果" tone="warning" actions={<Button onClick={() => void recover()}>核对发布结果</Button>}>{publication.message || '本次发布尚未确认。继续核对同一次请求即可。'}</InlineNotice>}
     {publication.kind === 'published' && <InlineNotice title="已发布到社区">这份配方已发布，可以在我的配方中管理版本与分享码。</InlineNotice>}
     {draft && expectedRevision !== undefined && expectedRevision !== draft.revision && <InlineNotice title="配方已有更新">链接指向修订 {expectedRevision}，这里展示当前修订 {draft.revision}。请查看当前内容后再发布。</InlineNotice>}
     {draft && <>

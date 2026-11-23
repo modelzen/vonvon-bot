@@ -22,7 +22,7 @@ let authoringSend: (request: DesktopAuthoringRequest) => Promise<unknown>;
 let facade: ReturnType<typeof createDesktopFacades>;
 let emit: (value: unknown) => void;
 let back: ReturnType<typeof vi.fn>;
-const resume = vi.fn();
+const resume = vi.fn(), published = vi.fn();
 function richDraft(revision = 1, patch: Partial<RecipeRichDraft['public']> = {}): RecipeRichDraft {
   const content = JSON.parse(readFileSync(resolve(process.cwd(), '../protocol/test/fixtures/recipe-rich-v2.content.json'), 'utf8'));
   content.parts = []; content.memories = []; delete content.finalLogo;
@@ -45,7 +45,7 @@ async function click(label: string) {expect(button(label).disabled).toBe(false);
 async function draw(account = accountId, expectedRevision?: number) {
   await act(async () => {
     emit({type: 'account', value: {kind: 'signedIn', accountId: account, displayName: '作者', provider: 'github', persistence: 'memory'}});
-    root.render(<ClientProvider client={facade.client} shell={facade.shell}><RecipeDraftPage shell={facade.shell.community!} accountId={account} draftId={draftId} expectedRevision={expectedRevision} onBack={back} onContinueInChat={resume}/></ClientProvider>);
+    root.render(<ClientProvider client={facade.client} shell={facade.shell}><RecipeDraftPage shell={facade.shell.community!} accountId={account} draftId={draftId} expectedRevision={expectedRevision} onBack={back} onContinueInChat={resume} onPublished={published}/></ClientProvider>);
   });
 }
 async function saved(revision: number, account = accountId, id = draftId) {await act(async () => emit({type: 'authoringSaved', value: {accountId: account, draftId: id, revision}}));}
@@ -54,8 +54,9 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', class {observe() {} unobserve() {} disconnect() {}});
   vi.stubGlobal('matchMedia', () => ({matches: false, addEventListener() {}, removeEventListener() {}}));
   document.body.innerHTML = '<div id="root"></div>'; root = createRoot(document.getElementById('root')!);
-  draft = richDraft(); requests = []; authoringRequests = []; back = vi.fn(); resume.mockReset();
+  draft = richDraft(); requests = []; authoringRequests = []; back = vi.fn(); resume.mockReset(); published.mockReset();
   authoringSend = async request => {
+    if (request.type === 'recoverPublication') return {kind: 'publicationRecovery', result: {kind: 'absent'}};
     if (request.type === 'preparePublication') return {kind: 'publicationReady', reviewId: otherAccount, draftId, revision: request.draft.revision, public: request.draft.public};
     throw new Error('Unexpected authoring request ' + request.type);
   };
@@ -211,7 +212,7 @@ it('keeps the original displayed draft while recovering an uncertain publication
   const prepared = authoringSend;
   authoringSend = async request => {
     if (request.type === 'confirmPublication') {attempts++; return {kind: 'publicationResult', result: {kind: 'pending'}};}
-    if (attempts) return {kind: 'publicationResult', result: {kind: 'published', publication: receipt}};
+    if (attempts) return {kind: 'publicationRecovery', result: {kind: 'published', publication: receipt}};
     return prepared(request);
   };
   await draw(); await click('发布到社区'); await click('确认发布');
@@ -224,7 +225,7 @@ it('keeps the original displayed draft while recovering an uncertain publication
     {type: 'confirmPublication', accountId, reviewId: otherAccount},
   ]);
   expect(authoringRequests.filter(request => request.type === 'preparePublication')).toEqual([
-    {type: 'preparePublication', accountId, draft}, {type: 'preparePublication', accountId, draft},
+    {type: 'preparePublication', accountId, draft},
   ]);
   expect(requests.filter(request => request.type === 'publishDraft')).toEqual([]);
 });
@@ -280,7 +281,7 @@ it('refuses a read older than the linked revision and provides an in-place fresh
   expect(authoringRequests.filter(request => request.type === 'confirmPublication')).toEqual([]);
 });
 
-it('recovers an invalidated confirmation through the original draft instead of retrying an unusable handle', async () => {
+it('offers a fresh read when an invalidated confirmation has no dispatched publication', async () => {
   const prepared = authoringSend;
   authoringSend = async request => request.type === 'confirmPublication' ? Promise.reject(new Error('确认已过期')) : prepared(request);
   await draw(); await click('发布到社区'); await click('确认发布');
@@ -289,8 +290,60 @@ it('recovers an invalidated confirmation through the original draft instead of r
   await click('核对发布结果');
   expect(authoringRequests.filter(request => request.type === 'confirmPublication')).toHaveLength(1);
   expect(authoringRequests.filter(request => request.type === 'preparePublication')).toEqual([
-    {type: 'preparePublication', accountId, draft: original}, {type: 'preparePublication', accountId, draft: original},
+    {type: 'preparePublication', accountId, draft: original},
   ]);
   await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
-  expect(document.body.textContent).toContain('配方内容已变化');
+  expect(document.body.textContent).toContain('未找到已提交的发布请求');
+  expect(authoringRequests.at(-1)).toEqual({type: 'recoverPublication', accountId, draftId});
+});
+
+
+it('cold remount recovers a retired draft by account/draft only and opens the exact published version', async () => {
+  const receipt = {accountId, draftId, recipeId: accountId, versionId: otherAccount, revision: 1};
+  const prepared = authoringSend;
+  let retired = false, available = false;
+  authoringSend = async request => {
+    if (request.type === 'confirmPublication') {retired = true; throw new Error('response lost');}
+    if (request.type === 'recoverPublication') return {kind: 'publicationRecovery', result: available ? {kind: 'published', publication: receipt} : {kind: 'pending'}};
+    return prepared(request);
+  };
+  send = async () => {if (retired) throw new Error('not_found'); return draft;};
+  await draw(); await click('发布到社区'); await click('确认发布');
+  await act(async () => root.unmount());
+  root = createRoot(document.getElementById('root')!);
+  authoringRequests = [];
+  await draw();
+  expect(document.querySelector('h1')).toBeNull();
+  expect(document.body.textContent).toContain('正在核对发布结果');
+  expect(published).not.toHaveBeenCalled();
+  available = true; await click('核对发布结果');
+  expect(published).toHaveBeenCalledExactlyOnceWith(receipt);
+  expect(authoringRequests).toEqual([{type: 'recoverPublication', accountId, draftId}, {type: 'recoverPublication', accountId, draftId}]);
+  expect(requests.filter(request => request.type === 'publishDraft')).toEqual([]);
+});
+
+it.each(['account', 'draft'] as const)('cold recovery rejects a receipt for another %s', async mismatch => {
+  send = async () => {throw new Error('not_found');};
+  authoringSend = async () => ({kind: 'publicationRecovery', result: {kind: 'published', publication: {accountId: mismatch === 'account' ? otherAccount : accountId,
+    draftId: mismatch === 'draft' ? otherAccount : draftId, recipeId: accountId, versionId: otherAccount, revision: 1}}});
+  await draw();
+  expect(document.body.textContent).toContain('发布回执与这份配方不一致');
+  expect(document.body.textContent).not.toContain('已发布到社区');
+  expect(published).not.toHaveBeenCalled();
+});
+
+it('cold recovery leaves an absent publication as a normal read failure and ignores a late receipt after account change', async () => {
+  send = async () => {throw new Error('not_found');};
+  await draw();
+  expect(document.body.textContent).toContain('配方尚未更新');
+  expect(document.body.textContent).not.toContain('正在核对发布结果');
+  let finish!: (reply: unknown) => void;
+  authoringSend = () => new Promise(resolve => {finish = resolve;});
+  await click('重新读取');
+  const stale = finish;
+  send = async () => richDraft(2, {name: '新账号作品'});
+  await draw(otherAccount);
+  await act(async () => stale({kind: 'publicationRecovery', result: {kind: 'published', publication: {accountId, draftId, recipeId: accountId, versionId: otherAccount, revision: 1}}}));
+  expect(published).not.toHaveBeenCalled();
+  expect(document.body.textContent).toContain('新账号作品');
 });

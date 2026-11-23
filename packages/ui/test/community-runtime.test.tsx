@@ -2,7 +2,7 @@
 import {act} from 'react';
 import {createRoot, type Root} from 'react-dom/client';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
-import {communityRequestSchema, type AccountShell, type CommunityRequest, type RecipeDetail, type RecipeRoleDraft} from '@vonvon/protocol';
+import {communityRequestSchema, type AuthoringPublished, type AccountShell, type CommunityRequest, type RecipeDetail, type RecipeRoleDraft} from '@vonvon/protocol';
 import {createDesktopFacades} from '../../desktop/src/facade';
 import {desktopChannels} from '../../desktop/src/ipc-contract';
 import {DesktopRootView} from '../src/devices/DesktopRoot';
@@ -411,4 +411,28 @@ it('keeps rental content distinct and explicitly returns other routes to recipes
   expect(document.querySelector('.community-tabs button[aria-current="page"]')?.textContent).toBe('Bot 配方');
   expect(document.querySelector('.community-card')).not.toBeNull();
   expect(document.querySelector('.community-empty')).toBeNull();
+});
+
+
+it('opens the exact recovered published version when a cold draft read is retired', async () => {
+  const normal = handle;
+  handle = async request => {if (request.type === 'draft') throw new Error('retired'); return request.type === 'detail' ? {...recipe, owned: true} : normal(request);};
+  const recover = vi.fn(async () => ({kind: 'publicationRecovery' as const, result: {kind: 'published' as const, publication: {accountId, draftId, recipeId: A, versionId: B, revision: 1}}}));
+  shell = {...shell, recipeAuthoring: {request: recover}};
+  await draw(); await click('打开旧私人草稿');
+  expect(recover).toHaveBeenCalledExactlyOnceWith({type: 'recoverPublication', accountId, draftId});
+  expect(document.querySelector('.community-detail h1')?.textContent).toBe(recipe.public.name);
+  expect(calls.filter(request => request.type === 'detail')).toEqual([{type: 'detail', accountId, recipeId: A, versionId: B}]);
+});
+
+it('ignores a late publication event for a draft the user has already left', async () => {
+  let event!: (receipt: AuthoringPublished) => void;
+  const normal = handle;
+  handle = async request => request.type === 'draft' ? {draftId, recipeId: null, revision: 1, public: recipe.public, config: {role: '角色'}} :
+    request.type === 'drafts' || request.type === 'publications' ? {items: []} : normal(request);
+  shell = {...shell, recipeAuthoring: {request: async () => ({kind: 'publicationRecovery', result: {kind: 'absent'}}), onPublished(listener) {event = listener; return () => {};}}};
+  await draw(); await click('打开旧私人草稿'); await click('返回我的配方');
+  await act(async () => event({accountId, draftId, recipeId: A, versionId: B, revision: 1}));
+  expect(calls.filter(request => request.type === 'detail')).toEqual([]);
+  expect(document.querySelector('.community-detail')).toBeNull();
 });

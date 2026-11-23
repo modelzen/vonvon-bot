@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {expect,it} from 'vitest';
-import {recipeAuthoringRequestSchema as request, recipeAuthoringReplySchema as reply,desktopAuthoringRequestSchema,creatorSnapshotSchema} from '../src/index.js';
+import {recipeAuthoringRequestSchema as request, recipeAuthoringReplySchema as reply,desktopAuthoringRequestSchema,desktopAuthoringReplySchema,creatorSnapshotSchema} from '../src/index.js';
 
 const id = randomUUID(), hash = 'a'.repeat(64), botId = 'cli_bot';
 it('uses separate discovery and binding-checked activation on owner authoring RPC', () => {
@@ -32,4 +32,13 @@ it('keeps plaintext out of journalable replies and arbitrary requests out of the
   expect(request.safeParse({...base,answer:{kind:'issued',target,codeIds:[id]}}).success).toBe(true);
   expect(request.safeParse({...base,answer:{kind:'issued',target,codeIds:[id],code:'a'.repeat(32)}}).success).toBe(false);
   expect(reply.safeParse({kind:'creatorJobs',jobs:[{id,binding:id,scope:hash,task:{kind:'command',command:{kind:'POST',path:'/anything'},approval:hash,expiresAt:1}}]}).success).toBe(false);
+});
+
+it('keeps cold publication recovery readonly and its absence distinct from a confirmed result',()=>{
+  const recover={type:'recoverPublication',accountId:id,draftId:id};
+  expect(desktopAuthoringRequestSchema.safeParse(recover).success).toBe(true);
+  for(const extra of [{reviewId:id},{draft:{}},{confirmationId:id},{snapshotDigest:hash}])expect(desktopAuthoringRequestSchema.safeParse({...recover,...extra}).success).toBe(false);
+  for(const result of [{kind:'absent'},{kind:'pending'},{kind:'published',publication:{accountId:id,draftId:id,recipeId:id,versionId:id,revision:1}}])
+    expect(desktopAuthoringReplySchema.safeParse({kind:'publicationRecovery',result}).success).toBe(true);
+  expect(desktopAuthoringReplySchema.safeParse({kind:'publicationRecovery',result:{kind:'published'}}).success).toBe(false);
 });

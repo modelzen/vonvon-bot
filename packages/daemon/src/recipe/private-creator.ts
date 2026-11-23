@@ -65,6 +65,9 @@ const same=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
 const snapshotHash=(s:CreatorSnapshot)=>digest(JSON.stringify(creatorSnapshotSchema.parse(s)));
 const state=(l:Link):CreatorLedger=>l.creator??={jobs:{},cards:{}};
 const workOf=(c:CreatorCommand)=>c.kind==='publish'?c.snapshot.work:'work'in c?c.work:undefined;
+const pendingPublication=(r:JobRecord)=>r.state==='active'||r.state==='unknown';
+const publicationAt=(r:JobRecord,work:CreatorWork,revision:number)=>r.job.task.kind==='command'&&r.job.task.command.kind==='publish'&&
+  same(r.job.task.command.snapshot.work,work)&&r.job.task.command.snapshot.revision===revision;
 const versionOf=(c:CreatorCommand)=>'target'in c?c.target:undefined;
 const viewVersion=(target:CreatorVersion,name:string,version:string):VersionSelection=>({kind:'version',target,name,version});
 function invalidate(s:CreatorLedger,draftId:string){
@@ -673,7 +676,8 @@ export class PrivateCreator{
     const row=await this.run(p,link,(s,_l,db)=>{
       this.noPendingSave(db,p,link,work);
       const publications=Object.values(s.jobs).filter(r=>r.job.task.kind==='command'&&r.job.task.command.kind==='publish'&&r.job.task.command.snapshot.work.draftId===work.draftId);
-      const existing=publications.find(r=>['active','unknown','finished'].includes(r.state))??publications.find(r=>r.state==='offer');
+      const existing=publications.find(pendingPublication)??publications.find(r=>r.state==='offer'&&publicationAt(r,work,revision)&&r.expiresAt>this.now())??
+        publications.find(r=>r.state==='finished'&&publicationAt(r,work,revision))??publications.find(r=>r.state==='offer');
       if(existing){
         const task=existing.job.task;
         if(task.kind!=='command'||task.command.kind!=='publish'||!same(task.command.snapshot.work,work)||task.command.snapshot.revision!==revision)throw denied();
@@ -791,7 +795,8 @@ export class PrivateCreator{
             (s.sources??={})[work.draftId]=source;
             (s.observed??={})[op.view.operationId]=now;
             const existing=Object.values(s.jobs).some(r=>r.job.task.kind==='read'&&r.state==='active'&&r.job.task.read.kind==='draft'&&same(r.job.task.read.work,work)||
-              r.job.task.kind==='command'&&r.job.task.command.kind==='publish'&&same(r.job.task.command.snapshot.work,work));
+              r.job.task.kind==='command'&&r.job.task.command.kind==='publish'&&r.job.task.command.snapshot.work.draftId===work.draftId&&
+                (pendingPublication(r)||publicationAt(r,work,receipt.revision)));
             if(!existing)this.addJob(p,link,s,{kind:'read',read:{kind:'draft',work}},'active',work);
           }
           for(const [id,time] of Object.entries(s.observed??{}))if(time+8*86400_000<=now)delete s.observed![id];
@@ -962,7 +967,9 @@ export class PrivateCreator{
           result.messageId=r.messageId;result.originalCardId=r.originalCardId;
         }
       }
-      r.state='finished';r.answerDigest=answerDigest;r.result=a;r.resultCard=card?.ref;
+      r.state='finished';r.answerDigest=answerDigest;
+      if(task.kind==='command'&&task.command.kind==='publish'&&(a.kind==='published'||a.kind==='rejected'))r.result=a;
+      r.resultCard=card?.ref;
       if(task.kind==='command'&&card){
         r.receiptCard=true;
         if(r.originalCardId&&r.messageId){

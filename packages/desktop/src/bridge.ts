@@ -600,6 +600,7 @@ export function installBridge(
       if(value.type==='creatorContinue')return creator.continue(value);
       if(value.type==='preparePublication')return creator.preparePublication(value);
       if(value.type==='confirmPublication')return creator.confirmPublication(value);
+      if(value.type==='recoverPublication')return creator.recoverPublication(value);
       const reply=await authoring.request(value);
       if(value.type==='confirmLink'&&reply.kind==='link'&&reply.linked){
         const status=await authoring.request({type:'status',handle:value.handle});

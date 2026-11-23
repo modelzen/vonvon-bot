@@ -204,6 +204,16 @@ export class RecipeCreatorSupervisor {
     return {kind:'publicationResult',result:{kind:'published',publication:{accountId:worker.association.accountId,draftId:answer.draftId,
       ...answer.target,revision:answer.revision}}};
   }
+  async recoverPublication(input:Extract<DesktopAuthoringRequest,{type:'recoverPublication'}>):Promise<DesktopAuthoringReply>{
+    try {
+      const signal=this.account.lease?.(input.accountId);if(!signal)throw unavailable();
+      const check=()=>{
+        const status=this.account.status();
+        if(this.stop.signal.aborted||signal.aborted||this.account.lease?.(input.accountId)!==signal||status.kind!=='signedIn'||status.accountId!==input.accountId)throw unavailable();
+      };
+      return await this.executor.recoverPublication(input.accountId,input.draftId,check);
+    }catch{throw new AuthoringError('发布结果尚未确认，请在原账号中重试核对同一次请求。');}
+  }
   async preparePublication(input:Extract<DesktopAuthoringRequest,{type:'preparePublication'}>):Promise<DesktopAuthoringReply>{
     try {
       const signal=this.account.lease?.(input.accountId);if(!signal)throw unavailable();

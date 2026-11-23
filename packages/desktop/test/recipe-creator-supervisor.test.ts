@@ -1,4 +1,7 @@
 import {randomUUID} from 'node:crypto';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {afterEach,expect,it,vi} from 'vitest';
 import {agentIdSchema,groupIdSchema,canonicalizeRichRecipeContent,type AccountStatus,type AuthoringOperation,type CreatorJob,type CreatorAnswer,type RecipeAuthoringRequest,type RecipeAuthoringReply} from '@vonvon/protocol';
 import type {VonvonClient} from '@vonvon/client/browser';
@@ -13,7 +16,7 @@ import {AuthoringError} from '../src/recipe-authoring-cloud.js';
 const cleanup:Array<()=>void>=[];
 afterEach(()=>{while(cleanup.length)cleanup.pop()!();});
 const settle=async()=>{for(let i=0;i<30;i++)await Promise.resolve();};
-function fixture(){
+function fixture(journal=new RecipeCreatorJournal()){
   const accountId=randomUUID(),other=randomUUID(),deviceId=randomUUID(),deviceKey=Buffer.alloc(32,3).toString('base64url'),botId=agentIdSchema.parse('cli_creator'),groupId=groupIdSchema.parse('oc_source');
   const sessions=new Map<string,string>(),bindings=new Map<string,string>([[accountId,randomUUID()],[other,randomUUID()]]),rpcs:RecipeAuthoringRequest[]=[];
   const signals=new Map([[accountId,new AbortController()],[other,new AbortController()]]),listeners=new Set<()=>void>();let active=accountId;
@@ -58,12 +61,13 @@ function fixture(){
   });
   const account:NativeAccount={lease:id=>id===active?signals.get(id)?.signal:undefined,status,onStatus:listener=>{listeners.add(()=>listener(status()));return ()=>{};},
     login:async()=>status(),cancelLogin:async()=>status(),logout:async()=>status(),dispose:async()=>{},recipeLink:(r,v)=>`https://vonvon.cc/recipes/${r}/versions/${v}`,request:async(id,path,init,beforeSend)=>{await beforeSend?.();return request(id,path,init);}};
-  const history=new AuthoringJournal(),journal=new RecipeCreatorJournal(),metadata=new MetadataJournal();
+  const history=new AuthoringJournal(),metadata=new MetadataJournal();
   const authoring=new RecipeAuthoringController(account,()=>{throw Error('creator must not capture selected view');},history);
   cleanup.push(()=>authoring.closeAll());
-  const executor=new RecipeCreatorExecutor(account,journal,metadata,history);
-  const build=(sources:string[]=[])=>{const supervisor=new RecipeCreatorSupervisor(account,retain,()=>sources,journal,history,authoring,executor);cleanup.push(()=>supervisor.dispose());return supervisor;};
-  return {accountId,other,botId,groupId,deviceId,deviceKey,account,authoring,history,journal,request,references,retain,rpcs,rpc,sessions,operations,build,
+  const published=vi.fn();
+  const executor=new RecipeCreatorExecutor(account,journal,metadata,history,published);
+  const build=(sources:string[]=[],records=journal)=>{const supervisor=new RecipeCreatorSupervisor(account,retain,()=>sources,records,history,authoring,records===journal?executor:new RecipeCreatorExecutor(account,records,metadata,history,published));cleanup.push(()=>supervisor.dispose());return supervisor;};
+  return {accountId,other,botId,groupId,deviceId,deviceKey,account,authoring,history,journal,published,request,references,retain,rpcs,rpc,sessions,operations,build,
     privateHandoff(){handoff={retryId:randomUUID(),ref:randomUUID(),generation:1,lease:'a'.repeat(64),versions:[randomUUID()]};return handoff;},
     changeIdentity(){groupIdentity='e'.repeat(64);},
     switchAccount(){signals.get(active)!.abort();active=other;for(const listener of listeners)listener();},
@@ -219,8 +223,8 @@ it('a recorded source key is checked before sending version selection',async()=>
   expect(f.rpcs.filter(r=>r.type==='creatorContinue')).toHaveLength(0);
 });
 
-async function publicationFixture(){
-  const f=fixture(),supervisor=f.build(),draftId=randomUUID(),recipeId=randomUUID(),versionId=randomUUID();
+async function publicationFixture(journal?:RecipeCreatorJournal){
+  const f=fixture(journal),supervisor=f.build(),draftId=randomUUID(),recipeId=randomUUID(),versionId=randomUUID();
   await supervisor.associated(f.accountId,'local',f.botId);await settle();
   const association=f.journal.associations(f.accountId)[0]!;
   const draft={draftId,recipeId:null,revision:2,public:{name:'App 预览',version:'1',summary:'简介',overview:'完整概览',access:'direct' as const},config:{role:'完整角色正文'}};
@@ -270,7 +274,7 @@ async function publicationFixture(){
   const confirm=(reviewId:string)=>supervisor.confirmPublication({type:'confirmPublication',accountId:f.accountId,reviewId});
   return {...f,supervisor,draft,prepare,confirm,recipeId,versionId,current:()=>current,
     lost(){loseResponse=true;receiptAvailable=false;},receipt(){receiptAvailable=true;},active(){state='active';},
-    restart(){supervisor.dispose();return f.build();}};
+    restart(records?:RecipeCreatorJournal){supervisor.dispose();return f.build([],records);}};
 }
 
 it('APP PUBLICATION prepares exact readonly bytes without publishing and confirms through the existing executor once',async()=>{
@@ -299,16 +303,56 @@ it.each(['account','revision','content','review','saved'] as const)('APP PUBLICA
   expect(f.request.mock.calls.some(([,path])=>path.endsWith('/publish'))).toBe(false);
 });
 
-it('APP PUBLICATION recovers the exact unknown job after restart and retired draft without another publisher or POST',async()=>{
-  const f=await publicationFixture(),ready=await f.prepare();if(ready.kind!=='publicationReady')throw Error('not ready');
+it('APP PUBLICATION cold recovery uses only persisted account/draft and exact receipt GET while the source is offline',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'creator-cold-'));cleanup.push(()=>rmSync(dir,{recursive:true,force:true}));
+  const f=await publicationFixture(new RecipeCreatorJournal(dir)),ready=await f.prepare();if(ready.kind!=='publicationReady')throw Error('not ready');
   f.lost();expect(await f.confirm(ready.reviewId)).toEqual({kind:'publicationResult',result:{kind:'pending'}});
-  const original=f.current()!.id;
-  const restarted=f.restart();await settle();f.receipt();
-  const recovered=await restarted.preparePublication({type:'preparePublication',accountId:f.accountId,draft:f.draft});
-  expect(recovered).toMatchObject({kind:'publicationResult',result:{kind:'published',publication:{draftId:f.draft.draftId,versionId:f.versionId}}});
+  const original=f.current()!.id,draftId=f.draft.draftId;
+  f.retain.mockRejectedValue(new Error('source offline'));
+  const restarted=f.restart(new RecipeCreatorJournal(dir));await settle();
+  const input={type:'recoverPublication' as const,accountId:f.accountId,draftId};
+  expect(await restarted.recoverPublication(input)).toEqual({kind:'publicationRecovery',result:{kind:'pending'}});
+  f.receipt();
+  expect(await restarted.recoverPublication(input)).toEqual({kind:'publicationRecovery',result:{kind:'published',publication:{accountId:f.accountId,draftId,recipeId:f.recipeId,versionId:f.versionId,revision:1}}});
+  expect(new RecipeCreatorJournal(dir).version(f.accountId,f.versionId)).toMatchObject({accountId:f.accountId});
+  expect(f.published).toHaveBeenCalledExactlyOnceWith({accountId:f.accountId,draftId,recipeId:f.recipeId,versionId:f.versionId,revision:1});
   expect(f.current()!.id).toBe(original);
   expect(f.request.mock.calls.filter(([,path])=>path.endsWith('/publish'))).toHaveLength(1);
   expect(f.rpcs.filter(r=>r.type==='creatorAppConfirm')).toHaveLength(1);
+  expect(f.request.mock.calls.filter(([,path])=>path.includes('/receipts/publications/')).every(([,path,init])=>path.includes(original)&&(!init?.method||init.method==='GET'))).toBe(true);
+});
+
+it('APP PUBLICATION receipt recovery cannot execute a frozen command or reveal another account or absent draft',async()=>{
+  const f=await publicationFixture(),ready=await f.prepare();if(ready.kind!=='publicationReady')throw Error('not ready');
+  f.lost();await f.confirm(ready.reviewId);
+  const row=f.journal.command(f.accountId,f.current()!.id)!;
+  const frozen=new RecipeCreatorJournal();frozen.save({...row,phase:'frozen'});
+  const recoverer=f.build([],frozen);f.request.mockClear();
+  expect(await recoverer.recoverPublication({type:'recoverPublication',accountId:f.accountId,draftId:f.draft.draftId})).toEqual({kind:'publicationRecovery',result:{kind:'absent'}});
+  expect(await recoverer.recoverPublication({type:'recoverPublication',accountId:f.accountId,draftId:randomUUID()})).toEqual({kind:'publicationRecovery',result:{kind:'absent'}});
+  await expect(recoverer.recoverPublication({type:'recoverPublication',accountId:f.other,draftId:f.draft.draftId})).rejects.toThrow();
+  f.switchAccount();
+  expect(await recoverer.recoverPublication({type:'recoverPublication',accountId:f.other,draftId:f.draft.draftId})).toEqual({kind:'publicationRecovery',result:{kind:'absent'}});
+  expect(f.request).not.toHaveBeenCalled();
+});
+
+it('APP PUBLICATION recovery rejects a mismatched receipt and a changed account before recording success',async()=>{
+  const f=await publicationFixture(),ready=await f.prepare();if(ready.kind!=='publicationReady')throw Error('not ready');
+  f.lost();await f.confirm(ready.reviewId);f.receipt();
+  const prior=f.request.getMockImplementation()!;
+  f.request.mockImplementation(async(id,path,init)=>{
+    const response=await prior(id,path,init);
+    if(!path.includes('/receipts/publications/'))return response;
+    const body=await response.json();body.receipt.draftRevision++;
+    return Response.json(body);
+  });
+  const input={type:'recoverPublication' as const,accountId:f.accountId,draftId:f.draft.draftId};
+  await expect(f.supervisor.recoverPublication(input)).rejects.toThrow();
+  expect(f.journal.version(f.accountId,f.versionId)).toBeUndefined();
+  f.request.mockImplementation(async(id,path,init)=>{const response=await prior(id,path,init);if(path.includes('/receipts/publications/'))f.switchAccount();return response;});
+  await expect(f.supervisor.recoverPublication(input)).rejects.toThrow();
+  expect(f.journal.version(f.accountId,f.versionId)).toBeUndefined();
+  expect(f.request.mock.calls.filter(([,path])=>path.endsWith('/publish'))).toHaveLength(1);
 });
 
 it('APP PUBLICATION gives controlled source recovery guidance without exposing transport details',async()=>{

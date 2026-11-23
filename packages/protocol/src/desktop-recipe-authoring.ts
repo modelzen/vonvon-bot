@@ -17,6 +17,7 @@ const creatorSource = z.object({viewId:viewIdSchema,botId:agentIdSchema}).strict
 export const desktopAuthoringRequestSchema = z.discriminatedUnion('type', [
   z.object({type:z.literal('preparePublication'),accountId:uuid,draft:recipeDraftSchema}).strict(),
   z.object({type:z.literal('confirmPublication'),accountId:uuid,reviewId:uuid}).strict(),
+  z.object({type:z.literal('recoverPublication'),accountId:uuid,draftId:uuid}).strict(),
   z.object({type:z.literal('creatorContinue'),accountId:uuid,entry:z.discriminatedUnion('kind',[
     z.object({kind:z.literal('source'),viewId:viewIdSchema,botId:agentIdSchema,groupId:groupIdSchema,parent:z.object({recipeId:uuid,versionId:uuid}).strict().optional()}).strict(),
     z.object({kind:z.literal('draft'),draftId:uuid,revision}).strict(),
@@ -108,7 +109,13 @@ const desktopAuthoringSessionSchema = z
     })
     .strict();
 export const authoringPublishedSchema=z.object({accountId:uuid,draftId:uuid,recipeId:uuid,versionId:uuid,revision}).strict();
+const publicationRecoverySchema=z.object({kind:z.literal('publicationRecovery'),result:z.discriminatedUnion('kind',[
+  z.object({kind:z.literal('absent')}).strict(),
+  z.object({kind:z.literal('pending')}).strict(),
+  z.object({kind:z.literal('published'),publication:authoringPublishedSchema}).strict(),
+])}).strict();
 export const desktopAuthoringReplySchema = z.discriminatedUnion('kind', [
+  publicationRecoverySchema,
   z.object({kind:z.literal('publicationReady'),reviewId:uuid,draftId:uuid,revision,public:recipePublicSchema}).strict(),
   z.object({kind:z.literal('publicationResult'),result:z.discriminatedUnion('kind',[
     z.object({kind:z.literal('pending')}).strict(),

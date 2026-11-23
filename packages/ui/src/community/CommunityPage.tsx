@@ -3,7 +3,7 @@ import {GlowButton} from '../GlowButton';
 import {Bookmark, ChevronRight, NotebookPen, Search} from 'lucide-react';
 import {useEffect, useRef, useState} from 'react';
 import {communityFailureMessages, newAcquisitionKey} from '@vonvon/protocol';
-import type {CommunityResponses, CommunityShell, RecipeDetail, RecipeSummary, RecipeDraft} from '@vonvon/protocol';
+import type {AuthoringPublished, CommunityResponses, CommunityShell, RecipeDetail, RecipeSummary, RecipeDraft} from '@vonvon/protocol';
 import {Button, InlineNotice} from '../reference/components/ui';
 import {useShellCapabilities} from '../client-context';
 import {useAccount, accountStatusText} from '../account-context';
@@ -118,15 +118,17 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
     if (route.kind === 'workspace') setRefresh(value => value + 1);
     if (route.kind === 'draft' && route.draftId === event.draftId) setPreparation(current => current?.draft?.draftId === event.draftId && current.draft.revision < event.revision ? undefined : current);
   }), [authoring, accountId, route]);
-  useEffect(() => authoring?.onPublished?.(event => {
-    if (event.accountId !== accountId) return;
+  function published(event: AuthoringPublished) {
+    if (!live.current || event.accountId !== accountId) return;
     invalidateCatalog();
-    if (route.kind === 'workspace') setRefresh(value => value + 1);
-    if (community.isOpen && route.kind === 'draft' && route.draftId === event.draftId) {
+    const current = navigation.current;
+    if (current.route.kind === 'workspace') setRefresh(value => value + 1);
+    if (current.isOpen && current.route.kind === 'draft' && current.route.draftId === event.draftId) {
       setPreparation(undefined);
       community.open({kind: 'detail', recipe: {recipeId: event.recipeId, versionId: event.versionId}, privateView: true});
     }
-  }), [authoring, accountId, route, community.isOpen]);
+  }
+  useEffect(() => authoring?.onPublished?.(published), [authoring, accountId]);
   async function run(action: () => Promise<void>) {
     if (busy) return;
     const current = generation.current;
@@ -204,7 +206,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   const login = <div className="community-empty"><h2>登录后继续</h2><p>{accountStatusText(account.status, account.supported)}</p><GlowButton variant="dark" disabled={!account.supported || account.status?.kind === 'signingIn'} onClick={() => void account.login()}>登录</GlowButton></div>;
   const privatePage = route.kind === 'library' || route.kind === 'workspace' || route.kind === 'draft' || route.kind === 'detail' && route.privateView;
   const sourceDialog = preparation && <RecipeAuthoringPage {...preparation} onBack={() => setPreparation(undefined)} onWorkspace={() => {setPreparation(undefined); open({kind: 'workspace'});}}/>;
-  if (route.kind === 'draft' && accountId) return <><RecipeDraftPage key={route.navigationId ?? route.draftId} shell={shell} accountId={accountId} draftId={route.draftId} expectedRevision={route.expectedRevision} onContinueInChat={authoring ? draft => setPreparation({draft}) : undefined} onBack={() => open({kind: 'workspace'})}/>{sourceDialog}</>;
+  if (route.kind === 'draft' && accountId) return <><RecipeDraftPage key={route.navigationId ?? route.draftId} shell={shell} accountId={accountId} draftId={route.draftId} expectedRevision={route.expectedRevision} onContinueInChat={authoring ? draft => setPreparation({draft}) : undefined} onPublished={published} onBack={() => open({kind: 'workspace'})}/>{sourceDialog}</>;
   return <div className="community-page">
     {route.kind === 'catalog' && <header className="community-heading community-page-heading"><h1>社区</h1><nav className="community-tabs" aria-label="社区类型"><button type="button" aria-current={tab === 'recipes' ? 'page' : undefined} onClick={() => {setTab('recipes'); if (route.kind !== 'catalog') open({kind: 'catalog'});}}>Bot 配方</button><button type="button" aria-current={tab === 'rental' ? 'page' : undefined} onClick={() => {setTab('rental'); if (route.kind !== 'catalog') open({kind: 'catalog'});}}>Bot 租赁 <span>敬请期待</span></button></nav></header>}
     {route.kind === 'catalog' && tab === 'recipes' && <div className="community-section-heading"><div><h2>{search ? '搜索结果' : catalog?.heroKind === 'featured' ? '场景精选' : '最新配方'}</h2>{!search && catalog?.heroKind === 'featured' && <p>Vonvon 编辑推荐</p>}</div><div className="community-actions"><Button variant="ghost" onClick={() => open({kind: 'library'})}><Bookmark size={14}/>已获取<ChevronRight size={12}/></Button><Button variant="ghost" onClick={() => open({kind: 'workspace'})}><NotebookPen size={14}/>我的配方<ChevronRight size={12}/></Button></div></div>}

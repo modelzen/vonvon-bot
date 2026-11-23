@@ -2,7 +2,7 @@ import {isDeepStrictEqual} from 'node:util';
 import {z} from 'zod';
 import {creatorSnapshotSchema,recipeAuthoringReplySchema,validateWritableRichRecipeContent,recipePublicSchema,richMetadataRequestSchema,
   communityResponseSchemas,type CreatorJob,type CreatorAnswer,type CreatorRead,type CreatorWork,type CreatorVersion,type CreatorSnapshot,type RecipeDraft,type CommunityRequest,
-  type AuthoringPublished,type AuthoringSaved,type RecipeAuthoringRequest,type RecipeAuthoringReply} from '@vonvon/protocol';
+  type DesktopAuthoringReply,type AuthoringPublished,type AuthoringSaved,type RecipeAuthoringRequest,type RecipeAuthoringReply} from '@vonvon/protocol';
 import type {NativeAccount} from './account-session.js';
 import {RecipeCreatorJournal,checkVersionSource,sameCreatorSource,creatorSha,creatorSnapshotDigest,type CreatorAssociation,type CreatorCommandRecord} from './recipe-creator-journal.js';
 import {creatorDraft,creatorJson,creatorCodes,publicationReceipt,issueReceipt,metadataReceipt,verifyMetadataReceipt,CreatorCloudRejected} from './recipe-creator-cloud.js';
@@ -359,6 +359,19 @@ export class RecipeCreatorExecutor {
       case 'revealCode':if(c.kind!=='reveal')throw invalid();return {kind:'reveal',target:c.target,codeId:c.codeId};
       default:throw invalid();
     }
+  }
+  async recoverPublication(accountId:string,draftId:string,check:()=>void):Promise<Extract<DesktopAuthoringReply,{kind:'publicationRecovery'}>>{
+    check();
+    const rows=this.journal.publications(accountId,draftId).filter(row=>row.phase!=='frozen'&&row.result?.kind!=='rejected');
+    for(const row of rows){
+      check();
+      const answer=await publicationReceipt(this.account,row);check();
+      if(answer?.kind==='published'){
+        this.committed(row,answer);
+        return {kind:'publicationRecovery',result:{kind:'published',publication:{accountId,draftId,...answer.target,revision:answer.revision}}};
+      }
+    }
+    return {kind:'publicationRecovery',result:{kind:rows.length?'pending':'absent'}};
   }
   private committed(row:CreatorCommandRecord,result:CreatorAnswer){
     const next={...row,phase:'committed' as const,result};this.journal.save(next);

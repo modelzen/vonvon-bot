@@ -3142,3 +3142,67 @@ it('APP PUBLICATION shares the same job with a simultaneous real private-card co
   expect(await rpc('creatorPreview',{work:snapshot.work,revision:2})).toMatchObject({state:'finished',job:{id:ready.job.id},result:answer});
   expect(await creatorJobs()).toEqual([]);
 });
+
+it('APP PUBLICATION does not let an older rejected revision hide the current offer',async()=>{
+  await link();await attachCreator();const old=await openManualWork('旧修订');
+  const previous=kind(await rpc('creatorPreview',{work:old.work,revision:2}),'creatorPreview');
+  await tap(privateChoice('确认发布'));
+  await expect(rpc('creatorPreview',{work:old.work,revision:3})).rejects.toThrow();
+  await rpc('creatorAnswer',{id:previous.job.id,answer:{kind:'unknown'}});
+  await expect(rpc('creatorPreview',{work:old.work,revision:3})).rejects.toThrow();
+  await rpc('creatorAnswer',{id:previous.job.id,answer:{kind:'rejected',reason:'changed'}});
+  const current=await openManualWork('新修订',3,old.work.draftId);
+  const offer=kind(await rpc('creatorPreview',{work:current.work,revision:3}),'creatorPreview');
+  expect(offer.state).toBe('offer');expect(offer.job.id).not.toBe(previous.job.id);
+  expect(await rpc('creatorCheck',{id:offer.job.id})).toMatchObject({mode:'preview'});
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  expect(await new AuthoringJournal(root,()=>clock).run(db=>Object.values(db.links)[0]!.creator!.jobs[previous.job.id]!.result)).toEqual({kind:'rejected',reason:'changed'});
+});
+
+it('APP PUBLICATION observes a newly saved revision after an older publication was rejected',async()=>{
+  await link();await attachCreator();const old=await openManualWork('旧修订');
+  const previous=kind(await rpc('creatorPreview',{work:old.work,revision:2}),'creatorPreview');
+  await tap(privateChoice('确认发布'));
+  await rpc('creatorAnswer',{id:previous.job.id,answer:{kind:'rejected',reason:'changed'}});
+  const edit=kind(await rpc('edit',{draftId:old.work.draftId,baseRevision:2}),'operation').operation;
+  const op=await advance(edit,'dispatch');
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  await ledger.run(db=>{db.operations[op.operationId]!.creatorSave=true;});
+  await rpc('settle',{operationId:op.operationId,receipt:{operationId:op.operationId,status:'accepted',stateRevision:3,draftId:old.work.draftId,revision:3}});
+  const read=(await creatorJobs()).find(j=>j.task.kind==='read'&&j.task.read.kind==='draft'&&j.task.read.work.draftId===old.work.draftId);
+  expect(read).toBeDefined();if(read?.task.kind!=='read'||read.task.read.kind!=='draft')throw Error('saved read missing');
+  const work=read.task.read.work;
+  await rpc('creatorAnswer',{id:read.id,answer:{kind:'snapshot',snapshot:{...old,work,revision:3,public:{...old.public,name:'新保存的短卡'},appPreviewUrl:'https://vonvon.cc/open/draft#'+work.draftId+'?revision=3'}}});
+  const offer=kind(await rpc('creatorPreview',{work,revision:3}),'creatorPreview');
+  expect(offer.state).toBe('offer');expect(lastCard()).toContain('新保存的短卡');expect(lastCard()).toContain('在 App 中预览');
+  expect(await creatorJobs()).toEqual([]);
+});
+
+it('APP PUBLICATION keeps multiple legal large editor answers outside the bounded main journal',async()=>{
+  await link();await attachCreator();
+  const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock),identity=kind(await rpc('groupSourceIdentity',{groupId}),'groupSourceIdentity').identity;
+  const field=(value:string)=>({itemId:randomUUID(),originId:randomUUID(),value});
+  const rules=Array.from({length:32},()=>({itemId:randomUUID(),originId:randomUUID(),purpose:'work' as const,text:{kind:'inline' as const,value:'记录客户反馈事项。'.repeat(570)}}));
+  const doc=canonicalizeRichRecipeContent({format:'rich-v2',schemaVersion:2,public:{name:field('大作品'),summary:field(''),overview:field(''),version:field('1')},
+    settings:[],files:[],skills:[],tasks:[],memories:[],rules,setup:[],parts:[]});
+  const bytes=Buffer.from(doc.canonicalUTF8),canonical=bytes.toString('base64url');
+  expect(canonical.length).toBeGreaterThan(600000);
+  const ids:string[]=[];
+  for(let index=0;index<10;index++){
+    const work={draftId:randomUUID(),source:{preparationId:randomUUID(),groupId,identity}};
+    const pending=kind(await rpc('creatorPreview',{work,revision:2}),'creatorPreview');
+    const snapshot={work,format:'rich-v2',recipeId:null,parent:null,revision:2,public:{name:'大作品',version:'1',summary:'',overview:'',access:'direct'},
+      contentSha256:digest(bytes),parts:[],sections:[{title:'规则',pageHashes:[digest('规则')]}]};
+    await rpc('creatorAnswer',{id:pending.job.id,answer:{kind:'snapshot',snapshot}});
+    await tap(privateChoice('继续修改内容'));
+    const edit=(await creatorJobs()).find(j=>j.task.kind==='read'&&j.task.read.kind==='edit'&&j.task.read.work.draftId===work.draftId)!;ids.push(edit.id);
+    await rpc('creatorAnswer',{id:edit.id,answer:{kind:'edit',work,revision:2,canonical,sourceCanonical:canonical}});
+  }
+  const persisted=await readFile(join(root,'recipe-authoring','journal.json'),'utf8');
+  expect(Buffer.byteLength(persisted)).toBeLessThan(1024*1024);
+  const rows=await ledger.run(db=>Object.values(db.links).find(link=>link.creator)!.creator!.jobs);
+  for(const id of ids){expect(rows[id]!.state).toBe('finished');expect(rows[id]!.answerDigest).toBeTruthy();expect(rows[id]!.result).toBeUndefined();}
+},60000);
