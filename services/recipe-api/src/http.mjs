@@ -33,6 +33,7 @@ const endpoints = [
   ['POST', '/operations/:o/redeem', 'redeemOperation', 'possession'],
   ['POST', '/operations/:o/complete', 'completeOperation', 'possession'],
   ['POST', '/authoring/:o/register', 'registerAuthoring'],
+  ['GET', '/authoring/:o/recovery', 'recoverAuthoring'],
   ['GET', '/authoring/:o', 'getAuthoring'],
   ['POST', '/authoring/:o/cancel', 'cancelAuthoring'],
   ['POST', '/authoring/:o/authorize', 'authorizeAuthoring'],

@@ -117,7 +117,7 @@ export const RULES: ReadonlyMap<string, Rule> = new Map([
   ...rows('command', 'listGroupMembers', { dm: 'bot', group: 'host', comment: 'deny' }),
   // dm-agent 7.3: a group within its own chat and its turn, a private chat on any Bot here. A comment's tools are its own.
   ...rows('command', 'feishuRead', { dm: 'bot', group: 'bot', comment: 'deny' }),
-  ...rows('command', 'registerAgent refreshAgentCredentials restartHost deleteAgent'),
+  ...rows('command', 'registerAgent refreshAgentCredentials restartHost deleteAgent readGroupIdentity'),
   // The desktop's older permission and reply switches: settings writes, which the command line makes as settings set.
   ...rows('command', 'setResponse setPermission', WRITE),
   ...rows('settings', 'read.host save.host', DM_ONLY),
@@ -158,6 +158,7 @@ export const RULES: ReadonlyMap<string, Rule> = new Map([
   ...rows('memory', 'export events restore promote move branchRename branchMerge branchDelete confirm purge undo reseal seen newCounts', DM_ONLY),
   ...rows('contextPreview', 'get', DM_ONLY),
   ...rows('recipeInstall', 'source ignoreVersion createdGroup prepare commit status cancel issuing reconcile'),
+  ...rows('recipeAuthoring', 'open close status beginLink inspectLink confirmLink reviewSource prepare edit inspectCandidate advance deliver resend cancel settle reconcile updateCard'),
   ...rows('schedule', 'list create edit pause resume delete runNow', { dm: 'bot', group: 'bot', comment: 'not-group' }),
   ...rows('schedule', 'listBot', { dm: 'bot', group: 'deny', comment: 'not-group' }),
   ...rows('memory', 'dmPeople'),
@@ -394,6 +395,7 @@ function inReach(principal: BotSessionPrincipal, scope: Scope | null, groups: re
       return admin.type === 'confirmCardCallback' ? botWide() : ok;
     }
     case 'command': return commandInReach(request.payload, session, own, reaches, botWide, narrow, feishuReach(principal));
+    case 'recipeAuthoring':
     case 'recipeInstall': return own(request.payload.botId) && wholeBot ? ok : outOfReach();
     case 'settings': {
       const payload = request.payload;
@@ -469,7 +471,7 @@ function commandInReach(command: Command, session: boolean, own: (botId: string)
     case 'restartHost': case 'cancelJob': return session ? outOfReach() : ok;
     case 'registerAgent': return outOfReach();
     case 'refreshAgentCredentials': case 'setAgentEnabled': case 'setAgentBadgeNumber': case 'deleteAgent': return own(command.agentId) ? botWide() : outOfReach();
-    case 'bindGroup': case 'listGroupMembers': return own(command.agentId) && reaches(command.groupId) ? ok : outOfReach();
+    case 'readGroupIdentity': case 'bindGroup': case 'listGroupMembers': return own(command.agentId) && reaches(command.groupId) ? ok : outOfReach();
     case 'feishuRead': return command.agentId === undefined || own(command.agentId) ? feishu : outOfReach();
     case 'setResponse': case 'setPermission': {
       const target = membershipOf(command.membershipId);
