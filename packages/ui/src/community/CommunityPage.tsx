@@ -3,7 +3,7 @@ import {GlowButton} from '../GlowButton';
 import {Bookmark, ChevronRight, NotebookPen, Search} from 'lucide-react';
 import {useEffect, useRef, useState} from 'react';
 import {communityFailureMessages, newAcquisitionKey} from '@vonvon/protocol';
-import type {CommunityResponses, CommunityShell, RecipeDetail, RecipeDraft, RecipeSummary} from '@vonvon/protocol';
+import type {CommunityResponses, CommunityShell, RecipeDetail, RecipeSummary} from '@vonvon/protocol';
 import {Button, InlineNotice} from '../reference/components/ui';
 import {useAccount, accountStatusText} from '../account-context';
 import {useDraftGuard} from '../settings/DraftGuard';
@@ -34,7 +34,11 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   const [tab, setTab] = useState<'recipes' | 'rental'>('recipes');
   const [workspaceTab, setWorkspaceTab] = useState<'drafts' | 'published'>('drafts');
   const {query, search, result: catalog} = community.catalog;
-  const setQuery = (query: string) => community.setCatalog(old => ({...old, query}));
+  const catalogHasRecipes = useRef(false);
+  if (catalog?.hero || catalog?.items.length) catalogHasRecipes.current = true;
+  const [composing, setComposing] = useState(false);
+  const searchInput = useRef<HTMLInputElement>(null);
+  const setQuery = (query: string) => {setError(undefined); community.setCatalog(old => ({...old, query}));};
   const setCatalog = (result: CommunityResponses['catalog'] | ((old: CommunityResponses['catalog'] | undefined) => CommunityResponses['catalog'] | undefined)) => community.setCatalog(old => ({...old, result: typeof result === 'function' ? result(old.result) : result}));
   const [library, setLibrary] = useState<CommunityResponses['library']>();
   const [drafts, setDrafts] = useState<CommunityResponses['drafts']['items']>();
@@ -56,6 +60,16 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   const editCode = (versionId: string, input: string) => setInputs(old => ({...old, [versionId]: input}));
   const navigation = useRef({route, isOpen: community.isOpen});
   if (navigation.current.route !== route || navigation.current.isOpen !== community.isOpen) {navigation.current = {route, isOpen: community.isOpen}; ++generation.current;}
+  useEffect(() => {
+    if (route.kind !== 'catalog' || tab !== 'recipes' || composing || query.trim() === search) return;
+    if (Array.from(query).length > 120) {setError('搜索词最多 120 个字符。'); return;}
+    const timer = setTimeout(() => {
+      ++generation.current;
+      setError(undefined);
+      community.setCatalog(old => ({...old, search: query.trim(), result: undefined, scrollTop: 0}));
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [route.kind, tab, query, search, composing]);
   const requestKeys = useRef(new Map<string, string>());
   useEffect(() => {live.current = true; return () => {live.current = false; ++generation.current;};}, []);
   const key = (logical: string) => {if (!requestKeys.current.has(logical)) requestKeys.current.set(logical, crypto.randomUUID()); return requestKeys.current.get(logical)!;};
@@ -69,7 +83,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
         if (catalog) {requestAnimationFrame(() => {const element = document.getElementById('main-content'); if (element) element.scrollTop = community.catalog.scrollTop;}); return;}
         setBusy(true);
         const result = await shell.request({type: 'catalog', ...(accountId ? {accountId} : {}), query: search});
-        if (active) setCatalog(result);
+        if (active && current === generation.current) setCatalog(result);
       } else if (route.kind === 'detail') {
         setBusy(true);
         const result = await shell.request({type: 'detail', ...(accountId ? {accountId} : {}), recipeId: route.recipe.recipeId, versionId: route.recipe.versionId});
@@ -88,7 +102,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
         if (active) {setDrafts(d.items); setPublications(p.items);}
       }
     };
-    void request().catch(e => {if (active) setError(e instanceof Error ? e.message : '读取未完成。');}).finally(() => {if (active && current === generation.current) setBusy(false);});
+    void request().catch(e => {if (active && current === generation.current) setError(e instanceof Error ? e.message : '读取未完成。');}).finally(() => {if (active && current === generation.current) setBusy(false);});
     return () => {active = false;};
   }, [shell, accountId, route, search, refresh]);
   async function run(action: () => Promise<void>) {
@@ -149,7 +163,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
     onBack={() => open({kind: 'workspace'})} onPublished={recipe => {community.setCatalog(old=>({...old,result:undefined}));setNotice(recipe.firstCode ? '本版本已发布。首枚分享码已生成，可在分享码管理中复制。' : '本版本已发布。'); community.open({kind: 'detail', recipe: {recipeId: recipe.recipeId, versionId: recipe.versionId}, privateView: true});}}/>;
   return <div className="community-page">
     {route.kind === 'catalog' && <header className="community-heading community-page-heading"><h1>社区</h1><nav className="community-tabs" aria-label="社区类型"><button type="button" aria-current={tab === 'recipes' ? 'page' : undefined} onClick={() => {setTab('recipes'); if (route.kind !== 'catalog') open({kind: 'catalog'});}}>Bot 配方</button><button type="button" aria-current={tab === 'rental' ? 'page' : undefined} onClick={() => {setTab('rental'); if (route.kind !== 'catalog') open({kind: 'catalog'});}}>Bot 租赁 <span>敬请期待</span></button></nav></header>}
-    {route.kind === 'catalog' && tab === 'recipes' && <div className="community-section-heading"><div><h2>{catalog?.heroKind === 'featured' ? '场景精选' : '最新配方'}</h2>{route.kind === 'catalog' && catalog?.heroKind === 'featured' && <p>Vonvon 编辑推荐</p>}</div><div className="community-actions"><Button variant="ghost" onClick={() => open({kind: 'library'})}><Bookmark size={14}/>已获取<ChevronRight size={12}/></Button><Button variant="ghost" onClick={() => open({kind: 'workspace'})}><NotebookPen size={14}/>创作中心<ChevronRight size={12}/></Button></div></div>}
+    {route.kind === 'catalog' && tab === 'recipes' && <div className="community-section-heading"><div><h2>{search ? '搜索结果' : catalog?.heroKind === 'featured' ? '场景精选' : '最新配方'}</h2>{!search && catalog?.heroKind === 'featured' && <p>Vonvon 编辑推荐</p>}</div><div className="community-actions"><Button variant="ghost" onClick={() => open({kind: 'library'})}><Bookmark size={14}/>已获取<ChevronRight size={12}/></Button><Button variant="ghost" onClick={() => open({kind: 'workspace'})}><NotebookPen size={14}/>创作中心<ChevronRight size={12}/></Button></div></div>}
     {route.kind !== 'catalog' && <BackButton label={route.kind === 'detail' && route.from === 'library' ? '返回已获取' : '返回 Bot 配方'} onClick={() => {setTab('recipes'); open({kind: route.kind === 'detail' ? route.from ?? 'catalog' : 'catalog'});}}/>}
     {error && <InlineNotice title="社区请求未完成" tone="warning" actions={<Button size="sm" onClick={() => {if (route.kind === 'catalog') community.setCatalog(old => ({...old, result: undefined})); setRefresh(old => old + 1);}}>重试读取</Button>}>{error}</InlineNotice>}
     {notice && <InlineNotice title="操作完成">{notice}</InlineNotice>}
@@ -157,9 +171,9 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
       {route.kind === 'catalog' && <>
 
         {tab === 'rental' ? <div className="community-empty"><h2>Bot 租赁</h2><p>让 Bot 为更多群聊提供帮助。</p></div> : <>
-          {(search || catalog?.hero || Boolean(catalog?.items.length)) && <form className="community-search" role="search" onSubmit={event => {event.preventDefault(); if (Array.from(query).length > 120) {setError('搜索词最多 120 个字符。'); return;} community.setCatalog(old => ({...old, search: query.trim(), result: undefined, scrollTop: 0})); setRefresh(old => old + 1);}}><Search size={16} aria-hidden="true"/><input aria-label="搜索配方" placeholder="搜索名称、简介" value={query} onChange={event => setQuery(event.target.value)}/><Button disabled={busy} type="submit">搜索</Button></form>}
+          {(query || search || catalogHasRecipes.current) && <div className="community-search" role="search"><Search size={16} aria-hidden="true"/><input ref={searchInput} type="search" aria-label="搜索配方" placeholder="搜索配方或作者" value={query} onChange={event => setQuery(event.target.value)} onCompositionStart={() => setComposing(true)} onCompositionEnd={event => {setQuery(event.currentTarget.value); setComposing(false);}}/>{query && <Button variant="ghost" aria-label="清除搜索" onClick={() => {++generation.current; setError(undefined); community.setCatalog(old => ({...old, query: '', search: '', result: undefined, scrollTop: 0})); setRefresh(old => old + 1); searchInput.current?.focus();}}>清除</Button>}</div>}
           {catalog?.hero && <RecipeCard recipe={catalog.hero} hero heroKind={catalog.heroKind} onOpen={() => open({kind: 'detail', recipe: {recipeId: catalog.hero!.recipeId, versionId: catalog.hero!.versionId}})}/>}
-          {catalog && Boolean(catalog.items.length) && <section className="community-catalog-list"><h2>{catalog.hero ? '更多配方' : '配方'}</h2><div className="community-grid">{catalog.items.map(recipe => <RecipeCard key={recipe.versionId} recipe={recipe} onOpen={() => open({kind: 'detail', recipe: {recipeId: recipe.recipeId, versionId: recipe.versionId}})}/>)}</div></section>}
+          {catalog && Boolean(catalog.items.length) && <section className="community-catalog-list">{!search && <h2>{catalog.hero ? '更多配方' : '配方'}</h2>}<div className="community-grid">{catalog.items.map(recipe => <RecipeCard key={recipe.versionId} recipe={recipe} onOpen={() => open({kind: 'detail', recipe: {recipeId: recipe.recipeId, versionId: recipe.versionId}})}/>)}</div></section>}
           {catalog && !catalog.hero && !catalog.items.length && <div className="community-empty"><h2>{search ? '没有找到匹配的配方' : '社区正在准备第一份配方'}</h2><p>{search ? '换一个名称或关键词试试。' : '你也可以在创作中心准备自己的作品。'}</p></div>}
           {catalog?.nextCursor && <div><Button disabled={busy} onClick={() => void run(async () => {const current = generation.current; const next = await shell.request({type: 'catalog', ...(accountId ? {accountId} : {}), query: search, cursor: catalog.nextCursor!}); if (live.current && current === generation.current) setCatalog(old => old ? {...old, items: uniqueRecipes(old.items, next.items), nextCursor: next.nextCursor} : next);})}>加载更多</Button></div>}
         </>}
@@ -167,9 +181,9 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
       {route.kind === 'library' && <section className="community-workspace-section"><h2>已获取</h2>{library?.items.length === 0 && <div className="community-empty"><h2>还没有获取配方</h2><p>从社区获取后，任何设备登录这个账号都可以继续使用。</p></div>}<div className="community-grid">{library?.items.map(recipe => <RecipeCard key={recipe.versionId} recipe={recipe} context="library" onOpen={() => open({kind: 'detail', recipe: {recipeId: recipe.recipeId, versionId: recipe.versionId}, from: 'library'})}/>)}</div>
         {library?.nextCursor && <div><Button disabled={busy} onClick={() => void run(async () => {const current = generation.current; const next = await shell.request({type: 'library', accountId: accountId!, cursor: library.nextCursor!}); if (live.current && current === generation.current) setLibrary(old => old ? {...old, items: uniqueRecipes(old.items, next.items), nextCursor: next.nextCursor} : next);})}>加载更多</Button></div>}</section>}
       {route.kind === 'workspace' && <>
-        <div className="community-heading community-studio-heading"><div><h2>创作中心</h2><p>私人草稿只有你能看到，发布后才进入社区。</p></div><div className="community-actions"><GlowButton variant="dark" onClick={() => open({kind: 'authoring'})}>分享群聊配方</GlowButton><Button onClick={() => open({kind: 'draft'})}>手动创作</Button></div></div>
+        <div className="community-heading community-studio-heading"><div><h2>创作中心</h2><p>在飞书和 Bot 整理配方，在这里检查内容并发布到社区。</p></div><div className="community-actions"><GlowButton variant="dark" onClick={() => open({kind: 'authoring'})}>准备配方</GlowButton></div></div>
         <nav className="community-workspace-tabs" aria-label="创作中心内容"><button type="button" aria-current={workspaceTab === 'drafts' ? 'page' : undefined} onClick={() => setWorkspaceTab('drafts')}>草稿箱 <span>{drafts?.length ?? 0}</span></button><button type="button" aria-current={workspaceTab === 'published' ? 'page' : undefined} onClick={() => setWorkspaceTab('published')}>已发布 <span>{publications?.length ?? 0}</span></button></nav>
-        <section hidden={workspaceTab !== 'drafts'} className="community-workspace-section">{drafts?.length === 0 && <p className="community-muted">还没有私人草稿。可以先手动准备角色与使用说明。</p>}{Boolean(drafts?.length) && <div className="community-list">{drafts?.map(draft => <div className="community-list-row community-studio-row" key={draft.draftId}><RecipeMark name={draft.public.name}/><div><strong>{draft.public.name || '未命名草稿'}</strong>{draft.public.summary && <p className="community-row-summary">{draft.public.summary}</p>}<small>{draft.public.version || '未指定版本'} · 私人草稿</small></div><Button onClick={() => open({kind: 'draft', draftId: draft.draftId})}>查看草稿</Button></div>)}</div>}</section>
+        <section hidden={workspaceTab !== 'drafts'} className="community-workspace-section">{drafts?.length === 0 && <p className="community-muted">还没有私人草稿。准备配方后，在这里检查内容并发布。</p>}{Boolean(drafts?.length) && <div className="community-list">{drafts?.map(draft => <div className="community-list-row community-studio-row" key={draft.draftId}><RecipeMark name={draft.public.name}/><div><strong>{draft.public.name || '未命名草稿'}</strong>{draft.public.summary && <p className="community-row-summary">{draft.public.summary}</p>}<small>{draft.public.version || '未指定版本'} · 私人草稿</small></div><Button onClick={() => open({kind: 'draft', draftId: draft.draftId})}>查看草稿</Button></div>)}</div>}</section>
         <section hidden={workspaceTab !== 'published'} className="community-workspace-section">{publications?.length === 0 && <p className="community-muted">发布后，你可以在这里维护版本和分享码。</p>}{Boolean(publications?.length) && <div className="community-list">{publications?.map(recipe => <div className="community-list-row community-studio-row" key={recipe.versionId}><RecipeMark name={recipe.public.name} logo={recipe.logo}/><div><strong>{recipe.public.name}</strong>{recipe.public.summary && <p className="community-row-summary">{recipe.public.summary}</p>}<small>{recipe.public.version} · {recipe.public.access === 'coded' ? '凭分享码获取' : '直接获取'}</small></div><Button onClick={() => open({kind: 'detail', recipe: {recipeId: recipe.recipeId, versionId: recipe.versionId}, privateView: true})}>管理此版本</Button></div>)}</div>}</section>
       </>}
       {route.kind === 'detail' && detail && <>

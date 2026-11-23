@@ -10,6 +10,7 @@ import {A, B, devicesState, fakeShell, newClient} from './devices-fixture';
 
 const accountId = '44444444-4444-4444-8444-444444444444';
 const draftId = '55555555-5555-4555-8555-555555555555';
+const draft = {draftId, recipeId: null, revision: 1, public: {name: '已有私人草稿', summary: '', overview: '', version: '1', access: 'direct' as const}, config: {role: '已有角色'}};
 function snapshot(name: string, revision = 1): DesktopSnapshot {
   const suffix = name.endsWith('B') ? 'b' : 'a'; const botId = 'cli_fixture_' + suffix; const groupId = 'oc_fixture_' + suffix;
   const membership = membershipSchema.parse({id: JSON.stringify([botId, groupId]), agentId: botId, groupId, name: name + '群', directory: '/tmp/synthetic-' + name, backend: 'codex-appserver', conversation: 'threads', response: 'mention', permission: {administrator: 'full', member: 'full', network: false}, stale: false, enabled: true});
@@ -66,7 +67,9 @@ beforeEach(() => {
   shell = {...fakeShell(), account, community: {request: async (request: CommunityRequest) => {
     requests.push(request);
     if (request.type === 'catalog') return {hero: null, items: [], nextCursor: null};
-    if (request.type === 'drafts' || request.type === 'publications') return {items: []};
+    if (request.type === 'drafts') return {items: [draft]};
+    if (request.type === 'draft') return draft;
+    if (request.type === 'publications') return {items: []};
     if (request.type === 'saveDraft') {if (++saveAttempts === 1) throw new Error('Synthetic response loss'); return {draftId, recipeId: null, revision: 1, public: request.public, config: request.config};}
     throw new Error('Unexpected cloud request');
   }}} as typeof shell;
@@ -100,7 +103,7 @@ it('moves production App subscriptions, search and actions to the selected devic
   expect(first.client.run.mock.calls.filter(([command]) => command.type === 'registerAgent')).toHaveLength(0);
 });
 it('keeps the production account editor and pending save through A to B to A while returning to a fresh A page', async () => {
-  await draw(A); await click('社区'); await click('创作中心'); await click('手动创作');
+  await draw(A); await click('社区'); await click('创作中心'); await click('查看草稿'); await click('编辑草稿');
   const input = await fill('配方名称', '不会因切设备丢失'); await click('保存私人草稿'); input.focus(); input.setSelectionRange(2, 4);
   for (const [id, phase] of [[B, 'connecting'], [B, 'ready'], [B, 'failed'], [A, 'ready']] as const) {
     await draw(id, phase);
@@ -167,7 +170,7 @@ it('keeps dirty production group settings behind the original guard before unmou
   expect(settings.mock.calls.every(([request]) => request.type === 'read')).toBe(true);
 });
 it('keeps the account editor behind its own guard before opening account management and logout', async () => {
-  await draw(A); await click('社区'); await click('创作中心'); await click('手动创作');
+  await draw(A); await click('社区'); await click('创作中心'); await click('查看草稿'); await click('编辑草稿');
   const editor = await fill('配方名称', '退出前保留输入');
   const menu = document.querySelector<HTMLButtonElement>('[aria-label^="当前设备："]')!;
   await act(async () => menu.click());
@@ -199,7 +202,7 @@ it('does not reuse the first A search generation when B never returned a snapsho
 
 it('switches the community target through the actual menu without discarding its dirty editor', async () => {
   shell.devices.switchTo.mockImplementation(async (id: string) => {root.render(<DesktopRootView state={devicesState({id})} fallback={first.client} shell={shell} renderApp={() => <App/>}/>);});
-  await draw(A); await click('社区'); await click('创作中心'); await click('手动创作');
+  await draw(A); await click('社区'); await click('创作中心'); await click('查看草稿'); await click('编辑草稿');
   const editor = await fill('配方名称', '切目标不会放弃草稿'); await click('保存私人草稿'); editor.focus(); editor.setSelectionRange(2, 4);
   await act(async () => document.querySelector<HTMLButtonElement>('[aria-label^="当前设备："]')!.click());
   const target = [...document.querySelectorAll<HTMLButtonElement>('.device-switcher__device')].find(button => button.querySelector('[title="家里"]'))!;

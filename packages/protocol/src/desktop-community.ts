@@ -3,14 +3,15 @@ import {recipeRichContentSchema} from './recipe-rich.js';
 
 const id = z.string().uuid();
 export const acquisitionKeySchema = z.string().regex(/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|a2\.[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i);
-export function newAcquisitionKey(now = Date.now()): string {
+export function newRichMetadataRequestId(now = Date.now()): string {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   let time = now;
   for (let n = 5; n >= 0; n--) {bytes[n] = time % 256; time = Math.floor(time / 256);}
   bytes[6] = 0x70 | (bytes[6]! & 15); bytes[8] = 0x80 | (bytes[8]! & 63);
   const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
-  return `a2.${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
 }
+export function newAcquisitionKey(now = Date.now()): string {return 'a2.' + newRichMetadataRequestId(now);}
 const revision = z.number().int().positive().max(2147483647);
 const wellFormed = (value: string) => !value.includes('\0') && !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(value);
 const text = (max: number) => z.string().max(max * 2).refine(value => wellFormed(value) && Array.from(value).length <= max);
@@ -45,8 +46,20 @@ const request = {requestId: id};
 const privateRequest = {accountId: id};
 const page={cursor:id.optional()};
 const catalogPage={cursor:z.string().min(1).max(1600).optional()};
+const manifestSha = z.string().regex(/^[a-f0-9]{64}$/);
+const metadataRequestId = z.string().regex(/^[a-f0-9]{8}-[a-f0-9]{4}-7[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
+export const richMetadataRequestSchema = z.object({
+  type:z.literal('saveRichDraftMetadata'), ...privateRequest, requestId:metadataRequestId, draftId:id, revision,
+  baseManifestSha256:manifestSha, public:recipePublicSchema, logo:z.discriminatedUnion('kind',[
+    z.object({kind:z.literal('keep')}).strict(), z.object({kind:z.literal('remove')}).strict(),
+    z.object({kind:z.literal('replace'),base64:z.string().min(4).max(2796204).regex(/^[A-Za-z0-9+/]+={0,2}$/)}).strict(),
+  ]),
+}).strict();
+export type RichMetadataRequest = z.infer<typeof richMetadataRequestSchema>;
+export const richMetadataReceiptSchema = z.object({requestId:metadataRequestId,draftId:id,revision,manifestSha256:manifestSha}).strict();
 const changes = {public: recipePublicSchema, config: recipeConfigSchema};
 export const communityRequestSchema = z.discriminatedUnion('type', [
+  richMetadataRequestSchema,
   z.object({type: z.literal('shareLink'), ...version}).strict(),
   z.object({type: z.literal('catalog'), accountId: id.optional(), query: text(120).optional(), ...catalogPage}).strict(),
   z.object({type: z.literal('detail'), accountId: id.optional(), ...version}).strict(),
@@ -72,6 +85,11 @@ const catalogNextCursor=z.string().min(1).max(1600).nullable();
 const codeState = z.enum(['available', 'redeemed', 'disabled']);
 const fullCode = z.object({codeId: id, status: z.literal('available'), code: z.string().regex(/^[A-F0-9-]{32,40}$/i)}).strict();
 export const communityResponseSchemas = {
+  saveRichDraftMetadata:z.discriminatedUnion('status',[
+    z.object({status:z.literal('committed'),receipt:richMetadataReceiptSchema,draft:recipeRichDraftSchema.optional()}).strict(),
+    z.object({status:z.literal('rejected'),code:z.enum(['conflict','operation_expired','operation_clock_skew','session_changed','auth_required','account_disabled','forbidden','quota_exceeded','credential_detected','invalid_input','not_found','rate_limited','source_unavailable','object_capacity','invalid_logo'])}).strict(),
+    z.object({status:z.literal('uncertain')}).strict(),
+  ]),
   shareLink: z.object({url: z.string().url().max(2048)}).strict(),
   catalog: z.object({heroKind:z.enum(['featured','latest']).nullable().optional(),hero: summary.nullable(), items: z.array(summary).max(8), nextCursor:catalogNextCursor}).strict(),
   detail: recipeDetailSchema,
@@ -103,6 +121,7 @@ export interface CommunityShell {
 }
 
 export const communityFailureMessages = {
+  invalid_logo: '图片未通过校验，请选择其他图片。', source_unavailable: '这项内容的来源已不可用。', object_capacity: '临时上传空间已满，请稍后重试。',
   conflict: '内容已在其他地方变更。请重新读取后再确认，你的输入仍保留。',
   operation_expired: '本次领取操作已过期。请先确认获取结果，再重新提交。',
   operation_clock_skew: '设备时间与服务端不一致，请校准设备时间后重试。',
