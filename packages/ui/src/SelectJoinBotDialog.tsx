@@ -9,7 +9,7 @@ import './select-join-bot.css';
 export function SelectJoinBotDialog({snapshot, onSelect, onClose}: {snapshot: DesktopSnapshot; onSelect: (id: AgentId) => void; onClose: () => void}) {
   const [selectedId, setSelectedId] = useState<AgentId>();
   const selected = snapshot.agents.find(agent => agent.id === selectedId && agent.enabled && !agent.readError);
-  return <Dialog open title="选择入群的 Bot" description="选择后，继续连接已有飞书群。" size="sm" onClose={onClose}
+  return <Dialog open title="选择入群的 Bot" description="选择后，继续创建或连接群聊。" size="sm" onClose={onClose}
     footer={<><Button onClick={onClose}>取消</Button><Button variant="primary" disabled={!selected} onClick={() => {if (selected) onSelect(selected.id);}}>下一步</Button></>}>
     <fieldset className="join-bot-picker"><legend className="ui-dialog__visually-hidden">选择 Bot</legend>
       {snapshot.agents.map(agent => {

@@ -3,7 +3,7 @@ import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ScheduleRequest } from '@vonvon/protocol';
 import type { AppConfig } from '../src/config/schema';
-import { saveConfig } from '../src/config/store';
+import { loadConfig, saveConfig } from '../src/config/store';
 import type { AgentEvent, AgentInput, StartThreadOptions } from '../src/agent/types';
 import { createAgentEntries, type AgentEntries } from '../src/agent/entry/registry';
 import type { ScheduleActor } from '../src/admin/schedule-commands';
@@ -78,7 +78,7 @@ const channel = { send, rawClient: { im: { v1: {
 } } } };
 let cfg: AppConfig;
 let opened: ReturnType<typeof createOrchestrator>[] = [];
-async function app() {
+async function app(adminRemoved?: (openId: string) => Promise<void>) {
   await saveConfig(cfg);
   const run = thread();
   fake.backend = { id: BE, displayName: 'Codex (app-server)', capabilities: { steer: true }, listModels: async () => [],
@@ -86,7 +86,8 @@ async function app() {
     listThreads: vi.fn(async () => []), readHistory: vi.fn(async () => ({ name: 'historic', preview: '', turns: [], totalTurns: 0 })) };
   const entries: AgentEntries = createAgentEntries({ appId: APP, isAdmin: id => (cfg.preferences?.access?.admins ?? []).includes(id), tools: [] });
   const issue = vi.spyOn(entries, 'issue'), turn = vi.spyOn(entries, 'openTurn');
-  const o = createOrchestrator(channel as never, cfg, paths.appDir, undefined, { entries, bot, droppedFile: join(paths.appDir, 'dropped.json') });
+  const o = createOrchestrator(channel as never, cfg, paths.appDir, undefined, { entries, bot, droppedFile: join(paths.appDir, 'dropped.json'),
+    ...(adminRemoved ? { authoring: { adminRemoved, onAction: async () => {}, onMessage: async () => false } } : {}) });
   opened.push(o); await o.initialize?.();
   const [dmDir, groupDir] = [join(paths.appDir, 'projects', 'dm'), join(paths.appDir, 'projects', 'group')];
   for (const dir of [dmDir, groupDir]) await mkdir(dir, { recursive: true });
@@ -230,6 +231,24 @@ describe('an administrator taken off the list', () => {
     expect(stored(someoneElse.id)).toMatchObject({ state: 'active' });
     expect(stored(group.id)).toMatchObject({ state: 'active' });
     expect(stored(manual.id)).toMatchObject({ state: 'paused', pausedReason: 'manual' });
+  });
+
+  it('interrupts and revokes a running private turn and pauses its task even if the draft journal fails', async () => {
+    const adminRemoved = vi.fn(async () => { throw new Error('journal unavailable'); });
+    const { o, run, entries, issue, as } = await app(adminRemoved);
+    const task = await made(as(dm(ADMIN, B), create(B)));
+    const result = fake.deps!.run(job(task));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const { sessionId } = issue.mock.results[0]!.value as { sessionId: string };
+    await expect(entries.authorizeSessionCall(sessionId, { kind: 'settingsWrite' })).resolves.toMatchObject({ ok: true });
+
+    await expect(remove(o, ADMIN)).resolves.toMatchObject({ kind: 'saved' });
+    expect((await loadConfig()).preferences?.access?.admins).toEqual([OWNER]);
+    expect(adminRemoved).toHaveBeenCalledExactlyOnceWith(ADMIN);
+    await until(() => expect(stored(task.id)).toMatchObject({ state: 'paused', pausedReason: 'admin-removed' }));
+    expect(run.t.abort).toHaveBeenCalledWith('turn-1');
+    await expect(entries.authorizeSessionCall(sessionId, { kind: 'settingsWrite' })).resolves.toMatchObject({ ok: false, reason: 'turn-ended' });
+    await expect(result).resolves.toMatchObject({ status: 'interrupted' });
   });
 
   it('stays paused when put back on the list, until a person resumes it', async () => {

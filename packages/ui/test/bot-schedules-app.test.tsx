@@ -20,8 +20,10 @@ vi.mock('../src/client-context', async original => {
   const actual = await original<typeof import('../src/client-context')>();
   return {...actual, useClient: () => h.client, useShellCapabilities: () => undefined, useActiveDevice: () => actual.LOCAL_ACTIVE_DEVICE, useDevicesState: () => undefined};
 });
+vi.mock('../src/community/community-context', () => ({useCommunity: () => undefined}));
 vi.mock('../src/settings/DraftGuard', () => ({DraftGuardProvider: () => null, useDraftGuard: () => ({navigate: (action: () => void) => action()})}));
 vi.mock('../src/desktop-update', () => ({DesktopUpdateProvider: () => null, useDesktopUpdate: () => [undefined]}));
+vi.mock('../src/accounts/account-page', () => ({useAccountPage: () => undefined}));
 vi.mock('../src/new-counts', async original => ({...await original<typeof import('../src/new-counts')>(), useNewCounts: () => ({projects: {}, bots: {}, dm: {}})}));
 vi.mock('../src/pending-groups', () => ({usePendingGroups: () => []}));
 

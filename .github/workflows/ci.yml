@@ -73,6 +73,13 @@ jobs:
         env:
           SOURCE_SHA: ${{ needs.scope.outputs.source_sha }}
         run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache-dependency-path: packages/daemon/native/recipe-files/go.sum
+      - name: Verify native recipe file transactions
+        working-directory: packages/daemon/native/recipe-files
+        run: go test ./...
       - run: npm ci
       # The install smoke builds a server package with the Node pinned in scripts/server-node.json; build-server.mjs
       # checks a cached download against that pin before every use.
@@ -87,6 +94,15 @@ jobs:
           CI_PACKAGES: ${{ needs.scope.outputs.packages }}
           VONVON_SMOKE_NODE_CACHE: ${{ runner.temp }}/vonvon-server-node
         run: node .github/scripts/ci-run.mjs
+
+      - name: Verify recipe services against a disposable database
+        if: needs.scope.outputs.scope == 'full'
+        run: |
+          npm ci --prefix services/recipe-api
+          npm ci --prefix services/recipe-web
+          npm test --prefix services/recipe-api
+          npm test --prefix services/recipe-web
+          node scripts/recipes/check.mjs
 
   macos:
     name: macOS checks
@@ -121,6 +137,13 @@ jobs:
         env:
           SOURCE_SHA: ${{ needs.scope.outputs.source_sha }}
         run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache-dependency-path: packages/daemon/native/recipe-files/go.sum
+      - name: Verify native recipe file transactions
+        working-directory: packages/daemon/native/recipe-files
+        run: go test ./...
       - run: npm ci
       - name: Run scoped macOS checks
         env:
@@ -150,6 +173,13 @@ jobs:
         env:
           SOURCE_SHA: ${{ needs.scope.outputs.source_sha }}
         run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache-dependency-path: packages/daemon/native/recipe-files/go.sum
+      - name: Verify native recipe file transactions
+        working-directory: packages/daemon/native/recipe-files
+        run: go test ./...
       - run: npm ci
       - name: Run scoped Windows checks
         env:

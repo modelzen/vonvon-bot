@@ -1,0 +1,46 @@
+[
+  {
+    "binding": {
+      "operationId": "019a81cb-2a00-7000-8000-000000000001",
+      "accountId": "11111111-2222-4333-8444-555555555555",
+      "versionId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "purpose": "installRichRecipe",
+      "manifestSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "targetPublicKey": "hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo",
+      "nonceCommitment": "Yw3NKWbEM2aRElRIu7JbT_QSpJxzLbLIq8G4WBvXEN0",
+      "serverPublicKey": "3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08",
+      "generation": 2,
+      "deadline": 1763111100000,
+      "format": "rich-v2"
+    },
+    "transcriptHex": "766f6e766f6e2e7265636970652e696e7374616c6c526963685265636970652e763200019a81cb2a007000800000000000000111111111222243338444555555555555aaaaaaaabbbb4ccc8dddeeeeeeeeeeee0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710ddde9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f000000020000019a819c5e60",
+    "proofs": {
+      "redeem": "df505638459c849f8744e807a03dd108f4287081cfc423d17144ca2010541551",
+      "applied": "27ddcebd097e449a53a51c07823dc57fed766f4c292c990f38c545daf3f8eede",
+      "rejected": "e44fa1c57ceace572ab7683ab475c0b7a2ccdac2ff70a5145f6a8957c2709d26"
+    }
+  },
+  {
+    "binding": {
+      "operationId": "019a81cb-2a00-7000-8000-000000000001",
+      "accountId": "11111111-2222-4333-8444-555555555555",
+      "versionId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "purpose": "updateDirectRichRecipe",
+      "manifestSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "targetPublicKey": "hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo",
+      "nonceCommitment": "Yw3NKWbEM2aRElRIu7JbT_QSpJxzLbLIq8G4WBvXEN0",
+      "serverPublicKey": "3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08",
+      "generation": 2,
+      "deadline": 1763111100000,
+      "format": "rich-v2",
+      "fromVersionId": "bbbbbbbb-1111-4111-8111-222222222222",
+      "localPlanSha256": "3434343434343434343434343434343434343434343434343434343434343434"
+    },
+    "transcriptHex": "766f6e766f6e2e7265636970652e757064617465446972656374526963685265636970652e763200019a81cb2a007000800000000000000111111111222243338444555555555555aaaaaaaabbbb4ccc8dddeeeeeeeeeeee0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710ddde9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f000000020000019a819c5e60bbbbbbbb1111411181112222222222223434343434343434343434343434343434343434343434343434343434343434",
+    "proofs": {
+      "redeem": "5c143cf54a5ff8fcc41a6d4779ed8987a6f21e7678035042480f06586c0c56cb",
+      "applied": "edf08cbfdf7ec7d644077158820f3ba403c0bde3d2a6f6c7357a5bca0ae95da8",
+      "rejected": "978767fbd5f2e2cc109bc9308d4d0ebb71e5189769b1d1a1936f5146156efa3e"
+    }
+  }
+]
