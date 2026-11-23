@@ -1,5 +1,5 @@
 import {
-  adminReplySchema, collaborationReplySchema, commandResultSchema,
+  NATIVE_RECIPE_PREVIEW_CAPABILITY, adminReplySchema, collaborationReplySchema, commandResultSchema,
   desktopSnapshotSchema, directoryReplySchema, environmentReplySchema, memoryReplySchema, contextPreviewReplySchema,
   errorEnvelopeSchema, eventSchema, machineReplySchema, requestSchema,
   libraryReplySchema, scheduleReplySchema, settingsReplySchema, deviceReplySchema, recipeInstallReplySchema,
@@ -214,7 +214,13 @@ export function createClient(socket: ClientConnection, capabilities: readonly st
     contextPreview: request => send("contextPreview", request),
     schedule: (botId, request) => send("schedule", { botId, request }),
     device: request => send("device", request),
-    recipeAuthoring: request => send('recipeAuthoring', request),
+    recipeAuthoring: request => {
+      if (request.type === 'creatorOpen' && !capabilities.includes(NATIVE_RECIPE_PREVIEW_CAPABILITY)) {
+        const {nativePreview: _nativePreview, ...legacy} = request;
+        return send('recipeAuthoring', legacy);
+      }
+      return send('recipeAuthoring', request);
+    },
     recipeInstall: request => send('recipeInstall', request),
     onLog(listener) { logs.add(listener); return () => { logs.delete(listener); }; },
     onBackendInstall(listener) { installs.add(listener); return () => { installs.delete(listener); }; },

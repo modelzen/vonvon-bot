@@ -107,7 +107,7 @@ const bot = {botId:agentIdSchema};
 const session = {...bot,session:uuid};
 export const creatorRequests = [
   z.object({type:z.literal('creatorDiscover'),...bot,accountId:uuid}).strict(),
-  z.object({type:z.literal('creatorOpen'),...bot,accountId:uuid,binding:uuid,scope:digest,wakeId:uuid.nullable()}).strict(),
+  z.object({type:z.literal('creatorOpen'),...bot,accountId:uuid,binding:uuid,scope:digest,wakeId:uuid.nullable(),nativePreview:z.literal(true).optional()}).strict(),
   z.object({type:z.literal('creatorContinue'),...session,selection}).strict(),
   z.object({type:z.literal('creatorPoll'),...session}).strict(),
   z.object({type:z.literal('creatorCheck'),...session,id:uuid}).strict(),

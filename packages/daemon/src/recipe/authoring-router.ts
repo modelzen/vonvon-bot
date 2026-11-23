@@ -37,7 +37,7 @@ export class AuthoringRouter {
       if(pending){await pending;return this.request(peer,input);}
       const existing=[...this.sessions].find(s=>s.presence?.peer.id===peer.id && s.presence.peer.device===peer.device &&
         (req.type==='open'||s.presence.account===req.accountId&&s.presence.binding===req.binding) && this.owners.get(s)?.creator===(req.type==='creatorOpen'));
-      if(existing&&req.type==='creatorOpen'&&existing.presence!.until>this.now()&&this.now()-existing.presence!.activeAt<30*60_000){
+      if(existing&&req.type==='creatorOpen'&&existing.presence!.nativePreview===req.nativePreview&&existing.presence!.until>this.now()&&this.now()-existing.presence!.activeAt<30*60_000){
         const p=existing.presence!;
         if(p.scope!==req.scope)throw new Error('来源身份已改变。');
         await existing.creator.open(p,req.binding,req.wakeId);
@@ -171,10 +171,19 @@ export class AuthoringRouter {
     const bindings=await this.journal.run(db=>Object.entries(db.links).filter(([,l])=>l.bot===this.botKey&&sameRecipient(l.recipient,recipient)).map(([key,l])=>({key,binding:l.binding})));
     const sessions=[...this.sessions].filter(s=>{const p=s.presence;return p&&bindings.some(l=>l.key===linkKey(p.scope,p.account)&&(!p.binding||p.binding===l.binding));});
     if(click?.verb==='creator'){
-      const epoch=await this.journal.run(db=>bindings.map(l=>db.links[l.key]?.creator?.cards[click.ref]).find(c=>c?.messageId===evt.messageId)?.session);
-      const s=sessions.find(s=>s.creator.enabled&&s.presence?.session===epoch);
-      if(s)await s.onAction(evt);
-      else await this.idle.creator.offlinePreview(evt);
+      const route=await this.journal.run(db=>bindings.flatMap(l=>{
+        const card=db.links[l.key]?.creator?.cards[click.ref],choice=card?.options[click.index]?.choice;
+        return card?.messageId===evt.messageId?[{...l,session:card.session,preview:choice?.kind==='read'&&choice.read.kind==='openPreview'}]:[];
+      })[0]);
+      const live=sessions.filter(s=>s.creator.enabled&&s.presence&&s.presence.until>this.now()&&this.now()-s.presence.activeAt<30*60_000);
+      if(!route)return;
+      const original=live.find(s=>s.presence?.session===route.session);
+      if(original&&(!route.preview||original.presence?.nativePreview)){await original.onAction(evt);return;}
+      if(!route.preview)return;
+      const linked=live.filter(s=>{const p=s.presence!;return p.binding===route.binding&&linkKey(p.scope,p.account)===route.key;});
+      const restored=linked.filter(s=>s.presence?.nativePreview);
+      if(restored.length===1)await restored[0]!.onAction(evt,route.session);
+      else await this.idle.creator.offlinePreview(evt,linked.length>0);
       return;
     }
     if(sessions.length>1){
