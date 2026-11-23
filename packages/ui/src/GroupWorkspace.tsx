@@ -23,13 +23,15 @@ import {groupUrl, openExternalUrl} from './url-actions';
 import {ProjectMemoryMap} from './ProjectPage';
 import {DmMemory} from './DmMemory';
 import {ScheduleTab} from './ScheduleTab';
+import {GroupRecipeShare} from './community/authoring/GroupRecipeShare';
 import {deviceTitle} from './setup/service-toggle';
 import './group-workspace.css';
 
-export type GroupDesignTab = GroupSettingsTab | 'memory' | 'schedule';
-export const groupDesignTabs: readonly [GroupDesignTab, string][] = [['model','模型与权限'],['capabilities','能力'],['response','沟通方式'],['memory','记忆'],['schedule','任务']];
+export type GroupDesignTab = GroupSettingsTab | 'memory' | 'schedule' | 'share';
+export const groupDesignTabs: readonly [GroupDesignTab, string][] = [['model','模型与权限'],['capabilities','能力'],['response','沟通方式'],['memory','记忆'],['schedule','任务'],['share','分享']];
 export function groupTabForSection(section?: string): GroupDesignTab {
   switch (section) {
+    case '分享': return 'share';
     case '记忆':
     case '项目记忆': return 'memory';
     case '任务':
@@ -41,7 +43,8 @@ export function groupTabForSection(section?: string): GroupDesignTab {
     case '执行权限':
     case '群设置':
     case '模型与权限':
-    case '可用模型': return 'model';
+    case '可用模型':
+    case '模型设置': return 'model';
     case '权限':
     case '工作目录权限':
     case '能挡到什么':
@@ -140,7 +143,7 @@ export function GroupWorkspace({member, agent, group, snapshot, dmMode, initialT
     finally {saving.current = false; setBusy(false); setPendingEnabled(null); setPendingConversation(null);}
   }
   const available = agent.running && !!project && !member.stale;
-  const tabs = groupDesignTabs;
+  const tabs = dmMode ? groupDesignTabs.filter(([value]) => value !== 'share') : groupDesignTabs;
   const groupBots = snapshot.memberships.filter(item => item.groupId === group.id).flatMap(item => {
     const bot = snapshot.agents.find(candidate => candidate.id === item.agentId);
     return bot ? [{item, bot}] : [];
@@ -185,7 +188,7 @@ export function GroupWorkspace({member, agent, group, snapshot, dmMode, initialT
     </header>
     {error && <InlineNotice title="操作未完成" tone="warning">{error}</InlineNotice>}
     {notice && notice !== '已保存。' && <p role="status" className="group-control-note">{notice}</p>}
-    {tab === 'memory' ? <section id={settingAnchor('记忆')} aria-label="记忆">
+    {tab === 'share' ? dmMode ? null : <GroupRecipeShare botId={agent.id} groupId={group.id}/> : tab === 'memory' ? <section id={settingAnchor('记忆')} aria-label="记忆">
       {dmMode ? <DmMemory key={member.id} agent={agent} revision={snapshot.revision} onBotProfile={() => guard.navigate(onBotProfile)}/> : memberProject ? <ProjectMemoryMap key={memberProject.id} focusNew={focusNew} groupsInitiallyOpen={false} initialRoleMembershipId={initialTab === 'role' ? member.id : undefined} selectedAgentId={member.agentId} selectedGroupId={member.groupId} onBotProfile={() => guard.navigate(onBotProfile)} project={memberProject} snapshot={snapshot} onMembership={id => {const target = snapshot.memberships.find(item => item.id === id); if (target) guard.navigate(() => onBot(target));}}/> : <p className="group-control-note">这个群的项目记忆暂不可用。</p>}
     </section> : tab === 'schedule' ? <ScheduleTab key={member.id} botId={member.agentId} {...dmMode ? {dm: true} : {chatId: member.groupId}} deviceTitle={deviceTitle(snapshot.application.platform)}/>
     : <GroupDesignSettings key={member.id} refreshVersion={version} dm={dmMode} scope={{kind:'project',botId:member.agentId,projectName:dmMode ? member.groupId : member.name}} tab={tab} tools={snapshot.tools} agent={agent} botName={agent.name} groupName={group.name} onOpenTools={onOpenTools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets} responseHeader={dmMode ? undefined : conversationControl}/>}

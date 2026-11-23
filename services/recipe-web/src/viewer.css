@@ -1,0 +1,8 @@
+.web-recipe-view {
+  --color-text: var(--ink); --color-text-secondary: var(--muted); --color-text-tertiary: var(--muted);
+  --color-border: var(--stroke); --color-surface: var(--paper); --color-surface-muted: var(--soft);
+  --color-surface-hover: var(--soft); --color-accent: #2878dd;
+  --radius-md: 8px; --font-weight-semibold: 600;
+}
+.web-recipe-view .today-back button { display:inline-flex; align-items:center; gap:6px; min-height:28px; padding:3px 7px; margin-left:-7px; border:0; border-radius:6px; color:var(--color-text-secondary); background:none; font-size:12px; }
+.web-recipe-view .community-metadata { flex-wrap:wrap; }

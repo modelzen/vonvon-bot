@@ -32,3 +32,8 @@
 }
 @media (prefers-reduced-motion:reduce) { .glow-button__idle,.glow-button__sweep,.glow-button .glow-button__button { transition:none; } }
 @media (pointer:coarse) { .glow-button .glow-button__button { min-height:44px; } }
+
+.glow-button[data-variant=dark] { --glow-button-surface:var(--color-text); --glow-button-label:var(--color-surface); --glow-button-border:var(--color-text); background:var(--glow-button-surface); }
+.glow-button[data-variant=dark] .glow-button__button { background:var(--glow-button-surface); color:var(--glow-button-label); border-color:var(--glow-button-border); }
+.glow-button[data-variant=dark] .glow-button__control { background:transparent; }
+@media (hover:hover) { .glow-button[data-variant=dark]:has(button:hover:not(:disabled)) { --glow-button-surface:color-mix(in srgb,var(--color-text) 85%,var(--color-surface)); } }

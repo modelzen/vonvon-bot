@@ -90,6 +90,21 @@ it('opens the intended Bot private chat without prefilled messages or other dest
   expect(allowedExternalUrl(botChatUrl('oc_group','feishu'),'bot-chat')).toBeNull();
 });
 
+it('accepts HTTP(S) recipe documents only through the explicit document purpose', async () => {
+  const openExternal=vi.fn(async()=>{});
+  for(const url of ['https://my.feishu.cn/share/base/ExampleReference6','https://vonvon.cc/docs/troubleshooting/','http://example.com/guide']) {
+    expect(allowedExternalUrl(url,'recipe-document')).toBe(url);
+    await openExternalUrl(url,'recipe-document',{openExternal});
+    expect(openExternal).toHaveBeenLastCalledWith(url,'recipe-document');
+  }
+  for(const url of ['javascript:alert(1)','data:text/html,test','file:///tmp/private','//example.com','https://user:pass@example.com','https://user@example.com','https://','not a URL','https://example.com\\@other.com']) {
+    expect(allowedExternalUrl(url,'recipe-document')).toBeNull();
+    await expect(openExternalUrl(url,'recipe-document',{openExternal})).rejects.toThrow();
+  }
+  expect(openExternal).toHaveBeenCalledTimes(3);
+  expect(allowedExternalUrl('http://auth.openai.com/authorize','authorization')).toBeNull();
+});
+
 it('opens a Lark bot on its own domain', () => {
   const url=botChatUrl('cli_example','lark');
   expect(url).toBe('https://applink.larksuite.com/client/bot/open?appId=cli_example');

@@ -1990,6 +1990,30 @@ describe('attention (s25g)', () => {
     const { req } = await judged(msgs[9]!); expect(req.context.filter(l => l.fresh)).toHaveLength(9);
     expect(req.message.fresh).toBe(true); expect(logged('attention')).toContainEqual(expect.objectContaining({ n: 10 }));
   });
+  it.each(['direct', 'anchored', 'batch'] as const)('only binds the direct explicit feedback source during smart intake (%s)', async mode => {
+    await orchestrator.shutdown();
+    const entries = createAgentEntries({appId: APP, isAdmin: () => false});
+    const open = vi.spyOn(entries, 'openTurn');
+    orchestrator = createOrchestrator(channel as never, cfg, workspace, undefined, {time, entries, feedback: {
+      enabled: () => true, close: async () => {}, onMessage: async () => false, onAction: async () => {},
+      bind: msg => ({messageId: msg.messageId, chatId: msg.chatId, openId: msg.senderId, attachments: [],
+        prepare: async () => {throw new Error('unused');}}),
+    }});
+    const first = says('整理反馈', {at: mode !== 'batch'});
+    await send(first, {openId: 'ou_first'});
+    if (mode === 'batch') {
+      const last = says('另一个人的内容');
+      await send(last, {openId: 'ou_second'});
+      await advance(s(20));
+      await decide(last, result('main', {anchor: idOf(first)}));
+    } else {
+      await decide(first, result('main', mode === 'anchored' ? {anchor: 'om_untrusted'} : {}));
+    }
+    await vi.waitFor(() => expect(open).toHaveBeenCalledOnce());
+    const facts = open.mock.calls[0]![1];
+    if (mode === 'direct') expect(facts.feedback).toMatchObject({messageId: idOf(first), openId: 'ou_first'});
+    else expect(facts.feedback).toBeUndefined();
+  });
   it('46, 62. replies to the batch anchor and then judges focused messages immediately, with private logs', async () => {
     const a = says('导出接口 500 有人看吗'), b = says('顺便'), c = says('是生产环境');
     for (const msg of [a, b, c]) await send(msg); await advance(s(20));

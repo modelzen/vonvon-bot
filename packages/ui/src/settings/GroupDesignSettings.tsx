@@ -25,6 +25,7 @@ import {useDecisionCatalogs} from './useDecisionCatalogs';
 import './group-design-settings.css';
 import {BotAdministrators} from '../management/AdministratorsPanel';
 import {CardDisplayEntry} from './card-display/CardDisplayStudio';
+import {RecipeSourcePanel} from '../recipes/RecipeSourcePanel';
 
 /** 模型与权限 shares one settings view; permission remains a compatible internal section key. */
 export type GroupSettingsTab = 'capabilities' | 'role' | 'model' | 'response' | 'permission';
@@ -172,6 +173,7 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
           render={(draft, _set, disabled, commit) => <SettingsRow title="语音转文字" trailing={<Toggle className="settings-row-switch" label="语音转文字" aria-label="语音转文字" checked={draft.voiceEnabled} disabled={disabled} onChange={event => void commit({voiceEnabled: event.target.checked})}/>}/>}/>}
         {onOpenTools && <SettingsGroup><SettingsRow title="工具" description="安装与授权" trailing={<Button size="sm" onClick={onOpenTools}>管理<ChevronRight size={13}/></Button>}/></SettingsGroup>}
       </>}
+      {tab === 'role' && !dm && <RecipeSourcePanel view={view}/>}
       {tab === 'role' && (sections.role ? <Editor title="本群角色" section={sections.role} save={(patch, revision) => save('role', patch, revision)}
         validate={value => [...value.supplement].length > SUPPLEMENT_MAX ? `本群角色最多 ${SUPPLEMENT_MAX} 字。` : undefined}
         render={(draft, set, disabled) => <>
