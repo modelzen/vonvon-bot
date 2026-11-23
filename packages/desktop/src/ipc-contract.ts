@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { ServerInfo, VonvonClient } from '@vonvon/client/browser';
 import {
-  agentIdSchema, viewIdSchema, type BackendInstallEventPayload, type CommandResult, type DesktopSnapshot, type DesktopUpdate, type DeviceEventPayload,
+  agentIdSchema, viewIdSchema, type AuthoringSaved, type AuthoringPublished, type AccountShell, type CommunityShell, type RecipeUseShell, type RecipeAuthoringShell, type RecipeSourceShell, type AccountStatus, type BackendInstallEventPayload, type CommandResult, type DesktopSnapshot, type DesktopUpdate, type DeviceEventPayload,
   type DevicesState, type LogEventPayload, type MachineReply, type ViewId,
 } from '@vonvon/protocol';
 import type { ShellCapabilities } from '../../ui/src/client-context.js';
@@ -26,6 +26,14 @@ export const desktopChannels = {
   close: 'desktop:client:close',
   subscribe: 'desktop:subscribe',
   external: 'desktop:shell:external',
+  community: 'desktop:community:request',
+  recipeSource: 'desktop:recipe-source:request',
+  recipeAuthoring: 'desktop:recipe-authoring:request',
+  recipeUse: 'desktop:recipe-use:request',
+  accountStatus: 'desktop:account:status',
+  accountLogin: 'desktop:account:login',
+  accountCancel: 'desktop:account:cancel',
+  accountLogout: 'desktop:account:logout',
   chooseExecutablePath: 'desktop:shell:chooseExecutablePath',
   chooseDirectoryPaths: 'desktop:shell:chooseDirectoryPaths',
   startHost: 'desktop:shell:startHost',
@@ -73,6 +81,7 @@ export type SafeFailure = {
   kind: 'rpc' | 'connection' | 'validation';
   message: string;
   code?: string;
+  retryAfter?: number;
 };
 
 /** A daemon error code the renderer may see: short and plain, so it cannot carry text of its own. */
@@ -91,6 +100,9 @@ export type DesktopEvent =
   | { type: 'device'; view: ViewId; value: DeviceEventPayload }
   /** This computer's own device events, whichever device the page shows (U3's "new device paired"). */
   | { type: 'localDevice'; value: DeviceEventPayload }
+  | { type: 'account'; value: AccountStatus }
+  | { type: 'authoringSaved'; value: AuthoringSaved }
+  | { type: 'authoringPublished'; value: AuthoringPublished }
   | { type: 'devices'; value: DevicesState }
   /** 自动检查更新的结果；窗口之后才订阅时由主进程补发最近一次。 */
   | { type: 'update'; value: DesktopUpdate }
@@ -102,7 +114,7 @@ export type DesktopEvent =
 
 export type DesktopShell = Required<Pick<ShellCapabilities,
   'openExternal' | 'chooseExecutablePath' | 'chooseDirectoryPaths' | 'checkDesktopUpdate' | 'retryDesktopUpdate' | 'installDesktopUpdate' | 'onDesktopUpdate' |
-  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli' | 'service' | 'setLoginItem' | 'devices' | 'onLocalDeviceEvent' | 'quitKeepsDaemon' | 'onRemoteUpdate'>>;
+  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli' | 'service' | 'setLoginItem' | 'devices' | 'onLocalDeviceEvent' | 'quitKeepsDaemon' | 'onRemoteUpdate'>> & { account: AccountShell; community: CommunityShell; recipeAuthoring: RecipeAuthoringShell; recipeUse: RecipeUseShell; recipeSource:RecipeSourceShell };
 
 export interface DesktopResources {
   uiIndex: string;

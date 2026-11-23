@@ -1,3 +1,5 @@
+import { Arch } from 'builder-util';
+import { buildRecipeFiles } from './build-recipe-files.mjs';
 import { readFile, readdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 
@@ -22,9 +24,11 @@ export async function assertNoBundledClaude(daemon) {
 }
 
 /** Also inspect actual packaged bytes, including package:dir and stale staging trees. */
-export default async function afterPack({ appOutDir, electronPlatformName, packager }) {
+export default async function afterPack({ appOutDir, electronPlatformName, packager, arch }) {
   const resources = electronPlatformName === 'darwin'
     ? join(appOutDir, `${packager.appInfo.productFilename}.app`, 'Contents/Resources')
     : join(appOutDir, 'resources');
   await assertNoBundledClaude(join(resources, 'daemon'));
+  // Electron merges the two packaged Mach-O files for its universal build.
+  if (arch !== Arch.universal) buildRecipeFiles(join(resources, 'daemon/dist'), `${electronPlatformName}-${Arch[arch]}`);
 }

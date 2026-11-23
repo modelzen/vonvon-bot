@@ -679,7 +679,7 @@ export class ClaudeAgentBackend implements AgentBackend {
     const realCwd = await realpath(opts.cwd).catch(() => opts.cwd);
     const access = claudeAccess(opts.mode, opts.network, opts.cwd, realCwd, await Promise.all(profile.additionalRoots.map(async root => ({ ...root, path: await realpath(root.path) }))), opts.native);
     if (access.mode !== 'full' && opts.readScope) {
-      access.read = await realScope(opts.readScope, opts.cwd, realCwd);
+      access.read = await realScope({...opts.readScope,allow:[...opts.readScope.allow,...profile.capabilityPackages.filter(pkg=>pkg.kind==='recipe').map(pkg=>pkg.path)]}, opts.cwd, realCwd);
       if (process.platform === 'linux') access.sandboxRead = await linuxReadScope(access.read, realCwd);
     }
     return new ClaudeAgentThread({
@@ -695,6 +695,7 @@ export class ClaudeAgentBackend implements AgentBackend {
       additionalDirectories: profile.additionalRoots.map(root => root.path),
       ...(profile.skills?.enabledNames ? { skills: [...profile.skills.enabledNames] } : {}),
       plugins: profile.capabilityPackages.map(pkg => pkg.path),
+      recipePlugins: profile.capabilityPackages.flatMap(pkg => pkg.kind === 'recipe' ? [pkg] : []),
       env: sessionClaudeEnv(profile.env),
       query: sdk.query,
       entry: opts.entry,
@@ -714,7 +715,7 @@ export class ClaudeAgentBackend implements AgentBackend {
     const realCwd = await realpath(opts.cwd).catch(() => opts.cwd);
     const access = claudeAccess(opts.mode, opts.network, opts.cwd, realCwd, await Promise.all(profile.additionalRoots.map(async root => ({ ...root, path: await realpath(root.path) }))), opts.native);
     if (access.mode !== 'full' && opts.readScope) {
-      access.read = await realScope(opts.readScope, opts.cwd, realCwd);
+      access.read = await realScope({...opts.readScope,allow:[...opts.readScope.allow,...profile.capabilityPackages.filter(pkg=>pkg.kind==='recipe').map(pkg=>pkg.path)]}, opts.cwd, realCwd);
       if (process.platform === 'linux') access.sandboxRead = await linuxReadScope(access.read, realCwd);
     }
     return new ClaudeAgentThread({
@@ -731,6 +732,7 @@ export class ClaudeAgentBackend implements AgentBackend {
       additionalDirectories: profile.additionalRoots.map(root => root.path),
       ...(profile.skills?.enabledNames ? { skills: [...profile.skills.enabledNames] } : {}),
       plugins: profile.capabilityPackages.map(pkg => pkg.path),
+      recipePlugins: profile.capabilityPackages.flatMap(pkg => pkg.kind === 'recipe' ? [pkg] : []),
       env: sessionClaudeEnv(profile.env),
       query: sdk.query,
       entry: opts.entry,

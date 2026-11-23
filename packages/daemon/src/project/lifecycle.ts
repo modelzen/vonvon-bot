@@ -228,7 +228,13 @@ async function refuseIfLeftOut(client: Client, chatId: string, input: CreateProj
     left = reply.code === 0 && Array.isArray(reply.data?.items) && !reply.data.has_more && !reply.data.items.some(member => member.member_id === input.invitee.id);
   } catch (error) { log.fail('project', error, { phase: 'invitee-check', requestId: input.requestId }); }
   if (!left) return;
-  await client.im.v1.chat.delete({ path: { chat_id: chatId } }).catch((error: unknown) => log.fail('project', error, { phase: 'invitee-disband', chatId }));
+  try {
+    const deleted = await client.im.v1.chat.delete({ path: { chat_id: chatId } });
+    if (deleted.code !== 0) throw new Error('飞书未确认解散群');
+  } catch (error) {
+    log.fail('project', error, { phase: 'invitee-disband', chatId });
+    throw new CreationOutcomeUnknownError(error);
+  }
   throw new CreationRefusedError(cannotInvite(botLabel(input)));
 }
 
@@ -301,7 +307,7 @@ export async function createProject(channel: Pick<LarkChannel, 'rawClient'>, req
       } else if (explicit) {
         const project = await newBindingProject(input.bot, { chatId, name }, explicit);
         saved = { ...row, ...explicit, name, chatId, noMention, ...storedMode(input.kind), projectId: project.id, migration: { library: Date.now(), memory: Date.now() } };
-        await addProject(saved, location);
+        saved = await addProject(saved, location);
       } else {
         saved = (await withBotGroupBinding(input.bot, { chatId, name, projectsRootDir: root }, async scope => {
           // The default folder is allocated first (a retry finds the same one), so the project can be made before the row.

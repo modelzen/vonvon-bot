@@ -121,7 +121,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
@@ -325,7 +325,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
@@ -575,7 +575,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
@@ -855,7 +855,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
@@ -1059,7 +1059,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
@@ -1372,7 +1372,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
@@ -1887,7 +1887,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
@@ -2200,7 +2200,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
@@ -2513,7 +2513,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
@@ -2826,7 +2826,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
@@ -3139,7 +3139,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
@@ -3452,7 +3452,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
@@ -3765,7 +3765,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
@@ -4078,7 +4078,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
@@ -9673,7 +9673,7 @@ export const toolPreviewFramesRequested: Record<'thinking' | 'tool' | 'streaming
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "✅ 已开启提醒"
@@ -9873,7 +9873,7 @@ export const toolPreviewFramesRequested: Record<'thinking' | 'tool' | 'streaming
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "✅ 已开启提醒"
@@ -10182,7 +10182,7 @@ export const toolPreviewFramesRequested: Record<'thinking' | 'tool' | 'streaming
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "✅ 已开启提醒"
@@ -10892,7 +10892,7 @@ export const streamingPreviewFramesRequested: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "✅ 已开启提醒"
@@ -11201,7 +11201,7 @@ export const streamingPreviewFramesRequested: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "✅ 已开启提醒"
@@ -11510,7 +11510,7 @@ export const streamingPreviewFramesRequested: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "✅ 已开启提醒"
@@ -11819,7 +11819,7 @@ export const streamingPreviewFramesRequested: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "✅ 已开启提醒"
@@ -12128,7 +12128,7 @@ export const streamingPreviewFramesRequested: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "✅ 已开启提醒"
@@ -12437,7 +12437,7 @@ export const streamingPreviewFramesRequested: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "✅ 已开启提醒"
@@ -12746,7 +12746,7 @@ export const streamingPreviewFramesRequested: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "✅ 已开启提醒"
@@ -13055,7 +13055,7 @@ export const streamingPreviewFramesRequested: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "✅ 已开启提醒"
@@ -13768,7 +13768,7 @@ export const subagentPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
@@ -14058,7 +14058,7 @@ export const subagentPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
@@ -15024,7 +15024,7 @@ export const subagentPreviewFramesRequested: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "✅ 已开启提醒"
@@ -15310,7 +15310,7 @@ export const subagentPreviewFramesRequested: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
-                  "element_id": "display-reminder",
+                  "element_id": "display_reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "✅ 已开启提醒"
