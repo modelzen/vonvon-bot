@@ -8,6 +8,7 @@ import {
   type RecipeRichContent,
   type RecipeRichText,
 } from '@vonvon/protocol';
+import {hostTimeZone} from '../bot/schedule/time';
 import type { ScheduleStore } from '../bot/schedule/store';
 import { managedId, type ManagedTaskDefinition } from '../bot/schedule/managed';
 import { botDir, botPaths, paths } from '../config/paths';
@@ -118,6 +119,7 @@ export async function prepareRich(
       row.projectSettingsRevision ??= 0;
       const old = row.richRecipe?.pointer.release ?? row.recipeInstall;
       if (old && old.recipeId !== release.recipeId) throw new Error('这个群已安装另一配方');
+      if(request.authority==='directUpdate'&&(!old||release.access!=='direct'))throw new Error('直接更新需已有配方来源与公开新版。');
       if (old?.versionId === release.versionId)
         return {
           changed: false,
@@ -133,7 +135,7 @@ export async function prepareRich(
           value: { text: row.recipeInstall.base.role },
         });
       const local = localRecipeItems(row, incoming);
-      const token = hash([bot, groupId, frozen(row), preview, key]);
+      const token = hash([bot, groupId, frozen(row), preview, key,...(request.authority?[request.authority]:[])]);
       if (request.choices && request.reviewToken !== token) throw new Error('预览已变化');
       const merged = mergeRecipeItems(base, local, incoming, request.choices);
       if (merged.conflicts.length || request.reviewToken !== token)
@@ -180,7 +182,7 @@ export async function prepareRich(
       const nonce = randomBytes(32),
         id = operationUuid(now),
         intent: Intent = {
-          ...(old && release.access === 'direct'
+          ...(old && release.access === 'direct' && request.authority!=='exactVersion'
             ? { purpose: 'updateDirectRichRecipe', fromVersionId: old.versionId, localPlanSha256: plan }
             : { purpose: 'installRichRecipe' }),
           format: 'rich-v2',
@@ -320,7 +322,7 @@ export async function applyRich(bot: BotIdentity, input: Activation, schedules: 
             name: t.name,
             instruction: String(item.value.instruction),
             spec: t.spec.kind === 'every' ? { ...t.spec, anchor: Math.ceil(now / 60000) * 60000 } : t.spec,
-            timeZone: t.timeZone.kind === 'recommended' ? t.timeZone.iana : 'UTC',
+            timeZone: t.timeZone.kind === 'recommended' ? t.timeZone.iana : hostTimeZone(),
             placement: { kind: t.placement },
             state: 'paused',
             createdBy: { via: 'desktop' },

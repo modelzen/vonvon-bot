@@ -1,3 +1,4 @@
+import {readerRoute,readerInput} from './reader-http.mjs';
 import { createServer } from 'node:http';
 import { identityFromRequest } from './auth.mjs';
 import { ApiError, badInput } from './errors.mjs';
@@ -144,11 +145,12 @@ export function createRecipeServer({ verify, execute, admitRich=false, attempts 
         const url = new URL(req.url, 'http://localhost');
         const rich=/^(?:\/api)?\/v2\//.test(url.pathname);
         const v2=rich ? await import('./rich-http.mjs') : null;
-        const route = rich ? v2.richRoute(req.method,url.pathname,admitRich) : identify(req, url);
+        const reader = rich ? readerRoute(req.method,url.pathname) : undefined;
+        const route = reader ?? (rich ? v2.richRoute(req.method,url.pathname,admitRich) : identify(req, url));
         if (route.isPublic === 'possession' && req.headersDistinct.authorization) throw badInput();
         const identity = route.isPublic === 'possession' ? null : await identityFromRequest(req, route.isPublic, verify);
-        const [operation, args] = await (rich?v2.richInput:inputFor)(req, url, route);
-        if (route.action === 'redeem') finishAttempt = attempts.begin(identity.issuer + '\0' + identity.subject);
+        const [operation, args] = await (reader?readerInput:rich?v2.richInput:inputFor)(req, url, route);
+        if (['redeem','readerRedeem'].includes(route.action)) finishAttempt = attempts.begin(identity.issuer + '\0' + identity.subject);
         const result = await execute(identity, operation, args);
         const response = JSON.stringify(result);
         finishAttempt?.(false);

@@ -1,3 +1,4 @@
+import {richRuntimeReplies} from './recipe-runtime.js';
 import { z } from 'zod';
 import { agentIdSchema, groupIdSchema, bindGroupCommandSchema } from './domain.js';
 import { createProjectRequestSchema } from './collaboration.js';
@@ -15,6 +16,7 @@ export const recipeUseRequestSchema = z.discriminatedUnion('type', [
   z
     .object({
       type: z.literal('begin'),
+      format: z.literal('rich-v2').optional(),
       accountId: uuid,
       viewId: viewIdSchema,
       recipeId: uuid,
@@ -23,6 +25,7 @@ export const recipeUseRequestSchema = z.discriminatedUnion('type', [
       groupId: groupIdSchema.optional(),
     })
     .strict(),
+  z.object({type:z.literal('richResolve'),handle:uuid,reviewToken:digest,choices:z.record(uuid,z.enum(['local','incoming']))}).strict(),
   z.object({ type: z.literal('join'), handle: uuid, input: recipeJoinInputSchema }).strict(),
   z.object({
     type: z.literal('repairJoin'),
@@ -57,6 +60,8 @@ export const desktopRecipeReviewSchema = z
   })
   .strict();
 export const recipeUseReplySchema = z.discriminatedUnion('kind', [
+  richRuntimeReplies[0].extend({...handle}),
+  z.object({kind:z.literal('richPrepared'),...handle,groupId:groupIdSchema,reviewToken:digest}).strict(),
   z.object({ kind: z.literal('choose'), ...handle }).strict(),
   z
     .object({ kind: z.literal('review'), ...handle, groupId: groupIdSchema, review: desktopRecipeReviewSchema })

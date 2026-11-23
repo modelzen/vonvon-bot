@@ -213,7 +213,7 @@ export class RecipeStore {
           if(request.sourceToken!==token()||request.recipeId!==release.recipeId||request.installedVersionId!==release.versionId||request.versionId===release.versionId)throw new Error('配方来源已改变');
           active.ignoredVersionId=request.versionId;
         }
-        return {changed:request.type==='ignoreVersion',value:{kind:'source',groupId:request.groupId,source:{recipeId:release.recipeId,versionId:release.versionId,revision:release.revision,authorId:release.authorId,installedAt:active.installedAt,sourceToken:token(),ignoredVersionId:active.ignoredVersionId}} as RecipeInstallReply};
+        return {changed:request.type==='ignoreVersion',value:{kind:'source',groupId:request.groupId,source:{format:'rich-v2',recipeId:release.recipeId,versionId:release.versionId,revision:release.revision,authorId:release.authorId,installedAt:active.installedAt,sourceToken:token(),ignoredVersionId:active.ignoredVersionId}} as RecipeInstallReply};
       }
       const source = row.recipeInstall;
       if (!source) {

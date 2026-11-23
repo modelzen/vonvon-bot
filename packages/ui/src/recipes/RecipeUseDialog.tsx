@@ -70,11 +70,12 @@ export function RecipeUseDialog(props: Props) {
           <li>{reply?.kind === 'applied' ? '已应用到目标群，云端已确认' : reply?.kind === 'pending' ? pendingText(reply.phase) : reply?.kind === 'rejected' ? '本次应用未完成' : '预览内容，确认后应用'}</li>
         </ol>
         {session.target && (reply?.kind === 'review' || reply?.kind === 'prepared') && <p className="recipe-use-note">沿用现有群聊的 Provider、工作目录和沟通方式。</p>}
-        {(reply?.kind === 'review' || reply?.kind === 'prepared') && <p role="status">{props.groupNameError ?? (!groupName ? '正在读取目标群名，核对后才能确认应用。' : '已核对飞书群名。')} <Button disabled={busy} onClick={props.onRefreshGroupName}>刷新群名</Button></p>}
+        {(reply?.kind === 'review' || reply?.kind === 'prepared' || reply?.kind === 'richReview' || reply?.kind === 'richPrepared') && <p role="status">{props.groupNameError ?? (!groupName ? '正在读取目标群名，核对后才能确认应用。' : '已核对飞书群名。')} <Button disabled={busy} onClick={props.onRefreshGroupName}>刷新群名</Button></p>}
         {(reply?.kind === 'review' || reply?.kind === 'prepared') && <RecipeReview draft={reviewDraft} onChange={setReviewDraft} review={reply.review} prepared={reply.kind === 'prepared'} busy={busy || !groupName}
           acceptedResolution={props.acceptedResolution}
           onResolve={resolution => onRequest({type: 'resolve', handle: reply.handle, reviewToken: reply.review.reviewToken, resolution})}
           onConfirm={() => onRequest({type: 'confirm', handle: reply.handle})}/>}
+        {(reply?.kind === 'richReview' || reply?.kind === 'richPrepared') && <RichInstallReview reply={reply} busy={!canAct || !groupName} onRequest={onRequest}/>}
         {reply?.kind === 'pending' && <InlineNotice title="正在核对结果" tone="warning">{pendingDetail(reply.phase)}关闭窗口后仍可从该配方恢复。</InlineNotice>}
         {recovery && reply?.kind === 'pending' && <InlineNotice title={recovery.state === 'createdUnsaved' ? '群已创建，连接尚未保存' : '群聊创建结果尚未确认'} tone="warning"
           actions={canAct && agent ? bound ? <Button onClick={() => void onRequest({type: 'repairJoin', handle: reply.handle, input: {type: 'existingBinding', agentId: agent.id, groupId: bound.groupId}})}>继续使用已连接的群</Button>
@@ -86,7 +87,7 @@ export function RecipeUseDialog(props: Props) {
           <Button disabled={!canAct} onClick={() => setDismiss(false)}>返回核对</Button>
           <Button disabled={!canAct} onClick={() => void onRequest({type: 'dismissJoin', handle: reply.handle})}>确认结束跟踪</Button>
         </>}>飞书群可能已经创建。结束跟踪不会删除群聊或改变现有连接，也不表示建群已取消。之后可从 Bot 已加入的群中连接。</InlineNotice>}
-        {reply?.kind === 'applied' && <InlineNotice title="配方已应用" tone="success">只更新了这个 Bot 在目标群中的角色和使用准备。使用准备保留为说明，请按需逐项处理。</InlineNotice>}
+        {reply?.kind === 'applied' && <InlineNotice title="配方已应用" tone="success">已更新这个 Bot 在目标群中的所选配置。任务保持暂停，请进入使用设置逐项核对。</InlineNotice>}
         {reply?.kind === 'rejected' && <InlineNotice title="本次未应用" tone="warning">{reply.reason || '本次操作已经结束。'}{reply.groupId && '群聊已保留，可以在这个群重新预览。'}</InlineNotice>}
         {!reply && <p role="status">{session.botId ? '正在读取配方和目标群…' : '正在读取目标设备的 Bot…'}</p>}
         {reply?.kind === 'choose' && !agent && <InlineNotice title="Bot 暂不可用" tone="warning">请在原设备恢复 Bot 后，重新核对原操作。</InlineNotice>}
@@ -140,4 +141,10 @@ function RecipeReview({review, draft, onChange, prepared, busy, acceptedResoluti
 function CompareText({title, text}: {title: string; text: string}) {return <div className="recipe-use-compare"><h4>{title}</h4><pre>{text || '未设置'}</pre></div>;}
 function CompareSetup({title, setup}: {title: string; setup?: RecipeSetup}) {
   return <div className="recipe-use-compare"><h4>{title}</h4>{setup ? <ol>{setup.steps.map((step, index) => <li key={index}><strong>{step.title}{step.required ? ' · 必需' : ' · 可选'}</strong><p>{step.instructions}</p>{step.check && <small>检查方式：{step.check}</small>}</li>)}</ol> : <p>未设置</p>}</div>;
+}
+
+function RichInstallReview({reply,busy,onRequest}:{reply:Extract<RecipeUseReply,{kind:'richReview'|'richPrepared'}>;busy:boolean;onRequest:(request:RecipeUseRequest)=>Promise<void>}) {
+  const [choices,setChoices]=useState<Record<string,'local'|'incoming'>>({});
+  if(reply.kind==='richPrepared')return <InlineNotice title="完整配置已核对"><p>只应用到所选 Bot 与群，保留其他群与 Bot 的配置。任务默认暂停。</p><Button variant="primary" disabled={busy} onClick={()=>void onRequest({type:'confirm',handle:reply.handle})}>确认应用此版本</Button></InlineNotice>;
+  return <section><h3>核对本群差异</h3>{reply.conflicts.length===0?<p>没有需要决定的冲突项。</p>:reply.conflicts.map(item=><fieldset key={item.itemId}><legend>{item.kind}</legend><div className="community-editor-grid"><div><h4>当前本群</h4><pre>{item.local??'未指定'}</pre></div><div><h4>配方新版</h4><pre>{item.incoming??'移除此项'}</pre></div></div><label><input type="radio" name={item.itemId} checked={choices[item.itemId]==='local'} onChange={()=>setChoices(old=>({...old,[item.itemId]:'local'}))}/>保留本群</label><label><input type="radio" name={item.itemId} checked={choices[item.itemId]==='incoming'} onChange={()=>setChoices(old=>({...old,[item.itemId]:'incoming'}))}/>使用配方</label></fieldset>)}<Button variant="primary" disabled={busy||reply.conflicts.some(item=>!choices[item.itemId])} onClick={()=>void onRequest({type:'richResolve',handle:reply.handle,reviewToken:reply.reviewToken,choices})}>确认这些选择并预览应用</Button></section>;
 }

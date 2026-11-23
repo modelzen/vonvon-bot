@@ -53,7 +53,7 @@ const success = (value: unknown) => ({ok:true,value});
 const text = () => document.querySelector('main')?.textContent ?? '';
 const dialog = (title: string) => [...document.querySelectorAll('[role="dialog"]')].find(element=>element.querySelector('header h2')?.textContent===title);
 async function click(label: string) {
-  const button = [...document.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.trim() === label);
+  const button = [...document.querySelectorAll<HTMLButtonElement>('button')].find(button => (button.getAttribute('aria-label') ?? button.textContent?.trim()) === label);
   expect(button, label).toBeDefined(); expect(button!.disabled, label).toBe(false);
   await act(async () => button!.click());
 }
@@ -67,8 +67,8 @@ async function fill(label: string,value: string) {
 async function chooseSource() {
   await click('社区'); await click('创作中心'); await click('分享群聊配方');
   const target = document.querySelector<HTMLButtonElement>('.authoring-source-list button');
-  expect(target?.textContent).toContain('群聊 A');
-  await act(async () => target!.click()); await click('核对所选群聊');
+  expect(target?.textContent).toContain('Bot A');
+  await act(async () => target!.click()); await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="选择已绑定群聊"] button')!.click());
 }
 async function linkMyself() {
   await click('关联我的飞书私聊');
@@ -223,10 +223,10 @@ it('creates fresh handles for account A/B/A, hides old private state and ignores
   expect(text()).not.toContain('账号甲');expect(text()).not.toContain('等待本人在飞书操作');expect(calls).toContainEqual({type:'detach',handle:first.handle});
   await act(async()=>finish?.({kind:'operation',operation:{...operations[0]!,state:'completed',receipt:{operationId,status:'accepted',stateRevision:3,draftId,revision:1}}}));
   expect(text()).not.toContain('同一份私人草稿');
-  await click('创作中心');await click('分享群聊配方');await act(async()=>document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());await click('核对所选群聊');
+  await click('创作中心');await click('分享群聊配方');await act(async()=>document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="选择已绑定群聊"] button')!.click());
   expect(text()).toContain('账号乙');expect(text()).not.toContain('等待本人在飞书操作');
   await act(async()=>{status=signedIn();emit({type:'account',value:status});});
-  await click('创作中心');await click('分享群聊配方');await act(async()=>document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());await click('核对所选群聊');
+  await click('创作中心');await click('分享群聊配方');await act(async()=>document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="选择已绑定群聊"] button')!.click());
   expect(calls.filter(request=>request.type==='open')).toHaveLength(3);
   const openSessions=[...sessions.keys()];expect(openSessions).not.toContain(first.handle);expect(text()).toContain('账号甲');
 });
@@ -236,10 +236,10 @@ it('closes device A, uses only device B groups, and rechecks a fresh handle on A
   const first=[...sessions.keys()][0]!;
   await act(async()=>emit({type:'devices',value:devicesState({id:B})}));
   expect(calls).toContainEqual({type:'detach',handle:first});expect(text()).not.toContain('群聊 A');expect(text()).not.toContain('Bot A');
-  await act(async()=>document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());await click('核对所选群聊');
+  await act(async()=>document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="选择已绑定群聊"] button')!.click());
   expect(calls.filter(request=>request.type==='open').at(-1)).toMatchObject({viewId:B,botId:'cli_author_b'});
   await act(async()=>emit({type:'devices',value:devicesState({id:A})}));
-  expect(text()).not.toContain('Bot B');await act(async()=>document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());await click('核对所选群聊');
+  expect(text()).not.toContain('Bot B');await act(async()=>document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="选择已绑定群聊"] button')!.click());
   expect(calls.filter(request=>request.type==='open')).toHaveLength(3);expect([...sessions.keys()]).not.toContain(first);
 });
 
@@ -265,7 +265,7 @@ it('closes a late open from an abandoned device instead of adopting its handle',
     if(request.type==='open')return new Promise(resolve=>{finish=()=>resolve(result);});
     return result;
   };
-  await click('核对所选群聊');expect(text()).toContain('正在核验');
+  await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="选择已绑定群聊"] button')!.click());expect(text()).toContain('正在核验');
   const old=[...sessions.keys()][0]!;
   await act(async()=>emit({type:'devices',value:devicesState({id:B})}));
   await act(async()=>finish?.({kind:'closed'}));
@@ -533,4 +533,89 @@ it('refreshes a detached draft detail only for its account and draft without ope
   await act(async()=>emit({type:'authoringSaved',value:{accountId:accountA,draftId,revision:2}}));
   expect(text()).toContain('后台保存后的新名称'); expect(text()).toContain('修订 2');
   expect(calls.filter(r=>r.type==='open')).toHaveLength(0);
+});
+
+it('selects actual rich skill files and complete items before sending a source-attested private draft',async()=>{
+  const {readFileSync}=await import('node:fs');const {resolve}=await import('node:path');
+  const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
+  const content=JSON.parse(readFileSync(resolve(process.cwd(),'../protocol/test/fixtures/recipe-rich-v2.content.json'),'utf8'));
+  content.parts=[];content.memories=[];delete content.finalLogo;
+  const canonical=canonicalizeRichRecipeContent(content).content;
+  linked=true;const normal=authoring;
+  authoring=async request=>{
+    if(request.type==='richSourceOptions')return {kind:'richSourceOptions',skills:[{name:'helper',files:['SKILL.md','reference.md']}]};
+    if(request.type==='richInventory')return {kind:'richInventory',groupId:request.groupId,inventory:{content:canonical,reviewToken:evidence,unavailable:[],versions:[]}};
+    if(request.type==='richPrepare'){const session=sessionFor(request);operations=[{...op(session),format:'rich-v2'}];return {kind:'operation',operation:operations[0]!};}
+    return normal(request);
+  };
+  await draw();await chooseSource();await click('读取可分享技能');
+  const skill=[...document.querySelectorAll('label')].find(label=>label.textContent==='helper')?.querySelector<HTMLInputElement>('input');
+  expect(skill).not.toBeNull();await act(async()=>skill!.click());
+  const reference=[...document.querySelectorAll('label')].find(label=>label.textContent==='reference.md')?.querySelector<HTMLInputElement>('input');
+  await act(async()=>reference!.click());await click('重新读取来源配置');
+  const inventory=calls.filter(request=>request.type==='richInventory').at(-1);expect(inventory).toMatchObject({options:{skills:[{skill:'helper',files:['SKILL.md','reference.md']}],includeBotMemories:false}});
+  const attest=[...document.querySelectorAll('label')].find(label=>label.textContent?.includes('我已核对来源和全部所选内容'))?.querySelector<HTMLInputElement>('input');
+  expect(attest).not.toBeNull();await act(async()=>attest!.click());await click('确认让 Bot 准备私人草稿');
+  const prepare=calls.find(request=>request.type==='richPrepare');expect(prepare).toMatchObject({selection:{reviewToken:evidence,sourceAttested:true,options:{includeBotMemories:false}}});
+  if(prepare?.type!=='richPrepare')throw new Error('Missing rich preparation');
+  expect(prepare.selection.selected).toContain(canonical.role!.itemId);
+  expect(calls.some(request=>request.type==='accept')).toBe(false);
+  expect(text()).toContain('等待本人在飞书操作');
+});
+
+it('edits rich public metadata through native attested chat and preserves newer local input when a receipt arrives',async()=>{
+  const {readFileSync}=await import('node:fs');const {resolve}=await import('node:path');const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
+  const content=JSON.parse(readFileSync(resolve(process.cwd(),'../protocol/test/fixtures/recipe-rich-v2.content.json'),'utf8'));content.parts=[];content.memories=[];delete content.finalLogo;
+  for(const field of ['name','summary','overview','version'] as const)content.public[field].value=draft.public[field];
+  const doc=canonicalizeRichRecipeContent(content);
+  draft={...draft,config:undefined,sourceIntentId:operationId,format:'rich-v2',rich:{content:doc.content,texts:{},canonical:Buffer.from(doc.canonicalUTF8).toString('base64url')}};
+  linked=true;const normal=authoring;
+  authoring=async request=>{if(request.type==='richEdit'){const session=sessionFor(request);operations=[{...op(session),format:'rich-v2',purpose:'editDraft',draftId,baseRevision:request.baseRevision}];return {kind:'operation',operation:operations[0]!};}return normal(request);};
+  await draw();await click('社区');await click('创作中心');await click('查看草稿');await click('编辑发布信息');await fill('配方名称','本次提交的名称');await click('核对并保存修改');
+  await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="选择 Bot"] button')!.click());await click('确认编辑 Bot');await click('发送继续编辑卡片');
+  const sent=calls.find(request=>request.type==='richEdit');expect(sent).toMatchObject({draftId,baseRevision:1,selected:[doc.content.public.name.itemId],changes:[{op:'setPublicText',field:'name',itemId:doc.content.public.name.itemId,value:'本次提交的名称'}]});
+  await fill('配方名称','收到回执前的新输入');content.public.name.value='本次提交的名称';const changed=canonicalizeRichRecipeContent(content);
+  draft={...draft,revision:2,public:{...draft.public,name:'本次提交的名称'},rich:{content:changed.content,texts:{},canonical:Buffer.from(changed.canonicalUTF8).toString('base64url')}};
+  await act(async()=>emit({type:'authoringSaved',value:{accountId:accountA,draftId,revision:2}}));
+  expect(document.querySelector<HTMLInputElement>('[aria-label="配方名称"]')?.value).toBe('收到回执前的新输入');expect(text()).toContain('云端已有新修订');
+  await click('采用已保存版本');expect(document.querySelector<HTMLInputElement>('[aria-label="配方名称"]')?.value).toBe('本次提交的名称');
+  const publish=[...document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='预览发布');expect(publish?.disabled).toBe(false);
+});
+
+it('discards delayed inventory across memory ABA and offers an individual setup opt-out',async()=>{
+  const {readFileSync}=await import('node:fs');const {resolve}=await import('node:path');
+  const content=JSON.parse(readFileSync(resolve(process.cwd(),'../protocol/test/fixtures/recipe-rich-v2.content.json'),'utf8'));
+  content.parts=[];content.skills=[];content.files=[];content.memories=[];delete content.finalLogo;
+  content.setup=[{itemId:'80000000-0000-4000-8000-000000000001',originId:'80000000-0000-4000-8000-000000000002',kind:'tool',title:'确认工具',instructions:'SETUP_SENTINEL',required:true,action:{kind:'manual'}}];
+  const normal=authoring,waiting:{request:Extract<DesktopAuthoringRequest,{type:'richInventory'}>;resolve:(v:DesktopAuthoringReply)=>void}[]=[];
+  linked=true;
+  authoring=async request=>{
+    if(request.type==='richInventory')return new Promise<DesktopAuthoringReply>(resolve=>waiting.push({request,resolve}));
+    if(request.type==='richPrepare')return {kind:'operation',operation:{...op(sessionFor(request)),format:'rich-v2'}};
+    return normal(request);
+  };
+  await draw();await chooseSource();expect(waiting).toHaveLength(1);
+  const memory=()=>[...document.querySelectorAll('label')].find(l=>l.textContent==='包含可分享的 Bot 记忆')!.querySelector<HTMLInputElement>('input')!;
+  await act(async()=>memory().click());await act(async()=>memory().click());
+  expect(waiting).toHaveLength(3);
+  const memoryItem={itemId:'90000000-0000-4000-8000-000000000001',originId:'90000000-0000-4000-8000-000000000002',text:{kind:'inline',value:'EXCLUDED_MEMORY_SENTINEL'}};
+  const deliver=(index:number)=>waiting[index]!.resolve({kind:'richInventory',groupId:waiting[index]!.request.groupId,inventory:{content:{...content,memories:waiting[index]!.request.options.includeBotMemories?[memoryItem]:[],public:{...content.public,name:{...content.public.name,value:'READ_'+index}}},reviewToken:String(index).repeat(64),unavailable:[],versions:[]}});
+  await act(async()=>deliver(2));
+  await click('重新读取来源配置');
+  await act(async()=>emit({type:'devices',value:devicesState({id:B})}));
+  await act(async()=>document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="选择已绑定群聊"] button')!.click());
+  await act(async()=>emit({type:'devices',value:devicesState({id:A})}));
+  await act(async()=>document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="选择已绑定群聊"] button')!.click());
+  expect(waiting).toHaveLength(6);
+  await act(async()=>deliver(5));
+  for(const index of [0,1,3,4])await act(async()=>deliver(index));
+  expect(text()).not.toContain('EXCLUDED_MEMORY_SENTINEL');
+  expect(text()).toContain('记忆不包含');
+  const step=content.setup[0];
+  const checkbox=[...document.querySelectorAll('label')].find(l=>l.textContent==='准备步骤 · '+step.title)?.querySelector<HTMLInputElement>('input');
+  expect(checkbox).toBeDefined();expect(checkbox!.checked).toBe(true);await act(async()=>checkbox!.click());
+  const attest=[...document.querySelectorAll('label')].find(l=>l.textContent?.includes('我已核对来源和全部所选内容'))!.querySelector<HTMLInputElement>('input')!;
+  await act(async()=>attest.click());await click('确认让 Bot 准备私人草稿');
+  const prepared=calls.find(r=>r.type==='richPrepare');expect(prepared).toMatchObject({selection:{reviewToken:'5'.repeat(64),options:{includeBotMemories:false}}});
+  if(prepared?.type!=='richPrepare')throw new Error('Missing preparation');expect(prepared.selection.selected).not.toContain(step.itemId);expect(prepared.selection.selected).not.toContain(memoryItem.itemId);
 });

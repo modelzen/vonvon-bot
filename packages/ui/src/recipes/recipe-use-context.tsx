@@ -10,7 +10,7 @@ import {Button} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
 import './recipe-use.css';
 
-export type RecipeReference = {recipeId: string; versionId: string; name: string; version: string};
+export type RecipeReference = {format?: 'rich-v2'; recipeId: string; versionId: string; name: string; version: string};
 export type RecipeGroupTarget = {botId: AgentId; groupId: GroupId};
 export type RecipeUseSession = {
   id: number; intentTarget?: RecipeGroupTarget;
@@ -24,7 +24,7 @@ const SESSION_SUMMARY_LIMIT = 8;
 const Context = createContext<ContextValue | undefined>(undefined);
 export function useRecipeUse() {return useContext(Context);}
 export function recipeReference(recipe: RecipeReference | RecipeDetail): RecipeReference {
-  return 'public' in recipe ? {recipeId: recipe.recipeId, versionId: recipe.versionId, name: recipe.public.name, version: recipe.public.version} : recipe;
+  return 'public' in recipe ? {...(recipe.format === 'rich-v2' ? {format: 'rich-v2' as const} : {}), recipeId: recipe.recipeId, versionId: recipe.versionId, name: recipe.public.name, version: recipe.public.version} : recipe;
 }
 function connectionState(state?: DevicesState) {
   return JSON.stringify([state?.active.id, state?.active.phase, state?.active.mode, state?.devices.find(row => row.id === state.active.id)?.status]);
@@ -165,7 +165,7 @@ function RecipeUseSessionView({session, visible, currentAccountId, currentDevice
   }
   function begin() {
     if (!session.botId) return;
-    return send({type: 'begin', accountId: session.accountId, viewId: session.device.id, recipeId: session.recipe.recipeId,
+    return send({type: 'begin', ...(session.recipe.format ? {format:session.recipe.format} : {}), accountId: session.accountId, viewId: session.device.id, recipeId: session.recipe.recipeId,
       versionId: session.recipe.versionId, botId: session.botId, ...(session.target ? {groupId: session.target.groupId} : {})});
   }
   useEffect(() => {

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { closeSync, fsyncSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { z } from 'zod';
+import {recipeRichInstallIntentSchema} from '@vonvon/protocol';
 import {
   agentIdSchema,
   groupIdSchema,
@@ -16,6 +17,7 @@ const operation = z
   .strict();
 const base = {
   id: uuid,
+  format: z.literal('rich-v2').optional(),
   accountId: uuid,
   deviceId: uuid,
   viewId: viewIdSchema,
@@ -43,6 +45,7 @@ const rowSchema = z.discriminatedUnion('stage', [
       stage: z.literal('operation'),
       groupId: groupIdSchema,
       operation,
+      richIntent: recipeRichInstallIntentSchema.optional(),
       action: z.enum(['reviewed', 'confirm', 'cancel']),
     })
     .strict(),

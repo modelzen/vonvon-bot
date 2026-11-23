@@ -10446,7 +10446,7 @@ export function createOrchestrator(
     settings: { read: admit(settings.read), save: admit(settings.save), models: admit(settings.models), act: admit(settings.act) },
     richRecipe:async(op,bot,member)=>{
       await loadStore();if(shuttingDown||bot.appId!==cfg.accounts.app.id)throw new Error('Bot 已停止');
-      if(op.kind==='richSetup'){if(op.request.botId!==bot.appId)throw new Error('配方所属 Bot 不符');await member(op.request.groupId);return richSetup(op.request,scheduleStore,settings,id=>isAdmin(cfg,id));}
+      if(op.kind==='richSetup'){if(op.request.botId!==bot.appId)throw new Error('配方所属 Bot 不符');await member(op.request.groupId);return richSetup(op.request,scheduleStore,settings,id=>isAdmin(cfg,id),primaryAdmin(cfg));}
       const journal=await readRichJournal(bot.appId,op.activation.operationId);return applyRich(bot,op.activation,scheduleStore,()=>member(journal.group));
     },
     scheduleAs: admittedScheduleAs,

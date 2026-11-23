@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {recipeRichContentSchema} from './recipe-rich.js';
 
 const id = z.string().uuid();
 export const acquisitionKeySchema = z.string().regex(/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|a2\.[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i);
@@ -18,24 +19,36 @@ export const recipePublicSchema = z.object({name: text(60), summary: text(240), 
 export const recipeConfigSchema = z.object({role: bytes(16384), setup: z.object({steps: z.array(z.object({kind: z.enum(['config','tool','context']), title: text(80), instructions: bytes(2048), required: z.boolean(), check: bytes(512).optional()}).strict()).min(1).max(8)}).strict().optional()}).strict();
 export type RecipeConfig = z.infer<typeof recipeConfigSchema>;
 export type RecipePublic = z.infer<typeof recipePublicSchema>;
-const summary = z.object({recipeId: id, versionId: id, revision, public: recipePublicSchema.partial({summary: true, overview: true})}).strict();
+const creator = z.object({authorId:id,displayName:text(60).refine(value=>Boolean(value.trim())&&!/@/.test(value))}).strict();
+const richView = z.object({content: recipeRichContentSchema, texts: z.record(id, bytes(131072)), canonical: z.string().max(1401000)}).strict();
+const display = {format: z.enum(['role-v1','rich-v2']).optional(), creator: creator.optional(), hasDisplayLogo: z.boolean().optional(), logo: z.string().max(180000).regex(/^data:image\/webp;base64,[A-Za-z0-9+/=]+$/).optional()};
+const summary = z.object({recipeId: id, versionId: id, revision, public: recipePublicSchema.partial({summary: true, overview: true}), ...display}).strict();
 export const recipeSummarySchema = summary;
 export type RecipeSummary = z.infer<typeof summary>;
-export const recipeDetailSchema = summary.extend({public: recipePublicSchema, owned: z.boolean(), acquired: z.boolean(), config: recipeConfigSchema.optional()}).strict().superRefine((value, ctx) => {
+export const recipeDetailSchema = summary.extend({public: recipePublicSchema, owned: z.boolean(), acquired: z.boolean(), config: recipeConfigSchema.optional(), rich: richView.optional()}).strict().superRefine((value, ctx) => {
   const permitted = value.owned || value.acquired || value.public.access === 'direct';
-  if (Boolean(value.config) !== permitted) ctx.addIssue({code: 'custom', message: 'Invalid configuration visibility'});
+  if(value.format==='rich-v2'&&(Boolean(value.rich)!==permitted||Boolean(value.config)))ctx.addIssue({code:'custom',message:'Invalid rich configuration visibility'});
+  if(value.rich&&value.format!=='rich-v2')ctx.addIssue({code:'custom',message:'Missing rich format'});
+  if (Boolean(value.config || value.rich) !== permitted) ctx.addIssue({code: 'custom', message: 'Invalid configuration visibility'});
 });
 export type RecipeDetail = z.infer<typeof recipeDetailSchema>;
-export const recipeDraftSchema = z.object({draftId: id, recipeId: id.nullable(), revision, public: recipePublicSchema, config: recipeConfigSchema}).strict();
-export type RecipeDraft = z.infer<typeof recipeDraftSchema>;
+const draftIdentity={draftId:id,recipeId:id.nullable(),revision,public:recipePublicSchema};
+export const recipeRoleDraftSchema=z.object({...draftIdentity,format:z.literal('role-v1').optional(),config:recipeConfigSchema,rich:z.undefined().optional(),logo:z.undefined().optional(),sourceIntentId:z.undefined().optional()}).strict();
+export const recipeRichDraftSchema=z.object({...draftIdentity,format:z.literal('rich-v2'),rich:richView,config:z.undefined().optional(),logo:display.logo,sourceIntentId:id}).strict();
+export const recipeDraftSchema=z.discriminatedUnion('format',[recipeRoleDraftSchema,recipeRichDraftSchema]);
+export type RecipeDraft=z.infer<typeof recipeDraftSchema>;
+export type RecipeRoleDraft=z.infer<typeof recipeRoleDraftSchema>;
+export type RecipeRichDraft=z.infer<typeof recipeRichDraftSchema>;
+
 const version = {recipeId: id, versionId: id};
 const request = {requestId: id};
 const privateRequest = {accountId: id};
-const page = {cursor: id.optional()};
+const page={cursor:id.optional()};
+const catalogPage={cursor:z.string().min(1).max(1600).optional()};
 const changes = {public: recipePublicSchema, config: recipeConfigSchema};
 export const communityRequestSchema = z.discriminatedUnion('type', [
   z.object({type: z.literal('shareLink'), ...version}).strict(),
-  z.object({type: z.literal('catalog'), accountId: id.optional(), query: text(120).optional(), ...page}).strict(),
+  z.object({type: z.literal('catalog'), accountId: id.optional(), query: text(120).optional(), ...catalogPage}).strict(),
   z.object({type: z.literal('detail'), accountId: id.optional(), ...version}).strict(),
   z.object({type: z.literal('library'), ...privateRequest, ...page}).strict(),
   z.object({type: z.literal('drafts'), ...privateRequest}).strict(),
@@ -46,7 +59,7 @@ export const communityRequestSchema = z.discriminatedUnion('type', [
     z.object({kind: z.literal('existing'), draftId: id, revision}).strict(),
   ])}).strict(),
   z.object({type: z.literal('deleteDraft'), ...privateRequest, ...request, draftId: id, revision}).strict(),
-  z.object({type: z.literal('publishDraft'), ...privateRequest, ...request, draftId: id, revision}).strict(),
+  z.object({type:z.literal('publishDraft'),...privateRequest,...request,draftId:id,revision,format:z.literal('rich-v2').optional(),canonical:z.string().min(1).max(1401000).regex(/^[A-Za-z0-9_-]+$/).optional()}).strict(),
   z.object({type: z.literal('acquire'), ...privateRequest, requestId: acquisitionKeySchema, versionId: id, code: z.string().regex(/^[a-z0-9-]{1,128}$/i).optional()}).strict(),
   z.object({type: z.literal('codes'), ...privateRequest, versionId: id, ...page}).strict(),
   z.object({type: z.literal('issueCodes'), ...privateRequest, ...request, versionId: id, count: z.number().int().min(1).max(100)}).strict(),
@@ -54,18 +67,19 @@ export const communityRequestSchema = z.discriminatedUnion('type', [
   z.object({type: z.literal('revealCode'), ...privateRequest, ...request, codeId: id}).strict(),
 ]);
 export type CommunityRequest = z.infer<typeof communityRequestSchema>;
-const nextCursor = id.nullable();
+const nextCursor=id.nullable();
+const catalogNextCursor=z.string().min(1).max(1600).nullable();
 const codeState = z.enum(['available', 'redeemed', 'disabled']);
 const fullCode = z.object({codeId: id, status: z.literal('available'), code: z.string().regex(/^[A-F0-9-]{32,40}$/i)}).strict();
 export const communityResponseSchemas = {
   shareLink: z.object({url: z.string().url().max(2048)}).strict(),
-  catalog: z.object({hero: summary.nullable(), items: z.array(summary).max(8), nextCursor}).strict(),
+  catalog: z.object({heroKind:z.enum(['featured','latest']).nullable().optional(),hero: summary.nullable(), items: z.array(summary).max(8), nextCursor:catalogNextCursor}).strict(),
   detail: recipeDetailSchema,
   library: z.object({items: z.array(summary).max(50), nextCursor}).strict(),
-  drafts: z.object({items: z.array(recipeDraftSchema).max(1000)}).strict(),
+  drafts: z.object({items: z.array(z.union([recipeDraftSchema,z.object({format:z.literal('rich-v2'),draftId:id,recipeId:id.nullable(),revision,public:recipePublicSchema}).strict()])).max(1000)}).strict(),
   publications: z.object({items: z.array(summary).max(1000)}).strict(),
   draft: recipeDraftSchema,
-  saveDraft: recipeDraftSchema,
+  saveDraft: recipeRoleDraftSchema,
   deleteDraft: z.object({draftId: id, deleted: z.literal(true)}).strict(),
   publishDraft: summary.extend({public: recipePublicSchema, firstCode: z.string().regex(/^[A-F0-9-]{32,40}$/i).optional()}).strict(),
   acquire: z.object({...version, owned: z.boolean(), acquired: z.boolean()}).strict(),

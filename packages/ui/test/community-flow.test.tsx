@@ -48,9 +48,9 @@ it('retries an uncertain code acquisition with one request key and reports accou
   let all = render();
   const input = all.find(node => node.props['aria-label'] === '分享码')!;
   input.props.onChange({target: {value: 'ABCD-1234'}});
-  all = render(); all.find(node => node.type === RecipeDetails)!.props.action.props.onClick(); await flush();
+  all = render(); all.find(node => node.props.id === 'community-acquire-code')!.props.onSubmit({preventDefault() {}}); await flush();
   all = render(); expect(all.some(node => node.props.children === '暂时离线')).toBe(true);
-  all.find(node => node.type === RecipeDetails)!.props.action.props.onClick(); await flush();
+  all.find(node => node.props.id === 'community-acquire-code')!.props.onSubmit({preventDefault() {}}); await flush();
   all = render();
   const requests = h.request.mock.calls.map(([request]) => request).filter(request => request.type === 'acquire');
   expect(requests).toHaveLength(2); expect(requests[0].requestId).toBe(requests[1].requestId);
@@ -72,7 +72,7 @@ it('does not use a late acquisition receipt to replace the page after navigating
   h.request.mockImplementation(async request => request.type === 'detail' ? recipe : request.type === 'shareLink' ? {url: 'https://community.example/version'} : request.type === 'acquire' ? new Promise(resolve => {finish = resolve;}) : {hero: null, items: [], nextCursor: null});
   render(); await flush(); let all = render();
   all.find(node => node.props['aria-label'] === '分享码')!.props.onChange({target: {value: 'CODE'}});
-  all = render(); all.find(node => node.type === RecipeDetails)!.props.action.props.onClick();
+  all = render(); all.find(node => node.props.id === 'community-acquire-code')!.props.onSubmit({preventDefault() {}});
   h.route = {kind: 'catalog'}; render(); await flush();
   finish({acquired: true}); await flush(); all = render();
   expect(all.some(node => node.type === RecipeDetails)).toBe(false);
