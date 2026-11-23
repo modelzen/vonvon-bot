@@ -77,6 +77,7 @@ type Handle = {
   busy: boolean;
   removeAbort?: () => void;
 };
+type CreatorContinuation=Extract<DesktopAuthoringReply,{kind:'creatorContinuing'}>;
 type CreatorContinue=Extract<DesktopAuthoringRequest,{type:'creatorContinue'}>;
 type Action = Exclude<DesktopAuthoringRequest, Open | DraftSourceOpen | Restore | CreatorContinue | {type:'preparePublication'|'confirmPublication'|'recoverPublication'}>;
 type SessionRequest = Extract<RecipeAuthoringRequest,{session:string}>;
@@ -237,7 +238,18 @@ export class RecipeAuthoringController {
       return {kind:'closed'};
     });
   }
-  async creatorBegin(handle:string,entry:CreatorContinue['entry']){
+  async creatorBegin(handle:string,{entry,retryId,recover}:CreatorContinue,target:Omit<CreatorContinuation,'kind'|'retryId'|'delivery'>){
+    const continuation=(delivery:CreatorContinuation['delivery']):CreatorContinuation=>({kind:'creatorContinuing',...target,retryId,delivery});
+    const handoffDelivery=(result:Extract<RecipeAuthoringReply,{kind:'handoff'}>,restored=false)=>{
+      switch(result.handoff.state){
+        case 'deliveryUnknown':return continuation('deliveryUnknown');
+        case 'selecting':case 'awaitingAttestations':return continuation('delivered');
+        case 'prepared':
+          if(!restored)throw recheck();
+          return continuation('restored');
+        default:throw new AuthoringError('本次私聊准备已停止或需要重新核对，请回到原来源查看。');
+      }
+    };
     const h=this.handles.get(handle);if(!h?.creator)throw changed();
     return this.enqueue(h,async()=>{
       await this.names(h);await this.present(h,true);
@@ -245,16 +257,23 @@ export class RecipeAuthoringController {
         const account:NativeAccount={...this.account,request:(accountId,path,init,beforeSend)=>this.account.request(accountId,path,init,async()=>{await beforeSend?.();this.check(h);})};
         const detail=await communityRequest(account,{type:'detail',accountId:h.open.accountId,recipeId:entry.recipeId,versionId:entry.versionId});this.check(h);
         if(!detail.owned||detail.recipeId!==entry.recipeId||detail.versionId!==entry.versionId||detail.creator&&detail.creator.authorId!==h.open.accountId)throw recheck();
-        await this.daemon(h,{type:'creatorContinue',selection:{kind:'version',target:{recipeId:entry.recipeId,versionId:entry.versionId},name:detail.public.name,version:detail.public.version}});
-        return {kind:'closed'};
+        // Version selection does not expose an idempotent handoff to restore.
+        if(recover)return continuation('unverified');
+        expectKind(await this.daemon(h,{type:'creatorContinue',selection:{kind:'version',target:{recipeId:entry.recipeId,versionId:entry.versionId},name:detail.public.name,version:detail.public.version}}),'creatorAck');
+        return continuation('delivered');
       }
       if(entry.kind==='source'){
         if(entry.viewId!==h.open.viewId||entry.botId!==h.open.botId)throw recheck();
         const groupName=h.groups.get(entry.groupId);if(!groupName)throw recheck();
         const inherited=entry.parent?await inheritedPublication(this.account,h.open.accountId,entry.parent.recipeId,entry.parent.versionId,()=>this.check(h)):undefined;
-        const scope={retryId:randomUUID(),groupId:entry.groupId};
+        const scope={retryId,groupId:entry.groupId};
         await this.groupIdentity(h,entry.groupId);
-        return this.beginHandoff(h,scope,{type:'beginHandoff',...scope,groupName,sourceVersionId:entry.parent?.versionId,...(inherited&&{inherited})});
+        const origin={sourceVersionId:entry.parent?.versionId,...(inherited&&{inherited})};
+        if(recover){
+          const restored=await this.restoreCreatorHandoff(h,scope,recover,{kind:'source',groupId:entry.groupId,...origin});
+          if(restored)return handoffDelivery(restored,true);
+        }
+        return handoffDelivery(await this.beginHandoff(h,scope,{type:'beginHandoff',...scope,groupName,...origin}));
       }
       const cloud=this.richCloud(h),{canonical,meta}=await cloud.draft(entry.draftId,entry.revision);
       const original=this.journal.history.locator(h.open.accountId,meta.sourceIntentId);
@@ -264,21 +283,25 @@ export class RecipeAuthoringController {
       if(!groupName)throw recheck();
       const status=expectKind(await this.daemon(h,{type:'status'}),'status');
       if(!status.linked)throw recheck();
+      const scope={retryId,groupId:original.groupId,draftId:entry.draftId};
+      if(recover){
+        const restored=await this.restoreCreatorHandoff(h,scope,recover,{kind:'draft',groupId:original.groupId,draftId:entry.draftId,baseRevision:entry.revision});
+        if(restored)return handoffDelivery(restored,true);
+      }
       const existing=status.operations.filter(op=>op.purpose==='editDraft'&&op.draftId===entry.draftId&&!terminal(op));
       if(existing.length){
         const op=existing[0]!;
         if(existing.length!==1||op.format!=='rich-v2'||op.baseRevision!==entry.revision||op.deliveryUnknown||!['waiting','candidate'].includes(op.state))throw recheck();
         const resumed=await this.operation(h,{type:'resumeContext',operationId:op.operationId});
-        if(resumed.format!=='rich-v2'||resumed.purpose!=='editDraft'||resumed.draftId!==entry.draftId||resumed.baseRevision!==entry.revision||
+        if(resumed.operationId!==op.operationId||resumed.format!=='rich-v2'||resumed.purpose!=='editDraft'||resumed.draftId!==entry.draftId||resumed.baseRevision!==entry.revision||
           resumed.deliveryUnknown||!['waiting','candidate'].includes(resumed.state))throw recheck();
         const {content}=decodeRichRecipeContent(Buffer.from(canonical,'base64url'));
-        await this.daemon(h,{type:'creatorContinue',selection:{kind:'draft',work:{draftId:entry.draftId,
-          source:{preparationId:meta.sourceIntentId,groupId:original.groupId,identity:original.identity}},name:content.public.name.value,version:content.public.version.value}});
-        return {kind:'closed'};
+        expectKind(await this.daemon(h,{type:'creatorContinue',selection:{kind:'draft',work:{draftId:entry.draftId,
+          source:{preparationId:meta.sourceIntentId,groupId:original.groupId,identity:original.identity}},name:content.public.name.value,version:content.public.version.value}}),'creatorAck');
+        return continuation('restored');
       }
-      const scope={retryId:randomUUID(),groupId:original.groupId,draftId:entry.draftId};
-      return this.beginHandoff(h,scope,{type:'beginDraftHandoff',...scope,groupName,identity:original.identity,baseRevision:entry.revision,canonical,
-        source:{sourceIntentId:meta.sourceIntentId,canonical:sourceBytes.toString('base64url')}});
+      return handoffDelivery(await this.beginHandoff(h,scope,{type:'beginDraftHandoff',...scope,groupName,identity:original.identity,baseRevision:entry.revision,canonical,
+        source:{sourceIntentId:meta.sourceIntentId,canonical:sourceBytes.toString('base64url')}}));
     });
   }
   private async openDraftSource(input: DraftSourceOpen) {
@@ -875,6 +898,17 @@ export class RecipeAuthoringController {
     await this.inspect(h, op);
     this.check(h);
     return this.confirmedOperation(h, await this.operation(h, { type: 'advance', operationId, authorization }));
+  }
+  private async restoreCreatorHandoff(h:Handle,scope:HandoffScope,recover:NonNullable<CreatorContinue['recover']>,expected:Extract<ScopedRequest,{type:'restoreHandoff'}>['expected']){
+    const reply=await this.daemon(h,{type:'restoreHandoff',retryId:scope.retryId,expected});
+    if(reply.kind==='handoffUnavailable'){
+      if(reply.retryId!==scope.retryId)throw invalidAuthoring();
+      if(recover==='handoff')throw new AuthoringError('原发卡记录无法核验，请先在原 Bot 的私聊中查看。');
+      return;
+    }
+    const restored=this.verifyHandoff(scope,expectKind(reply,'handoff'));
+    h.handoff=scope;
+    return restored;
   }
   private async beginHandoff(h:Handle,scope:HandoffScope,request:Extract<ScopedRequest,{type:'beginHandoff'|'beginDraftHandoff'}>) {
     h.handoff ??= scope;

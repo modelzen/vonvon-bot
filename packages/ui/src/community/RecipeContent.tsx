@@ -16,7 +16,7 @@ export function RecipeMark({name, logo}: {name: string; logo?: string}) {
   return <span className="community-recipe-mark" aria-hidden="true"><Bot size={26} strokeWidth={1.65}/></span>;
 }
 
-export function CopyButton({value, label = '分享链接'}: {value: string; label?: string}) {
+export function CopyButton({value, label = '复制链接'}: {value: string; label?: string}) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
   return <><Button variant="ghost" onClick={() => {void Promise.resolve().then(() => navigator.clipboard.writeText(value)).then(() => setState('copied'), () => setState('failed'));}}>{state === 'copied' ? <><Check size={14}/>已复制</> : <><Copy size={14}/>{label}</>}</Button>
     {state === 'failed' && <label className="community-copy-fallback">未能复制，请手动复制<input aria-label="手动复制" readOnly value={value} onFocus={event => event.target.select()}/></label>}</>;

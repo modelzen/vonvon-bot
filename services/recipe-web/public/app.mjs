@@ -141,7 +141,7 @@ async function home() {
     }
     if (!hero && !items.length) results.append(stableQuery ?
       empty('没有找到匹配的配方', null, button('清除搜索', () => { q.value = ''; load(); }, 'secondary')) :
-      empty('社区里还没有配方', '发布后，配方会出现在这里。', link('分享配方', '/studio', 'secondary')));
+      empty('社区里还没有配方', '发布后，配方会出现在这里。', link('创作配方', '/studio', 'secondary')));
     if (cursor) results.append(button('加载更多', more, 'secondary more'));
   }
   const listUrl = (s, next) => {
@@ -218,10 +218,10 @@ async function copy(button) {
   const url = location.origin + location.pathname;
   try {
     await navigator.clipboard.writeText(url); button.textContent = '✓ 已复制';
-    setTimeout(() => { button.textContent = '分享链接'; }, 2000);
+    setTimeout(() => { button.textContent = '复制链接'; }, 2000);
   } catch {
     const box = el('input'); box.type = 'url'; box.readOnly = true; box.value = url; box.setAttribute('aria-label','配方链接');
-    modal('复制分享链接', box, group('actions', closeButton())); box.select();
+    modal('复制链接', box, group('actions', closeButton())); box.select();
   }
 }
 function metric(label, value) { return group('metric', el('span', label), el('strong', value)); }
@@ -262,7 +262,7 @@ async function detail(confirmed) {
     await resumeAcquisition();
     return;
   }
-  const sharing = button('分享链接', ev => copy(ev.currentTarget), 'secondary');
+  const sharing = button('复制链接', ev => copy(ev.currentTarget), 'secondary');
   const actions = group('actions', sharing);
   if (data.acquired || data.owned) actions.append(el('span', data.owned ? '我的作品' : '已获取', 'pill'));
   else {

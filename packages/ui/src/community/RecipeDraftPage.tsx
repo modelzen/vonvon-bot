@@ -14,6 +14,7 @@ type Props = {
   draftId: string;
   expectedRevision?: number;
   onBack: () => void;
+  onDeleted: (draftId: string) => void;
   onPublished?: (publication: AuthoringPublished) => void;
   onContinueInChat?: (draft: RecipeDraft) => void;
 };
@@ -28,7 +29,7 @@ export function RecipeDraftPage(props: Props) {
   return <DraftSession key={`${props.accountId}:${props.draftId}:${props.expectedRevision ?? 0}`} {...props}/>;
 }
 
-function DraftSession({shell, accountId, draftId, expectedRevision, onBack, onContinueInChat, onPublished}: Props) {
+function DraftSession({shell, accountId, draftId, expectedRevision, onBack, onDeleted, onContinueInChat, onPublished}: Props) {
   const authoring = useShellCapabilities()?.recipeAuthoring;
   const [read, setRead] = useState<Read>({kind: 'loading'});
   const [refresh, setRefresh] = useState(0);
@@ -145,8 +146,8 @@ function DraftSession({shell, accountId, draftId, expectedRevision, onBack, onCo
     if (deletionRequest.current?.revision !== deletion.revision) deletionRequest.current = {revision: deletion.revision, requestId: crypto.randomUUID()};
     try {
       const result = await shell.request({type: 'deleteDraft', accountId, draftId, revision: deletion.revision, requestId: deletionRequest.current.requestId});
-      if (result.draftId !== draftId) throw new Error('尚未确认此配方的删除结果，请重试同一操作。');
-      if (alive.current) onBack();
+      if (result.draftId !== draftId || result.deleted !== true) throw new Error('尚未确认此配方的删除结果，请重试同一操作。');
+      if (alive.current) onDeleted(result.draftId);
     } catch (reason) {
       if (alive.current) setDeleteError(reason instanceof Error ? reason.message : '删除未完成，请重试。');
     } finally {
@@ -169,7 +170,7 @@ function DraftSession({shell, accountId, draftId, expectedRevision, onBack, onCo
       <RecipeDetails draft recipe={draft} heading={<header className="community-detail-heading recipe-draft-heading">
         <RecipeMark name={draft.public.name} logo={draft.format === 'rich-v2' ? draft.logo : undefined}/>
         <div><h1>{draft.public.name || '未命名配方'}</h1><p>创作中 · 仅自己可见</p>{draft.public.summary && <p>{draft.public.summary}</p>}</div>
-        <div className="community-actions"><Button disabled={!current || deleting || publicationLocked || !onContinueInChat} onClick={() => onContinueInChat?.(draft)}>在飞书继续创作</Button><GlowButton variant="dark" disabled={!current || deleting || publicationLocked || !authoring} onClick={() => void prepare(draft)}>{publication.kind === 'preparing' ? '正在准备…' : publication.kind === 'publishing' ? '正在发布…' : publication.kind === 'published' ? '已发布' : '发布到社区'}</GlowButton></div>
+        <div className="community-actions"><Button title="让原来源 Bot 发送引导卡，并打开本人私聊" disabled={!current || deleting || publicationLocked || !onContinueInChat} onClick={() => onContinueInChat?.(draft)}>继续创作</Button><GlowButton variant="dark" disabled={!current || deleting || publicationLocked || !authoring} onClick={() => void prepare(draft)}>{publication.kind === 'preparing' ? '正在准备…' : publication.kind === 'publishing' ? '正在发布…' : publication.kind === 'published' ? '已发布' : '发布到社区'}</GlowButton></div>
       </header>}/>
       {!onContinueInChat && <p className="community-muted">请在已关联的 Bot 私聊中继续创作。</p>}
       <div className="recipe-draft-footer"><Button variant="ghost" disabled={!current || deleting || publicationLocked} onClick={() => {setDeleteError(undefined); setDeletion(draft);}}>删除未发布配方</Button></div>

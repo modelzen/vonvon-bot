@@ -21,6 +21,7 @@ export type Option={label:string;choice:Choice};
 export type Card={
   ref:string;generation:number;session:string;sendId:string;expiresAt:number;title:string;text:string;
   options:Option[];previewOwner?:string;previewApproval?:string;version?:VersionSelection;needsUpdate?:true;retryId?:string;cardId?:string;messageId?:string;url?:string;appPreviewUrl?:string;workId?:string;
+  previewRefresh?:{owner:string;cardId:string;messageId:string};
 };
 export const layout=(c:Card)=>card([
   {tag:'div',text:{tag:'plain_text',content:c.text}},

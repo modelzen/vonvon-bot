@@ -37,11 +37,11 @@ function assertGuide(document) {
   const main = document.querySelector('main');
   assert.equal(main.querySelectorAll('form,input,textarea,select,[contenteditable="true"]').length, 0, 'website studio must not expose manual authoring controls');
   assert.equal(main.querySelector('h1')?.textContent, '在 Bot 私聊中创作');
-  assert.match(main.textContent, /社区.*我的配方.*分享配方/s);
+  assert.match(main.textContent, /社区.*我的配方.*创作配方/s);
   assert.match(main.textContent, /Bot.*已有群聊/s);
   assert.match(main.textContent, /飞书私聊/);
   assert.match(main.textContent, /App 查看完整预览.*App 确认发布.*飞书卡片上直接确认发布/s);
-  assert.match(main.textContent, /草稿.*已发布版本.*分享码.*App/s);
+  assert.match(main.textContent, /已获取.*创作中.*已发布.*App/s);
   assert.doesNotMatch(main.textContent, /新建文字草稿|保存草稿|在私聊中查看完整预览|准备新版|生成分享码/);
   assert.equal(document.querySelector('a[href="/"]')?.textContent.includes('Vonvon Bot'), true);
   assert.equal(document.querySelector('#library-link')?.getAttribute('href'), '/library');

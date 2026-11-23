@@ -23,15 +23,13 @@ import {groupUrl, openExternalUrl} from './url-actions';
 import {ProjectMemoryMap} from './ProjectPage';
 import {DmMemory} from './DmMemory';
 import {ScheduleTab} from './ScheduleTab';
-import {GroupRecipeShare} from './community/authoring/GroupRecipeShare';
 import {deviceTitle} from './setup/service-toggle';
 import './group-workspace.css';
 
-export type GroupDesignTab = GroupSettingsTab | 'memory' | 'schedule' | 'share';
-export const groupDesignTabs: readonly [GroupDesignTab, string][] = [['model','模型与权限'],['capabilities','能力'],['response','沟通方式'],['memory','记忆'],['schedule','任务'],['share','分享']];
+export type GroupDesignTab = GroupSettingsTab | 'memory' | 'schedule';
+export const groupDesignTabs: readonly [GroupDesignTab, string][] = [['model','模型与权限'],['capabilities','能力'],['response','沟通方式'],['memory','记忆'],['schedule','任务']];
 export function groupTabForSection(section?: string): GroupDesignTab {
   switch (section) {
-    case '分享': return 'share';
     case '记忆':
     case '项目记忆': return 'memory';
     case '任务':
@@ -143,7 +141,6 @@ export function GroupWorkspace({member, agent, group, snapshot, dmMode, initialT
     finally {saving.current = false; setBusy(false); setPendingEnabled(null); setPendingConversation(null);}
   }
   const available = agent.running && !!project && !member.stale;
-  const tabs = dmMode ? groupDesignTabs.filter(([value]) => value !== 'share') : groupDesignTabs;
   const groupBots = snapshot.memberships.filter(item => item.groupId === group.id).flatMap(item => {
     const bot = snapshot.agents.find(candidate => candidate.id === item.agentId);
     return bot ? [{item, bot}] : [];
@@ -180,15 +177,15 @@ export function GroupWorkspace({member, agent, group, snapshot, dmMode, initialT
       </div>
       <div className="config-header-navigation">
         <nav className="group-design-tabs config-tabs gooey-tabs" aria-label={dmMode ? '私聊设置' : '群设置'}>
-          <NavigationIndicator activeIndex={tabs.findIndex(([value]) => tab === value)}/>
-          {tabs.map(([value,label]) => <button type="button" key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => guard.navigate(() => {setTab(value); onTabChange?.(value);})}>{value === 'memory' && newMemoryCount ? <>{label}<span className="group-memory-tab-new" aria-label={`${newMemoryCount} 条新记忆`}>新 {newMemoryCount}</span></> : label}</button>)}
+          <NavigationIndicator activeIndex={groupDesignTabs.findIndex(([value]) => tab === value)}/>
+          {groupDesignTabs.map(([value,label]) => <button type="button" key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => guard.navigate(() => {setTab(value); onTabChange?.(value);})}>{value === 'memory' && newMemoryCount ? <>{label}<span className="group-memory-tab-new" aria-label={`${newMemoryCount} 条新记忆`}>新 {newMemoryCount}</span></> : label}</button>)}
         </nav>
         {dmMode ? (!agent.running && <span className="group-control-note">{agent.enabled ? 'Bot 未运行' : 'Bot 已停用'}</span>) : project ? <span className="config-enable group-enable-control"><span role="status" className="group-save-status">{notice === '已保存。' && <><Check size={12} aria-hidden="true"/>已保存</>}</span>{pendingEnabled !== null && <OperationActivity key={`${member.id}:${pendingEnabled}`} label={pendingEnabled ? '本群启用中' : '本群停用中'} state={pendingEnabled ? 'connecting' : 'working'}/>}<Toggle aria-label={`在本群使用 ${agent.name}`} label="在本群使用" checked={project.enabled} disabled={!available || busy} onChange={event => {const enabled=event.target.checked; guard.navigate(() => {void update({enabled});});}}/></span> : <span className="group-control-note">{!agent.enabled ? 'Bot 已停用' : !agent.running ? 'Bot 未运行' : '读取中…'}</span>}
       </div>
     </header>
     {error && <InlineNotice title="操作未完成" tone="warning">{error}</InlineNotice>}
     {notice && notice !== '已保存。' && <p role="status" className="group-control-note">{notice}</p>}
-    {tab === 'share' ? dmMode ? null : <GroupRecipeShare botId={agent.id} groupId={group.id}/> : tab === 'memory' ? <section id={settingAnchor('记忆')} aria-label="记忆">
+    {tab === 'memory' ? <section id={settingAnchor('记忆')} aria-label="记忆">
       {dmMode ? <DmMemory key={member.id} agent={agent} revision={snapshot.revision} onBotProfile={() => guard.navigate(onBotProfile)}/> : memberProject ? <ProjectMemoryMap key={memberProject.id} focusNew={focusNew} groupsInitiallyOpen={false} initialRoleMembershipId={initialTab === 'role' ? member.id : undefined} selectedAgentId={member.agentId} selectedGroupId={member.groupId} onBotProfile={() => guard.navigate(onBotProfile)} project={memberProject} snapshot={snapshot} onMembership={id => {const target = snapshot.memberships.find(item => item.id === id); if (target) guard.navigate(() => onBot(target));}}/> : <p className="group-control-note">这个群的项目记忆暂不可用。</p>}
     </section> : tab === 'schedule' ? <ScheduleTab key={member.id} botId={member.agentId} {...dmMode ? {dm: true} : {chatId: member.groupId}} deviceTitle={deviceTitle(snapshot.application.platform)}/>
     : <GroupDesignSettings key={member.id} refreshVersion={version} dm={dmMode} scope={{kind:'project',botId:member.agentId,projectName:dmMode ? member.groupId : member.name}} tab={tab} tools={snapshot.tools} agent={agent} botName={agent.name} groupName={group.name} onOpenTools={onOpenTools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets} responseHeader={dmMode ? undefined : conversationControl}/>}

@@ -6,7 +6,8 @@ import {useActiveDevice, useClient, useShellCapabilities} from '../client-contex
 import type {RecipeGroupTarget} from '../recipes/recipe-use-context';
 import {useOptionalDraftGuard} from '../settings/DraftGuard';
 
-export type CommunityRoute = {kind: 'catalog'} | {kind: 'library'} | {kind: 'workspace'} | {kind: 'detail'; recipe: {recipeId: string; versionId: string}; from?: 'library'; privateView?: boolean; useTarget?: RecipeGroupTarget} | {kind: 'draft'; draftId: string; expectedRevision?: number; navigationId?: string};
+export type RecipeWorkspaceTab = 'acquired' | 'drafts' | 'published';
+export type CommunityRoute = {kind: 'catalog'} | {kind: 'workspace'; tab: RecipeWorkspaceTab} | {kind: 'detail'; recipe: {recipeId: string; versionId: string}; from?: RecipeWorkspaceTab; privateView?: boolean; useTarget?: RecipeGroupTarget} | {kind: 'draft'; draftId: string; expectedRevision?: number; navigationId?: string};
 export type CommunityDeparture = {deviceId: string; destination: Destination};
 type CommunityContextValue = {
   shell?: CommunityShell; isOpen: boolean; route: CommunityRoute;
@@ -29,7 +30,7 @@ export function CommunityProvider({shell, onUse, children}: {shell?: CommunitySh
   const client = useClient();
   const device = useActiveDevice();
   const [stored, setRoute] = useState<{route: CommunityRoute; owner?: string; deviceId?: string; client?: typeof client}>({route: {kind: 'catalog'}});
-  const privateRoute = stored.route.kind === 'draft' || stored.route.kind === 'workspace' || stored.route.kind === 'library' || stored.route.kind === 'detail' && stored.route.privateView;
+  const privateRoute = stored.route.kind === 'draft' || stored.route.kind === 'workspace' || stored.route.kind === 'detail' && (stored.route.privateView || stored.route.from !== undefined);
   const foreignRoute = privateRoute && stored.owner !== undefined && stored.owner !== accountId;
   const route = foreignRoute ? {kind: 'catalog'} as const : stored.route;
   useEffect(() => {if (foreignRoute) setRoute({route: {kind: 'catalog'}});}, [foreignRoute]);

@@ -1,7 +1,7 @@
 import {recipeRichDraftChangeSchema} from './recipe-rich.js';
 import {richFreezeInputSchema,richPreparationSchema,richSourceOptionsSchema,richInventoryOptionsSchema,richLocalInventorySchema} from './recipe-rich-authoring.js';
 import { z } from 'zod';
-import { agentIdSchema, groupIdSchema } from './domain.js';
+import { agentIdSchema, agentSchema, groupIdSchema, membershipSchema } from './domain.js';
 import { viewIdSchema } from './desktop-devices.js';
 import { recipePublicSchema, recipeConfigSchema, recipeDraftSchema } from './desktop-community.js';
 import { authoringChangeSchema, authoringOperationSchema, authoringHandoffSchema, handoffUnavailableSchema } from './recipe-authoring.js';
@@ -18,8 +18,10 @@ export const desktopAuthoringRequestSchema = z.discriminatedUnion('type', [
   z.object({type:z.literal('preparePublication'),accountId:uuid,draft:recipeDraftSchema}).strict(),
   z.object({type:z.literal('confirmPublication'),accountId:uuid,reviewId:uuid}).strict(),
   z.object({type:z.literal('recoverPublication'),accountId:uuid,draftId:uuid}).strict(),
-  z.object({type:z.literal('creatorContinue'),accountId:uuid,entry:z.discriminatedUnion('kind',[
-    z.object({kind:z.literal('source'),viewId:viewIdSchema,botId:agentIdSchema,groupId:groupIdSchema,parent:z.object({recipeId:uuid,versionId:uuid}).strict().optional()}).strict(),
+  z.object({type:z.literal('creatorContinue'),accountId:uuid,retryId:uuid,recover:z.enum(['request','handoff']).optional(),entry:z.discriminatedUnion('kind',[
+    z.object({kind:z.literal('source'),viewId:viewIdSchema,botId:agentIdSchema,groupId:groupIdSchema,
+      registrationId:agentSchema.shape.registrationId,registeredAt:agentSchema.shape.registeredAt,bindingIncarnation:membershipSchema.shape.bindingIncarnation,
+      parent:z.object({recipeId:uuid,versionId:uuid}).strict().optional()}).strict(),
     z.object({kind:z.literal('draft'),draftId:uuid,revision}).strict(),
     z.object({kind:z.literal('version'),recipeId:uuid,versionId:uuid}).strict(),
   ]),source:creatorSource.optional()}).strict(),
@@ -114,6 +116,7 @@ const publicationRecoverySchema=z.object({kind:z.literal('publicationRecovery'),
   z.object({kind:z.literal('pending')}).strict(),
   z.object({kind:z.literal('published'),publication:authoringPublishedSchema}).strict(),
 ])}).strict();
+export const creatorChatTargetSchema=creatorSource.extend({accountId:uuid,tenant:z.enum(['feishu','lark']),botName:name}).strict();
 export const desktopAuthoringReplySchema = z.discriminatedUnion('kind', [
   publicationRecoverySchema,
   z.object({kind:z.literal('publicationReady'),reviewId:uuid,draftId:uuid,revision,public:recipePublicSchema}).strict(),
@@ -121,7 +124,8 @@ export const desktopAuthoringReplySchema = z.discriminatedUnion('kind', [
     z.object({kind:z.literal('pending')}).strict(),
     z.object({kind:z.literal('published'),publication:authoringPublishedSchema}).strict(),
   ])}).strict(),
-  z.object({kind:z.literal('creatorContinuing'),accountId:uuid,viewId:viewIdSchema,botId:agentIdSchema}).strict(),
+  creatorChatTargetSchema.extend({kind:z.literal('creatorContinuing'),retryId:uuid,delivery:z.enum(['delivered','deliveryUnknown','queued','restored','unverified'])}).strict(),
+  z.object({kind:z.literal('creatorUnverified'),accountId:uuid,retryId:uuid}).strict(),
   z.object({kind:z.literal('creatorSourceRequired'),options:z.array(creatorSource.extend({botName:name})).max(64)}).strict(),
   handoffUnavailableSchema,
   z.object({kind:z.literal('handoffRestored'),session:desktopAuthoringSessionSchema,handoff:authoringHandoffSchema}).strict(),
