@@ -6,7 +6,7 @@ import {
   agentIdSchema, groupIdSchema, desktopSnapshotSchema, recipeUseRequestSchema, desktopRecipeSourceRequestSchema,
   communityRequestSchema, communityResponseSchemas, collaborationRequestSchema, commandSchema,
   type AccountStatus, type AccountShell, type RecipeUseRequest, type RecipeUseReply, type DesktopRecipeSourceRequest,
-  type DesktopRecipeSourceReply, type CommunityRequest, type ProjectSettingsView,
+  type DesktopRecipeSourceReply, type CommunityRequest, type ProjectSettingsView, type RecipeDetail,
 } from '@vonvon/protocol';
 import {createDesktopFacades} from '../../desktop/src/facade';
 import {desktopChannels} from '../../desktop/src/ipc-contract';
@@ -48,7 +48,7 @@ let accountListener: ((status: AccountStatus) => void) | undefined;
 let useReply: (request: RecipeUseRequest) => RecipeUseReply | Promise<RecipeUseReply>;
 let sourceReply: (request: DesktopRecipeSourceRequest) => DesktopRecipeSourceReply | Promise<DesktopRecipeSourceReply>;
 let acquired: boolean;
-let detailRead: (() => Promise<typeof detail>) | undefined;
+let detailRead: (() => Promise<RecipeDetail>) | undefined;
 
 function Launcher() {
   const community = useCommunity()!;
@@ -409,6 +409,64 @@ it('keeps conflict decisions explicit and presents the retained local value besi
   expect(requests.some(request => request.type === 'confirm')).toBe(false);
 });
 
+it('requires a compatible preview for legacy memory conflicts and recovers through cancellation and a fresh preview', async () => {
+  useReply = request => request.type === 'cancel' ? {kind: 'rejected', handle, groupId}
+    : request.type === 'retry' ? {kind: 'richReview', handle, groupId, reviewToken: newToken, conflicts: []}
+    : request.type === 'richResolve' ? {kind: 'richPrepared', handle, groupId, reviewToken: newToken}
+    : {kind: 'richReview', handle, groupId, reviewToken: token, conflicts: [
+      {itemId: versionId, kind: 'memories', base: 'MEMORY_BASE_SENTINEL', local: 'MEMORY_LOCAL_SENTINEL', incoming: 'MEMORY_INCOMING_SENTINEL'},
+      {itemId: nextVersion, kind: 'role', base: null, local: '本群角色', incoming: '新角色'},
+    ]};
+  await draw(); await click('预览已知群');
+  expect(document.body.textContent).toContain('需要重新预览配方');
+  expect(document.body.textContent).toContain('取消本次应用后重新预览');
+  expect(document.body.textContent).not.toMatch(/MEMORY_(BASE|LOCAL|INCOMING)_SENTINEL/);
+  expect(document.querySelector('fieldset')).toBeNull();
+  expect(button('预览所选内容')).toBeUndefined();
+  expect(button('确认应用到这个群')).toBeUndefined();
+  expect(requests.some(request => request.type === 'richResolve' || request.type === 'confirm')).toBe(false);
+  expect(communityRequests.some(request => request.type === 'detail')).toBe(false);
+  await click('取消应用'); await click('在这个群重新预览');
+  expect(requests.filter(request => request.type === 'richResolve')).toEqual([{type: 'richResolve', handle, reviewToken: newToken, choices: {}}]);
+  expect(button('确认应用到这个群').disabled).toBe(false);
+  expect(document.body.textContent).not.toContain('MEMORY_LOCAL_SENTINEL');
+});
+
+it.each(['richReview', 'richPrepared'] as const)('blocks %s with legacy retained memory before resolving or reading content', async kind => {
+  const onRequest = vi.fn(async (_request: RecipeUseRequest) => {});
+  const session = {id: 1, recipe: {recipeId, versionId, name: '配方', version: '1'}, accountId, device: {id: A, name: '设备', isRemote: true, mode: 'full' as const, capabilities: []}, client, botId};
+  const reply = kind === 'richReview' ? {kind, handle, groupId, reviewToken: token, conflicts: []} : {kind, handle, groupId, reviewToken: token};
+  await act(async () => root.render(<DesktopRootView state={devicesState({id: A, phase: 'ready'})} fallback={client} shell={shell} renderApp={() => <RecipeUseDialog session={session} visible reply={reply} busy={false} paused={false} accountChanged={false} unavailable={false} needsRecovery={false} groupId={groupId} groupName="群聊" community={shell.community} retainedSettings={[{kind: 'memories', base: 'RETAINED_BASE_SENTINEL', local: 'RETAINED_LOCAL_SENTINEL', incoming: 'RETAINED_INCOMING_SENTINEL'}]} onRefreshGroupName={() => {}} onSelectBot={() => {}} onSelectGroup={() => {}} onClose={() => {}} onRecover={() => {}} onRequest={onRequest}/>}/>));
+  expect(document.body.textContent).toContain('需要重新预览配方');
+  expect(document.body.textContent).not.toMatch(/RETAINED_(BASE|LOCAL|INCOMING)_SENTINEL/);
+  expect(document.querySelector('.recipe-use-retained')).toBeNull();
+  expect(button('确认应用到这个群')).toBeUndefined();
+  expect(button('预览所选内容')).toBeUndefined();
+  expect(onRequest).not.toHaveBeenCalled();
+  expect(communityRequests.some(request => request.type === 'detail')).toBe(false);
+  expect(button('取消应用').disabled).toBe(false);
+});
+
+it('shows a historical recipe preview with five tabs while keeping memory out of every panel', async () => {
+  const {canonicalizeRichRecipeContent} = await import('@vonvon/protocol');
+  const {readFileSync} = await import('node:fs');
+  const {resolve} = await import('node:path');
+  const content = JSON.parse(readFileSync(resolve(process.cwd(), '../protocol/test/fixtures/recipe-rich-v2.content.json'), 'utf8'));
+  content.parts = []; delete content.finalLogo;
+  content.memories = content.memories.map((memory: {itemId: string; originId: string}) => ({...memory, text: {kind: 'inline', value: 'USE_PREVIEW_MEMORY_SENTINEL'}}));
+  const doc = canonicalizeRichRecipeContent(content);
+  detailRead = async () => ({...detail, format: 'rich-v2', config: undefined, rich: {content: doc.content, texts: {}, canonical: Buffer.from(doc.canonicalUTF8).toString('base64url')}});
+  useReply = () => ({kind: 'richPrepared', handle, groupId, reviewToken: token});
+  await draw(); await click('预览已知群');
+  expect(document.querySelectorAll('[aria-label="配方详细信息"] button')).toHaveLength(5);
+  for (const label of ['概览', '模型与权限', '能力', '沟通方式', '任务']) {
+    await click(label);
+    expect(document.body.textContent).not.toContain('USE_PREVIEW_MEMORY_SENTINEL');
+  }
+  expect(document.querySelector('[aria-label="配方详细信息"]')?.textContent).not.toContain('记忆');
+  expect(button('确认应用到这个群').disabled).toBe(false);
+});
+
 it('blocks confirmation when content cannot be read and retries the same fixed version', async () => {
   detailRead = async () => {throw new Error('offline');};
   useReply = () => ({kind: 'richPrepared', handle, groupId, reviewToken: token});
@@ -500,7 +558,7 @@ it.each(['account', 'recipe', 'version', 'handle', 'token'] as const)('does not 
   expect(communityRequests.filter(request => request.type === 'detail')).toHaveLength(2);
 });
 
-it.each(['rules', 'files', 'tasks', 'memories', 'setup'])('keeps %s prose and names verbatim', async kind => {
+it.each(['rules', 'files', 'tasks', 'setup'])('keeps %s prose and names verbatim', async kind => {
   const itemId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
   const content = JSON.stringify({name: 'constructor', title: 'constructor', text: 'default', instruction: 'default', instructions: 'default'});
   useReply = () => ({kind: 'richReview', handle, groupId, reviewToken: token, conflicts: [{itemId, kind, base: null, local: content, incoming: null}]});

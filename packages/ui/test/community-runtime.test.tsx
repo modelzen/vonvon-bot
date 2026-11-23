@@ -420,13 +420,13 @@ it('renders complete rich configuration through the strict facade and hides ever
   expect(document.querySelector('.community-detail')?.textContent).not.toContain('OLD_SETUP_PRIVATE');
   expect(document.querySelector('.community-detail')?.textContent).not.toContain('SETUP_SKILL_BODY');
   await fill('分享码','VALID');await click('获取配方');
-  expect([...document.querySelectorAll('[aria-label="配方详细信息"] button')].map(button=>button.textContent)).toEqual(['概览','模型与权限','能力','沟通方式','记忆','任务']);
+  expect([...document.querySelectorAll('[aria-label="配方详细信息"] button')].map(button=>button.textContent)).toEqual(['概览','模型与权限','能力','沟通方式','任务']);
   expect(document.querySelector('.community-additional-notes')?.textContent).toContain('OLD_SETUP_PRIVATE');
   expect(document.querySelector('.community-additional-notes')?.textContent).toContain('OLD_SETUP_CHECK');
-  for(const section of ['模型与权限','能力','沟通方式','记忆','任务']){
+  for(const section of ['模型与权限','能力','沟通方式','任务']){
     await click(section);expect(document.querySelector('.community-detail-content h2')?.textContent).toBe(section==='能力'?'角色':section);
   }
-  await click('记忆');expect(document.querySelector('.community-config')?.textContent).toBe('记忆');
+  expect(document.querySelector('[aria-label="配方详细信息"]')?.textContent).not.toContain('记忆');
   await click('能力');expect(document.querySelector('.community-detail-content')?.textContent).toContain(content.role.text.value);
   expect(document.querySelector('.community-detail-content')?.textContent).toContain('setup');
   expect(document.querySelector('.community-detail-content')?.textContent).toContain('SETUP_SKILL_BODY');

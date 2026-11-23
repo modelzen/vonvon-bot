@@ -167,6 +167,12 @@ export function decodeRichRecipeContent(input: string | Uint8Array): CanonicalRi
   return result;
 }
 
+export function validateWritableRichRecipeContent(input: unknown): CanonicalRichRecipeContent {
+  const result = canonicalizeRichRecipeContent(input);
+  if (result.content.memories.length) fail('invalid_content', 'memories');
+  return result;
+}
+
 export async function digestRichRecipeContent(input: CanonicalRichRecipeContent): Promise<string> {
   const digest = await globalThis.crypto.subtle.digest('SHA-256', new Uint8Array(input.canonicalUTF8));
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');

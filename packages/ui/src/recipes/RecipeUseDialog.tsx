@@ -143,13 +143,14 @@ function RichInstallReview({session, community, reply, busy, retainedSettings, o
   const [readError, setReadError] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const preparedToken = useRef<string | undefined>(undefined);
+  const needsCompatiblePreview = reply.kind === 'richReview' && reply.conflicts.some(item => item.kind === 'memories') || retainedSettings?.some(item => item.kind === 'memories');
   useEffect(() => {
-    if (reply.kind !== 'richReview' || reply.conflicts.length || busy || preparedToken.current === reply.reviewToken) return;
+    if (needsCompatiblePreview || reply.kind !== 'richReview' || reply.conflicts.length || busy || preparedToken.current === reply.reviewToken) return;
     preparedToken.current = reply.reviewToken;
     void onRequest({type: 'richResolve', handle: reply.handle, reviewToken: reply.reviewToken, choices: {}});
-  }, [reply, busy, onRequest]);
+  }, [reply, busy, needsCompatiblePreview, onRequest]);
   useEffect(() => {
-    if (reply.kind !== 'richPrepared' || busy || detail) return;
+    if (needsCompatiblePreview || reply.kind !== 'richPrepared' || busy || detail) return;
     let current = true;
     setReadError(false);
     void community?.request({type: 'detail', accountId: session.accountId, recipeId: session.recipe.recipeId, versionId: session.recipe.versionId}).then(result => {
@@ -159,7 +160,8 @@ function RichInstallReview({session, community, reply, busy, retainedSettings, o
     }, () => {if (current) setReadError(true);});
     if (!community) setReadError(true);
     return () => {current = false;};
-  }, [reply.kind, session.accountId, session.recipe.recipeId, session.recipe.versionId, community, attempt, busy, detail]);
+  }, [reply.kind, session.accountId, session.recipe.recipeId, session.recipe.versionId, community, attempt, busy, detail, needsCompatiblePreview]);
+  if (needsCompatiblePreview) return <InlineNotice title="需要重新预览配方" tone="warning">目标设备返回了包含记忆的旧版预览。配方不再携带记忆，请更新目标设备，取消本次应用后重新预览。</InlineNotice>;
   if (reply.kind === 'richPrepared') return <section className="recipe-use-preview">
     <div><h3>配方内容</h3><p className="recipe-use-note">以下是配方原文。本次冲突中选择保留的内容列在下方；未变更的项目可能沿用本群现有设置。</p></div>
     {detail ? <RecipeDetails recipe={detail} heading={<></>}/> : readError ? <InlineNotice title="暂时无法读取配方内容" tone="warning">读取后再确认应用。<Button disabled={busy} onClick={() => setAttempt(value => value + 1)}>重新读取配方</Button></InlineNotice> : <p role="status">正在读取配方内容…</p>}
@@ -182,12 +184,12 @@ function RichInstallReview({session, community, reply, busy, retainedSettings, o
   </section>;
 }
 
-const conflictNames: Record<string, string> = {role: '角色', settings: '群聊设置', rules: '规则', skills: '技能', files: '文档', tasks: '任务', memories: '记忆', setup: '补充说明', cardBlock: '消息卡片'};
+const conflictNames: Record<string, string> = {role: '角色', settings: '群聊设置', rules: '规则', skills: '技能', files: '文档', tasks: '任务', setup: '补充说明', cardBlock: '消息卡片'};
 function conflictLabel(kind: string) {return Object.hasOwn(conflictNames, kind) ? conflictNames[kind] ?? '配置项目' : '配置项目';}
 const conflictFields = new Map<string, string[]>([
   ['role', ['text']], ['rules', ['purpose', 'text']], ['files', ['name', 'use', 'text']],
   ['skills', ['name']], ['tasks', ['name', 'instruction', 'spec', 'timeZone', 'placement']],
-  ['memories', ['text']], ['setup', ['kind', 'title', 'instructions', 'check', 'required', 'action']],
+  ['setup', ['kind', 'title', 'instructions', 'check', 'required', 'action']],
   ['cardBlock', ['kind', 'name', 'slot', 'mode', 'appearance', 'template', 'requestedTemplate', 'size', 'color', 'warning', 'warningAt', 'contextRules']],
   ['settings', ['field', 'value']],
 ]);

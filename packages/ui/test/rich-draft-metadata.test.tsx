@@ -72,11 +72,11 @@ beforeEach(() => {
 });
 afterEach(async () => {await act(async () => root.unmount()); vi.unstubAllGlobals(); vi.restoreAllMocks();});
 
-it('keeps the named draft, six tabs and in-place metadata form without duplicated detail or engineering controls', async () => {
+it('keeps the named draft, five tabs and in-place metadata form without duplicated detail or engineering controls', async () => {
   await draw(); expect([...document.querySelectorAll('h1')].map(item => item.textContent)).toEqual(['产品群待办']);
   expect(document.querySelector('.rich-draft-heading p')?.textContent).toBe('配方草稿');
   expect(document.querySelector('.rich-draft-page')?.firstElementChild?.className).toBe('today-back');
-  expect(document.querySelectorAll('[aria-label="配方详细信息"] button')).toHaveLength(6);
+  expect(document.querySelectorAll('[aria-label="配方详细信息"] button')).toHaveLength(5);
   await click('能力'); await click('编辑发布信息');
   expect(document.querySelector('[aria-current="page"]')?.textContent).toBe('概览');
   expect(document.querySelector('.community-detail-content .rich-draft-metadata')).not.toBeNull();
@@ -84,6 +84,25 @@ it('keeps the named draft, six tabs and in-place metadata form without duplicate
   expect(document.body.textContent).not.toMatch(/允许聊天修改|选择 Bot|选择设备|本次允许|操作历史/);
   await fill('配方名称', '取消的输入'); await click('取消'); expect(document.querySelector('.rich-draft-metadata')).toBeNull();
   expect(requests.some(item => item.type === 'saveRichDraftMetadata')).toBe(false);
+});
+it('keeps historical memory out of private draft detail and its publication preview', async () => {
+  const content = structuredClone(draft.rich.content);
+  content.memories = [{itemId: '10000000-0000-4000-8000-000000000006', originId: '20000000-0000-4000-8000-000000000006', text: {kind: 'inline', value: 'PRIVATE_DRAFT_MEMORY_SENTINEL'}}];
+  const doc = canonicalizeRichRecipeContent(content);
+  draft = {...draft, rich: {content: doc.content, texts: {}, canonical: Buffer.from(doc.canonicalUTF8).toString('base64url')}};
+  await draw();
+  for (const label of ['概览', '模型与权限', '能力', '沟通方式', '任务']) {
+    await click(label);
+    expect(document.querySelector('[aria-label="配方详细信息"]')?.textContent).not.toContain('记忆');
+    expect(document.body.textContent).not.toContain('PRIVATE_DRAFT_MEMORY_SENTINEL');
+  }
+  await click('预览发布');
+  const preview = document.querySelector('[role="dialog"]');
+  expect(preview?.textContent).toContain('发布后此版本内容固定');
+  expect(preview?.querySelectorAll('[aria-label="配方详细信息"] button')).toHaveLength(5);
+  expect(preview?.textContent).not.toContain('记忆');
+  expect(document.body.textContent).not.toContain('PRIVATE_DRAFT_MEMORY_SENTINEL');
+  expect(requests.some(item => item.type === 'publishDraft')).toBe(false);
 });
 
 it('saves publication information directly without a source or authoring session and keeps publication separate', async () => {

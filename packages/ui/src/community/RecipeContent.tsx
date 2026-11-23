@@ -6,7 +6,7 @@ import {Button} from '../reference/components/ui';
 import {useShellCapabilities} from '../client-context';
 import {allowedExternalUrl, openExternalUrl} from '../url-actions';
 
-export const recipeSections = ['概览', '模型与权限', '能力', '沟通方式', '记忆', '任务'] as const;
+export const recipeSections = ['概览', '模型与权限', '能力', '沟通方式', '任务'] as const;
 export type RecipeSection = typeof recipeSections[number];
 type Section = RecipeSection;
 
@@ -66,7 +66,6 @@ export function RecipeConfiguration({config, section}: {config: RecipeConfig; se
   if (section === '模型与权限') return <div className="community-config"><h2>模型与权限</h2><dl><dt>推荐模型</dt><dd>未指定</dd><dt>权限要求</dt><dd>未指定</dd></dl></div>;
   if (section === '能力') return <div className="community-config"><h2>角色与规则</h2><RecipeMarkdown text={config.role || '未指定'}/><h3>技能</h3><p className="community-muted">未指定</p></div>;
   if (section === '沟通方式') return <div className="community-config"><h2>沟通方式</h2><p className="community-muted">未指定</p></div>;
-  if (section === '记忆') return <div className="community-config"><h2>记忆</h2></div>;
   if (section === '任务') return <div className="community-config"><h2>任务</h2><p className="community-muted">没有任务</p></div>;
   return null;
 }
