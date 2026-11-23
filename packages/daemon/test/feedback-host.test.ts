@@ -6,9 +6,11 @@ import {Readable} from 'node:stream';
 import type {CardActionEvent, NormalizedMessage} from '@larksuiteoapi/node-sdk';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import {isChatAllowed, isUserAllowedInProject, type AppConfig} from '../src/config/schema';
+import type {FeedbackChatIm} from '../src/feedback/chat';
 import {configuredFeedback, configureFeedback, setupDestination} from '../src/feedback/config';
 import {FEEDBACK_ACTION} from '../src/feedback/events';
 import {createFeedbackHost} from '../src/feedback/host';
+import {NativeFeedbackIm, type FeedbackImClient} from '../src/feedback/im';
 import {FileFeedbackStore} from '../src/feedback/store';
 import {feedbackSummarySchema, type FeedbackActor, type FeedbackDraft, type FeedbackGateway} from '../src/feedback/types';
 import type {Project} from '../src/project/registry';
@@ -57,10 +59,10 @@ function fixture() {
   const review = vi.fn(async () => 'om_review'), reply = vi.fn(async (_actor: FeedbackActor, _text: string) => {}), close = vi.fn(async () => {});
   const beginAuthorization = vi.fn(async () => ({verificationUrl: 'private-fixture', qrPath: 'unused', expiresAt: 1000}));
   const checkBot = vi.fn(async () => {});
-  const makeHost = (operationStore = store) => createFeedbackHost({root, bot, registration, store: operationStore, gateway, project: id => id === project.chatId ? project : undefined,
+  const makeHost = (operationStore = store, im: FeedbackChatIm = {reply, review, authorization: async () => {}}) => createFeedbackHost({root, bot, registration, store: operationStore, gateway, project: id => id === project.chatId ? project : undefined,
     checkBot, close, allowed: (current, openId) => isChatAllowed(cfg, current.chatId) && (!openId || isUserAllowedInProject(cfg, current, openId)), configure: async (actor, dest) => {
       if (actor.openId !== 'ou_admin') throw new Error('non-admin'); configureFeedback(project, registration, dest);
-    }, im: () => ({reply, review, authorization: async () => {}}), authorization: {beginAuthorization, finishAuthorization: gateway.user},
+    }, im: () => im, authorization: {beginAuthorization, finishAuthorization: gateway.user},
     download: async () => Readable.from(['file'])});
   const host = makeHost();
   const setup = () => host.onMessage(message(command, 'ou_admin'));
@@ -313,3 +315,52 @@ it.each(['allowedChats', 'allowedUsers'] as const)('withholds the receipt when %
   expect(f.reply.mock.calls.some(([, text]) => text.includes('https://'))).toBe(false);
   expect(f.gateway.submit).toHaveBeenCalledTimes(1);
 });
+
+it.each(['submitted', 'uncertain'].flatMap(state => ['allowedChats', 'allowedUsers', 'lifetime', 'registration', 'retained'].map(policy => ({state, policy}))))(
+  'checks $policy at native reply dispatch for a $state historical receipt', async ({state, policy}) => {
+    const f = fixture();
+    await f.setup();
+    const {operationId} = await f.prepare();
+    const {draft} = await f.store.read(operationId);
+    if (state === 'uncertain') f.gateway.submit.mockRejectedValue(new Error('response lost after form start'));
+    await f.host.onAction(action(draft));
+    expect((await f.store.read(operationId)).state).toBe(state);
+    configureFeedback(f.project, registration, {...destination, baseToken: 'BaseTwo', tableId: 'tblTwo', shareToken: 'shrTwo'});
+    f.gateway.lookup.mockImplementation(async input => ({state: 'found', recordId: 'recLater', creatorOpenId: input.actor.openId}));
+    let release = () => {};
+    const gate = new Promise<void>(resolve => {release = resolve;});
+    let entered = () => {};
+    const querying = new Promise<void>(resolve => {entered = resolve;});
+    let firstGet = true;
+    const reply = vi.fn(async (_request: Parameters<FeedbackImClient['im']['v1']['message']['reply']>[0]) =>
+      ({code: 0, data: {message_id: 'om_receipt', chat_id: draft.actor.chatId}}));
+    const client: FeedbackImClient = {
+      im: {v1: {message: {
+        get: async request => {
+          if (firstGet) {firstGet = false; entered(); await gate;}
+          return {code: 0, data: {items: [{message_id: request?.path.message_id, chat_id: draft.actor.chatId}]}};
+        }, reply,
+      }, image: {create: async () => {throw new Error('Unexpected image upload');}}}},
+      cardkit: {v1: {card: {create: async () => {throw new Error('Unexpected card creation');}}}},
+    };
+    const native = new NativeFeedbackIm({client, bot, privateRecipient: async () => undefined});
+    const restarted = f.makeHost(new FileFeedbackStore(join(root, 'operations')), native);
+    const pending = restarted.onAction(action(draft));
+    let closing: Promise<void> | undefined;
+    try {
+      await querying;
+      if (policy === 'allowedChats') f.access.allowedChats = ['oc_other'];
+      if (policy === 'allowedUsers') f.project.allowedUsers = ['ou_other'];
+      if (policy === 'lifetime') closing = restarted.close();
+      if (policy === 'registration') f.checkBot.mockRejectedValue(new Error('registration changed'));
+    } finally {release();}
+    await pending;
+    await closing;
+    const receipts = reply.mock.calls.filter(([request]) => request?.data.content.includes('https://my.feishu.cn/record/'));
+    expect(receipts).toHaveLength(policy === 'retained' ? 1 : 0);
+    if (policy === 'retained') expect(receipts[0]?.[0]?.path.message_id).toBe('om_review');
+    if (state === 'uncertain') expect(f.gateway.lookup).toHaveBeenLastCalledWith(expect.objectContaining({destination}));
+    expect((await f.store.read(operationId)).state).toBe('submitted');
+    expect(f.gateway.submit).toHaveBeenCalledTimes(1);
+  },
+);

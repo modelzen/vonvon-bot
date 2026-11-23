@@ -6,7 +6,7 @@ import type {FeedbackActor, FeedbackDestination, FeedbackSubmissionResult, Feedb
 
 type ReviewCard = NonNullable<ReturnType<typeof feedbackReviewCard>>;
 export interface FeedbackChatIm {
-  reply(actor: FeedbackActor, text: string): Promise<void>;
+  reply(actor: FeedbackActor, text: string, beforeSend?: () => Promise<void>): Promise<void>;
   review(actor: FeedbackActor, body: ReviewCard, beforeSend?: () => Promise<void>): Promise<string>;
   /** Send URL followed by its QR image to this exact person's private chat. */
   authorization(actor: FeedbackActor, verificationUrl: string, qrPath: string): Promise<void>;

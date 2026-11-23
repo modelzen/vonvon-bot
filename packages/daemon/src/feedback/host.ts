@@ -168,7 +168,7 @@ export function createFeedbackHost(deps: Dependencies): FeedbackHost {
             await controller(operation.draft.destination, {review: im.review.bind(im), authorization: im.authorization.bind(im),
               async reply(recipient, text) {
                 checkAudience();
-                await im.reply(recipient, text);
+                await im.reply(recipient, text, async () => {await deps.checkBot(); checkAudience();});
               },
             }).onAction(event);
           }
