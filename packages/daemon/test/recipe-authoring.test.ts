@@ -3206,3 +3206,87 @@ it('APP PUBLICATION keeps multiple legal large editor answers outside the bounde
   const rows=await ledger.run(db=>Object.values(db.links).find(link=>link.creator)!.creator!.jobs);
   for(const id of ids){expect(rows[id]!.state).toBe('finished');expect(rows[id]!.answerDigest).toBeTruthy();expect(rows[id]!.result).toBeUndefined();}
 },60000);
+
+
+it('APP PREPARE INTEGRATION rejects an expired existing offer before creating a replacement',async()=>{
+  await link();await attachCreator();const snapshot=await openManualWork('过期发布准备');
+  const current=kind(await rpc('creatorPreview',{work:snapshot.work,revision:2}),'creatorPreview');
+  const {AuthoringJournal}=await import('../src/recipe/authoring-journal');
+  const ledger=new AuthoringJournal(root,()=>clock);
+  await ledger.run(db=>{
+    const row=Object.values(db.links).find(l=>l.binding===current.job.binding)!.creator!.jobs[current.job.id]!;
+    row.expiresAt=clock-1;
+  });
+  await expect(rpc('creatorPreview',{work:snapshot.work,revision:2})).rejects.toThrow('来源、授权或修订已改变');
+  expect(await ledger.run(db=>Object.values(db.links).find(l=>l.binding===current.job.binding)!.creator!.jobs[current.job.id]!.state)).toBe('offer');
+});
+
+it.each(['role','rich','rich-paired'] as const)('APP PREPARE INTEGRATION drives real supervisor controller executor and daemon to readonly publicationReady for %s',async format=>{
+  await link();
+  const {RecipeCreatorSupervisor}=await import(new URL('../../desktop/src/recipe-creator-supervisor.ts',import.meta.url).href);
+  const {RecipeCreatorExecutor}=await import(new URL('../../desktop/src/recipe-creator.ts',import.meta.url).href);
+  const {RecipeCreatorJournal}=await import(new URL('../../desktop/src/recipe-creator-journal.ts',import.meta.url).href);
+  const {RecipeAuthoringController}=await import(new URL('../../desktop/src/recipe-authoring.ts',import.meta.url).href);
+  const {MetadataJournal}=await import(new URL('../../desktop/src/community-metadata-journal.ts',import.meta.url).href);
+  const {AuthoringJournal:NativeHistory}=await import(new URL('../../desktop/src/recipe-authoring-journal.ts',import.meta.url).href);
+  const {recipeAuthoringReplySchema}=await import('@vonvon/protocol');
+  const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
+  const work:{draftId:string;source:null|{preparationId:string;groupId:typeof groupId;identity:string}}={draftId:randomUUID(),source:null};
+  if(format!=='role'){
+    const op=await prepare();
+    await rpc('settle',{operationId:op.operationId,receipt:{operationId:op.operationId,status:'accepted',stateRevision:3,draftId:work.draftId,revision:1}});
+    const identity=kind(await rpc('operationSourceIdentity',{operationId:op.operationId}),'operationSourceIdentity').identity!;
+    work.source={preparationId:op.operationId,groupId,identity};
+  }
+  const field=(value:string)=>({itemId:randomUUID(),originId:randomUUID(),value});
+  const fileParts=Array.from({length:3},(_,i)=>({itemId:randomUUID(),objectId:randomUUID(),bytes:Buffer.from('模拟文件正文 '+i)}));
+  const logoPart={objectId:randomUUID(),bytes:Buffer.alloc(7224,4)};
+  const texts=Object.fromEntries(fileParts.map(part=>[part.objectId,part.bytes.toString()]));
+  const objects=new Map([...fileParts,logoPart].map(part=>[part.objectId,part.bytes]));
+  const document=canonicalizeRichRecipeContent({format:'rich-v2',schemaVersion:2,public:{name:field('原生发布准备联调'),summary:field(''),overview:field('完整内容'),version:field('2')},
+    role:{itemId:randomUUID(),originId:randomUUID(),text:{kind:'inline',value:'完整群角色'}},
+    settings:[],rules:[],skills:[{itemId:randomUUID(),originId:randomUUID(),name:'模拟技能',entryFileId:fileParts[0]!.itemId,fileIds:fileParts.map(part=>part.itemId)}],files:fileParts.map((part,i)=>({itemId:part.itemId,originId:randomUUID(),name:i===0?'SKILL.md':'reference-'+i+'.md',use:i===0?'skillDescription':'reference',text:{kind:'part',objectId:part.objectId}})),
+    tasks:[],memories:[],setup:[],parts:[...fileParts.map(part=>({objectId:part.objectId,kind:'text',sha256:digest(part.bytes),bytes:part.bytes.length,mediaType:'text/plain;charset=utf-8'})),
+      {objectId:logoPart.objectId,kind:'finalLogo',sha256:digest(logoPart.bytes),bytes:logoPart.bytes.length,mediaType:'image/webp'}],finalLogo:{itemId:randomUUID(),originId:randomUUID(),objectId:logoPart.objectId}});
+  const manifest={objectId:randomUUID(),kind:'manifest',sha256:digest(document.canonicalUTF8),bytes:document.canonicalUTF8.length,mediaType:'application/json'};
+  const publicFields={name:'原生发布准备联调',summary:'',overview:'完整内容',version:'2',access:'direct' as const};
+  const draft=format!=='role'?{draftId:work.draftId,recipeId:null,revision:2,public:publicFields,format:'rich-v2' as const,sourceIntentId:work.source!.preparationId,
+    rich:{content:document.content,texts,canonical:Buffer.from(document.canonicalUTF8).toString('base64url')},logo:'data:image/webp;base64,'+logoPart.bytes.toString('base64')}:
+    {draftId:work.draftId,recipeId:null,revision:2,public:publicFields,config:{role:'完整群角色'}};
+  const controller=new AbortController(),state={kind:'signedIn' as const,accountId:account,displayName:'本人',provider:'google' as const,persistence:'memory' as const};
+  const requests:Array<{path:string;method:string}>=[],trace:Array<{type:string;kind?:string;error?:string}>=[];
+  const native={status:()=>state,lease:(id:string)=>id===account?controller.signal:undefined,onStatus:()=>()=>{},login:async()=>state,logout:async()=>state,cancelLogin:async()=>state,dispose:async()=>{},
+    recipeLink:(r:string,v:string)=>`https://vonvon.cc/recipes/${r}/versions/${v}`,request:async(id:string,path:string,init?:RequestInit,beforeSend?:()=>void|Promise<void>)=>{
+      await beforeSend?.();expect(id).toBe(account);requests.push({path,method:init?.method??'GET'});
+      if(path==='/v1/me')return Response.json({accountId:account});
+      if(path==='/v2/drafts/'+work.draftId)return format!=='role'?Response.json({format:'rich-v2',draftId:work.draftId,recipeId:null,revision:2,access:'direct',sourceIntentId:work.source!.preparationId,
+        manifest,sourceManifest:manifest,logicalBytes:document.logicalBytes,retainedCandidateBytes:0}):Response.json({error:{code:'not_found'}},{status:404});
+      if(path==='/v2/drafts/'+work.draftId+'/objects/'+manifest.objectId)return new Response(document.canonical);
+      const object=objects.get(path.split('/').at(-1)!);if(object)return new Response(object);
+      if(path==='/v1/drafts/'+work.draftId)return Response.json(draft);
+      if(path.includes('/drafts/'+work.draftId+'/creator-context?'))return Response.json({draftId:work.draftId,format:format!=='role'?'rich-v2':'role-v1',revision:draft.revision,sourceIntentId:work.source?.preparationId??null,parent:null});
+      throw Error(path);
+    }};
+  const deviceKey=Buffer.alloc(32,7).toString('base64url');
+  const client={recipeAuthoring:async(input:Parameters<typeof service.request>[1])=>{
+    try{const reply=recipeAuthoringReplySchema.parse(await service.request(peer,input));trace.push({type:input.type,kind:reply.kind});return reply;}
+    catch(error){trace.push({type:input.type,error:String(error)});throw error;}
+  },device:async()=>({kind:'deviceStatus',status:{device:{id:peer.device,name:'原设备',publicKey:deviceKey},remote:{addresses:[],port:3000},clients:{active:1,total:1}}}),
+    snapshot:async()=>({agents:[{id:agentIdSchema.parse(appId),name:'原 Bot',running:true}],memberships:[{agentId:appId,groupId}],groups:[{id:groupId,name:'原群'}]})};
+  const retain=async(viewId:string,signal:AbortSignal)=>({viewId,client,signal,pairedKey:deviceKey,release(){},check(){signal.throwIfAborted();}});
+  const journal=new RecipeCreatorJournal(),history=new NativeHistory(),authoring=new RecipeAuthoringController(native,()=>{throw Error('must adopt');},history);
+  const executor=new RecipeCreatorExecutor(native,journal,new MetadataJournal(),history),supervisor=new RecipeCreatorSupervisor(native,retain,()=>[],journal,history,authoring,executor);
+  try{
+    await supervisor.associated(account,format==='rich-paired'?peer.device:'local',agentIdSchema.parse(appId));
+    if(work.source)history.history.remember(journal.associations(account)[0]!,work.source.preparationId,work.source.identity,groupId);
+    const {desktopAuthoringRequestSchema}=await import('@vonvon/protocol');
+    const input=desktopAuthoringRequestSchema.parse(JSON.parse(JSON.stringify({type:'preparePublication',accountId:account,draft})));
+    if(input.type!=='preparePublication')throw Error('prepare request');
+    const ready=await supervisor.preparePublication(input);
+    expect(await supervisor.preparePublication(input)).toEqual(ready);
+    expect(ready).toMatchObject({kind:'publicationReady',draftId:work.draftId,revision:2});
+    expect(requests.every(r=>r.method==='GET')).toBe(true);
+    expect(trace.some(r=>r.type==='creatorAppConfirm')).toBe(false);
+  }catch(error){console.log('APP PREPARE diagnostics',JSON.stringify({trace,requests}));throw error;}
+  finally{supervisor.dispose();authoring.closeAll();history.history.close();}
+});
