@@ -88,6 +88,15 @@ jobs:
           VONVON_SMOKE_NODE_CACHE: ${{ runner.temp }}/vonvon-server-node
         run: node .github/scripts/ci-run.mjs
 
+      - name: Verify recipe services against a disposable database
+        if: needs.scope.outputs.scope == 'full'
+        run: |
+          npm ci --prefix services/recipe-api
+          npm ci --prefix services/recipe-web
+          npm test --prefix services/recipe-api
+          npm test --prefix services/recipe-web
+          node scripts/recipes/check.mjs
+
   macos:
     name: macOS checks
     needs: scope

@@ -23,6 +23,22 @@ function harness() {
 }
 
 describe('synchronous desktop facade', () => {
+  it('exposes only validated account status and replays it to a remounted shell listener', async () => {
+    const h = harness();
+    const { account } = createDesktopFacades(h.transport).shell;
+    expect(Object.keys(account).sort()).toEqual(['cancelLogin', 'login', 'logout', 'onStatus', 'status']);
+    const statuses: unknown[] = [];
+    h.event({ type: 'account', value: { kind: 'signedOut' } });
+    const stop = account.onStatus(status => statuses.push(status));
+    h.event({ type: 'account', value: { kind: 'signingIn', access_token: 'sensitive' } });
+    h.event({ type: 'account', value: { kind: 'signingIn' } });
+    stop();
+    h.event({ type: 'account', value: { kind: 'signedOut' } });
+    expect(statuses).toEqual([{ kind: 'signedOut' }, { kind: 'signingIn' }]);
+    h.replies.set(desktopChannels.accountStatus, async () => ({ ok: true, value: { kind: 'signedOut', refresh_token: 'secret' } }));
+    await expect(account.status()).rejects.toThrow();
+  });
+
   it('forwards service and login actions through dedicated shell IPC', async () => {
     const h = harness();
     const requests: Array<{ channel: string; args: unknown[] }> = [];
