@@ -89,9 +89,17 @@ export class RecipeUseController {
   private async daemon(h: Handle, request: Parameters<NonNullable<VonvonClient['recipeInstall']>>[0]) {
     this.check(h);
     if (!h.lease.client.recipeInstall) throw new RecipeUseError('此设备尚不支持配方安装。');
-    const reply = recipeInstallReplySchema.parse(await h.lease.client.recipeInstall(request));
-    this.check(h);
-    return reply;
+    try {
+      const reply = recipeInstallReplySchema.parse(await h.lease.client.recipeInstall(request));
+      this.check(h);
+      return reply;
+    } catch (error) {
+      this.check(h);
+      if ('memoryPolicy' in request && request.memoryPolicy === 'exclude' && error instanceof RpcError &&
+          error.code === 'invalid_request' && error.message === '请求参数无效。' && error.details === undefined)
+        throw new RecipeUseError('目标设备未接受本次排除配方记忆的安装请求，请先更新该设备，再重新打开配方。');
+      throw error;
+    }
   }
   private richCloud(h: Handle) {return richUseCloud(this.account,{accountId:h.input.accountId,signal:h.signal,check:()=>this.check(h)});}
   private base(h: Handle) {
@@ -234,7 +242,7 @@ export class RecipeUseController {
   private async prepareRich(h:Handle,groupId:GroupId,selection?:Extract<RecipeUseRequest,{type:'richResolve'}>):Promise<RecipeUseReply> {
     h.richPreview ??= await this.richCloud(h).preview(h.input.recipeId,h.input.versionId);
     await this.identity(h);
-    const reply=await this.daemon(h,{type:'richPrepare',botId:h.input.botId,groupId,...h.richPreview,...(selection?{reviewToken:selection.reviewToken,choices:selection.choices}:{})});
+    const reply=await this.daemon(h,{type:'richPrepare',memoryPolicy:'exclude',botId:h.input.botId,groupId,...h.richPreview,...(selection?{reviewToken:selection.reviewToken,choices:selection.choices}:{})});
     if(reply.kind==='alreadyInstalled'&&reply.groupId===groupId&&reply.recipeId===h.input.recipeId&&reply.versionId===h.input.versionId)return this.done(h,groupId,'applied');
     if(reply.kind==='richReview'){
       if(reply.groupId!==groupId)throw invalid();
@@ -256,7 +264,7 @@ export class RecipeUseController {
   private async settleRich(h:Handle,row:Operation,cancel:boolean):Promise<RecipeUseReply> {
     await this.identity(h);
     const target={botId:h.input.botId,operationId:row.operation.id};
-    const status=async(type:'richStatus'|'richIssuing'|'richReconcile'|'richCancel')=>{const value=await this.daemon(h,{type,...target});if(value.kind!=='richStatus'||value.operationId!==row.operation.id)throw invalid();return value;};
+    const status=async(type:'richStatus'|'richIssuing'|'richReconcile'|'richCancel')=>{const value=await this.daemon(h,{type,...target,...(type==='richIssuing'?{memoryPolicy:'exclude' as const}:{})});if(value.kind!=='richStatus'||value.operationId!==row.operation.id)throw invalid();return value;};
     let current=await status('richStatus');
     if(cancel){
       if(current.issuerState==='unissued')current=await status('richCancel');
@@ -270,7 +278,7 @@ export class RecipeUseController {
       if(current.status!=='prepared'||current.issuerState!=='issuing')throw invalid();
       try{authorization=await this.richCloud(h).authorize(row);}catch(error){if(error instanceof Unredeemable){const reconciled=await status('richReconcile');return reconciled.status==='rejected'?this.done(h,row.groupId,'rejected',reconciled.reason):this.pending(h,'installing');}throw error;}
     }
-    const applied=await this.daemon(h,{type:'richCommit',...target,...(authorization?{authorization}:{})});
+    const applied=await this.daemon(h,{type:'richCommit',memoryPolicy:'exclude',...target,...(authorization?{authorization}:{})});
     if(applied.kind!=='richStatus'||applied.operationId!==row.operation.id)throw invalid();
     return (applied.status==='applied'||applied.status==='rejected')&&applied.settled?this.done(h,row.groupId,applied.status,applied.reason):this.pending(h,'installing');
   }

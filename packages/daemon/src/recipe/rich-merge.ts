@@ -7,7 +7,7 @@ type Identity = Pick<Portable, 'itemId' | 'originId'>;
 export type LocalRecipeItem = Identity & { kind: Collection | 'role' | 'cardBlock'; value: Record<string, unknown> };
 export type RecipeSnapshot = readonly LocalRecipeItem[];
 export type RecipeItemChoices = Readonly<Record<string, 'local' | 'incoming'>>;
-const collections: Collection[] = ['settings', 'rules', 'skills', 'files', 'tasks', 'memories', 'setup'];
+const collections: Collection[] = ['settings', 'rules', 'skills', 'files', 'tasks', 'setup'];
 
 export function recipeSnapshot(content: RecipeRichContent, resolve: (value: RecipeRichText) => string): LocalRecipeItem[] {
   const items: LocalRecipeItem[] = [];
