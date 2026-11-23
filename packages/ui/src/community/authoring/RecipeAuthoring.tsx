@@ -492,6 +492,7 @@ function PrivateFlow({
       const record = storedHandoff(scope);
       if (record && (resume || attempt)) {
         retry.current = record.retryId;
+        if (attempt) await begin(next);
         const restored = await progressFor(next, record.retryId);
         if (active && !draftId && restored?.state === 'cancelled') onRestart();
       } else await begin(next);
@@ -754,10 +755,7 @@ function PrivateFlow({
       {(error || handoff?.state === 'deliveryUnknown') && !done && (
         <Button
           disabled={busy}
-          onClick={() => {
-            if (session && retry.current) void act(begin);
-            else reconnect((n) => n + 1);
-          }}
+          onClick={() => reconnect((n) => n + 1)}
         >
           重试本次准备
         </Button>

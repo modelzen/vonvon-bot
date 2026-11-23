@@ -258,13 +258,60 @@ it('retains the retry identity across uncertain delivery and reopens only the ac
   expect(cloudCalls.filter(r=>r.type==='draft')).toEqual([{type:'draft',accountId:accountA,draftId}]);
 });
 
-it('revalidates the original retry after a disconnected session, without dispatching a second request',async()=>{
-  linked=true;await draw();await chooseSource();await click('确认');
-  const retryId=currentHandoff!.retryId;
-  await click('关闭');
-  authoring=async r=>{if(r.type==='handoffStatus')throw new Error('请重新核验本人私聊。');return defaultAuthoring(r);};
-  await click('准备配方');expect(dialog('准备配方')?.textContent).toContain('重新核验本人私聊');
-  await click('重试本次准备');expect(calls.filter(r=>r.type==='beginHandoff').map(r=>r.retryId)).toEqual([retryId,retryId]);
+it.each(['selecting','prepared'] as const)('reopens a revoked session and restores the same %s preparation without sending another card',async(state)=>{
+  vi.useFakeTimers();linked=true;
+  let handoffHandle:string|undefined;
+  let sentCards=0;
+  authoring=async request=>{
+    if(request.type==='beginHandoff') {
+      sessionFor(request);
+      handoffHandle=request.handle;
+      if(currentHandoff?.retryId===request.retryId)return {kind:'handoff',handoff:currentHandoff};
+      sentCards++;
+    }
+    if(request.type==='handoffStatus'&&currentHandoff?.state==='selecting'&&request.handle!==handoffHandle) {
+      sessionFor(request);
+      throw new Error('请在 App 继续本次准备，重新核验本人私聊。');
+    }
+    return defaultAuthoring(request);
+  };
+  await draw();await chooseSource();await click('确认');
+  const initial=calls.find(request=>request.type==='beginHandoff')!;
+  const originalSession=sessions.get(initial.handle)!;
+  if(state==='prepared') {
+    operations=[op(originalSession,'candidate')];
+    currentHandoff={...currentHandoff!,state:'prepared',operationId};
+    await act(async()=>vi.advanceTimersByTimeAsync(2000));
+    expect(dialog('准备配方')?.textContent).toContain('等待本人在飞书确认候选');
+  }
+  sessions.clear();
+  await act(async()=>vi.advanceTimersByTimeAsync(state==='prepared'?4000:2000));
+  expect(dialog('准备配方')?.textContent).toContain('操作已关闭，请重新核验');
+  const beforeRetry=calls.length;
+  await click('重试本次准备');
+  expect(calls.filter(request=>request.type==='open')).toHaveLength(2);
+  expect(calls.slice(beforeRetry).find(request=>request.type==='open')).toMatchObject({accountId:accountA,viewId:A,botId:botA,groupId:groupA});
+  const resumed=calls.slice(beforeRetry).find(request=>request.type==='beginHandoff')!;
+  expect(resumed).toMatchObject({retryId:initial.retryId,groupId:groupA});
+  expect(resumed.handle).not.toBe(initial.handle);
+  expect(calls.filter(request=>request.type==='beginHandoff').map(request=>request.retryId)).toEqual([initial.retryId,initial.retryId]);
+  expect(calls.slice(beforeRetry)).toContainEqual({type:'handoffStatus',handle:resumed.handle,retryId:initial.retryId});
+  if(state==='prepared') {
+    expect(calls.slice(beforeRetry)).toContainEqual({type:'status',handle:resumed.handle});
+    expect(dialog('准备配方')?.textContent).toContain('等待本人在飞书确认候选');
+  }
+  expect(dialog('准备配方')?.textContent).not.toContain('操作已关闭');
+  expect(sentCards).toBe(1);
+  operations=[{...op(originalSession,'completed'),receipt:{status:'accepted',operationId,draftId,revision:1,stateRevision:3}}];
+  currentHandoff={...currentHandoff!,state:'prepared',operationId};
+  await act(async()=>vi.advanceTimersByTimeAsync(2000));
+  expect(dialog('准备配方')?.textContent).toContain('私人草稿已保存');
+  expect(calls.some(request=>request.type==='prepare'||request.type==='edit')).toBe(false);
+  const view=Array.from(dialog('准备配方')!.querySelectorAll('button')).find(button=>button.textContent==='查看草稿')!;
+  await act(async()=>view.click());
+  expect(cloudCalls.filter(request=>request.type==='draft')).toEqual([{type:'draft',accountId:accountA,draftId}]);
+  expect(cloudCalls.some(request=>request.type==='saveDraft')).toBe(false);
+  expect(sentCards).toBe(1);
 });
 
 it.each(['stopped','unbound'] as const)('gives a %s Bot one actionable destination without opening a private session',async(kind)=>{
