@@ -6,14 +6,14 @@ import {RecipeDetails} from '../src/community/RecipeContent';
 
 type Effect = {deps?: unknown[]; cleanup?: () => void};
 const h = vi.hoisted(() => ({state: [] as unknown[], refs: [] as Array<{current: unknown}>, effects: [] as Effect[], pending: [] as Array<() => void>, si: 0, ri: 0, ei: 0,
-  route: {kind: 'catalog'} as any, catalog: {query: '', search: '', scrollTop: 0} as any, request: vi.fn(), login: vi.fn(), accountId: '11111111-1111-4111-8111-111111111111' as string | undefined,
+  route: {kind: 'catalog'} as any, catalog: {generation: 0, query: '', search: '', scrollTop: 0} as any, request: vi.fn(), login: vi.fn(), accountId: '11111111-1111-4111-8111-111111111111' as string | undefined,
 }));
 vi.mock('react', async original => ({...await original<typeof import('react')>(),
   useState: (initial: unknown) => {const i = h.si++; if (!(i in h.state)) h.state[i] = typeof initial === 'function' ? (initial as () => unknown)() : initial; return [h.state[i], (next: unknown) => {h.state[i] = typeof next === 'function' ? (next as (old: unknown) => unknown)(h.state[i]) : next;}];},
   useRef: (initial: unknown) => {const i = h.ri++; return h.refs[i] ??= {current: initial};},
   useEffect: (effect: () => (() => void) | void, deps?: unknown[]) => {const i = h.ei++; const old = h.effects[i]; if (old?.deps && deps && deps.every((value, at) => Object.is(value, old.deps![at]))) return; h.pending.push(() => {old?.cleanup?.(); h.effects[i] = {deps, cleanup: effect() || undefined};});},
 }));
-vi.mock('../src/community/community-context', () => ({useCommunity: () => ({shell: {request: h.request}, route: h.route, catalog: h.catalog, setCatalog: (next: any) => {h.catalog = typeof next === 'function' ? next(h.catalog) : next;}, open: (next: any) => {h.route = next;}})}));
+vi.mock('../src/community/community-context', () => ({useCommunity: () => ({shell: {request: h.request}, route: h.route, catalog: h.catalog, setCatalog: (next: any) => {h.catalog = typeof next === 'function' ? next(h.catalog) : next;}, invalidateCatalog: () => {h.catalog = {...h.catalog, generation: h.catalog.generation + 1, result: undefined, scrollTop: 0};}, open: (next: any) => {h.route = next;}})}));
 vi.mock('../src/client-context', () => ({useShellCapabilities: () => undefined}));
 vi.mock('../src/account-context', () => ({useAccount: () => ({supported: true, status: h.accountId ? {kind: 'signedIn', accountId: h.accountId} : {kind: 'signedOut'}, login: h.login}), accountStatusText: () => '登录'}));
 vi.mock('../src/settings/DraftGuard', () => ({useDraft: () => {}, useDraftGuard: () => ({navigate: (action: () => void) => action()})}));
@@ -34,7 +34,7 @@ const flush = async () => {for (let i = 0; i < 15; i++) await Promise.resolve();
 beforeEach(() => {
   h.state = []; h.refs = []; h.effects = []; h.pending = []; h.accountId = '11111111-1111-4111-8111-111111111111';
   h.route = {kind: 'detail', recipe: {recipeId: recipe.recipeId, versionId: recipe.versionId}};
-  h.catalog = {query: '', search: '', scrollTop: 0}; h.request.mockReset(); h.login.mockReset().mockResolvedValue(undefined);
+  h.catalog = {generation: 0, query: '', search: '', scrollTop: 0}; h.request.mockReset(); h.login.mockReset().mockResolvedValue(undefined);
   h.request.mockImplementation(async request => request.type === 'detail' ? recipe : request.type === 'shareLink' ? {url: 'https://community.example/version'} : {});
 });
 it('retries an uncertain code acquisition with one request key and reports account acquisition separately from installation', async () => {

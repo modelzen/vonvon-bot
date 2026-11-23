@@ -11,8 +11,9 @@ type CommunityContextValue = {
   shell?: CommunityShell; isOpen: boolean; route: CommunityRoute;
   departure?: CommunityDeparture; leave: (departure: CommunityDeparture) => void; consumeDeparture: (departure: CommunityDeparture) => void;
   open: (route?: CommunityRoute) => void; close: () => void;
-  catalog: {query: string; search: string; result?: CommunityResponses['catalog']; scrollTop: number};
+  catalog: {generation: number; query: string; search: string; result?: CommunityResponses['catalog']; scrollTop: number};
   setCatalog: Dispatch<SetStateAction<CommunityContextValue['catalog']>>;
+  invalidateCatalog: () => void;
   onUse?: (recipe: RecipeDetail) => void;
 };
 const Context = createContext<CommunityContextValue | undefined>(undefined);
@@ -36,13 +37,14 @@ export function CommunityProvider({shell, onUse, children}: {shell?: CommunitySh
   function clearUseTarget() {
     setRoute(current => current.route.kind === 'detail' && current.route.useTarget ? {...current, route: {...current.route, useTarget: undefined}} : current);
   }
-  const [catalog, setCatalog] = useState<CommunityContextValue['catalog']>({query: '', search: '', scrollTop: 0});
+  const [catalog, setCatalog] = useState<CommunityContextValue['catalog']>({generation: 0, query: '', search: '', scrollTop: 0});
+  const invalidateCatalog = () => setCatalog(current => ({...current, generation: current.generation + 1, result: undefined, scrollTop: 0}));
   const currentUse = useRef({onUse, useTarget, route, isOpen});
   currentUse.current = {onUse, useTarget, route, isOpen};
   const value = useMemo(() => ({shell, isOpen, route, onUse: onUse ? (recipe: RecipeDetail) => {
     const current = currentUse.current;
     if (current.isOpen && current.route.kind === 'detail' && current.route.recipe.recipeId === recipe.recipeId && current.route.recipe.versionId === recipe.versionId) current.onUse?.(recipe, current.useTarget);
-  } : undefined, catalog, setCatalog, departure,
+  } : undefined, catalog, setCatalog, invalidateCatalog, departure,
     leave: (next: CommunityDeparture) => {setDeparture(next); setOpen(false); clearUseTarget();},
     consumeDeparture: (expected: CommunityDeparture) => setDeparture(current => current === expected ? undefined : current),
     open: (next?: CommunityRoute) => {setDeparture(undefined); if (next) setRoute({route: next.kind === 'detail' ? {...next, recipe: {recipeId: next.recipe.recipeId, versionId: next.recipe.versionId}} : next, owner: accountId, deviceId: device.id, client}); setOpen(true);}, close: () => {setDeparture(undefined); setOpen(false); clearUseTarget();},
