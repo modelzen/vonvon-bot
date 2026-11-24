@@ -408,6 +408,24 @@ export class ClubStore {
     return Boolean(this.#db.prepare('SELECT 1 FROM templates WHERE cover_url = ? LIMIT 1').get(coverUrl));
   }
 
+  countPendingCovers() {
+    const row = this.#db.prepare(`
+      SELECT COUNT(DISTINCT t.cover_url) AS cnt
+      FROM templates t
+      JOIN authors a ON a.public_key = t.author_public_key
+      WHERE t.cover_url IS NOT NULL AND a.trusted = 0 AND a.blocked = 0
+    `).get();
+    return Number(row?.cnt ?? 0);
+  }
+
+  clearCoversForAuthor(publicKey) {
+    const rows = this.#db.prepare(
+      'SELECT DISTINCT cover_url FROM templates WHERE author_public_key = ? AND cover_url IS NOT NULL',
+    ).all(publicKey);
+    this.#db.prepare('UPDATE templates SET cover_url = NULL WHERE author_public_key = ?').run(publicKey);
+    return rows.map(r => r.cover_url).filter(Boolean);
+  }
+
   setAuthorTrust(publicKey, trusted, note = '') {
     const existing = this.#db.prepare('SELECT public_key FROM authors WHERE public_key = ?').get(publicKey);
     if (!existing) {

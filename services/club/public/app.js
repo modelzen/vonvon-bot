@@ -88,66 +88,72 @@
     return svg;
   }
 
-  function renderCard(item) {
+  function createMiniDocElement(item) {
+    const mini = document.createElement('div');
+    mini.className = 'mini-doc';
+    const accent = document.createElement('div');
+    accent.className = 'mini-doc-accent';
+    const miniTitle = document.createElement('div');
+    miniTitle.className = 'mini-doc-title';
+    miniTitle.textContent = item.name;
+    const miniSummary = document.createElement('div');
+    miniSummary.className = 'mini-doc-summary';
+    miniSummary.textContent = item.summary;
+    mini.append(accent, miniTitle, miniSummary);
+
+    if (Array.isArray(item.skillNames) && item.skillNames.length > 0) {
+      const skillsRow = document.createElement('div');
+      skillsRow.className = 'mini-doc-skills';
+      for (const s of item.skillNames.slice(0, 2)) {
+        const pill = document.createElement('span');
+        pill.className = 'mini-skill-pill';
+        pill.textContent = s;
+        skillsRow.appendChild(pill);
+      }
+      if (item.skillNames.length > 2) {
+        const more = document.createElement('span');
+        more.className = 'mini-skill-pill mini-skill-more';
+        more.textContent = `+${item.skillNames.length - 2}`;
+        skillsRow.appendChild(more);
+      }
+      mini.appendChild(skillsRow);
+    }
+    return mini;
+  }
+
+  function renderCard(item, index = 0) {
     const card = document.createElement('article');
     card.className = 'card';
-    card.tabIndex = 0;
-    card.setAttribute('role', 'link');
-    card.setAttribute('aria-label', `${item.name} — 打开宣传文档`);
 
-    const openDoc = () => {
-      if (isSafeHttps(item.docUrl)) window.open(item.docUrl, '_blank', 'noopener,noreferrer');
-    };
-    card.addEventListener('click', openDoc);
-    card.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        openDoc();
-      }
-    });
+    // Native anchor wraps preview + title so middle-click, Cmd/Ctrl+click and URL hover preview work cleanly.
+    const link = document.createElement('a');
+    link.className = 'card-link';
+    if (isSafeHttps(item.docUrl)) {
+      link.href = item.docUrl;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+    }
+    link.setAttribute('aria-label', `${item.name} — 打开宣传文档`);
 
     // Upper preview: real cover image if present, otherwise Plan A miniature Feishu document sheet.
     const preview = document.createElement('div');
-    preview.className = item.coverUrl ? 'card-preview has-cover' : 'card-preview';
+    const hasCover = Boolean(item.coverUrl && /^\/covers\/[a-f0-9]+\.(?:png|jpg|webp)$/.test(item.coverUrl));
+    preview.className = hasCover ? 'card-preview has-cover' : 'card-preview';
 
-    if (item.coverUrl && /^\/covers\/[a-f0-9]+\.(?:png|jpg|webp)$/.test(item.coverUrl)) {
+    if (hasCover) {
       const img = document.createElement('img');
       img.className = 'card-cover-img';
       img.src = item.coverUrl;
       img.alt = item.name;
-      img.loading = 'lazy';
+      img.loading = index < 8 ? 'eager' : 'lazy';
+      img.decoding = 'async';
+      img.addEventListener('error', () => {
+        preview.className = 'card-preview';
+        img.replaceWith(createMiniDocElement(item));
+      }, { once: true });
       preview.appendChild(img);
     } else {
-      const mini = document.createElement('div');
-      mini.className = 'mini-doc';
-      const accent = document.createElement('div');
-      accent.className = 'mini-doc-accent';
-      const miniTitle = document.createElement('div');
-      miniTitle.className = 'mini-doc-title';
-      miniTitle.textContent = item.name;
-      const miniSummary = document.createElement('div');
-      miniSummary.className = 'mini-doc-summary';
-      miniSummary.textContent = item.summary;
-      mini.append(accent, miniTitle, miniSummary);
-
-      if (Array.isArray(item.skillNames) && item.skillNames.length > 0) {
-        const skillsRow = document.createElement('div');
-        skillsRow.className = 'mini-doc-skills';
-        for (const s of item.skillNames.slice(0, 2)) {
-          const pill = document.createElement('span');
-          pill.className = 'mini-skill-pill';
-          pill.textContent = s;
-          skillsRow.appendChild(pill);
-        }
-        if (item.skillNames.length > 2) {
-          const more = document.createElement('span');
-          more.className = 'mini-skill-pill mini-skill-more';
-          more.textContent = `+${item.skillNames.length - 2}`;
-          skillsRow.appendChild(more);
-        }
-        mini.appendChild(skillsRow);
-      }
-      preview.appendChild(mini);
+      preview.appendChild(createMiniDocElement(item));
     }
 
     const sourceBadge = document.createElement('span');
@@ -168,6 +174,8 @@
     title.textContent = item.name;
     title.title = item.name;
     titleRow.appendChild(title);
+
+    link.append(preview, titleRow);
 
     const metaRow = document.createElement('div');
     metaRow.className = 'card-meta-row';
@@ -228,8 +236,8 @@
 
     metrics.appendChild(likeBtn);
     metaRow.append(authorInfo, metrics);
-    body.append(titleRow, metaRow);
-    card.append(preview, body);
+    body.append(metaRow);
+    card.append(link, body);
     return card;
   }
 
@@ -259,7 +267,7 @@
         }
       } else {
         emptyEl.classList.add('hidden');
-        for (const item of items) gridEl.appendChild(renderCard(item));
+        items.forEach((item, idx) => gridEl.appendChild(renderCard(item, idx)));
       }
     } catch {
       showToast('列表加载失败，请刷新重试');

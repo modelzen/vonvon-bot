@@ -61,7 +61,9 @@ export const templateSkill: BuiltinSkill = {
 - **仅内部私用（\`public: false\`，默认）**：打包成普通本地文件，绝不向社区上报任何信息。
 
 ### 4. 规范目录与安全打包
-在临时草稿目录组装标准结构：顶层 \`vonvon-bot.json\`、\`README.md\`、顶层单份 \`skills/<名称>/SKILL.md\`（无需维护双端副本）、可选 \`workspace/\`（预置 \`AGENTS.md\` 与知识文档）：
+在临时草稿目录组装标准结构：顶层 \`vonvon-bot.json\`、\`README.md\`、顶层单份 \`skills/<名称>/SKILL.md\`（无需维护双端副本，且每个 \`SKILL.md\` 开头必须带 YAML frontmatter \`name\` 和 \`description\`，否则 Codex/Claude 无法识别）、可选 \`workspace/\`（预置 \`AGENTS.md\` 与知识文档，绝不放 \`.claude/\`、\`.codex/\`、\`.git/\`、\`.mcp.json\` 或 \`.env\`）：
+- \`vonvon-bot.json\` 必填与常用字段：
+  \`schemaVersion: 1\`、\`id\`（小写字母/数字/连字符，支持 \`作者/配方名\`）、\`version\`（如 \`0.1.0\`）、\`public\`（\`true\` 公开宣传 / \`false\` 私用）、\`name\`（≤80 字）、\`summary\`（≤300 字）、\`docUrl\`（\`public: true\` 时必填 \`https://\` 飞书公开文档链接）、\`author: { name, contact? }\`、可选 \`group: { defaultName?, role?, recommendedPermission?: "qa"|"write"|"full", firstMessage?, schedules? }\`。
 - 公开宣传且立即上线：\`vonvon template pack <草稿目录> --out <绝对输出路径>.vonvon.zip --publish --json\`
 - 仅本地打包：\`vonvon template pack <草稿目录> --out <绝对输出路径>.vonvon.zip --json\`
 - 若脱敏扫描拦截，按提示清理敏感信息后重试。打包完成后用 \`[文件名](绝对路径)\` 把 \`.vonvon.zip\` 发给用户，并附一段可直接转发到飞书群或小红书的介绍文案。`,

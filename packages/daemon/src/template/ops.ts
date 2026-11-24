@@ -206,6 +206,9 @@ function unwrapSingleTopDir(entries: LoadedFile[]): LoadedFile[] {
 }
 
 async function loadRawEntries(source: string, sourceUrl?: string): Promise<{ sourceKind: TemplateSourceKind; files: LoadedFile[] }> {
+  if (/^https?:\/\//i.test(source.trim())) {
+    throw new Error(`这是网址而非本地路径：${source}。请先浅克隆仓库（git clone --depth 1 <网址> <临时目录>）或下载 .vonvon.zip 到本地后再传入。`);
+  }
   const resolved = resolve(source);
   const info = await stat(resolved).catch(() => {
     throw new Error(`找不到配方路径：${source}`);
@@ -311,6 +314,35 @@ function parseLoadedPackage(sourceKind: TemplateSourceKind, files: LoadedFile[])
   return { sourceKind, layout, manifest, rawManifestText, readme, skills, workspaceFiles, allFiles: files };
 }
 
+/**
+ * Matches `discoverLocalGroupSkills` (`packages/daemon/src/agent/group-skills.ts`):
+ * both Codex and Claude require YAML frontmatter with non-empty `name` and `description` in `SKILL.md`.
+ */
+function findInvalidSkills(pkg: ParsedTemplatePackage): string[] {
+  const invalid: string[] = [];
+  const scalar = (value: string) => value.trim().replace(/^(['"])([\s\S]*)\1$/u, '$2');
+  for (const [skillName, entries] of pkg.skills.entries()) {
+    const skillMd = entries.find(e => e.path === 'SKILL.md');
+    if (!skillMd) {
+      invalid.push(skillName);
+      continue;
+    }
+    const content = skillMd.data.toString('utf8');
+    const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u)?.[1];
+    if (!frontmatter) {
+      invalid.push(skillName);
+      continue;
+    }
+    const name = scalar(frontmatter.match(/^name:\s*(.+)$/mu)?.[1] ?? '');
+    const rawDesc = frontmatter.match(/^description:\s*(.+)$/mu)?.[1] ?? '';
+    const desc = /^[>|][-+]?\s*$/u.test(rawDesc)
+      ? (frontmatter.match(/^description:[^\n]*\n((?:[ \t]+[^\n]*(?:\n|$))*)/mu)?.[1] ?? '').trim()
+      : scalar(rawDesc);
+    if (!name || !desc) invalid.push(skillName);
+  }
+  return invalid;
+}
+
 function hasEffectiveCapability(pkg: ParsedTemplatePackage): boolean {
   if (pkg.skills.size > 0) return true;
   if (pkg.workspaceFiles.some(f => f.path !== 'README.md' && f.path !== '.gitignore')) return true;
@@ -335,10 +367,14 @@ export async function inspectTemplate(source: string, options: { sourceUrl?: str
   const docUrl = effectiveDocUrl(manifest);
   const signatureStatus = checkSignature(pkg);
   const capable = hasEffectiveCapability(pkg);
+  const invalidSkills = findInvalidSkills(pkg);
   const warnings: string[] = [];
 
   if (!capable) {
     warnings.push('配方不包含有效 Skill、预置工作区文件或本群角色（空壳配方无法对外发布）');
+  }
+  if (invalidSkills.length > 0) {
+    warnings.push(`以下 Skill 的 SKILL.md 缺少合法 YAML frontmatter（name / description），Codex 和 Claude 将无法发现它们：${invalidSkills.join('、')}`);
   }
   if (signatureStatus === 'invalid') {
     warnings.push('公开宣传签名校验失败：清单内容可能已被修改');
@@ -700,6 +736,10 @@ export async function packTemplate(
 
   if (!hasEffectiveCapability(pkg)) {
     throw new Error('配方必须至少包含 1 个有效 Skill、预置工作区文件或本群角色（role），拒绝打包空壳配方');
+  }
+  const invalidSkills = findInvalidSkills(pkg);
+  if (invalidSkills.length > 0) {
+    throw new Error(`以下 Skill 的 SKILL.md 缺少合法 YAML frontmatter（需在文件开头用 --- 包裹 name 和 description）：${invalidSkills.join('、')}`);
   }
 
   const publicFlag = isPublicTemplate(pkg.manifest);

@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { discoverLocalGroupSkills } from '../src/agent/group-skills';
 import { assertTemplateSessionAllowed } from '../src/cli/commands/template';
 import { SESSION_BOT_ENV, SESSION_ENV, SESSION_SCOPE_ENV } from '../src/config/session-env';
 import { DEVICES_DIR } from '../src/remote/files';
@@ -234,6 +235,12 @@ describe('template pack, inspect, extract, stage and telemetry', () => {
     expect(staged.telemetry).toEqual({ attempted: true, ok: true });
     expect(await readFile(join(destDir, '.agents/skills/brief-setup/SKILL.md'), 'utf8')).toContain('brief-setup');
     expect(await readFile(join(destDir, '.claude/skills/brief-setup/SKILL.md'), 'utf8')).toContain('brief-setup');
+    // Real daemon skill discovery must detect the staged skill on both Codex and Claude backends.
+    const emptyHome = await makeTempDir('vonvon-oshome-');
+    const codexFound = await discoverLocalGroupSkills({ backendId: 'codex-appserver', cwd: destDir, home: emptyHome, env: {} });
+    const claudeFound = await discoverLocalGroupSkills({ backendId: 'claude-agent', cwd: destDir, home: emptyHome, env: {} });
+    expect(codexFound.map(s => s.name)).toEqual(['brief-setup']);
+    expect(claudeFound.map(s => s.name)).toEqual(['brief-setup']);
     expect(await readFile(join(destDir, 'docs/指南.md'), 'utf8')).toBe('知识文档内容');
     const meta = installedTemplatesFileSchema.parse(JSON.parse(await readFile(join(destDir, INSTALLED_META_FILENAME), 'utf8')));
     expect(meta.templates).toHaveLength(1);
@@ -348,9 +355,24 @@ describe('template pack, inspect, extract, stage and telemetry', () => {
       'vonvon-bot.json': JSON.stringify({
         schemaVersion: 1, id: 'dev/leaky', version: '0.1.0', name: '漏密钥', summary: '测脱敏', author: { name: 'dev' },
       }),
-      'skills/s/SKILL.md': '---\nname: s\n---\n请用密钥 sk-ant-secretvalue1234567890abcd',
+      'skills/s/SKILL.md': '---\nname: s\ndescription: 测脱敏\n---\n请用密钥 sk-ant-secretvalue1234567890abcd',
     });
     await expect(packTemplate(leakyDir, join(leakyDir, 'out.vonvon.zip'), { dataRoot })).rejects.toBeInstanceOf(PackRedactionError);
+
+    // SKILL.md without required YAML frontmatter (name + description) warns on inspect and fails pack.
+    const badSkillDir = await makeTempDir('vonvon-bad-skill-');
+    await writeTree(badSkillDir, {
+      'vonvon-bot.json': JSON.stringify({
+        schemaVersion: 1, id: 'dev/bad-skill', version: '0.1.0', name: '坏技能', summary: '缺少 frontmatter', author: { name: 'dev' },
+      }),
+      'skills/broken/SKILL.md': '# Missing YAML frontmatter\n',
+    });
+    const badSkillInspect = await inspectTemplate(badSkillDir);
+    expect(badSkillInspect.warnings.some(w => w.includes('frontmatter'))).toBe(true);
+    await expect(packTemplate(badSkillDir, join(badSkillDir, 'out.vonvon.zip'), { dataRoot })).rejects.toThrow(/frontmatter/);
+
+    // Passing a URL directly gives an actionable clone/download message.
+    await expect(inspectTemplate('https://github.com/modelzen/vonvon-assistant')).rejects.toThrow(/git clone --depth 1/);
 
     // Repo-root layout matching modelzen/vonvon-assistant (legacy defaults, .agents/skills + .claude/skills).
     const repoDir = await makeTempDir('vonvon-repo-');
@@ -374,8 +396,8 @@ describe('template pack, inspect, extract, stage and telemetry', () => {
       }),
       'README.md': '# Assistant',
       'AGENTS.md': '# Rules',
-      '.agents/skills/vonvon-setup/SKILL.md': '---\nname: vonvon-setup\n---\n初始化',
-      '.claude/skills/vonvon-setup/SKILL.md': '---\nname: vonvon-setup\n---\n初始化',
+      '.agents/skills/vonvon-setup/SKILL.md': '---\nname: vonvon-setup\ndescription: 环境预准备\n---\n初始化',
+      '.claude/skills/vonvon-setup/SKILL.md': '---\nname: vonvon-setup\ndescription: 环境预准备\n---\n初始化',
     });
 
     const inspected = await inspectTemplate(repoDir);
@@ -435,7 +457,7 @@ describe('template pack, inspect, extract, stage and telemetry', () => {
         schemaVersion: 1, id: 'safe/mixed', version: '0.1.0', name: '混合目录', summary: '保留根文档', author: { name: 'ok' },
       }),
       'AGENTS.md': '# Root Rules',
-      'skills/mixed-setup/SKILL.md': '---\nname: mixed-setup\n---\nBody',
+      'skills/mixed-setup/SKILL.md': '---\nname: mixed-setup\ndescription: 初始化\n---\nBody',
     });
     const mixedInspected = await inspectTemplate(mixedDir);
     expect(mixedInspected.skills.map(s => s.name)).toEqual(['mixed-setup']);

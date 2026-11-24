@@ -81,7 +81,9 @@ export async function runTemplateInspect(source: string, options: { sourceUrl?: 
       `${result.name} (${result.id} v${result.version})`,
       `简介：${result.summary}`,
       `作者：${result.author.name}${result.author.contact ? ` · ${result.author.contact}` : ''}`,
-      `公开宣传：${result.public ? '是' : '否（私密）'}${result.docUrl ? ` · ${result.docUrl}` : ''}`,
+      result.public
+        ? `公开宣传：是${result.docUrl ? ` · ${result.docUrl}` : ''}`
+        : '公开宣传：否（仅本地私用，不会上报社区）',
       `签名状态：${result.signatureStatus === 'valid' ? '有效' : result.signatureStatus === 'invalid' ? '无效' : '未签名'}`,
       `Skill（${result.skills.length}）：${result.skills.length ? result.skills.map(s => `${s.name}${s.setup ? ' [setup]' : ''}`).join('、') : '无'}`,
       `预置工作区文件（${result.workspaceFiles.length}）：${result.workspaceFiles.length ? result.workspaceFiles.slice(0, 10).join('、') : '无'}`,
@@ -134,6 +136,21 @@ export async function runTemplateStage(
   }
 }
 
+function formatPublishLine(publish: NonNullable<Awaited<ReturnType<typeof packTemplate>>['publish']>): string {
+  if (!publish.ok) {
+    return `宣传名片上报未成功（本地包已生成）：${publish.error ?? '网络异常'}`;
+  }
+  const coverNote = publish.coverUploaded ? '，已同步飞书封面图' : '';
+  const suffix = publish.url ? `：${publish.url}` : '';
+  if (publish.status === 'pending_author_trust') {
+    return `首次发布已提交至 Vonvon 灵感 Club（新作者首次核验中，通过后你后续的配方与更新会自动秒上${coverNote}）${suffix}`;
+  }
+  if (publish.status === 'updated') {
+    return `已更新至 Vonvon 灵感 Club（公开宣传页已刷新${coverNote}）${suffix}`;
+  }
+  return `已上架至 Vonvon 灵感 Club${coverNote ? `（${coverNote.slice(1)}）` : ''}${suffix}`;
+}
+
 export async function runTemplatePack(
   dir: string,
   options: { out?: string; publish?: boolean },
@@ -145,9 +162,7 @@ export async function runTemplatePack(
     const lines = [
       `已打包配方 ${result.id} v${result.version} → ${result.out}（${result.sizeBytes} 字节，sha256: ${result.sha256.slice(0, 16)}…）`,
       `Skill：${result.skillNames.length ? result.skillNames.join('、') : '无'} · 预置文件：${result.workspaceFileCount} 个 · 公开宣传：${result.public ? '是' : '否'}`,
-      ...(result.publish ? [result.publish.ok
-        ? `宣传名片已上报至 Vonvon 灵感 Club（状态：${result.publish.status}）${result.publish.url ? `：${result.publish.url}` : ''}`
-        : `宣传名片上报未成功（本地包已生成）：${result.publish.error ?? '网络异常'}`] : []),
+      ...(result.publish ? [formatPublishLine(result.publish)] : []),
     ];
     print(io, lines, result);
   } catch (err) {

@@ -285,17 +285,29 @@ describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
       }),
     })).status, 400);
 
-    // Publish v1.0.0 + trust original, then publish v2.0.0 and verify an older v1.0.0 install NEVER rolls back v2.0.0.
-    assert.equal((await fetch(`${baseUrl}/api/publish`, {
+    // Publish v1.0.0 with signed cover BEFORE trusting -> cover is stored inside bounded pending quota,
+    // stays 404 publicly while pending, and immediately returns 200 upon admin trust (zero re-publish needed!).
+    const firstPub = await (await fetch(`${baseUrl}/api/publish`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ promo: basePromo, signature: legSig }),
-    })).status, 200);
+      body: JSON.stringify({
+        promo: basePromo,
+        signature: legSig,
+        coverBase64: TINY_PNG.toString('base64'),
+        coverSignature: legKey.signCover(basePromo.id, basePromo.version, basePromo.docUrl, TINY_PNG),
+      }),
+    })).json();
+    assert.equal(firstPub.ok, true);
+    assert.equal(firstPub.status, 'pending_author_trust');
+    assert.match(firstPub.coverUrl, /^\/covers\/[a-f0-9]+\.png$/);
+    assert.equal((await fetch(`${baseUrl}${firstPub.coverUrl}`)).status, 404, 'pending cover must stay 404 before trust');
+
     await fetch(`${baseUrl}/api/admin/authors/trust`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
       body: JSON.stringify({ publicKey: legKey.publicKey, trusted: true }),
     });
+    assert.equal((await fetch(`${baseUrl}${firstPub.coverUrl}`)).status, 200, 'first card cover should be immediately public after trust');
     const v2Promo = { ...basePromo, version: '2.0.0', name: '原版爆款 v2' };
     // Forged cover signature on publish is silently ignored; valid author-signed cover (bound to version & docUrl) is stored.
     const forgedCoverRes = await (await fetch(`${baseUrl}/api/publish`, {

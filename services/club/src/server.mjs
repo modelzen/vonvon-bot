@@ -169,11 +169,14 @@ export function createClubServer({
           return sendJson(res, 409, { ok: false, error: `不允许用旧版本（${checked.promo.version}）覆盖当前版本（${saved.currentVersion}）` });
         }
 
-        // Only persist uploaded covers for already-trusted authors so pending/unknown keys cannot exhaust disk
-        // or expose covers before approval.
+        // Persist author-signed cover for trusted authors, and for pending authors up to a strict global cap
+        // (20 pending covers max) so a brand-new creator's first card appears with its cover as soon as trusted.
+        // `/covers/*` still refuses untrusted authors with 404 until approved.
+        const MAX_PENDING_COVERS = 20;
         let coverUrl = null;
         const targetDocUrl = checked.promo.docUrl ?? checked.promo.repository ?? '';
-        if (saved.trusted && coversDir && typeof body.coverBase64 === 'string' && body.coverBase64.trim() && typeof body.coverSignature === 'string') {
+        const canAcceptCover = saved.trusted || store.countPendingCovers() < MAX_PENDING_COVERS;
+        if (canAcceptCover && coversDir && typeof body.coverBase64 === 'string' && body.coverBase64.trim() && typeof body.coverSignature === 'string') {
           try {
             const coverBytes = Buffer.from(body.coverBase64, 'base64');
             if (verifyCoverSignature(saved.id, checked.promo.version, targetDocUrl, saved.authorPublicKey, coverBytes, body.coverSignature)) {
@@ -253,9 +256,14 @@ export function createClubServer({
           const body = await readJsonBody(req);
           const publicKey = typeof body.publicKey === 'string' ? body.publicKey.trim() : '';
           if (!publicKey) return sendJson(res, 400, { ok: false, error: '缺少 publicKey' });
-          const updated = store.setAuthorBlocked(publicKey, body.blocked !== false, typeof body.note === 'string' ? body.note : '');
+          const blocked = body.blocked !== false;
+          const updated = store.setAuthorBlocked(publicKey, blocked, typeof body.note === 'string' ? body.note : '');
           if (!updated) return sendJson(res, 404, { ok: false, error: '作者不存在' });
-          return sendJson(res, 200, { ok: true, publicKey, blocked: body.blocked !== false });
+          if (blocked) {
+            const removedCovers = store.clearCoversForAuthor(publicKey);
+            for (const url of removedCovers) await cleanupOrphanCover(url);
+          }
+          return sendJson(res, 200, { ok: true, publicKey, blocked });
         }
 
         if (method === 'POST' && pathname === '/api/admin/templates/delete') {

@@ -7,7 +7,7 @@
   <meta name="description" content="发现和分享好用的 Vonvon Bot 飞书 AI 同事配方。点击卡片直达创作者公开飞书文档，在飞书私聊里一句话创建你的专属 Bot 群。">
   <meta name="theme-color" content="#ffffff">
   <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
-  <link rel="stylesheet" href="/styles.css?v=3">
+  <link rel="stylesheet" href="/styles.css?v=4">
 </head>
 <body>
   <header class="nav">
@@ -82,28 +82,30 @@
         <h2 id="modal-title">创作并分享你的 Bot 配方</h2>
         <button class="modal-close" id="close-modal-btn" type="button" aria-label="关闭">✕</button>
       </div>
-      <p class="modal-lead">不用写配置文件，也不用懂 Git。复制下面这句话发给你的 <strong>Vonvon Bot 私聊</strong>，Bot 会一步步带你整理并打包：</p>
-
-      <div class="copy-box">
-        <code id="create-prompt-text">帮我创作一个配方</code>
-        <button class="btn btn-primary btn-sm" id="copy-prompt-btn" type="button">一键复制</button>
-      </div>
+      <p class="modal-lead">不用写配置文件，也不用懂 Git，按下面几步就能把你的好玩法变成可分享的配方：</p>
 
       <ol class="modal-steps">
-        <li><strong>丢给 Bot 任意素材</strong>：一个你调顺手的飞书群、一篇干货帖子、一份飞书文档，或者直接口述你的想法。</li>
-        <li><strong>配一篇公开飞书宣传文档</strong>：把文档右上角分享权限设为「互联网上获得链接的人可阅读」（顺手加张封面图更好看），并在文档里写清楚获取方式或联系方式。</li>
-        <li><strong>自由分发与曝光</strong>：选择「公开宣传」只展示你的飞书文档链接，<strong>绝不上传你的 Skill 或正文</strong>——开源分享或自行分发 <code>.vonvon.zip</code> 都由你决定。</li>
+        <li>
+          <strong>先安装并连接 Vonvon Bot</strong><span class="step-note">（已安装可跳过）</span>：先下载桌面端或服务端并绑定你的飞书 Bot。
+          <div class="step-action">
+            <a class="btn btn-line btn-sm" href="https://vonvon.cc/get/" target="_blank" rel="noopener noreferrer">免费下载 Vonvon Bot →</a>
+          </div>
+        </li>
+        <li>
+          <strong>在飞书私聊发给你的 Bot</strong>：复制下面这句话发给它，然后把调顺手的飞书群、文档或想法直接丢给它，Bot 会带你整理并打包：
+          <div class="copy-box">
+            <code id="create-prompt-text">帮我创作一个配方</code>
+            <button class="btn btn-primary btn-sm" id="copy-prompt-btn" type="button">一键复制</button>
+          </div>
+        </li>
+        <li><strong>配一篇公开飞书宣传文档</strong>：把文档右上角「分享」权限设为「互联网上获得链接的人可阅读」（顺手加张封面图更好看），并在文档里写清介绍与获取方式。</li>
+        <li><strong>自由分发与免费曝光</strong>：选择「公开宣传」只展示你的飞书文档链接与封面，<strong>绝不上传你的 Skill 或正文</strong>——免费分享或自行分发 <code>.vonvon.zip</code> 都由你决定。</li>
       </ol>
-
-      <div class="modal-foot">
-        <span>还没有安装 Vonvon Bot？</span>
-        <a class="btn btn-line btn-sm" href="https://vonvon.cc/get/" target="_blank" rel="noopener noreferrer">免费下载桌面端 / 服务端 →</a>
-      </div>
     </div>
   </div>
 
   <div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
 
-  <script src="/app.js?v=3" defer></script>
+  <script src="/app.js?v=4" defer></script>
 </body>
 </html>
