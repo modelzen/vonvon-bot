@@ -43,17 +43,18 @@ describe('project library file', () => {
     expect(stored.projects[0]).toMatchObject({ name: 'b', memoryLimit: 100 });
   });
 
-  it('refuses two projects with one name or one main folder', async () => {
+  it('allows two projects to share one main folder, while keeping ids and names unique', async () => {
     const location = libraryLocation(root());
-    await expect(ownLibrary(async draft => {
-      draft.projects.push(project('prj_0000000a', 'a', '/w/a'), project('prj_0000000b', 'b', '/w/a'));
-      await draft.commit();
-    }, location)).rejects.toThrow(/唯一/);
     await expect(ownLibrary(async draft => {
       draft.projects.push(project('prj_0000000a', 'a', '/w/a'), project('prj_0000000b', 'a', '/w/b'));
       await draft.commit();
     }, location)).rejects.toThrow(/唯一/);
     expect(await readLibrary(location)).toEqual({ projects: [], rest: {} });
+    await ownLibrary(async draft => {
+      draft.projects.push(project('prj_0000000a', 'a', '/w/a'), project('prj_0000000b', 'b', '/w/a'));
+      await draft.commit();
+    }, location);
+    expect((await readLibrary(location)).projects.map(item => [item.name, item.workspace.primary])).toEqual([['a', '/w/a'], ['b', '/w/a']]);
   });
 
   it('never reads a broken, foreign or linked file as an empty library', async () => {

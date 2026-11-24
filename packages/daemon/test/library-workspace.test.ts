@@ -29,7 +29,7 @@ import { createAdminService } from '../src/admin/service';
 import { projectRevision } from '../src/admin/collaboration';
 import { AdminWriteError } from '../src/admin/ops';
 import { detachSessionsForChatIn } from '../src/bot/session-store';
-import { createLibraryProject, LibraryError, libraryLocation, ownLibrary, readLibrary } from '../src/project/library';
+import { createLibraryProject, libraryLocation, ownLibrary, readLibrary } from '../src/project/library';
 import { bindProject, listProjectsIn, mutateProject, previousProjectIdIn, removeProject, resetProjectDirectoryOverride, type Project } from '../src/project/registry';
 
 type Row = Record<string, unknown>;
@@ -112,15 +112,16 @@ describe('library.workspace, the one writer of a project\'s workspace', () => {
     expect(stored('cli_b')[0]!.cwd).toBe(target);
   });
 
-  it('refuses a folder that is another project\'s main folder, and changes nothing', async () => {
-    const { id } = await sharedProject();
+  it('allows changing a project to a main folder another project already uses, without altering the other project', async () => {
+    const { id, shared } = await sharedProject();
     const web = (await library()).find(project => project.id !== id)!;
-    const before = { library: await library(), a: stored('cli_a'), sessions: detached('cli_a') };
-    const failure = await createHostLibrary().workspace({ projectId: web.id, workspace: { primary: web.workspace.primary === folder('web') ? folder('shared') : folder('shared'), additional: [] } }).catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(LibraryError);
-    expect(failure).toMatchObject({ code: 'primary-taken', project: { id } });
-    expect((failure as Error).message).toContain('要共用请加入项目「支付组」');
-    expect({ library: await library(), a: stored('cli_a'), sessions: detached('cli_a') }).toEqual(before);
+    const change = await createHostLibrary().workspace({ projectId: web.id, workspace: { primary: shared, additional: [] } });
+    expect(change).toMatchObject({ changed: true, project: { id: web.id, revision: 2, workspace: { primary: shared } } });
+    expect(change.rebound.map(item => [item.botId, item.chatId, item.state])).toEqual([['cli_a', 'oc_web', 'archived']]);
+    expect(detached('cli_a')).toEqual({ oc_pay: false, oc_web: true });
+    expect(detached('cli_b')).toEqual({ oc_pay: false });
+    expect((await library()).find(project => project.id === id)).toMatchObject({ revision: 1, workspace: { primary: shared } });
+    expect((await library()).find(project => project.id === web.id)).toMatchObject({ revision: 2, workspace: { primary: shared } });
   });
 
   it('refuses a stale revision and a folder the data root forbids, and leaves the project as it was', async () => {
@@ -193,16 +194,20 @@ describe('a row of a library project does not take a folder from anywhere else',
 });
 
 describe('making and joining projects at binding time', () => {
-  it('makes the project before the row, finds it again on a retry, refuses another group\'s use of its folder, and suffixes a name', async () => {
+  it('makes the project before the row, finds it again on a retry, allows another group to use the same folder, and suffixes a name', async () => {
     const pay = folder('pay');
     const workspace = { primary: pay, additional: [] };
     const first = await createLibraryProject({ name: '支付组', workspace, createdBy: { botId: 'cli_a', chatId: 'oc_pay' } }, libraryLocation(fixture.root), () => 5);
     expect(first).toMatchObject({ name: '支付组', revision: 1, createdAt: 5, createdBy: { botId: 'cli_a', chatId: 'oc_pay' } });
     expect(await createLibraryProject({ name: '支付组', workspace, createdBy: { botId: 'cli_a', chatId: 'oc_pay' } }, libraryLocation(fixture.root))).toEqual(first);
-    await expect(createLibraryProject({ name: '别的', workspace, createdBy: { botId: 'cli_b', chatId: 'oc_other' } }, libraryLocation(fixture.root))).rejects.toMatchObject({ code: 'primary-taken', project: { id: first.id } });
+    const other = await createLibraryProject({ name: '别的', workspace, createdBy: { botId: 'cli_b', chatId: 'oc_other' } }, libraryLocation(fixture.root));
+    expect(other.id).not.toBe(first.id);
+    expect(other.workspace.primary).toBe(pay);
+    // Retrying the second group's creation still finds its own project instead of the first group's.
+    expect(await createLibraryProject({ name: '别的', workspace, createdBy: { botId: 'cli_b', chatId: 'oc_other' } }, libraryLocation(fixture.root))).toEqual(other);
     const second = await createLibraryProject({ name: '支付组', workspace: { primary: folder('pay-2'), additional: [] }, createdBy: { botId: 'cli_a', chatId: 'oc_pay2' } }, libraryLocation(fixture.root));
     expect(second.name).toBe('支付组 2');
-    expect((await library()).map(project => project.name)).toEqual(['支付组', '支付组 2']);
+    expect((await library()).map(project => project.name)).toEqual(['支付组', '别的', '支付组 2']);
   });
 
   it('writes the row with the project it joins and the step-A marker, and remembers the project of an unbound group', async () => {

@@ -589,6 +589,7 @@ function DesktopApp() {
         ? snapshot.projects?.find(item => item.id === (route.parent.kind === 'project' ? route.parent.id : undefined))?.name ?? '项目'
         : route.parent.kind === 'group' ? '群组列表' : '项目列表'
     : route.kind === 'dm' ? agent?.name ?? 'Bot'
+    : route.kind === 'project' && route.from ? route.from.label
     : routeView(route) === 'agents' ? 'Bot 列表' : routeView(route) === 'groups' ? '群组列表' : '项目列表';
   function membershipRows(
     members: Membership[],
@@ -930,7 +931,7 @@ function DesktopApp() {
                 revealHistory={searchTarget?.reveal === "group-history"} initialTab={searchTarget ? groupTabForSection(searchTarget.section) : groupTabs[member.id]} focusNew={newMemoryFocus?.memberId === member.id ? newMemoryFocus.token : undefined} newMemoryCount={member.projectId ? newCounts.projects[member.projectId] : undefined} onTabChange={tab => {setGroupTabs(current => ({...current,[member.id]:tab})); setNewMemoryFocus(undefined);}}
                 onBot={next => select({kind:'membership',id:next.id})}
                 onBotProfile={() => changeRoute(() => ({kind:'agent',id:agent.id,pane:{kind:'profile'}}))}
-                onProject={id => select({kind: 'project', id})}
+                onProject={id => changeRoute(current => ({kind: 'project', id, pane: {kind: 'workspace'}, from: {route: current, label: group.name}}))}
                 onOpenTools={() => openContextSettings('environment')} onOpenProviders={() => openContextSettings('providers')} onOpenSecrets={provider => openContextSettings('secrets', decisionProviderSection(provider))}
                 onChanged={async () => {await run({type:'refresh'});}}/>}
               {route.kind === 'dm' && agent?.dm && <GroupWorkspace key={agent.dm.id} dmMode member={agent.dm} agent={agent} group={{id: agent.dm.groupId, name: agent.dm.name}} snapshot={snapshot}
@@ -984,6 +985,15 @@ function DesktopApp() {
             onOpenLogs={() => { openPage("diagnostics"); setSearchTarget({page: "diagnostics", section: "daemon 日志"}); }}/>}
           {page === "diagnostics" && <DiagnosticsPanel snapshot={snapshot} ready={ready} busy={busy} run={run}
             onOpenSetup={openSetup} onOpenProviders={openProviders} onOpenSecrets={() => openPage("secrets")}
+            onOpenMembership={id => navigate(() => {
+              setGroupTabs(current => ({...current, [id]: 'model'}));
+              setRoute(openMembership({kind: 'list', view: 'groups'}, id, snapshot));
+              setPage('collaboration');
+              setSettingsReturn(undefined);
+              setFeatureId(undefined);
+              setSearchTarget({page: 'collaboration', selection: {kind: 'membership', id}, section: '工作区', field: '修改工作区'});
+              setNotice(undefined);
+            })}
             onNotice={(message, error) => setNotice({message, error})}/>}
           </>}
         </div>

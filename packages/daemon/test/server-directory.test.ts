@@ -108,49 +108,58 @@ describe('canonical home directory tokens', () => {
 });
 
 describe('web directory suggestions', () => {
-  it('lists the host home and its visible folders, and admits the selected canonical path', async () => {
+  it('lists the host home with visible folders before hidden folders, and admits the selected canonical path', async () => {
     const {home, browser} = await fixture();
-    await Promise.all([mkdir(join(home, 'Projects')), mkdir(join(home, '.private')), writeFile(join(home, 'file.txt'), 'file')]);
+    await Promise.all([mkdir(join(home, 'Projects')), mkdir(join(home, '.private')), mkdir(join(home, '.vonvon-bot')), writeFile(join(home, 'file.txt'), 'file')]);
     const result = await browser.suggest('');
     expect(result.parent).toBe(dirname(result.root));
-    expect(result.entries.map(entry => entry.name)).toEqual(['home', 'Projects']);
+    expect(result.entries.map(entry => entry.name)).toEqual(['home', 'Projects', '.private', '.vonvon-bot']);
+    expect(result.entries.map(entry => entry.hidden)).toEqual([false, false, true, true]);
     expect(result.path).toBe(result.root);
     const chosen = await browser.choose(result.entries[1]!.path);
     expect(await browser.resolve(chosen.token)).toBe(join(result.root, 'Projects'));
   });
 
-  it('searches nested names while excluding hidden/generated trees and symlink escapes or cycles', async () => {
+  it('searches nested names while matching top-level dot folders, excluding hidden trees, generated trees, and symlink escapes or cycles', async () => {
     const {home, outside, browser} = await fixture();
     await Promise.all([
       mkdir(join(home, 'Developer', 'Vonvon Bot'), {recursive: true}),
       mkdir(join(home, 'node_modules', 'vonvon-dependency'), {recursive: true}),
       mkdir(join(home, '.private', 'vonvon-secret'), {recursive: true}),
+      mkdir(join(home, '.vonvon-bot', 'projects'), {recursive: true}),
       mkdir(join(outside, 'vonvon-outside')),
       symlink(outside, join(home, 'vonvon-escape')),
       symlink(home, join(home, 'cycle')),
     ]);
     const result = await browser.suggest('vonvon');
-    expect(result.entries.map(entry => entry.name)).toEqual(['Vonvon Bot']);
+    expect(result.entries.map(entry => entry.name)).toEqual(['Vonvon Bot', '.vonvon-bot']);
+    expect(result.entries.map(entry => entry.hidden)).toEqual([false, true]);
     expect(result.path).toBeNull();
     expect(result.truncated).toBe(false);
+    const dotResult = await browser.suggest('.vonvon');
+    expect(dotResult.entries.map(entry => entry.name)).toEqual(['.vonvon-bot']);
   });
 
-  it('supports tilde, full paths, partial names and browsing hidden folders explicitly', async () => {
+  it('supports tilde, full paths, partial names, trailing dot completion and browsing hidden folders explicitly', async () => {
     const {home, browser} = await fixture();
     await mkdir(join(home, 'Projects', 'Vonvon Bot'), {recursive: true});
     await mkdir(join(home, '.private', 'workspace'), {recursive: true});
+    await mkdir(join(home, '.vonvon-bot', 'projects'), {recursive: true});
     const result = await browser.suggest('~/Projects/');
     expect(result.entries.map(entry => entry.name)).toEqual(['Projects', 'Vonvon Bot']);
     expect(result.parent).toBe(result.root);
     const completion = await browser.suggest(join(home, 'Projects', 'Von'));
     expect(completion.entries.map(entry => entry.name)).toEqual(['Vonvon Bot']);
     expect(completion.path).toBe(result.path);
+    expect((await browser.suggest('~/.')).entries.map(entry => entry.name)).toEqual(['.private', '.vonvon-bot']);
+    expect((await browser.suggest(`${home}/.`)).entries.map(entry => entry.name)).toEqual(['.private', '.vonvon-bot']);
     expect((await browser.suggest('~/.private/')).entries.map(entry => entry.name)).toEqual(['.private', 'workspace']);
     expect((await browser.suggest('~/Projects/Vonvon Bot')).entries.map(entry => entry.name)).toEqual(['Vonvon Bot']);
     if (process.platform !== 'win32') return;
     // main 必败: Windows took ~\ for a name to search for (Windows acceptance task 205)
     expect((await browser.suggest('~\\Projects\\')).entries.map(entry => entry.name)).toEqual(['Projects', 'Vonvon Bot']);
     expect((await browser.suggest('~\\Projects\\Von')).entries.map(entry => entry.name)).toEqual(['Vonvon Bot']);
+    expect((await browser.suggest('~\\.')).entries.map(entry => entry.name)).toEqual(['.private', '.vonvon-bot']);
     expect((await browser.suggest('~\\..\\outside\\')).path).toBe(await realpath(join(home, '..', 'outside')));
   });
 

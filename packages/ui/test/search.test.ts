@@ -306,7 +306,13 @@ test('model and permission search targets reach visible compact summaries with t
   }
 });
 
-test('P6: the workspace is the project\'s: its settings open the project page, not a group', () => {
+test('workspace settings are reachable directly on the group page and still work on the project page', () => {
+  for (const query of ['工作区', '工作目录', '更换目录', '主目录', '添加目录']) {
+    const entry = findEntries(entries, query).find(item => item.destination.selection?.kind === 'membership');
+    assert.equal(entry?.destination.section, '工作区', query);
+    assert.equal(entry?.destination.field, query === '工作区' ? undefined : '修改工作区', query);
+    assert.equal(groupTabForSection(entry?.destination.section), 'model', query);
+  }
   for (const query of ['主目录', '代码仓库']) {
     const entry = findEntries(entries, query).find(item => item.destination.selection?.kind === 'project');
     assert.deepEqual(entry?.destination.selection, {kind: 'project', id: projectId}, query);
@@ -314,9 +320,7 @@ test('P6: the workspace is the project\'s: its settings open the project page, n
     assert.equal(routeFromSearch(entry!.destination, snapshot)?.route.kind, 'project');
     assert.deepEqual(routeFromSearch(entry!.destination, snapshot)?.route, {kind: 'project', id: projectId, pane: {kind: 'workspace'}});
   }
-  // no group-level entry for it any more
-  assert.ok(!entries.some(entry => entry.destination.selection?.kind === 'membership' && entry.destination.section === '工作区'));
-  for (const section of ['权限', '能挡到什么', '高级设置', '工作目录权限']) assert.equal(groupTabForSection(section), 'model', section);
+  for (const section of ['权限', '工作区', '工作目录', '更换目录', '能挡到什么', '高级设置', '工作目录权限']) assert.equal(groupTabForSection(section), 'model', section);
   assert.equal(groupTabForSection('个性与记忆'), 'capabilities');
 });
 
