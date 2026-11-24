@@ -2,12 +2,15 @@ import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { RpcError, type VonvonClient } from '@vonvon/client';
 import { discoverLocalGroupSkills } from '../src/agent/group-skills';
-import { assertTemplateSessionAllowed } from '../src/cli/commands/template';
+import { assertTemplateSessionAllowed, verifyTemplateSessionAllowed } from '../src/cli/commands/template';
 import { SESSION_BOT_ENV, SESSION_ENV, SESSION_SCOPE_ENV } from '../src/config/session-env';
 import { DEVICES_DIR } from '../src/remote/files';
 import { authorKeyPath, loadOrCreateAuthorKey, signPromoPayload, verifyPromoPayload } from '../src/template/author-key';
-import { extractTemplate, inspectTemplate, INSTALLED_META_FILENAME, packTemplate, PackRedactionError, stageTemplate } from '../src/template/ops';
+import {
+  draftTemplateFromDirectory, extractTemplate, inspectTemplate, INSTALLED_META_FILENAME, packTemplate, PackRedactionError, stageTemplate,
+} from '../src/template/ops';
 import { scanFilesForSecrets } from '../src/template/redact';
 import { buildPublicPromoPayload, installedTemplatesFileSchema, templateManifestSchema } from '../src/template/schema';
 import { createZip, normalizeZipPath, readZip } from '../src/template/zip';
@@ -473,5 +476,169 @@ describe('template CLI session authorization', () => {
     expect(() => assertTemplateSessionAllowed({ [SESSION_ENV]: 'vs1.x', [SESSION_SCOPE_ENV]: 'bot=cli_bot' })).toThrow(/群聊和云文档评论/);
     expect(() => assertTemplateSessionAllowed({ [SESSION_ENV]: 'vs1.x', [SESSION_BOT_ENV]: 'cli_bot' }, 'bot=cli_bot,group=oc_g')).toThrow(/群聊和云文档评论/);
     expect(() => assertTemplateSessionAllowed({ FEISHU_CODEX_BRIDGE: '1' })).toThrow(/群聊和云文档评论/);
+  });
+
+  it('negotiates exactly once in a DM bot session and rejects non-DM principals', async () => {
+    const makeFakeClient = (principal: 'bot-session:dm' | 'bot-session:group') => {
+      let negotiates = 0;
+      const client = {
+        async admin(payload: { type: string }) {
+          if (payload.type === 'negotiate') {
+            negotiates++;
+            if (negotiates > 1) throw new RpcError('invalid_request', 'negotiate 只能发一次。');
+            return { kind: 'negotiated', principal, capabilities: ['cli'] };
+          }
+          throw new Error(`unexpected admin call: ${payload.type}`);
+        },
+        async close() {},
+      } as unknown as VonvonClient;
+      return { client, count: () => negotiates };
+    };
+
+    const dmFake = makeFakeClient('bot-session:dm');
+    await expect(verifyTemplateSessionAllowed(
+      { [SESSION_ENV]: 'vs1.token', [SESSION_BOT_ENV]: 'cli_bot' },
+      undefined,
+      await makeTempDir('vonvon-home-'),
+      async () => dmFake.client,
+    )).resolves.toBeUndefined();
+    expect(dmFake.count()).toBe(1);
+
+    const groupFake = makeFakeClient('bot-session:group');
+    await expect(verifyTemplateSessionAllowed(
+      { [SESSION_ENV]: 'vs1.token', [SESSION_BOT_ENV]: 'cli_bot' },
+      undefined,
+      await makeTempDir('vonvon-home-'),
+      async () => groupFake.client,
+    )).rejects.toThrow(/群聊和云文档评论/);
+    expect(groupFake.count()).toBe(1);
+  });
+});
+
+describe('draftTemplateFromDirectory', () => {
+  it('extracts real group workspace, local skills, and existing manifest while skipping runtime/builtin/forbidden files', async () => {
+    const groupDir = await makeTempDir('vonvon-src-group-');
+    const destDir = join(await makeTempDir('vonvon-draft-out-'), 'draft');
+    const dataRoot = await makeTempDir('vonvon-draft-data-');
+
+    await writeTree(groupDir, {
+      '.gitignore': '# runtime state\nworkspace/\n*.log\n',
+      'vonvon-bot.json': JSON.stringify({
+        schemaVersion: 1,
+        id: 'vonvon-assistant',
+        name: 'vonvon 帮助与反馈',
+        summary: '4 个真实 Skill 帮用户初始化、答疑、排错和反馈。',
+        version: '0.1.0',
+        public: true,
+        docUrl: 'https://example.feishu.cn/docx/existingdoc',
+        author: { name: 'modelzen' },
+        defaults: {
+          groupName: 'vonvon 帮助与反馈',
+          permission: 'full',
+          permissionNote: '本地排错需要完全访问',
+          firstMessage: '开始初始化',
+        },
+        skills: [
+          { name: 'vonvon-setup', title: '环境预准备与更新', description: '一次性体检' },
+        ],
+      }, null, 2),
+      'README.md': '# vonvon 帮助与反馈\n',
+      'AGENTS.md': '# Group Rules\n',
+      'scripts/sync-skills.mjs': 'console.log("ok");\n',
+      '.env': 'SECRET_KEY=topsecret\n',
+      '.mcp.json': '{"mcpServers":{}}\n',
+      'debug.log': 'ignored log\n',
+      'workspace/setup-state.json': '{"step":1}\n',
+      'workspace/vonvon-bot/.git/HEAD': 'ref: refs/heads/main\n',
+      'workspace/vonvon-bot/README.md': 'nested repo\n',
+      'nested-clone/.git/HEAD': 'ref: refs/heads/main\n',
+      'nested-clone/index.ts': 'export {};\n',
+      '.agents/skills/vonvon-setup/SKILL.md': '---\nname: vonvon-setup\ndescription: 初始化技能\n---\nSetup body\n',
+      '.agents/skills/vonvon-qa/SKILL.md': '---\nname: vonvon-qa\ndescription: 源码答疑\n---\nQA body\n',
+      '.agents/skills/vonvon-diagnose/SKILL.md': '---\nname: vonvon-diagnose\ndescription: 本地排错\n---\nDiagnose body\n',
+      '.agents/skills/vonvon-feedback/SKILL.md': '---\nname: vonvon-feedback\ndescription: 脱敏反馈\n---\nFeedback body\n',
+      '.agents/skills/vonvon-template/SKILL.md': '---\nname: vonvon-template\ndescription: 系统内置技能不应复制\n---\nBuiltin\n',
+      '.agents/skills/disabled-one/SKILL.md': '---\nname: disabled-one\ndescription: 已停用技能\n---\nDisabled\n',
+      '.claude/skills/vonvon-setup/SKILL.md': '---\nname: vonvon-setup\ndescription: 重复副本\n---\nDup\n',
+    });
+
+    const draft = await draftTemplateFromDirectory({
+      sourceDir: groupDir,
+      destDir,
+      groupName: 'vonvon 帮助与反馈',
+      roleSupplement: '优先依据工作区源码回答问题。',
+      recommendedPermission: 'full',
+      disabledSkillPaths: [join(groupDir, '.agents/skills/disabled-one/SKILL.md')],
+    });
+
+    expect(draft.reusedExistingManifest).toBe(true);
+    expect(draft.id).toBe('vonvon-assistant');
+    expect(draft.skills.map(s => s.name)).toEqual(['vonvon-diagnose', 'vonvon-feedback', 'vonvon-qa', 'vonvon-setup']);
+    expect(draft.skills.find(s => s.name === 'vonvon-setup')?.title).toBe('环境预准备与更新');
+    expect(draft.workspaceFiles).toEqual(['.gitignore', 'AGENTS.md', 'scripts/sync-skills.mjs']);
+    expect(draft.hasReadme).toBe(true);
+    expect(draft.roleIncluded).toBe(true);
+    expect(draft.skippedEntries).toEqual(expect.arrayContaining([
+      { path: '.agents/skills/vonvon-template', reason: 'builtin-skill' },
+      { path: '.agents/skills/disabled-one', reason: 'disabled-skill' },
+      { path: 'workspace/', reason: 'gitignored' },
+      { path: 'debug.log', reason: 'gitignored' },
+      { path: 'nested-clone/', reason: 'nested-git-repo' },
+      { path: '.env', reason: 'forbidden' },
+      { path: '.mcp.json', reason: 'forbidden' },
+    ]));
+
+    // Draft forces `public: false` until creator opts in, and passes inspect + pack cleanly!
+    const inspected = await inspectTemplate(destDir);
+    expect(inspected.public).toBe(false);
+    expect(inspected.docUrl).toBe('https://example.feishu.cn/docx/existingdoc');
+    expect(inspected.skills.map(s => s.name)).toEqual(['vonvon-diagnose', 'vonvon-feedback', 'vonvon-qa', 'vonvon-setup']);
+    expect(inspected.group.role).toBe('优先依据工作区源码回答问题。');
+    expect(inspected.group.firstMessage).toBe('开始初始化');
+
+    const outZip = join(await makeTempDir('vonvon-draft-zip-'), 'assistant.vonvon.zip');
+    const packed = await packTemplate(destDir, outZip, { dataRoot });
+    expect(packed.skillNames).toEqual(['vonvon-diagnose', 'vonvon-feedback', 'vonvon-qa', 'vonvon-setup']);
+    expect(packed.public).toBe(false);
+
+    // Rejects destination nested inside sourceDir or non-empty destination.
+    await expect(draftTemplateFromDirectory({
+      sourceDir: groupDir,
+      destDir: join(groupDir, 'sub-draft'),
+      groupName: 'vonvon 帮助与反馈',
+    })).rejects.toThrow(/不能位于源群工作区内部/);
+    await expect(draftTemplateFromDirectory({
+      sourceDir: groupDir,
+      destDir,
+      groupName: 'vonvon 帮助与反馈',
+    })).rejects.toThrow(/必须为空目录/);
+  });
+
+  it('synthesizes a valid manifest from scratch when the group has no existing vonvon-bot.json', async () => {
+    const groupDir = await makeTempDir('vonvon-plain-group-');
+    const destDir = join(await makeTempDir('vonvon-plain-out-'), 'draft');
+    await writeTree(groupDir, {
+      'AGENTS.md': '# 每日复盘群规则\n',
+      '.agents/skills/daily-recap/SKILL.md': '---\nname: daily-recap\ndescription: 整理每日工作复盘\n---\nBody\n',
+    });
+
+    const draft = await draftTemplateFromDirectory({
+      sourceDir: groupDir,
+      destDir,
+      groupName: '每日复盘',
+      authorName: 'Clay',
+      roleSupplement: '每天 18:00 汇总当天进展与风险。',
+      recommendedPermission: 'write',
+      schedules: [{ name: '晚间复盘', when: { kind: 'daily', time: '18:00' }, prompt: '总结今天进展', enabledByDefault: true }],
+    });
+
+    expect(draft.reusedExistingManifest).toBe(false);
+    expect(draft.id).toBe('group-recipe');
+    expect(draft.skills.map(s => s.name)).toEqual(['daily-recap']);
+    expect(draft.scheduleCount).toBe(1);
+    const inspected = await inspectTemplate(destDir);
+    expect(inspected.author.name).toBe('Clay');
+    expect(inspected.group.recommendedPermission).toBe('write');
+    expect(inspected.group.schedules).toHaveLength(1);
   });
 });

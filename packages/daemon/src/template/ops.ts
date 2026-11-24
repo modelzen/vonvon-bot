@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, readdir, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { paths } from '../config/paths';
 import { loadOrCreateAuthorKey, signCoverBytes, signPromoPayload, verifyPromoPayload } from './author-key';
 import {
@@ -10,8 +10,9 @@ import {
 import { scanFilesForSecrets, type RedactionFinding } from './redact';
 import {
   buildPublicPromoPayload, effectiveAcquisition, effectiveDocUrl, effectiveGroupSpec, effectivePricing,
-  installedTemplatesFileSchema, isPublicTemplate, templateManifestSchema,
-  type InstalledTemplateRecord, type InstalledTemplatesFile, type TemplateGroupSpec, type TemplateManifest, type TemplatePricing,
+  installedTemplatesFileSchema, isPublicTemplate, templateManifestSchema, TEMPLATE_ID_REGEX,
+  type InstalledTemplateRecord, type InstalledTemplatesFile, type TemplateGroupSpec, type TemplateManifest,
+  type TemplatePricing, type TemplateSchedule,
 } from './schema';
 import { createZip, MAX_ARCHIVE_BYTES, MAX_ARCHIVE_FILES, MAX_UNCOMPRESSED_BYTES, normalizeZipPath, readZip } from './zip';
 
@@ -318,27 +319,26 @@ function parseLoadedPackage(sourceKind: TemplateSourceKind, files: LoadedFile[])
  * Matches `discoverLocalGroupSkills` (`packages/daemon/src/agent/group-skills.ts`):
  * both Codex and Claude require YAML frontmatter with non-empty `name` and `description` in `SKILL.md`.
  */
+function parseSkillFrontmatter(content: string): { name: string; description: string } | undefined {
+  const scalar = (value: string) => value.trim().replace(/^(['"])([\s\S]*)\1$/u, '$2');
+  const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u)?.[1];
+  if (!frontmatter) return undefined;
+  const name = scalar(frontmatter.match(/^name:\s*(.+)$/mu)?.[1] ?? '');
+  const rawDesc = frontmatter.match(/^description:\s*(.+)$/mu)?.[1] ?? '';
+  const description = /^[>|][-+]?\s*$/u.test(rawDesc)
+    ? (frontmatter.match(/^description:[^\n]*\n((?:[ \t]+[^\n]*(?:\n|$))*)/mu)?.[1] ?? '').trim()
+    : scalar(rawDesc);
+  if (!name || !description) return undefined;
+  return { name, description };
+}
+
 function findInvalidSkills(pkg: ParsedTemplatePackage): string[] {
   const invalid: string[] = [];
-  const scalar = (value: string) => value.trim().replace(/^(['"])([\s\S]*)\1$/u, '$2');
   for (const [skillName, entries] of pkg.skills.entries()) {
     const skillMd = entries.find(e => e.path === 'SKILL.md');
-    if (!skillMd) {
+    if (!skillMd || !parseSkillFrontmatter(skillMd.data.toString('utf8'))) {
       invalid.push(skillName);
-      continue;
     }
-    const content = skillMd.data.toString('utf8');
-    const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u)?.[1];
-    if (!frontmatter) {
-      invalid.push(skillName);
-      continue;
-    }
-    const name = scalar(frontmatter.match(/^name:\s*(.+)$/mu)?.[1] ?? '');
-    const rawDesc = frontmatter.match(/^description:\s*(.+)$/mu)?.[1] ?? '';
-    const desc = /^[>|][-+]?\s*$/u.test(rawDesc)
-      ? (frontmatter.match(/^description:[^\n]*\n((?:[ \t]+[^\n]*(?:\n|$))*)/mu)?.[1] ?? '').trim()
-      : scalar(rawDesc);
-    if (!name || !desc) invalid.push(skillName);
   }
   return invalid;
 }
@@ -837,5 +837,459 @@ export async function packTemplate(
     skillNames,
     workspaceFileCount,
     ...(publish ? { publish } : {}),
+  };
+}
+
+/** Vonvon's own built-in DM/group skills must never be copied into a creator's recipe package. */
+const BUILTIN_SKILL_NAMES = new Set([
+  'vonvon-config',
+  'vonvon-feishu',
+  'vonvon-schedule',
+  'vonvon-template',
+]);
+
+export interface DraftSkippedEntry {
+  path: string;
+  reason: 'gitignored' | 'nested-git-repo' | 'forbidden' | 'symlink' | 'builtin-skill' | 'disabled-skill';
+}
+
+export interface DraftFromGroupInput {
+  sourceDir: string;
+  destDir: string;
+  groupName: string;
+  groupId?: string;
+  authorName?: string;
+  roleSupplement?: string;
+  recommendedPermission?: 'qa' | 'write' | 'full';
+  schedules?: TemplateSchedule[];
+  disabledSkillPaths?: readonly string[];
+}
+
+export interface DraftFromGroupResult {
+  dest: string;
+  sourceDir: string;
+  manifestPath: string;
+  id: string;
+  version: string;
+  name: string;
+  reusedExistingManifest: boolean;
+  skills: { name: string; title?: string; description?: string; files: number }[];
+  workspaceFiles: string[];
+  hasReadme: boolean;
+  roleIncluded: boolean;
+  recommendedPermission?: 'qa' | 'write' | 'full';
+  scheduleCount: number;
+  skippedEntries: DraftSkippedEntry[];
+  redactionWarnings: RedactionFinding[];
+}
+
+interface GitIgnoreRule {
+  dirOnly: boolean;
+  anchored: boolean;
+  hasSlash: boolean;
+  regex: RegExp;
+}
+
+function globToRegex(pattern: string): RegExp {
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  const translated = escaped
+    .replace(/\*\*/g, '\0')
+    .replace(/\*/g, '[^/]*')
+    .replace(/\?/g, '[^/]')
+    .replace(/\0/g, '.*');
+  return new RegExp(`^${translated}$`);
+}
+
+function parseGitIgnore(raw: string): GitIgnoreRule[] {
+  const rules: GitIgnoreRule[] = [];
+  for (const rawLine of raw.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#') || line.startsWith('!')) continue;
+    const dirOnly = line.endsWith('/');
+    const anchored = line.startsWith('/');
+    const body = line.replace(/^\/+/, '').replace(/\/+$/, '');
+    if (!body) continue;
+    rules.push({
+      dirOnly,
+      anchored,
+      hasSlash: body.includes('/'),
+      regex: globToRegex(body),
+    });
+  }
+  return rules;
+}
+
+function matchesGitIgnore(rules: readonly GitIgnoreRule[], relPath: string, isDir: boolean): boolean {
+  const normalized = relPath.replace(/^\/+|\/+$/g, '');
+  if (!normalized) return false;
+  const segments = normalized.split('/');
+  const leaf = segments.at(-1) ?? '';
+  for (const rule of rules) {
+    if (rule.dirOnly && !isDir) continue;
+    if (rule.anchored || rule.hasSlash) {
+      if (rule.regex.test(normalized)) return true;
+    } else if (rule.regex.test(leaf)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function deriveTemplateId(groupName: string): string {
+  const slug = groupName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+  if (slug && TEMPLATE_ID_REGEX.test(slug)) return slug;
+  return 'group-recipe';
+}
+
+async function hasNestedGitMarker(dirPath: string): Promise<boolean> {
+  try {
+    await lstat(join(dirPath, '.git'));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function normalizeDisabledPaths(pathsList: readonly string[]): Promise<Set<string>> {
+  const set = new Set<string>();
+  for (const raw of pathsList) {
+    if (!raw?.trim()) continue;
+    const resolved = resolve(raw);
+    set.add(resolved);
+    try {
+      set.add(await realpath(resolved));
+    } catch {
+      // Missing path; keep resolved form.
+    }
+  }
+  return set;
+}
+
+async function canonicalizeTargetPath(targetPath: string): Promise<string> {
+  const abs = resolve(targetPath);
+  const trailing: string[] = [];
+  let cursor = abs;
+  while (true) {
+    try {
+      const real = await realpath(cursor);
+      return trailing.length ? join(real, ...trailing.reverse()) : real;
+    } catch {
+      const parent = dirname(cursor);
+      if (parent === cursor) return abs;
+      trailing.push(cursor.slice(parent.length).replace(/^[/\\]+/, ''));
+      cursor = parent;
+    }
+  }
+}
+
+/**
+ * Deterministically copy a bound group's real workspace files, group-local Skills
+ * (`.agents/skills`, `.claude/skills`, or `skills/`), existing `vonvon-bot.json`, and
+ * group settings into a clean standard-layout draft directory ready for preview & packing.
+ */
+export async function draftTemplateFromDirectory(input: DraftFromGroupInput): Promise<DraftFromGroupResult> {
+  const resolvedSourceArg = resolve(input.sourceDir);
+  const sourceStat = await stat(resolvedSourceArg).catch(() => {
+    throw new Error(`找不到群工作区目录：${input.sourceDir}`);
+  });
+  if (!sourceStat.isDirectory()) {
+    throw new Error(`群工作区路径不是目录：${input.sourceDir}`);
+  }
+  const sourceDir = await realpath(resolvedSourceArg);
+
+  const dest = resolve(input.destDir);
+  const canonicalDest = await canonicalizeTargetPath(dest);
+  const relFromSource = relative(sourceDir, canonicalDest);
+  const normalizedRel = relFromSource.split(sep).join('/');
+  if (normalizedRel === '' || (!isAbsolute(relFromSource) && normalizedRel !== '..' && !normalizedRel.startsWith('../'))) {
+    throw new Error(`草稿输出目录不能位于源群工作区内部：${dest}`);
+  }
+
+  const destStat = await lstat(dest).catch(() => undefined);
+  if (destStat) {
+    if (destStat.isSymbolicLink() || !destStat.isDirectory()) {
+      throw new Error(`草稿输出路径已存在且不是目录：${dest}`);
+    }
+    const existing = await readdir(dest);
+    if (existing.length > 0) {
+      throw new Error(`草稿输出目录必须为空目录：${dest}`);
+    }
+  }
+
+  const disabledPaths = await normalizeDisabledPaths(input.disabledSkillPaths ?? []);
+  const skippedEntries: DraftSkippedEntry[] = [];
+  const collectedFiles: LoadedFile[] = [];
+  let fileCount = 0;
+  let totalBytes = 0;
+
+  // 1. Parse optional root `.gitignore` so runtime clones & local scratch folders (like `workspace/`) are skipped cleanly.
+  let gitIgnoreRules: GitIgnoreRule[] = [];
+  try {
+    const rawIgnore = await readFile(join(sourceDir, '.gitignore'), 'utf8');
+    gitIgnoreRules = parseGitIgnore(rawIgnore);
+  } catch {
+    // No `.gitignore` — normal for non-git group workspaces.
+  }
+
+  // 2. Discover group-local Skills from `skills/`, `.agents/skills/`, `.claude/skills/` (priority order).
+  const extractedSkills = new Map<string, { entries: LoadedFile[]; description?: string }>();
+  const skillRoots = ['skills', '.agents/skills', '.claude/skills'] as const;
+  for (const rootRel of skillRoots) {
+    const rootFull = join(sourceDir, rootRel);
+    const rootInfo = await lstat(rootFull).catch(() => undefined);
+    if (!rootInfo || rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) continue;
+    const candidates = (await readdir(rootFull, { withFileTypes: true })).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const entry of candidates) {
+      const skillName = entry.name;
+      if (skillName.startsWith('.') || skillName === '__MACOSX') continue;
+      const skillDir = join(rootFull, skillName);
+      const skillInfo = await lstat(skillDir).catch(() => undefined);
+      if (!skillInfo || skillInfo.isSymbolicLink() || !skillInfo.isDirectory()) {
+        if (skillInfo?.isSymbolicLink()) skippedEntries.push({ path: `${rootRel}/${skillName}`, reason: 'symlink' });
+        continue;
+      }
+      if (BUILTIN_SKILL_NAMES.has(skillName)) {
+        skippedEntries.push({ path: `${rootRel}/${skillName}`, reason: 'builtin-skill' });
+        continue;
+      }
+      if (extractedSkills.has(skillName)) continue;
+
+      const skillMdPath = join(skillDir, 'SKILL.md');
+      const skillMdInfo = await lstat(skillMdPath).catch(() => undefined);
+      if (!skillMdInfo || skillMdInfo.isSymbolicLink() || !skillMdInfo.isFile()) continue;
+
+      const realSkillMd = await realpath(skillMdPath).catch(() => resolve(skillMdPath));
+      if (disabledPaths.has(resolve(skillMdPath)) || disabledPaths.has(realSkillMd)) {
+        skippedEntries.push({ path: `${rootRel}/${skillName}`, reason: 'disabled-skill' });
+        continue;
+      }
+
+      const skillEntries: LoadedFile[] = [];
+      async function walkSkill(current: string): Promise<void> {
+        const children = (await readdir(current, { withFileTypes: true })).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+        for (const child of children) {
+          if (child.name === '.git' || child.name === '.DS_Store' || child.name === 'Thumbs.db' || child.name === '__MACOSX') continue;
+          const full = join(current, child.name);
+          const info = await lstat(full);
+          const relInside = normalizeZipPath(relative(skillDir, full).split(sep).join('/'));
+          if (info.isSymbolicLink()) {
+            skippedEntries.push({ path: `${rootRel}/${skillName}/${relInside}`, reason: 'symlink' });
+            continue;
+          }
+          if (info.isDirectory()) {
+            await walkSkill(full);
+          } else if (info.isFile()) {
+            fileCount++;
+            if (fileCount > MAX_ARCHIVE_FILES) {
+              throw new Error(`提取的文件数量超过配方上限（最多 ${MAX_ARCHIVE_FILES} 个）`);
+            }
+            totalBytes += info.size;
+            if (totalBytes > MAX_UNCOMPRESSED_BYTES) {
+              throw new Error(`提取的文件总大小超过配方上限（最大 ${Math.round(MAX_UNCOMPRESSED_BYTES / (1024 * 1024))} MB）`);
+            }
+            skillEntries.push({ path: relInside, data: await readFile(full) });
+          }
+        }
+      }
+      await walkSkill(skillDir);
+      const skillMd = skillEntries.find(e => e.path === 'SKILL.md');
+      const frontmatter = skillMd ? parseSkillFrontmatter(skillMd.data.toString('utf8')) : undefined;
+      extractedSkills.set(skillName, { entries: skillEntries, ...(frontmatter?.description ? { description: frontmatter.description } : {}) });
+    }
+  }
+
+  // 3. Read existing `vonvon-bot.json` (if present in sourceDir) as baseline manifest.
+  let existingManifest: TemplateManifest | undefined;
+  const sourceManifestPath = join(sourceDir, MANIFEST_FILENAME);
+  try {
+    const manifestStat = await lstat(sourceManifestPath);
+    if (manifestStat.isFile()) {
+      const parsed = templateManifestSchema.safeParse(JSON.parse(await readFile(sourceManifestPath, 'utf8')));
+      if (parsed.success) existingManifest = parsed.data;
+    }
+  } catch {
+    // Ignore absent or non-JSON manifest; we synthesize a clean one below.
+  }
+
+  // 4. Walk group workspace files cleanly into `workspace/` (and top-level `README.md`).
+  let readmeBuf: Buffer | undefined;
+  const workspaceFiles: LoadedFile[] = [];
+
+  async function walkWorkspace(current: string): Promise<void> {
+    const children = (await readdir(current, { withFileTypes: true })).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const child of children) {
+      const full = join(current, child.name);
+      const rel = normalizeZipPath(relative(sourceDir, full).split(sep).join('/'));
+      const isTopLevel = current === sourceDir;
+      const info = await lstat(full);
+
+      if (isOsJunk(rel)) continue;
+      if (info.isSymbolicLink()) {
+        skippedEntries.push({ path: rel, reason: 'symlink' });
+        continue;
+      }
+
+      if (isTopLevel && (child.name === MANIFEST_FILENAME || child.name === INSTALLED_META_FILENAME)) {
+        continue;
+      }
+      if (isTopLevel && child.name === 'skills' && info.isDirectory()) {
+        continue;
+      }
+      if (isTopLevel && child.name === 'README.md' && info.isFile()) {
+        readmeBuf = await readFile(full);
+        continue;
+      }
+
+      if (info.isDirectory()) {
+        const lower = child.name.toLowerCase();
+        if ((isTopLevel && FORBIDDEN_WORKSPACE_ROOTS.has(lower)) || lower === '.git' || lower === 'node_modules') {
+          if (lower !== '.git' && lower !== '.agents' && lower !== '.claude') {
+            skippedEntries.push({ path: `${rel}/`, reason: 'forbidden' });
+          }
+          continue;
+        }
+        if (matchesGitIgnore(gitIgnoreRules, rel, true)) {
+          skippedEntries.push({ path: `${rel}/`, reason: 'gitignored' });
+          continue;
+        }
+        if (await hasNestedGitMarker(full)) {
+          skippedEntries.push({ path: `${rel}/`, reason: 'nested-git-repo' });
+          continue;
+        }
+        await walkWorkspace(full);
+      } else if (info.isFile()) {
+        if (isForbiddenWorkspacePath(rel)) {
+          skippedEntries.push({ path: rel, reason: 'forbidden' });
+          continue;
+        }
+        if (matchesGitIgnore(gitIgnoreRules, rel, false)) {
+          skippedEntries.push({ path: rel, reason: 'gitignored' });
+          continue;
+        }
+        fileCount++;
+        if (fileCount > MAX_ARCHIVE_FILES) {
+          throw new Error(`提取的文件数量超过配方上限（最多 ${MAX_ARCHIVE_FILES} 个）`);
+        }
+        totalBytes += info.size;
+        if (totalBytes > MAX_UNCOMPRESSED_BYTES) {
+          throw new Error(`提取的文件总大小超过配方上限（最大 ${Math.round(MAX_UNCOMPRESSED_BYTES / (1024 * 1024))} MB）`);
+        }
+        workspaceFiles.push({ path: rel, data: await readFile(full) });
+      }
+    }
+  }
+  await walkWorkspace(sourceDir);
+
+  // 5. Build clean draft manifest (`public: false` always until creator explicitly opts in).
+  const existingGroup = existingManifest ? effectiveGroupSpec(existingManifest) : {};
+  const existingSkillMeta = new Map((existingManifest?.skills ?? []).map(s => [s.name, s]));
+  const skillSummaries = [...extractedSkills.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([name, info]) => {
+      const prior = existingSkillMeta.get(name);
+      const description = (prior?.description ?? info.description)?.slice(0, 300);
+      return {
+        name,
+        ...(prior?.title ? { title: prior.title } : {}),
+        ...(description ? { description } : {}),
+      };
+    });
+
+  const mergedRole = input.roleSupplement?.trim() || existingGroup.role?.trim() || undefined;
+  const mergedPermission = input.recommendedPermission ?? existingGroup.recommendedPermission;
+  const mergedSchedules = input.schedules?.length ? input.schedules : existingGroup.schedules;
+  const groupSpec: TemplateGroupSpec = {
+    defaultName: existingGroup.defaultName ?? input.groupName.trim().slice(0, 100),
+    ...(mergedRole ? { role: mergedRole.slice(0, 5000) } : {}),
+    ...(mergedPermission ? { recommendedPermission: mergedPermission } : {}),
+    ...(existingGroup.permissionNote ? { permissionNote: existingGroup.permissionNote } : {}),
+    ...(existingGroup.firstMessage ? { firstMessage: existingGroup.firstMessage } : {}),
+    ...(mergedSchedules?.length ? { schedules: mergedSchedules } : {}),
+  };
+
+  const draftManifest: TemplateManifest = existingManifest
+    ? {
+        schemaVersion: 1,
+        id: existingManifest.id,
+        version: existingManifest.version,
+        public: false,
+        name: existingManifest.name,
+        summary: existingManifest.summary,
+        ...(existingManifest.tags?.length ? { tags: existingManifest.tags } : {}),
+        ...(existingManifest.docUrl ? { docUrl: existingManifest.docUrl } : {}),
+        ...(existingManifest.homepage ? { homepage: existingManifest.homepage } : {}),
+        ...(existingManifest.installHint ? { installHint: existingManifest.installHint } : {}),
+        ...(existingManifest.license ? { license: existingManifest.license } : {}),
+        ...(existingManifest.credits?.length ? { credits: existingManifest.credits } : {}),
+        author: {
+          name: existingManifest.author.name,
+          ...(existingManifest.author.url ? { url: existingManifest.author.url } : {}),
+          ...(existingManifest.author.contact ? { contact: existingManifest.author.contact } : {}),
+        },
+        ...(existingManifest.repository ? { repository: existingManifest.repository } : {}),
+        ...(existingManifest.acquisition?.length ? { acquisition: existingManifest.acquisition } : {}),
+        ...(existingManifest.pricing ? { pricing: existingManifest.pricing } : {}),
+        ...(existingManifest.compatibility ? { compatibility: existingManifest.compatibility } : {}),
+        ...(existingManifest.prerequisites?.length ? { prerequisites: existingManifest.prerequisites } : {}),
+        group: groupSpec,
+        ...(skillSummaries.length ? { skills: skillSummaries } : {}),
+      }
+    : {
+        schemaVersion: 1,
+        id: deriveTemplateId(input.groupName),
+        version: '0.1.0',
+        public: false,
+        name: input.groupName.trim().slice(0, 80) || '未命名配方',
+        summary: `基于飞书群「${input.groupName.trim().slice(0, 60)}」整理的 Vonvon 配方。`,
+        author: { name: input.authorName?.trim().slice(0, 80) || '创作者' },
+        group: groupSpec,
+        ...(skillSummaries.length ? { skills: skillSummaries } : {}),
+      };
+
+  const manifestText = `${JSON.stringify(draftManifest, null, 2)}\n`;
+  collectedFiles.push({ path: MANIFEST_FILENAME, data: Buffer.from(manifestText, 'utf8') });
+  if (readmeBuf) collectedFiles.push({ path: 'README.md', data: readmeBuf });
+  for (const [skillName, info] of extractedSkills.entries()) {
+    for (const entry of info.entries) {
+      collectedFiles.push({ path: `skills/${skillName}/${entry.path}`, data: entry.data });
+    }
+  }
+  for (const wf of workspaceFiles) {
+    collectedFiles.push({ path: `workspace/${wf.path}`, data: wf.data });
+  }
+
+  // 6. Write standard-layout draft directory cleanly to disk.
+  await mkdir(dest, { recursive: true });
+  for (const file of collectedFiles) {
+    const outPath = join(dest, ...file.path.split('/'));
+    await mkdir(dirname(outPath), { recursive: true });
+    await writeFile(outPath, file.data);
+  }
+
+  const redactionWarnings = scanFilesForSecrets(collectedFiles);
+
+  return {
+    dest,
+    sourceDir,
+    manifestPath: join(dest, MANIFEST_FILENAME),
+    id: draftManifest.id,
+    version: draftManifest.version,
+    name: draftManifest.name,
+    reusedExistingManifest: Boolean(existingManifest),
+    skills: skillSummaries.map(s => ({
+      ...s,
+      files: extractedSkills.get(s.name)?.entries.length ?? 0,
+    })),
+    workspaceFiles: workspaceFiles.map(f => f.path),
+    hasReadme: Boolean(readmeBuf),
+    roleIncluded: Boolean(mergedRole),
+    ...(mergedPermission ? { recommendedPermission: mergedPermission } : {}),
+    scheduleCount: mergedSchedules?.length ?? 0,
+    skippedEntries,
+    redactionWarnings,
   };
 }

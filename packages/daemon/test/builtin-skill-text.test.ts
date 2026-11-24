@@ -191,9 +191,14 @@ describe('the template builtin skill', () => {
   });
   it('guides public Feishu doc sharing, non-content upload notice, and safe staging/packing', () => {
     for (const words of [
+      '`vonvon template draft-group <群> --dest <空草稿目录> --json`',
       '`vonvon template inspect <source> --json`',
       '`vonvon template stage <source> --dest <工作区目录> --mode fresh --json`',
       '`vonvon template pack <草稿目录> --out <绝对输出路径>.vonvon.zip --publish --json`',
+      '`ask_user`',
+      '其他（直接打字）',
+      '其他任意素材',
+      '该飞书文档的链接（`docUrl`）会直接写入配方包的 `vonvon-bot.json` 中',
       '互联网上获得链接的人可阅读',
       '封面图',
       '绝不会上传你的 Skill、配置、提示词、工作区文档等任何配方内容',

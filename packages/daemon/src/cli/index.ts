@@ -956,6 +956,16 @@ template.command('pack <dir>').description('Validate, redact-check, sign and pac
     await mod.verifyTemplateSessionAllowed(process.env, program.opts<{ scope?: string }>().scope);
     await mod.runTemplatePack(dir, options, io(options));
   });
+template.command('draft-group <group>').description('Copy a bound group\'s real workspace, local skills, and config into a clean template draft directory')
+  .requiredOption('--dest <dir>', 'Empty destination draft directory (must be outside the source group folder)')
+  .option(...BOT)
+  .option('--author <name>', 'Fallback author name when the group has no existing vonvon-bot.json')
+  .option(...JSON_FLAG)
+  .action(async (group: string, options: Json & { dest?: string; bot?: string; author?: string }) => {
+    const mod = await import('./commands/template');
+    mod.assertTemplateSessionAllowed(process.env, program.opts<{ scope?: string }>().scope);
+    await mod.runTemplateDraftGroup(group, options, io(options));
+  });
 
 /**
  * Exits once the JSON line, and whatever was written before it, is out: process.exit would cut a pipe's pending output

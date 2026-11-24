@@ -3,7 +3,7 @@ import { log } from '../../core/logger';
 import { parseAskRequest, type AgentEntry, type AskAnswer, type AskRequest, type AskResolution } from '../types';
 import { toolReplyText } from '../entry/tools';
 import type { JsonRpcAnswer, JsonRpcId } from '../../provider/transport/jsonrpc';
-import { offeredTool } from './dynamic-tools';
+import { ASK_USER_TOOL, offeredTool } from './dynamic-tools';
 import type { DynamicToolCallResponse } from './protocol/generated/v2/DynamicToolCallResponse';
 import type { PermissionsRequestApprovalResponse } from './protocol/generated/v2/PermissionsRequestApprovalResponse';
 import type { ToolRequestUserInputParams } from './protocol/generated/v2/ToolRequestUserInputParams';
@@ -205,7 +205,119 @@ export function userInputRequest(
 const toolCallSchema = z.object({
   threadId: z.string().min(1), turnId: z.string().min(1), callId: z.string(), namespace: z.string().nullish(), tool: z.string().min(1), arguments: z.unknown(),
 });
+const askUserArgsSchema = z.object({
+  title: z.string().trim().min(1).max(80).optional(),
+  questions: z.array(z.object({
+    id: z.string().trim().min(1).max(64).optional(),
+    header: z.string().trim().min(1).max(40),
+    question: z.string().trim().min(1).max(1000),
+    multiSelect: z.boolean().optional(),
+    allowOther: z.boolean().optional(),
+    options: z.array(z.object({
+      label: z.string().trim().min(1).max(80),
+      description: z.string().trim().max(300).optional(),
+    })).max(10).optional(),
+  })).min(1).max(3),
+});
 const toolAnswer = (text: string, success: boolean): JsonRpcAnswer => ({ result: { contentItems: [{ type: 'inputText', text }], success } satisfies DynamicToolCallResponse });
+
+/** Bridge for `vonvon_bot.ask_user`: reuses the exact same InboundQuestion / AskCoordinator / buildAskCard pipeline. */
+export interface DynamicAskHost {
+  rpcId: JsonRpcId;
+  nextSerial(): number;
+  enqueue(question: InboundQuestion): void;
+}
+
+function dynamicAskUserCall(
+  call: z.infer<typeof toolCallSchema>,
+  scope: CodexRequestScope | undefined,
+  askHost: DynamicAskHost | undefined,
+): Promise<JsonRpcAnswer | null> | JsonRpcAnswer {
+  if (!scope) return toolAnswer('这一轮已经结束了。', false);
+  if (!askHost) return toolAnswer('当前会话暂不支持发飞书选择卡，请改用简洁文字向用户提问。', false);
+  const parsed = askUserArgsSchema.safeParse(call.arguments);
+  if (!parsed.success) {
+    const detail = parsed.error.issues.map(i => `${i.path.join('.') || 'arguments'}: ${i.message}`).join('；');
+    return toolAnswer(`参数不对：${detail}`, false);
+  }
+  const args = parsed.data;
+  const requestId = `codex-ask-${askHost.nextSerial()}`;
+  const request = parseAskRequest({
+    kind: 'choices',
+    id: requestId,
+    title: args.title || (args.questions.length === 1 ? args.questions[0]!.header : '需要你的选择'),
+    acceptedConsequence: '将你的选择或填写内容发回继续处理。',
+    declinedConsequence: '15 分钟未回答或取消后，本轮由模型决定继续或停下等待。',
+    questions: args.questions.map((q, qi) => q.options?.length
+      ? {
+          id: `q${qi}`,
+          title: q.header,
+          detail: q.question,
+          selection: q.multiSelect ? 'multiple' : 'single',
+          other: q.allowOther ?? true,
+          options: q.options.map((opt, oi) => ({ id: `o${oi}`, label: opt.label, description: opt.description ?? '' })),
+        }
+      : { id: `q${qi}`, title: q.header, detail: q.question, selection: 'text' }),
+  });
+
+  return new Promise(resolve => {
+    let settled = false;
+    const question: InboundQuestion = {
+      kind: 'request',
+      rpcId: askHost.rpcId,
+      threadId: call.threadId,
+      turnId: call.turnId,
+      request,
+      cancel() {
+        if (settled) return;
+        settled = true;
+        scope.forget(question);
+        resolve(null);
+      },
+      settle(resolution) {
+        if (settled) return;
+        settled = true;
+        scope.forget(question);
+        if (!resolution) {
+          resolve(toolAnswer('这一轮已经结束了。', false));
+          return;
+        }
+        if (resolution.kind === 'unanswered') {
+          if (resolution.reason === 'timeout') {
+            resolve(toolAnswer('用户 15 分钟没有在卡片上回答。先停下来，或简短说明还需要什么。', false));
+          } else if (resolution.reason === 'stopped') {
+            resolve(toolAnswer('用户停止了这一轮。', false));
+          } else {
+            resolve(toolAnswer('选择卡没能发出或本轮已结束。请改用简洁文字向用户提问并等待回复。', false));
+          }
+          return;
+        }
+        const answer = resolution.answer;
+        if (answer.kind === 'text') {
+          const mapped = args.questions.map((q, qi) => ({ id: q.id ?? `q${qi}`, header: q.header, text: answer.text }));
+          resolve(toolAnswer(JSON.stringify({ answered: true, answers: mapped }), true));
+          return;
+        }
+        if (answer.kind !== 'choices') {
+          resolve(toolAnswer('收到了不匹配的卡片回答，请改用文字向用户确认。', false));
+          return;
+        }
+        const mapped = args.questions.map((q, qi) => {
+          const item = answer.answers.find(a => a.questionId === `q${qi}`);
+          if (!item) return { id: q.id ?? `q${qi}`, header: q.header, unanswered: true };
+          if ('text' in item) return { id: q.id ?? `q${qi}`, header: q.header, text: item.text };
+          const selected = item.selected
+            .map(optionId => q.options?.find((_opt, oi) => optionId === `o${oi}`)?.label)
+            .filter((label): label is string => Boolean(label));
+          return { id: q.id ?? `q${qi}`, header: q.header, selected };
+        });
+        resolve(toolAnswer(JSON.stringify({ answered: true, answers: mapped }), true));
+      },
+    };
+    scope.add(question);
+    if (!settled) askHost.enqueue(question);
+  });
+}
 
 /** The thread an `item/tool/call` names: its vonvon entry, and when its turn's turn/start answered. */
 export interface DynamicToolHost {
@@ -219,7 +331,8 @@ export interface DynamicToolHost {
  * Claude's calls are bound by tool-use id. Every refusal is an answer with `success: false`, never a JSON-RPC error.
  */
 export function dynamicToolCall(params: unknown, scope: CodexRequestScope | undefined,
-  lookup: (threadId: string) => DynamicToolHost | undefined): Promise<JsonRpcAnswer> | JsonRpcAnswer {
+  lookup: (threadId: string) => DynamicToolHost | undefined,
+  askHost?: DynamicAskHost): Promise<JsonRpcAnswer | null> | JsonRpcAnswer {
   const parsed = toolCallSchema.safeParse(params);
   if (!parsed.success) return toolAnswer('vonvon 看不懂这次工具调用。', false);
   const call = parsed.data, host = lookup(call.threadId);
@@ -227,6 +340,9 @@ export function dynamicToolCall(params: unknown, scope: CodexRequestScope | unde
   const over = () => toolAnswer('这一轮已经结束了。', false);
   if (!host) return toolAnswer('这不是本 bot 的线程，vonvon 的工具在这里不能用。', false);
   if (!offeredTool(call.namespace, call.tool)) return toolAnswer('没有这个工具。', false);
+  if (call.tool === ASK_USER_TOOL) {
+    return dynamicAskUserCall(call, scope, askHost);
+  }
   return new Promise(resolve => {
     let answered = false;
     const answer = (reply: JsonRpcAnswer) => { if (!answered) { answered = true; drop?.(); resolve(reply); } };
