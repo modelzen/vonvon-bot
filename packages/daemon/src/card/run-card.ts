@@ -23,7 +23,15 @@ import type { RunCardStream } from './run-card-stream';
 import { buildSubagentSection } from './subagent-section';
 import { processPanel } from './process-panel';
 import { statusSymbol } from './process-status';
-import { buildProcessBodyWithKinds, currentAnswerIndex, processTitle, runElapsedMs } from './run-process';
+import {
+  buildProcessBodyWithKinds,
+  currentAnswerIndex,
+  formatOverflowAttachmentMarkdown,
+  processTitle,
+  runElapsedMs,
+  type OverflowAttachmentView,
+} from './run-process';
+import { blockKey } from './run-segment';
 import { runCardMeter } from './context-gauge';
 import { toolCommand } from '../environment/tool-command';
 import { CARD_DISPLAY_REMINDER_EID, DEFAULT_REMINDER_TEMPLATE, DEFAULT_REMINDER_REQUESTED_TEMPLATE, compileCardDisplay, type CardDisplayLayoutParts, type CardDisplayValues, type CardDisplayConfig } from '@vonvon/protocol';
@@ -118,6 +126,8 @@ function reminderControl(cardKey: string, requested: boolean): CardElement {
   };
 }
 
+export type ContinuationReason = 'steer' | 'capacity' | 'answer';
+
 /** Routing + render inputs for one run card. */
 export interface RunCardState {
   cardDisplay?: CardDisplayConfig;
@@ -128,8 +138,19 @@ export interface RunCardState {
   subagentsCarried?: true;
   subagentPage?: number;
   rs: RunState;
-  /** This display segment ended because an accepted steer opened a new card. */
-  continued?: boolean;
+  /** This display segment ended because another card took over (`true` = steer). */
+  continued?: boolean | ContinuationReason;
+  /** Keep every block inside the process panel on terminal render (never pull an
+   * intermediate progress text out as a final answer when freezing a process card). */
+  processOnly?: boolean;
+  /** Omit the process panel on standalone final-answer or answer-continuation cards. */
+  answerOnly?: boolean;
+  /** Render process blocks in full rich mode without compact output erasure or
+   * omission so multi-card continuation can measure true card capacity. */
+  unboundedProcess?: boolean;
+  /** Oversized single items (tool / code block / table / long unbroken text)
+   * keyed by blockKey -> attachment status & preview. */
+  overflowAttachments?: ReadonlyMap<string, OverflowAttachmentView>;
   /** The first card of a turn the smart mode joined on its own (s25b): deleted when the turn ends with nothing to say.
    * A card a steer splits off is not. */
   initiativeCard?: true;
@@ -283,7 +304,14 @@ export function buildRunCardBase(rc: RunCardState): {card:CardObject;parts:CardD
     parts.modelElement=footerParts?.model;
   }
   if (parts.controlsIndex !== undefined && parts.controlsIndex < 0) delete parts.controlsIndex;
-  const result = card(all.map(runTypography), { streaming: running, summary: rc.continued ? '已接收补充，继续处理' : summaryText(state) });
+  const summary = rc.continued === 'capacity'
+    ? '已达单卡容量，继续处理'
+    : rc.continued === 'answer'
+      ? '过程已折叠，最终答复见下一张卡片'
+      : rc.continued
+        ? '已接收补充，继续处理'
+        : summaryText(state);
+  const result = card(all.map(runTypography), { streaming: running, summary });
   result.body = { ...(result.body as Record<string, unknown>), vertical_spacing: '16px' };
   const usage = state.usage;
   const pct = usage?.window ? Math.max(0,Math.min(100,Math.round(100*usage.used/usage.window))) : undefined;
@@ -345,18 +373,28 @@ function renderRunning(state: RunState, rc: RunCardState): CardElement[] {
   const elements: CardElement[] = [markRunPart(runCardMeter(state.usage),'context')];
   if (rc.sessionNotice) elements.push(noteMd(rc.sessionNotice));
 
-  const answerIdx = currentAnswerIndex(state.blocks);
-  const processBlocks = state.blocks.filter((b, i) => i !== answerIdx && (b.kind !== 'tool'||processBlockVisible(rc,'tool',true)) && (b.kind !== 'reasoning'||processBlockVisible(rc,'reasoning',true)));
-  const process = buildProcessBodyWithKinds(processBlocks, rc.images, PROCESS_COMPONENT_BUDGET - section.components - sectionPanelOverhead(section.elements), true);
-  const title = processTitle(state.terminal, runElapsedMs(state));
-  if (process.elements.length) {
-    const panel = markRunPart(processPanel(title, process.elements, true, { titleColor: false }),'process');
-    runCardProcessKinds.set(panel,process.kinds);
-    elements.push(panel);
+  const answerIdx = rc.processOnly ? -1 : currentAnswerIndex(state.blocks);
+  if (!rc.answerOnly) {
+    const processBlocks = state.blocks.filter((b, i) => i !== answerIdx && (b.kind !== 'tool'||processBlockVisible(rc,'tool',true)) && (b.kind !== 'reasoning'||processBlockVisible(rc,'reasoning',true)));
+    const process = buildProcessBodyWithKinds(
+      processBlocks,
+      rc.images,
+      PROCESS_COMPONENT_BUDGET - section.components - sectionPanelOverhead(section.elements),
+      true,
+      { unbounded: rc.unboundedProcess, overflowAttachments: rc.overflowAttachments },
+    );
+    const title = processTitle(state.terminal, runElapsedMs(state));
+    if (process.elements.length) {
+      const panel = markRunPart(processPanel(title, process.elements, true, { titleColor: false }),'process');
+      runCardProcessKinds.set(panel,process.kinds);
+      elements.push(panel);
+    }
+    else if (state.startedAt !== undefined) elements.push(markRunPart(md(title),'process'));
   }
-  else if (state.startedAt !== undefined) elements.push(markRunPart(md(title),'process'));
   elements.push(...section.elements.map(element=>markRunPart(element,'subagent')));
-  const answer = answerIdx >= 0 ? (state.blocks[answerIdx] as Extract<Block, { kind: 'text' }>).content : '';
+  const answerBlock = answerIdx >= 0 ? (state.blocks[answerIdx] as Extract<Block, { kind: 'text' }>) : undefined;
+  const answerOverflow = answerBlock ? rc.overflowAttachments?.get(blockKey(answerBlock)) : undefined;
+  const answer = answerOverflow ? formatOverflowAttachmentMarkdown(answerOverflow) : (answerBlock?.content ?? '');
   if (answer) {
     elements.push(...renderRichText(answer, rc.images, { streamTailId: ANSWER_EID, live: true }).map(element => markRunPart(element,'answer')));
   }
@@ -421,25 +459,35 @@ function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
   const elements: CardElement[] = [markRunPart(runCardMeter(state.usage),'context')];
   if (rc.sessionNotice) elements.push(noteMd(rc.sessionNotice));
 
-  const answerIdx = lastTextIndex(state.blocks);
-  const answer = rc.localFiles?.text ?? (answerIdx >= 0 ? (state.blocks[answerIdx] as Extract<Block, { kind: 'text' }>).content.trim() : '');
+  const answerIdx = rc.processOnly ? -1 : lastTextIndex(state.blocks);
+  const answerBlock = answerIdx >= 0 ? (state.blocks[answerIdx] as Extract<Block, { kind: 'text' }>) : undefined;
+  const answerOverflow = answerBlock ? rc.overflowAttachments?.get(blockKey(answerBlock)) : undefined;
+  const answer = rc.localFiles?.text ?? (answerOverflow ? formatOverflowAttachmentMarkdown(answerOverflow) : (answerBlock?.content.trim() ?? ''));
   const answerElements = rc.localFiles ? renderFileAnswer(rc.localFiles, rc.images)
     : hasMarkdownTable(answer) ? renderReport(answer, { images: rc.images }) : renderRichText(answer, rc.images);
 
   // Everything except the final answer block is "process". (A block after the
   // answer can only be a trailing tool call — keep it folded with the rest.)
-  const processBlocks = state.blocks.filter((_, i) => i !== answerIdx);
-  const blocks = processBlocks.filter(b=>(b.kind!=='tool'||processBlockVisible(rc,'tool',false))&&(b.kind!=='reasoning'||processBlockVisible(rc,'reasoning',false)));
-  const processBudget = rc.localFiles?.links.length
-    ? Math.max(10, Math.min(PROCESS_COMPONENT_BUDGET, 170 - fileComponentCount(answerElements))) : PROCESS_COMPONENT_BUDGET;
-  const processEls = buildProcessBodyWithKinds(blocks, rc.images, Math.max(10, processBudget - section.components - sectionPanelOverhead(section.elements)));
-  const title = processTitle(state.terminal, runElapsedMs(state));
-  if (processEls.elements.length) {
-    const panel = markRunPart(processPanel(title, processEls.elements, false, { titleColor: false }),'process');
-    runCardProcessKinds.set(panel,processEls.kinds);
-    elements.push(panel);
+  if (!rc.answerOnly) {
+    const processBlocks = state.blocks.filter((_, i) => i !== answerIdx);
+    const blocks = processBlocks.filter(b=>(b.kind!=='tool'||processBlockVisible(rc,'tool',false))&&(b.kind!=='reasoning'||processBlockVisible(rc,'reasoning',false)));
+    const processBudget = rc.localFiles?.links.length
+      ? Math.max(10, Math.min(PROCESS_COMPONENT_BUDGET, 170 - fileComponentCount(answerElements))) : PROCESS_COMPONENT_BUDGET;
+    const processEls = buildProcessBodyWithKinds(
+      blocks,
+      rc.images,
+      Math.max(10, processBudget - section.components - sectionPanelOverhead(section.elements)),
+      false,
+      { unbounded: rc.unboundedProcess, overflowAttachments: rc.overflowAttachments },
+    );
+    const title = processTitle(state.terminal, runElapsedMs(state));
+    if (processEls.elements.length) {
+      const panel = markRunPart(processPanel(title, processEls.elements, false, { titleColor: false }),'process');
+      runCardProcessKinds.set(panel,processEls.kinds);
+      elements.push(panel);
+    }
+    else if (state.startedAt !== undefined) elements.push(markRunPart(md(title),'process'));
   }
-  else if (state.startedAt !== undefined) elements.push(markRunPart(md(title),'process'));
 
   elements.push(...section.elements.map(element=>markRunPart(element,'subagent')));
 
@@ -455,7 +503,11 @@ function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
     elements.push(...answerElements.map(element => markRunPart(element,'answer')));
   }
 
-  if (rc.continued) {
+  if (rc.continued === 'capacity') {
+    elements.push(greyNote('已达单卡容量，后续内容见下一张卡片'));
+  } else if (rc.continued === 'answer') {
+    elements.push(greyNote('过程已折叠，最终答复见下一张卡片'));
+  } else if (rc.continued) {
     elements.push(noteMd('已接收补充，后续输出见下一张卡片'));
   } else if (state.terminal === 'interrupted') {
     elements.push(noteMd(`${statusSymbol('stopped')} ${rc.stopped ? stoppedLine(rc.stopped) : '已被中断'}`));

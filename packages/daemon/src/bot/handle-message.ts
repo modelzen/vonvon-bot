@@ -37,6 +37,15 @@ import { VoiceMessages } from '../voice/messages';
 import { steerWithDeadline, isRejectedSteer } from './steer-delivery';
 import { TurnCardEvents, type SteerCardEvent } from './turn-card-events';
 import { runSegment } from '../card/run-segment';
+import {
+  RunCardContinuation,
+  applyResolvedAttachmentsToBlocks,
+  buildSafeLiveCard,
+  pendingAttachmentsFor,
+  planTerminalCards,
+  resolveAttachmentPlaceholders,
+  segmentImageText,
+} from './run-card-continuation';
 import type {
   BotAddedEvent,
   CardActionEvent,
@@ -8039,9 +8048,6 @@ export function createOrchestrator(
         render.seedUsage(meterOf(topicThreadId, rec, opts.thread));
         const cardEvents = new TurnCardEvents();
         state.steerReply = { run, accept: (messageId, voice) => cardEvents.accept(messageId, voice) };
-        let boundary: RunState | undefined;
-        let segmentStartedAt: number | undefined;
-        const segmentSnapshot = (): RunState => runSegment(render.snapshot(), boundary, segmentStartedAt);
         render.showTools = getShowToolCalls(state.presentation ?? cfg);
         let cardMsgId: string | undefined;
         let rc: RunCardState = {
@@ -8050,6 +8056,7 @@ export function createOrchestrator(
           voiceMessages: currentTurn.voice ? [currentTurn.voice] : [],
           requesterOpenId: currentTurn.requesterOpenId,
           showTools: render.showTools,
+          unboundedProcess: true,
           completionReminder: completionReminderView(state),
           ...(opts.backendId ? { backend: opts.backendId } : {}),
           // 模型显示档位：footnote 本轮 model·推理强度；always 档终态卡也保留。
@@ -8085,9 +8092,104 @@ export function createOrchestrator(
         // CardKit streaming entity: body streams with the native typewriter,
         // ⏹/⚙️ ride whole-card updates — both on one card_id (see RunCardStream).
         let stream = queuedCard?.stream ?? new RunCardStream();
-        const pushLiveCard = (): void => {
-          if (cardMsgId) stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID);
+        const pushLiveCard = (builtFrame?: ReturnType<typeof buildRunCard>): void => {
+          if (cardMsgId) stream.streamCoalesced(channel, builtFrame ?? buildSafeLiveCard(rc), ANSWER_EID);
         };
+        const registerReminder = (messageId: string, target: RunCardState, targetStream: RunCardStream): void => {
+          completionReminderRefreshers.set(messageId, () => {
+            target.completionReminder = completionReminderView(state);
+            void trackTask(targetStream.updateLiveCard(channel, buildSafeLiveCard(target)));
+          });
+        };
+        let pendingPrev: { stream: RunCardStream; messageId: string } | undefined;
+        const continuation = new RunCardContinuation({
+          channel,
+          chatId: opts.chatId,
+          replyInThread: !opts.flat,
+          activeMessageId: () => cardMsgId ?? '',
+          activeCard: () => rc,
+          pushActiveCard: (builtFrame) => pushLiveCard(builtFrame),
+          openNextCard: async ({ replyTo: prevMsgId, nextRs, answerOnly, attachments }) => {
+            const nextStream = new RunCardStream();
+            const next: RunCardState = {
+              ...rc,
+              rs: nextRs,
+              cardKey: undefined,
+              continued: undefined,
+              processOnly: false,
+              answerOnly: answerOnly === true,
+              unboundedProcess: true,
+              overflowAttachments: attachments.size > 0 ? new Map(attachments) : undefined,
+              localFiles: undefined,
+              images: undefined,
+              sessionNotice: undefined,
+              label: undefined,
+              initiativeCard: undefined,
+              voiceMessages: [],
+            };
+            let nextId: string;
+            try {
+              nextId = await nextStream.create(channel, opts.chatId, buildSafeLiveCard(next), {
+                replyTo: prevMsgId, replyInThread: !opts.flat,
+              });
+            } catch (err) {
+              log.fail('card', err, { phase: 'capacity-card-create' });
+              return null;
+            }
+            const previousStream = stream;
+            const previousId = cardMsgId!;
+            pendingPrev = { stream: previousStream, messageId: previousId };
+            completionReminderRefreshers.delete(previousId);
+            runsByCard.delete(previousId);
+            runStreams.delete(previousId);
+            next.askWaiting = rc.askWaiting;
+            next.askWaitingSubagentId = rc.askWaitingSubagentId;
+            rc = next;
+            stream = nextStream;
+            cardMsgId = nextId;
+            curCardKey = nextId;
+            rc.cardKey = nextId;
+            state.runCard = rc;
+            runsByCard.set(nextId, state);
+            runStreams.set(nextId, stream);
+            registerReminder(nextId, rc, stream);
+            attachRunImages({
+              stream, rc, channel,
+              upload: sources => uploadOutboundImages(channel, sources, runCwd, opts.mode ?? DEFAULT_PERMISSION_MODE, opts.network ?? false),
+            });
+            pushLiveCard();
+            return { messageId: nextId };
+          },
+          finalizePreviousCard: async (frozenRc) => {
+            const prev = pendingPrev!;
+            pendingPrev = undefined;
+            try {
+              await prev.stream.drain();
+              const imgText = segmentImageText(frozenRc.rs);
+              if (!frozenRc.processOnly) {
+                const text = finalMessageText(frozenRc.rs);
+                if (text.trim()) {
+                  frozenRc.localFiles = await outboundFiles.prepare(text, {
+                    messageId: prev.messageId, chatId: opts.chatId, cwd: runCwd,
+                    mode: opts.mode ?? DEFAULT_PERMISSION_MODE, requesterOpenId: currentTurn.requesterOpenId,
+                    replyInThread: !opts.flat, cardId: prev.stream.getCardId(),
+                  }, (id, element) => prev.stream.updateElement(channel, id, element));
+                }
+              }
+              frozenRc.images = await prev.stream.settleImages(imgText);
+            } catch (err) {
+              log.fail('card', err, { phase: 'capacity-card-assets' });
+            }
+            await refreshRunCardDisplayValues(frozenRc, runCwd);
+            await prev.stream.finalizeCard(channel, buildRunCard(frozenRc))
+              .catch(err => log.fail('card', err, { phase: 'capacity-card-finalize' }));
+            return {
+              messageId: prev.messageId,
+              updateCard: (updatedRc) => prev.stream.updateCard(channel, buildRunCard(updatedRc)),
+            };
+          },
+        });
+        const segmentSnapshot = (): RunState => continuation.segmentOf(render.snapshot());
         state.voiceReply = {
           run,
           add: (voice) => {
@@ -8119,10 +8221,10 @@ export function createOrchestrator(
             // streaming 并重推（见 RunCardStream.streamElement）。
             cardMsgId = queuedCard.msgId;
             queuedCard = undefined; // 只复用一次；排队续轮照常新建卡
-            await stream.updateCard(channel, buildRunCard(rc));
+            await stream.updateCard(channel, buildSafeLiveCard(rc));
           } else {
             // A scheduled turn quotes no earlier card: it goes where its hook says (T2 4.2).
-            cardMsgId = await stream.create(channel, opts.chatId, buildRunCard(rc), { replyTo: scheduled ? landingOf(scheduled) : replyTo, replyInThread });
+            cardMsgId = await stream.create(channel, opts.chatId, buildSafeLiveCard(rc), { replyTo: scheduled ? landingOf(scheduled) : replyTo, replyInThread });
           }
         } catch (err) {
           // turn/start 已提前发出：建卡失败时模型已在跑，必须中断并回收进程——
@@ -8145,12 +8247,6 @@ export function createOrchestrator(
           runsByCard.set(cardMsgId, state);
           runStreams.set(cardMsgId, stream);
         }
-        const registerReminder = (messageId: string, target: RunCardState, targetStream: RunCardStream): void => {
-          completionReminderRefreshers.set(messageId, () => {
-            target.completionReminder = completionReminderView(state);
-            void trackTask(targetStream.updateLiveCard(channel, buildRunCard(target)));
-          });
-        };
         if (cardMsgId) registerReminder(cardMsgId, rc, stream);
         // The entity is created before its carrier messageId exists, so the
         // initial JSON cannot self-route controls. Establish the first
@@ -8175,8 +8271,7 @@ export function createOrchestrator(
           if (completionOnly) {
             // Preserve steer segmentation and quote the latest accepted input,
             // without publishing either segment while the run is still active.
-            boundary = render.snapshot();
-            segmentStartedAt = Date.now();
+            continuation.resetForSteer(render.snapshot(), Date.now());
             rc.rs = segmentSnapshot();
             replyTo = event.messageId;
             rc.initiativeCard = undefined;
@@ -8188,14 +8283,15 @@ export function createOrchestrator(
           const nextStartedAt = Date.now();
           const next: RunCardState = {
             ...rc, rs: runSegment(nextBoundary, nextBoundary, nextStartedAt),
-            cardKey: undefined, continued: false, localFiles: undefined, images: undefined, sessionNotice: undefined,
+            cardKey: undefined, continued: undefined, processOnly: false, answerOnly: false, unboundedProcess: true,
+            overflowAttachments: undefined, localFiles: undefined, images: undefined, sessionNotice: undefined,
             // A steer's card answers that message, even an @ (s25b H1): never deleted as empty.
             initiativeCard: undefined,
             voiceMessages: event.voice ? [event.voice] : [],
           };
           let nextId: string;
           try {
-            nextId = await nextStream.create(channel, opts.chatId, buildRunCard(next), {
+            nextId = await nextStream.create(channel, opts.chatId, buildSafeLiveCard(next), {
               replyTo: event.messageId, replyInThread: !opts.flat,
             });
           } catch (err) {
@@ -8209,14 +8305,13 @@ export function createOrchestrator(
           const previousStream = stream;
           const previousId = cardMsgId!;
           previous.rs = { ...previous.rs, terminal: 'done', footer: null, completedAt: nextStartedAt };
-          previous.continued = true;
+          previous.continued = 'steer';
           completionReminderRefreshers.delete(previousId);
           runsByCard.delete(previousId);
           runStreams.delete(previousId);
           // Switch the live target before awaiting the frozen card's I/O. The
           // event queue retains all backend output produced while cards rotate.
-          boundary = nextBoundary;
-          segmentStartedAt = nextStartedAt;
+          continuation.resetForSteer(nextBoundary, nextStartedAt);
           next.askWaiting = rc.askWaiting;
           next.askWaitingSubagentId = rc.askWaitingSubagentId;
           rc = next;
@@ -8239,12 +8334,12 @@ export function createOrchestrator(
               mode: opts.mode ?? DEFAULT_PERMISSION_MODE, requesterOpenId: currentTurn.requesterOpenId,
               replyInThread: !opts.flat, cardId: previousStream.getCardId(),
             }, (id, element) => previousStream.updateElement(channel, id, element));
-            previous.images = await previousStream.settleImages(text);
+            previous.images = await previousStream.settleImages(segmentImageText(previous.rs));
           } catch (err) {
             log.fail('card', err, { phase: 'steer-card-assets' });
           }
           await refreshRunCardDisplayValues(previous,runCwd);
-          await previousStream.finalizeCard(channel, buildRunCard(previous))
+          await previousStream.finalizeCard(channel, buildRunCard({ ...previous, unboundedProcess: false }))
             .catch(err => log.fail('card', err, { phase: 'steer-card-finalize' }));
         };
         cardClock = setInterval(() => {
@@ -8364,15 +8459,12 @@ export function createOrchestrator(
             if (usage) lastUsage.set(topicThreadId, usage);
           }
           if (ev.type === 'compaction' && ev.phase === 'end' && !ev.failed) { markTopicsDue(topicThreadId, opts.chatId, opts.thread.sessionId); markContextDue(opts.thread, topicThreadId); }
-          rc.rs = segmentSnapshot();
           // The global mode is live-editable. Re-evaluate on every structural /
           // answer frame so switching away from manual removes the button from
           // an already-running card instead of leaving a stale affordance.
           rc.completionReminder = completionReminderView(state);
-          // Non-blocking: never stall event consumption on a round-trip. The pump
-          // coalesces and routes the latest snapshot — answer text → element
-          // typewriter (cardElement.content), structure → whole-card update.
-          if (ev.type !== 'subagent_step') pushLiveCard();
+          // Check card capacity, roll over cleanly if needed, and push the live frame.
+          await continuation.syncLive(render.snapshot(), ev, { skipPush: ev.type === 'subagent_step' });
         }
         // Whether its session had gone as the turn's events ended, before any terminal I/O: a turn that failed on its own
         // stays its own failure, whatever stops the bot or changes the group while it is delivered (ranScheduled).
@@ -8447,24 +8539,12 @@ export function createOrchestrator(
         const gone = await dropSilentCard(rc, finalMsgId, notedOf(currentTurn), opts, Boolean(state.completionReminderRequested));
         let delivered = false;
         if (!gone) try {
-          if (!finalMsgId) {
-            // Only settled content may create the carrier in completion-only mode.
-            rc.images = await stream.settleImages(finalMessageText(rc.rs));
-            await refreshRunCardDisplayValues(rc,runCwd);
-            finalMsgId = await stream.create(channel, opts.chatId, buildRunCard(rc), {
-              replyTo: scheduled ? landingOf(scheduled) : replyTo, replyInThread,
-            });
-            cardMsgId = finalMsgId;
-            curCardKey = finalMsgId;
-            runStreams.set(finalMsgId, stream);
-            if (!firstCardSent) {
-              firstCardSent = true;
-              try { onTopicCreated?.(); } catch { /* reaction is best-effort */ }
-            }
-          }
-          await adoptThreadId(finalMsgId);
-          if (completionOnly) scheduled?.started({ messageId: finalMsgId, ...(topicThreadId && !isMainKey(topicThreadId, opts.chatId) ? { topicId: topicThreadId } : {}) });
-          rc.cardKey = finalMsgId;
+          const fullAnswerText = continuation.fullTurnAnswerText(render.snapshot());
+          const { fences } = extractCardFences(fullAnswerText);
+          const settledImages = await stream.settleImages(segmentImageText(render.snapshot()));
+          rc.images = settledImages;
+          rc.overflowAttachments = continuation.settledAttachments();
+          rc.unboundedProcess = true;
 
           // [重试] for a turn that went quiet or lost the model (product.md 3.12),
           // read from the settled render: a ⏹ wins over a timer that fired
@@ -8474,53 +8554,131 @@ export function createOrchestrator(
           let retryReason: RetryTurn['reason'] | undefined;
           if (rc.rs.terminal === 'idle_timeout') retryReason = 'idle';
           else if (rc.rs.terminal === 'error' && rc.rs.errorKind === 'network') retryReason = 'network';
-          if (retryReason && topicThreadId && state.queue.length === 0 && !scheduled) {
-            retryTurns.set(finalMsgId, {
-              sessionKey: topicThreadId, chatId: opts.chatId, flat: Boolean(opts.flat), turn: currentTurn,
-              replayText: currentTurn.replayText ?? currentTurn.input.text ?? '',
-              reason: retryReason, idleSeconds: Math.round(idleMs / 1000),
-              settled: new Promise<void>((resolve) => { settleTurn = resolve; }),
-            });
-            rc.retry = 'available';
+
+          const manuallyRequested = Boolean(state.completionReminderRequested);
+          const planned = planTerminalCards(rc);
+          let terminalCardUpdated = false;
+          let activeStream = stream;
+          let activeRc = rc;
+          let lastMsgId = finalMsgId ?? '';
+
+          for (let index = 0; index < planned.length; index += 1) {
+            const item = planned[index]!;
+            const isFirst = index === 0;
+            const isLast = index === planned.length - 1;
+            const reuseActive = isFirst && Boolean(cardMsgId);
+            const cardStream = reuseActive ? stream : new RunCardStream();
+            const pendingViews = item.oversized.length > 0
+              ? pendingAttachmentsFor(continuation.settledAttachments(), item.oversized)
+              : continuation.settledAttachments();
+
+            const cardRc: RunCardState = {
+              ...rc,
+              rs: {
+                ...rc.rs,
+                blocks: applyResolvedAttachmentsToBlocks(item.blocks, pendingViews ?? new Map()),
+                terminal: isLast ? rc.rs.terminal : 'done',
+                footer: null,
+              },
+              cardKey: undefined,
+              continued: isLast ? undefined : item.continued,
+              processOnly: item.processOnly,
+              answerOnly: item.answerOnly,
+              unboundedProcess: true,
+              overflowAttachments: pendingViews,
+              localFiles: undefined,
+              images: settledImages,
+              label: isFirst ? rc.label : undefined,
+              sessionNotice: isFirst ? rc.sessionNotice : undefined,
+              voiceMessages: isFirst ? rc.voiceMessages : undefined,
+              modelOnTerminal: isLast ? rc.modelOnTerminal : false,
+              stopped: isLast ? rc.stopped : undefined,
+              nextRun: isLast ? rc.nextRun : undefined,
+              retry: undefined,
+              handoffNotes: undefined,
+            };
+
+            let thisMsgId = reuseActive ? cardMsgId! : '';
+            if (!reuseActive) {
+              await refreshRunCardDisplayValues(cardRc, runCwd);
+              thisMsgId = await cardStream.create(channel, opts.chatId, buildRunCard(cardRc), {
+                replyTo: isFirst ? (scheduled ? landingOf(scheduled) : replyTo) : lastMsgId,
+                replyInThread: isFirst ? replyInThread : !opts.flat,
+              });
+              runStreams.set(thisMsgId, cardStream);
+              if (isFirst && !firstCardSent) {
+                firstCardSent = true;
+                try { onTopicCreated?.(); } catch { /* reaction is best-effort */ }
+              }
+            }
+            if (isFirst) {
+              await adoptThreadId(thisMsgId);
+              if (completionOnly) scheduled?.started({ messageId: thisMsgId, ...(topicThreadId && !isMainKey(topicThreadId, opts.chatId) ? { topicId: topicThreadId } : {}) });
+            }
+            cardRc.threadId = topicThreadId ?? cardRc.threadId;
+
+            if (item.oversized.length > 0) {
+              await continuation.ensureAttachments(item.oversized, thisMsgId);
+              const settledViews = continuation.settledAttachments() ?? new Map();
+              cardRc.overflowAttachments = settledViews;
+              cardRc.rs = {
+                ...cardRc.rs,
+                blocks: applyResolvedAttachmentsToBlocks(item.blocks, settledViews),
+              };
+            }
+
+            if (!item.processOnly && item.answerText.trim()) {
+              const resolvedAnswer = resolveAttachmentPlaceholders(item.answerText, continuation.settledAttachments() ?? new Map());
+              cardRc.localFiles = await outboundFiles.prepare(resolvedAnswer, {
+                messageId: thisMsgId, chatId: opts.chatId, cwd: runCwd,
+                mode: opts.mode ?? DEFAULT_PERMISSION_MODE, requesterOpenId: currentTurn.requesterOpenId,
+                replyInThread: !opts.flat, cardId: cardStream.getCardId(),
+              }, (elementId, element) => cardStream.updateElement(channel, elementId, element));
+            }
+
+            if (isLast) {
+              cardRc.cardKey = thisMsgId;
+              if (retryReason && topicThreadId && state.queue.length === 0 && !scheduled) {
+                retryTurns.set(thisMsgId, {
+                  sessionKey: topicThreadId, chatId: opts.chatId, flat: Boolean(opts.flat), turn: currentTurn,
+                  replayText: currentTurn.replayText ?? currentTurn.input.text ?? '',
+                  reason: retryReason, idleSeconds: Math.round(idleMs / 1000),
+                  settled: new Promise<void>((resolve) => { settleTurn = resolve; }),
+                });
+                cardRc.retry = 'available';
+              }
+            }
+
+            completionReminderRefreshers.delete(thisMsgId);
+            runsByCard.delete(thisMsgId);
+            if (!isLast) runStreams.delete(thisMsgId);
+            await refreshRunCardDisplayValues(cardRc, runCwd);
+            const updated = await cardStream.finalizeCard(channel, buildRunCard(cardRc));
+            lastMsgId = thisMsgId;
+            if (isLast) {
+              terminalCardUpdated = updated;
+              activeStream = cardStream;
+              activeRc = cardRc;
+            }
           }
 
-          // Outbound images + 卡片围栏. The answer's images mostly uploaded already
-          // (the background uploader started on the ref's first appearance, so the
-          // live card showed them mid-stream). settleImages finishes the job under
-          // ONE hard deadline — it waits out in-flight uploads and uploads the
-          // final answer's own refs concurrently, and what hasn't landed by then
-          // simply renders as text (an `image.create` with no timeout used to leave
-          // the card stuck on 「正在输出」with a live ⏹; issue #14 "一显示就卡").
-          // The ```feishu-card fences are hoisted into standalone clean cards here.
-          // Best-effort throughout: an unresolved ref renders as text, a failed
-          // card is logged.
-          const answerText = finalMessageText(rc.rs);
-          noteTurnUsage(opts.thread, answerText, topicThreadId);
-          // What this bot said, for the place's next judgements (smart groups only: none other is tracked).
-          if (topicThreadId && answerText.trim()) recent.addOwn(topicThreadId, opts.chatId, { id: finalMsgId, at: Date.now(), text: answerText });
-          rc.localFiles = await outboundFiles.prepare(answerText, {
-            messageId: finalMsgId, chatId: opts.chatId, cwd: runCwd,
-            mode: opts.mode ?? DEFAULT_PERMISSION_MODE, requesterOpenId: currentTurn.requesterOpenId,
-            replyInThread: !opts.flat, cardId: stream.getCardId(),
-          }, (elementId, element) => stream.updateElement(channel, elementId, element));
-          const { fences } = extractCardFences(answerText);
-          rc.images = await stream.settleImages(answerText);
-
-          // terminal whole-card update: final render with streaming off (clears the
-          // typewriter cursor) and no ⏹ button. Remove the callback before freezing
-          // live repaints; already-accepted repaint writes are serialized ahead of
-          // finalizeCard, while callbacks arriving from now on cannot overwrite it.
-          const manuallyRequested = Boolean(state.completionReminderRequested);
-          completionReminderRefreshers.delete(cardMsgId);
-          await refreshRunCardDisplayValues(rc,runCwd);
-          const terminalCardUpdated = await stream.finalizeCard(channel, buildRunCard(rc));
+          finalMsgId = lastMsgId;
+          cardMsgId = finalMsgId;
+          curCardKey = finalMsgId;
+          stream = activeStream;
+          rc = activeRc;
           delivered = terminalCardUpdated;
+
+          noteTurnUsage(opts.thread, fullAnswerText, topicThreadId);
+          // What this bot said, for the place's next judgements (smart groups only: none other is tracked).
+          if (topicThreadId && fullAnswerText.trim()) recent.addOwn(topicThreadId, opts.chatId, { id: finalMsgId, at: Date.now(), text: fullAnswerText });
+
           // Its card has its last word (the answer, or that the shutdown cut it short): nothing to ask again after a restart.
           if (terminalCardUpdated) {
             cutShortAnswered(state.inFlight);
             state.inFlight = undefined;
           }
-          if (confirmedDone && rc.rs.terminal === 'done' && answerText.trim() && terminalCardUpdated) reportLatestAction(opts.chatId, 'replied');
+          if (confirmedDone && rc.rs.terminal === 'done' && fullAnswerText.trim() && terminalCardUpdated) reportLatestAction(opts.chatId, 'replied');
           // One-line per-turn timeline; all ms are relative to the turn's stream start.
           {
             const terminalAt = Date.now();
@@ -8556,7 +8714,7 @@ export function createOrchestrator(
               log.fail('card', err, { phase: 'clean-card' });
             }
           }
-          await handOff(rc, stream, finalMsgId, answerText, terminalCardUpdated, opts);
+          await handOff(rc, stream, finalMsgId, fullAnswerText, terminalCardUpdated, opts);
           if (topicThreadId) {
             touchSession(topicThreadId); // 轮次收尾打点（M-3 reaper 的空闲时钟）
             await patchSession(topicThreadId, { updatedAt: Date.now(), ...savedMeter(topicThreadId, opts.thread) });
@@ -8823,7 +8981,16 @@ export function createOrchestrator(
     // context (null between turns); assigned directly in the loop so TS narrows it.
     // `stream`/`cardMsgId` are null until the turn produces real output — a card is
     // sent LAZILY on first content, so a planning-only turn leaves no empty box.
-    type GoalTurnCtx = { cardRequested?: boolean; render: RunRender; rc: RunCardState; stream: RunCardStream | null; cardMsgId: string | null; clock?: ReturnType<typeof setInterval> };
+    type GoalTurnCtx = {
+      cardRequested?: boolean;
+      render: RunRender;
+      rc: RunCardState;
+      stream: RunCardStream | null;
+      cardMsgId: string | null;
+      clock?: ReturnType<typeof setInterval>;
+      continuation: RunCardContinuation;
+      pendingPrev?: { stream: RunCardStream; messageId: string };
+    };
     let cur: GoalTurnCtx | null = null;
     const finalized: { last?: GoalTurnCtx } = {};
     let carried: SubagentRow[] = [];
@@ -8876,33 +9043,117 @@ export function createOrchestrator(
       if (!ctx) return;
       carried = ctx.render.snapshot().subagents.filter(row => row.status === 'running');
       ctx.rc.subagentsCarried = continues && carried.length ? true : undefined;
-      if (!ctx.stream && ctx.cardRequested && ctx.rc.cardDisplay?.reply?.streamText === false) {
-        ctx.render.finalize();
-        ctx.rc.rs = ctx.render.snapshot();
-        await ensureCard(ctx);
-      }
-      if (!ctx.stream || !ctx.cardMsgId) return;
+      const deferredCompletionCard = !ctx.stream && ctx.cardRequested && ctx.rc.cardDisplay?.reply?.streamText === false;
+      if (!ctx.stream && !deferredCompletionCard) return;
       clearInterval(ctx.clock);
       ctx.clock = undefined;
-      await ctx.stream.drain();
+      if (ctx.stream) await ctx.stream.drain();
       const subagents = ctx.render.snapshot().subagents;
       const confirmedDone = ctx.render.terminal() === 'done';
       ctx.render.finalize();
-      ctx.rc.rs = { ...ctx.render.snapshot(), subagents };
+      const fullSnapshot = ctx.render.snapshot();
+      const fullAnswerText = ctx.continuation.fullTurnAnswerText(fullSnapshot);
+      ctx.rc.rs = { ...ctx.continuation.segmentOf(fullSnapshot), subagents };
       logSubagentChanges(subagents, ctx.rc.rs.subagents);
-      const answerText = finalMessageText(ctx.rc.rs);
-      ctx.rc.localFiles = await outboundFiles.prepare(answerText, {
-        messageId: ctx.cardMsgId, chatId: opts.chatId, cwd: runCwd,
-        mode: opts.mode ?? DEFAULT_PERMISSION_MODE, requesterOpenId: opts.requesterOpenId,
-        replyInThread: !opts.flat, cardId: ctx.stream.getCardId(),
-      }, (elementId, element) => ctx.stream!.updateElement(channel, elementId, element));
-      ctx.rc.images = await ctx.stream.settleImages(answerText);
-      await refreshRunCardDisplayValues(ctx.rc,runCwd);
-      const terminalCardUpdated = await ctx.stream.updateCard(channel, buildRunCard(ctx.rc));
+      const settledImages = ctx.stream
+        ? await ctx.stream.settleImages(segmentImageText(fullSnapshot))
+        : await uploadOutboundImages(channel, [], runCwd, opts.mode ?? DEFAULT_PERMISSION_MODE, opts.network ?? false);
+      ctx.rc.images = settledImages;
+      ctx.rc.overflowAttachments = ctx.continuation.settledAttachments();
+      ctx.rc.unboundedProcess = true;
+
+      const planned = planTerminalCards(ctx.rc);
+      let activeStream = ctx.stream;
+      let activeRc = ctx.rc;
+      let lastMsgId = ctx.cardMsgId ?? '';
+      let terminalCardUpdated = false;
+
+      for (let index = 0; index < planned.length; index += 1) {
+        const item = planned[index]!;
+        const isFirst = index === 0;
+        const isLast = index === planned.length - 1;
+        const reuseActive = isFirst && Boolean(ctx.stream && ctx.cardMsgId);
+        const cardStream = reuseActive ? ctx.stream! : new RunCardStream();
+        const pendingViews = item.oversized.length > 0
+          ? pendingAttachmentsFor(ctx.continuation.settledAttachments(), item.oversized)
+          : ctx.continuation.settledAttachments();
+
+        const cardRc: RunCardState = {
+          ...ctx.rc,
+          rs: {
+            ...ctx.rc.rs,
+            blocks: applyResolvedAttachmentsToBlocks(item.blocks, pendingViews ?? new Map()),
+            terminal: isLast ? ctx.rc.rs.terminal : 'done',
+            footer: null,
+          },
+          cardKey: undefined,
+          continued: isLast ? undefined : item.continued,
+          processOnly: item.processOnly,
+          answerOnly: item.answerOnly,
+          unboundedProcess: true,
+          overflowAttachments: pendingViews,
+          localFiles: undefined,
+          images: settledImages,
+          sessionNotice: isFirst ? ctx.rc.sessionNotice : undefined,
+          modelOnTerminal: isLast ? ctx.rc.modelOnTerminal : false,
+          stopped: isLast ? ctx.rc.stopped : undefined,
+        };
+
+        let thisMsgId = reuseActive ? ctx.cardMsgId! : '';
+        if (!reuseActive) {
+          await refreshRunCardDisplayValues(cardRc, runCwd);
+          thisMsgId = await cardStream.create(channel, opts.chatId, buildRunCard(cardRc), {
+            replyTo: isFirst ? replyTo : lastMsgId,
+            replyInThread: isFirst ? replyInThread : !opts.flat,
+          });
+          opts.sessionNotice = undefined;
+          runStreams.set(thisMsgId, cardStream);
+          if (isFirst) {
+            await adoptThreadId(thisMsgId, cardRc);
+            requestGoalSessionTitleApply();
+          }
+        }
+        cardRc.threadId = topicThreadId ?? cardRc.threadId;
+
+        if (item.oversized.length > 0) {
+          await ctx.continuation.ensureAttachments(item.oversized, thisMsgId);
+          const settledViews = ctx.continuation.settledAttachments() ?? new Map();
+          cardRc.overflowAttachments = settledViews;
+          cardRc.rs = {
+            ...cardRc.rs,
+            blocks: applyResolvedAttachmentsToBlocks(item.blocks, settledViews),
+          };
+        }
+
+        if (!item.processOnly && item.answerText.trim()) {
+          const resolvedAnswer = resolveAttachmentPlaceholders(item.answerText, ctx.continuation.settledAttachments() ?? new Map());
+          cardRc.localFiles = await outboundFiles.prepare(resolvedAnswer, {
+            messageId: thisMsgId, chatId: opts.chatId, cwd: runCwd,
+            mode: opts.mode ?? DEFAULT_PERMISSION_MODE, requesterOpenId: opts.requesterOpenId,
+            replyInThread: !opts.flat, cardId: cardStream.getCardId(),
+          }, (elementId, element) => cardStream.updateElement(channel, elementId, element));
+        }
+
+        runsByCard.delete(thisMsgId);
+        if (!isLast) runStreams.delete(thisMsgId);
+        await refreshRunCardDisplayValues(cardRc, runCwd);
+        const updated = await cardStream.updateCard(channel, buildRunCard(cardRc));
+        lastMsgId = thisMsgId;
+        replyTo = thisMsgId;
+        replyInThread = !opts.flat;
+        if (isLast) {
+          terminalCardUpdated = updated;
+          activeStream = cardStream;
+          activeRc = cardRc;
+        }
+      }
+
+      ctx.stream = activeStream;
+      ctx.cardMsgId = lastMsgId || null;
+      ctx.rc = activeRc;
       lastCardUpdated = terminalCardUpdated;
-      if (confirmedDone && ctx.rc.rs.terminal === 'done' && answerText.trim() && terminalCardUpdated) reportLatestAction(opts.chatId, 'replied');
-      runsByCard.delete(ctx.cardMsgId);
-      promoteCard(ctx.cardMsgId, ctx.rc);
+      if (confirmedDone && ctx.rc.rs.terminal === 'done' && fullAnswerText.trim() && terminalCardUpdated) reportLatestAction(opts.chatId, 'replied');
+      if (ctx.cardMsgId) promoteCard(ctx.cardMsgId, ctx.rc);
       finalized.last = ctx;
     };
 
@@ -8918,6 +9169,7 @@ export function createOrchestrator(
         cardDisplay: state.presentation?.preferences?.cardDisplay,
         requesterOpenId: opts.requesterOpenId,
         showTools: render.showTools,
+        unboundedProcess: true,
         goalControls: true,
         ...(opts.backendId ? { backend: opts.backendId } : {}),
         ...((goalModelDisp !== 'off' || state.presentation?.preferences?.cardDisplay) && opts.model
@@ -8925,7 +9177,96 @@ export function createOrchestrator(
           : {}),
         ...(opts.sessionNotice ? { sessionNotice: opts.sessionNotice } : {}),
       };
-      return { render, rc, stream: null, cardMsgId: null };
+      const ctx: GoalTurnCtx = { render, rc, stream: null, cardMsgId: null, continuation: undefined as unknown as RunCardContinuation };
+      ctx.continuation = new RunCardContinuation({
+        channel,
+        chatId: opts.chatId,
+        replyInThread: !opts.flat,
+        activeMessageId: () => ctx.cardMsgId ?? '',
+        activeCard: () => ctx.rc,
+        pushActiveCard: (builtFrame) => {
+          if (ctx.stream && ctx.cardMsgId) ctx.stream.streamCoalesced(channel, builtFrame ?? buildSafeLiveCard(ctx.rc), ANSWER_EID);
+        },
+        openNextCard: async ({ replyTo: prevMsgId, nextRs, answerOnly, attachments }) => {
+          const nextStream = new RunCardStream();
+          const next: RunCardState = {
+            ...ctx.rc,
+            rs: nextRs,
+            cardKey: undefined,
+            continued: undefined,
+            processOnly: false,
+            answerOnly: answerOnly === true,
+            unboundedProcess: true,
+            overflowAttachments: attachments.size > 0 ? new Map(attachments) : undefined,
+            localFiles: undefined,
+            images: undefined,
+            sessionNotice: undefined,
+          };
+          let nextId: string;
+          try {
+            nextId = await nextStream.create(channel, opts.chatId, buildSafeLiveCard(next), {
+              replyTo: prevMsgId, replyInThread: !opts.flat,
+            });
+          } catch (err) {
+            log.fail('card', err, { phase: 'goal-capacity-card-create' });
+            return null;
+          }
+          const prevStream = ctx.stream!;
+          const prevId = ctx.cardMsgId!;
+          ctx.pendingPrev = { stream: prevStream, messageId: prevId };
+          runsByCard.delete(prevId);
+          runStreams.delete(prevId);
+          clearInterval(ctx.clock);
+          next.cardKey = nextId;
+          ctx.rc = next;
+          ctx.stream = nextStream;
+          ctx.cardMsgId = nextId;
+          state.runCard = next;
+          runsByCard.set(nextId, state);
+          runStreams.set(nextId, nextStream);
+          attachRunImages({
+            stream: nextStream, rc: ctx.rc, channel,
+            upload: sources => uploadOutboundImages(channel, sources, runCwd, opts.mode ?? DEFAULT_PERMISSION_MODE, opts.network ?? false),
+          });
+          ctx.clock = setInterval(() => {
+            if (ctx.rc.rs.terminal === 'running') nextStream.streamCoalesced(channel, buildSafeLiveCard(ctx.rc), ANSWER_EID);
+          }, 1000);
+          ctx.clock.unref();
+          replyTo = nextId;
+          replyInThread = !opts.flat;
+          nextStream.streamCoalesced(channel, buildSafeLiveCard(ctx.rc), ANSWER_EID);
+          return { messageId: nextId };
+        },
+        finalizePreviousCard: async (frozenRc) => {
+          const prev = ctx.pendingPrev!;
+          ctx.pendingPrev = undefined;
+          try {
+            await prev.stream.drain();
+            const imgText = segmentImageText(frozenRc.rs);
+            if (!frozenRc.processOnly) {
+              const text = finalMessageText(frozenRc.rs);
+              if (text.trim()) {
+                frozenRc.localFiles = await outboundFiles.prepare(text, {
+                  messageId: prev.messageId, chatId: opts.chatId, cwd: runCwd,
+                  mode: opts.mode ?? DEFAULT_PERMISSION_MODE, requesterOpenId: opts.requesterOpenId,
+                  replyInThread: !opts.flat, cardId: prev.stream.getCardId(),
+                }, (id, element) => prev.stream.updateElement(channel, id, element));
+              }
+            }
+            frozenRc.images = await prev.stream.settleImages(imgText);
+          } catch (err) {
+            log.fail('card', err, { phase: 'goal-capacity-card-assets' });
+          }
+          await refreshRunCardDisplayValues(frozenRc, runCwd);
+          await prev.stream.finalizeCard(channel, buildRunCard(frozenRc))
+            .catch(err => log.fail('card', err, { phase: 'goal-capacity-card-finalize' }));
+          return {
+            messageId: prev.messageId,
+            updateCard: (updatedRc) => prev.stream.updateCard(channel, buildRunCard(updatedRc)),
+          };
+        },
+      });
+      return ctx;
     };
 
     /** Send this turn's streaming card on first real content (idempotent). */
@@ -8942,14 +9283,14 @@ export function createOrchestrator(
       ctx.rc.askWaiting = askWaiting;
       ctx.rc.askWaitingSubagentId = askWaitingSubagentId;
       await refreshRunCardDisplayValues(ctx.rc,runCwd);
-      const cardMsgId = await stream.create(channel, opts.chatId, buildRunCard(ctx.rc), { replyTo, replyInThread });
+      const cardMsgId = await stream.create(channel, opts.chatId, buildSafeLiveCard(ctx.rc), { replyTo, replyInThread });
       ctx.rc.cardKey = cardMsgId;
       state.runCard = ctx.rc;
       ctx.stream = stream;
       ctx.cardMsgId = cardMsgId;
       opts.sessionNotice = undefined; // shown; a turn without a card keeps it for the next
       ctx.clock = setInterval(() => {
-        if (ctx.rc.rs.terminal === 'running') stream.streamCoalesced(channel, buildRunCard(ctx.rc), ANSWER_EID);
+        if (ctx.rc.rs.terminal === 'running') stream.streamCoalesced(channel, buildSafeLiveCard(ctx.rc), ANSWER_EID);
       }, 1000);
       ctx.clock.unref();
       runsByCard.set(cardMsgId, state);
@@ -9039,8 +9380,8 @@ export function createOrchestrator(
           // structure change forces a whole-card update).
           cur.rc.goalEnding = true;
           if (cur.stream) {
-            cur.rc.rs = cur.render.snapshot();
-            cur.stream.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID);
+            cur.rc.rs = cur.continuation.segmentOf(cur.render.snapshot());
+            cur.stream.streamCoalesced(channel, buildSafeLiveCard(cur.rc), ANSWER_EID);
           }
         } else {
           resolveEnd(); // no turn in flight → end now
@@ -9079,9 +9420,8 @@ export function createOrchestrator(
           let usage = ev.type === 'context_usage' ? { used: ev.usedTokens, window: ev.contextWindow } : undefined;
           if (cur) {
             cur.render.apply(ev);
-            cur.rc.rs = cur.render.snapshot();
-            usage = cur.rc.rs.usage;
-            if (cur.stream) cur.stream.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID);
+            usage = cur.render.snapshot().usage;
+            await cur.continuation.syncLive(cur.render.snapshot(), ev, { skipPush: !cur.stream });
           }
           if (topicThreadId && usage) lastUsage.set(topicThreadId, usage);
           if (ev.type === 'compaction' && ev.phase === 'end' && !ev.failed) { markTopicsDue(topicThreadId, opts.chatId, opts.thread.sessionId); markContextDue(opts.thread, topicThreadId); }
@@ -9108,7 +9448,7 @@ export function createOrchestrator(
           askTurn ??= asks.openTurn({ run, sessionKey: activeKey, placement: askPlacement,
             placed: async messageId => { if (cur) await adoptThreadId(messageId, cur.rc); return activeKey; },
             initiator: { kind: opts.requesterKind ?? 'unknown', openId: opts.requesterOpenId }, idlePause,
-            waiting: (label, subagentId) => { activity?.waiting(Boolean(label)); askWaiting = label; askWaitingSubagentId = subagentId; if (cur) { cur.rc.askWaiting = label; cur.rc.askWaitingSubagentId = subagentId; if (cur.stream) cur.stream.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID); } },
+            waiting: (label, subagentId) => { activity?.waiting(Boolean(label)); askWaiting = label; askWaitingSubagentId = subagentId; if (cur) { cur.rc.askWaiting = label; cur.rc.askWaitingSubagentId = subagentId; if (cur.stream) cur.stream.streamCoalesced(channel, buildSafeLiveCard(cur.rc), ANSWER_EID); } },
             fault: error => { log.fail('agent', error, { phase: 'ask-response' }); if (state.run === run) originalInterrupt(); },
           });
           continue;
@@ -9146,7 +9486,7 @@ export function createOrchestrator(
             const subagents = cur.render.snapshot().subagents;
             cur.render.apply(ev);
             logSubagentChanges(subagents, cur.render.snapshot().subagents);
-            cur.rc.rs = cur.render.snapshot();
+            cur.rc.rs = cur.continuation.segmentOf(cur.render.snapshot());
           } else carried = reduce({ ...initialState, subagents: carried }, ev).subagents;
           for (const row of cur?.render.snapshot().subagents ?? carried) knownSubagents.set(row.id, row);
           continue;
@@ -9160,14 +9500,12 @@ export function createOrchestrator(
         // card exists, keep streaming everything (incl. reasoning) into it.
         if (ev.type === 'thinking' || ev.type === 'thinking_delta') {
           if (cur.stream) {
-            cur.rc.rs = cur.render.snapshot();
-            cur.stream.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID);
+            await cur.continuation.syncLive(cur.render.snapshot(), ev);
           }
           continue;
         }
         await ensureCard(cur);
-        cur.rc.rs = cur.render.snapshot();
-        cur.stream?.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID);
+        await cur.continuation.syncLive(cur.render.snapshot(), ev, { skipPush: !cur.stream });
       }
       activity.end();
       askTurn?.close('turn-ended');
@@ -9231,8 +9569,9 @@ export function createOrchestrator(
       if (cur?.stream && cur.cardMsgId) {
         clearInterval(cur.clock);
         cur.render.apply({ type: 'error', message: err instanceof Error ? err.message : String(err), willRetry: false });
-        cur.rc.rs = cur.render.snapshot();
+        cur.rc.rs = cur.continuation.segmentOf(cur.render.snapshot());
         cur.rc.askWaiting = undefined;
+        cur.rc.unboundedProcess = false;
         // Do not repeat finalizeCard's file/image I/O after a failure. Drain old
         // frames, then retire the card without controls; a second failure stays secondary.
         try {
