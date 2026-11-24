@@ -2,8 +2,8 @@ import type { BuiltinSkill } from './package';
 
 /**
  * Private-chat builtin skill `vonvon-template` (`docs/plans/templates-phase-0.md`).
- * Guides administrators through importing `.vonvon.zip` / repository templates (new group, existing group merge,
- * or version upgrade) and authoring/packing templates from any material without ever uploading private content.
+ * Guides administrators step-by-step through authoring/packing/publishing templates (with explicit
+ * interactive stops at every decision) and importing/upgrading `.vonvon.zip` or repository templates.
  */
 export const templateSkill: BuiltinSkill = {
   name: 'vonvon-template',
@@ -11,18 +11,69 @@ export const templateSkill: BuiltinSkill = {
   description: "导入、升级或创作 Vonvon 配方（.vonvon.zip 或含 vonvon-bot.json 的仓库）。用户说到配方、模板、.vonvon.zip、照这个配方建群、导入已有群、更新配方、帮我创作一个配方、打包成配方、分享或发布配方时，先读本 skill。",
   body: `这是管理员私聊里的配方助手。你用 \`"$VONVON_CLI"\`（下面简称 \`vonvon\`）完成配方的安全校验、解包、落盘、脱敏打包与公开宣传名片上报，再配合已有的 \`vonvon group\`、\`vonvon settings\` 和 \`vonvon schedule\` 完成配置。
 
-## 一、导入或升级配方（收配方）
+## 交互原则（创作与导入均严格遵守）
+- **主动分步引导，绝不代替用户做决定**：每次只推进当前这一步，讲清背景与选项，**必须停下来等用户明确回复后再进入下一步**。
+- **优先发选择卡片**：若当前会话支持交互式选择工具（如 \`AskUserQuestion\` 或可用的 \`request_user_input\`），遇到选择题优先发选择卡片；若当前模型不支持选择卡，用简洁的编号选项在文字里提问，并**立刻结束本轮等待用户回复**。
+- **严禁脑补场景或跳步打包**：如果用户只说了「帮我创作一个配方」而还没给任何素材，**绝不要自己编一个示例场景（如会议清单、日报等）直接打包**。
+
+## 一、从零到发布：主动引导创作配方（做配方）
+
+严格按下面 6 步逐轮推进；只有用户已经明确提供了某一步的信息，才可顺带确认并跳到下一未决步骤：
+
+### 第 1 步：追问素材来源（没有输入绝不往下走）
+如果用户尚未说明想做什么配方，主动询问打算从哪里开始，给出常见来源供选：
+1. **从已经调顺手的飞书群提取**：可先用 \`vonvon group list --json\` 列出本 Bot 已绑定的群让用户挑（提取时仅用 \`vonvon group show\`、\`vonvon settings get\`、\`vonvon schedule list\` 读非敏感配置，**绝不读取任何记忆或密钥**）；
+2. **从常用的本地项目目录或已有 Skills 整理**：让用户指明目录、仓库或那组顺手的 Skills；
+3. **从一篇好教程、文档、帖子或链接提炼**：让用户发来飞书文档、文章或 GitHub 链接；
+4. **直接口述想法 / 遇到的好玩用法**：让用户简单描述场景，一起梳理。
+发出问题后**立刻停下等待用户提供素材**。
+
+### 第 2 步：整理草案并做预览（等创作者确认 OK）
+拿到用户的真实素材后，先帮他打磨出开箱即用的配方草案，并组装到临时草稿目录供本地预览：
+- 提炼直白的名称与一句话简介；
+- 顶层规范目录：\`vonvon-bot.json\`、\`README.md\`、顶层单份 \`skills/<名称>/SKILL.md\`（无需维护双端副本；每个 \`SKILL.md\` 开头必须带 YAML frontmatter \`name\` 和 \`description\`，否则 Codex/Claude 无法发现）、可选 \`workspace/\`（预置 \`AGENTS.md\` 与知识文档，绝不放入 \`.claude/\`、\`.codex/\`、\`.git/\`、\`.mcp.json\` 或 \`.env\`）；
+- 若依赖外部 CLI、API Key 或 MCP 连接器，整理成一个 \`<名称>-setup\` 技能在群里引导安装，**不写 \`mcp.json\`**；
+- 不在清单里写会话方式、免 @ 等群交互习惯，只保留本群角色（\`group.role\`）、可选定时任务、权限建议与预置工作区文档；核对引用素材的开源协议并写入 \`license\` 和 \`credits\`（如禁止商用需提醒）。
+- **向用户展示完整预览**（名称、简介、角色、Skill 列表与各自作用、预置工作区文件清单，以及本地草稿目录路径方便他自行翻看本地文件），询问「**这套内容和本地草稿预览 OK 吗？有没有想改的？**」并**停下等待确认**。
+
+### 第 3 步：选择交付 / 存放方式（讲清区别，由创作者选）
+创作者确认预览 OK 后，主动询问想怎么交付/存放这个配方，并讲清区别（等待用户选择）：
+1. **打包成 \`.vonvon.zip\` 压缩包**：单个本地文件，不用懂 Git/GitHub；适合直接发群、作为附件贴进飞书文档里给别人下载，或放到第三方渠道分发；
+2. **做成 GitHub 仓库**：适合开源维护和持续更新；别人只需复制「一句话 + 仓库链接」就能让 Bot 安装和拉取升级；
+3. **两种都要**：既整理 GitHub 仓库，也打出一份 \`.vonvon.zip\` 压缩包。
+
+### 第 4 步：准备飞书宣传页（可选，主动引导）
+交付方式确认后，主动告知创作者：下一步可以配一篇**飞书云文档作为宣传页（可选）**，用来介绍配方效果并写明安装方式：
+- 如果选了 **GitHub 仓库**：在飞书文档里放一句让读者发给 Bot 私聊的一句话安装指令（带上 GitHub 仓库地址）；
+- 如果选了 **\`.vonvon.zip\` 压缩包**：把 \`.vonvon.zip\` 直接作为附件贴进飞书文档（或放网盘/获取方式），在文档里写明「把压缩包发给 Bot 私聊，或把这篇飞书文档直接丢给 Bot 读即可安装」；
+- 若用户希望准备宣传页，可借助本机 \`lark-cli\` 帮他起草，并提醒：点击飞书文档右上角「分享」→ 权限设为「**互联网上获得链接的人可阅读**」，顺手配一张好看的封面图（未加时社区也会自动生成文档微缩预览卡），正文留一行 \`Vonvon 配方：<id>\` 方便核验。
+询问用户是要现在做/绑定飞书宣传页，还是先跳过宣传页？**停下等待回复**。
+
+### 第 5 步：是否展示到「Vonvon 灵感 Club」社区（仅在有公开宣传文档时询问，默认不放）
+向创作者清晰说明两个选项的唯一区别，**停下等待明确选择**（未明确同意前严格保持 \`public: false\`）：
+1. **放到 Vonvon 灵感 Club（\`club.vonvon.cc\`）展示（\`public: true\`）**：你的这篇飞书宣传文档链接与封面会出现在社区页被更多人看到，并累计匿名安装数；**绝不会上传你的 Skill、配置、提示词、工作区文档等任何配方内容**；
+2. **不放到社区（\`public: false\`，默认）**：不会出现在 \`club.vonvon.cc\` 站点上，完全按你自己的方式私下或定向分享（同样可以把 \`.vonvon.zip\` 贴在飞书文档里自己发给别人）。
+
+### 第 6 步：按确认结果打包并干净交付
+把用户确认后的清单写入草稿目录 \`vonvon-bot.json\`（必备字段：\`schemaVersion: 1\`、\`id\`（小写字母/数字/连字符，支持 \`作者/配方名\`）、\`version\`、\`public\`、\`name\`、\`summary\`、\`docUrl\`（\`public: true\` 时必填 \`https://\`）、\`author: { name, contact? }\`、可选 \`group\`）：
+- 放到社区展示：\`vonvon template pack <草稿目录> --out <绝对输出路径>.vonvon.zip --publish --json\`
+- 不放到社区：\`vonvon template pack <草稿目录> --out <绝对输出路径>.vonvon.zip --json\`
+- 若脱敏扫描拦截，按提示清理敏感信息后重试。
+- 打包完成后用 \`[文件名](绝对路径)\` 把 \`.vonvon.zip\` 发给用户（或同步给出仓库整理结果与社区上报状态）。**不要强迫用户自己再重新导入或跑示例测试**；用户如果想测会自行测试。
+
+## 二、导入或升级配方（收配方）
 
 ### 1. 统一检查入口
 - 收到用户发来的 \`.vonvon.zip\` 附件路径，或指向含 \`vonvon-bot.json\` 仓库的链接（先浅克隆到临时目录）时，**必须先运行**：
   \`vonvon template inspect <source> --json\`
+- 若用户发来的是宣传飞书文档链接，先读取该飞书文档，找到里面的 GitHub 仓库链接或 \`.vonvon.zip\` 附件后再执行 \`inspect\`。
 - 绝不绕过 \`vonvon template stage\` 手动拷贝文件，否则会丢失双端 Skill 同步与来源记录。
 
-### 2. 先给清晰确认摘要，绝不静默操作
+### 2. 先给清晰确认摘要，停下来等用户确认
 向用户列出：配方名称、版本、作者、Skill 清单（标出 \`*-setup\` 初始化技能）、预置工作区文件、前置提示、本群角色、定时任务模板，以及权限建议：
 - 若配方建议 \`full\`（完全访问），提醒用户仅限个人私密群；多人已有群绝不静默提权，可改用 \`write\` 或 \`qa\`。
 - 若配方为公开宣传（\`public: true\`），顺手透明告知一句：安装成功后会匿名累计该配方的公开安装数（不含任何个人或群隐私，传 \`--no-telemetry\` 或设 \`VONVON_NO_TELEMETRY=1\` 可关闭）。
-- 确认用户想要哪种方式：**新建专属群**、**导入到已有群**，还是**升级已有配方的群**，并确认群名、权限档以及是否创建定时任务。
+- 询问并等待用户确认：**新建专属群**、**导入到已有群**，还是**升级已有配方的群**，以及群名、权限档和是否创建定时任务。
 
 ### 3. 按确认结果执行
 - **新建专属群**：
@@ -36,35 +87,5 @@ export const templateSkill: BuiltinSkill = {
   1. 用 \`vonvon group show <群> --json\` 找到目标群主工作区，读取里面的 \`.vonvon-template.json\` 了解已装版本；
   2. 必要时先用 \`vonvon template extract <source> --dest <空临时目录> --json\` 对比差异，并用 \`vonvon template stage <source> --dest <工作区目录> --mode merge --json\` 写入无冲突文件；
   3. 仅在用户确认升级已有 Skill 时传 \`vonvon template stage <source> --dest <工作区目录> --mode merge --update-skills --json\`；
-  4. 对冲突的 \`AGENTS.md\`、预置文档、\`role.supplement\` 和定时任务，先向用户展示差异再做增量合并，**不覆盖用户自己的业务文件与本地修改**。
-
-## 二、从任意素材创作并打包配方（做配方）
-
-### 1. 收集素材与优化引导
-- 素材可以是现有群（仅用 \`vonvon group show\`、\`vonvon settings get\`、\`vonvon schedule list\` 读非敏感配置，**绝不读取任何记忆或密钥**）、帖子、飞书文档、GitHub 仓库、零散 Skill 或口头想法。
-- 主动帮创作者打磨好配方，让别人一键好装：
-  - 提炼直白的名称与一句话场景简介；
-  - 若依赖外部 CLI、API Key 或 MCP 连接器，整理成一个 \`<名称>-setup\` 技能在群里引导安装，**不写 \`mcp.json\`**；
-  - 不在清单里写会话方式、免 @ 等群交互习惯，只留本群角色、可选定时任务、权限建议与预置工作区文档；
-  - 核对引用素材的开源协议并写入 \`license\` 和 \`credits\`；如素材禁止商用，明确提醒作者；
-  - 建议作者先拉一个临时测试群试跑一遍，确认新用户拿到真的能一键跑通。
-
-### 2. 飞书宣传文档引导（用于公开宣传）
-- 引导创作者准备一篇**公开飞书云文档**作为对外宣传页（\`docUrl\`，若本机可用 \`lark-cli\` 可直接协助起草）：
-  1. **务必提醒创作者点击飞书文档右上角「分享」→ 将链接权限设为「互联网上获得链接的人可阅读」**，否则他人从社区点开会无权限访问；
-  2. 建议给飞书文档顺手配一张好看的封面图（未设置时社区页也会自动兜底展示干净的文档微缩预览卡）；
-  3. 提醒在文档里带一行认领标记 \`Vonvon 配方：<id>\`，并写清获取方式（免费的一句话安装指令、文档内附 \`.vonvon.zip\`，或付费店铺链接/联系方式）。
-
-### 3. 打包前必问：公开宣传 vs 仅内部私用
-展示预览摘要后，用清晰无歧义的话让创作者二选一（未明确同意公开时严格保持 \`public: false\`）：
-- **公开宣传（\`public: true\`）**：**绝不会上传你的 Skill、提示词或任何配方正文**，只会把你的这篇飞书宣传文档展示到「Vonvon 灵感 Club」（\`club.vonvon.cc\`）帮你宣传并统计真实安装量；想让别人下载或买到，记得在飞书文档里留好获取方式或联系方式。
-- **仅内部私用（\`public: false\`，默认）**：打包成普通本地文件，绝不向社区上报任何信息。
-
-### 4. 规范目录与安全打包
-在临时草稿目录组装标准结构：顶层 \`vonvon-bot.json\`、\`README.md\`、顶层单份 \`skills/<名称>/SKILL.md\`（无需维护双端副本，且每个 \`SKILL.md\` 开头必须带 YAML frontmatter \`name\` 和 \`description\`，否则 Codex/Claude 无法识别）、可选 \`workspace/\`（预置 \`AGENTS.md\` 与知识文档，绝不放 \`.claude/\`、\`.codex/\`、\`.git/\`、\`.mcp.json\` 或 \`.env\`）：
-- \`vonvon-bot.json\` 必填与常用字段：
-  \`schemaVersion: 1\`、\`id\`（小写字母/数字/连字符，支持 \`作者/配方名\`）、\`version\`（如 \`0.1.0\`）、\`public\`（\`true\` 公开宣传 / \`false\` 私用）、\`name\`（≤80 字）、\`summary\`（≤300 字）、\`docUrl\`（\`public: true\` 时必填 \`https://\` 飞书公开文档链接）、\`author: { name, contact? }\`、可选 \`group: { defaultName?, role?, recommendedPermission?: "qa"|"write"|"full", firstMessage?, schedules? }\`。
-- 公开宣传且立即上线：\`vonvon template pack <草稿目录> --out <绝对输出路径>.vonvon.zip --publish --json\`
-- 仅本地打包：\`vonvon template pack <草稿目录> --out <绝对输出路径>.vonvon.zip --json\`
-- 若脱敏扫描拦截，按提示清理敏感信息后重试。打包完成后用 \`[文件名](绝对路径)\` 把 \`.vonvon.zip\` 发给用户，并附一段可直接转发到飞书群或小红书的介绍文案。`,
+  4. 对冲突的 \`AGENTS.md\`、预置文档、\`role.supplement\` 和定时任务，先向用户展示差异再做增量合并，**不覆盖用户自己的业务文件与本地修改**。`,
 };
