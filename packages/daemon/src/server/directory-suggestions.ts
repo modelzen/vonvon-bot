@@ -21,11 +21,15 @@ export const directorySuggestionWorkerSource = String.raw`(async (root, query) =
   const {basename, dirname, isAbsolute, join, resolve, sep} = require('node:path');
   const windows = process.platform === 'win32';
   const entries = new Map();
-  const typed = query.trim();
+  const raw = query.trim();
+  const dotTrail = raw === '.' || /(?:^|[\\/])\.$/.test(raw);
+  const typed = dotTrail && raw !== '.' ? raw.slice(0, -1) : raw;
   const fromHome = typed === '~' || typed.startsWith('~/') || (windows && typed.startsWith('~\\'));
   const rooted = isAbsolute(typed) || fromHome;
   const discovery = Boolean(typed && !rooted);
-  const ignored = new Set(['node_modules', 'vendor', 'venv', 'dist', 'build', 'target', 'out', 'coverage', '__pycache__']);
+  const needle = raw.toLocaleLowerCase();
+  const limit = discovery ? 50 : 500;
+  const ignored = new Set(['node_modules', 'vendor', 'venv', '.venv', 'dist', 'build', 'target', 'out', 'coverage', '__pycache__', '.git', '.hg', '.svn', '.next', '.nuxt', '.turbo', '.vite', '.pytest_cache', '.mypy_cache']);
   const noDescent = new Set(['Desktop', 'Documents', 'Downloads', 'Music', 'Pictures', 'Movies', 'Library', 'OrbStack', 'Virtual Machines', 'Virtual Machines.localized', 'Parallels']);
   const preferred = new Set(['develop', 'developer', 'projects', 'project', 'workspaces', 'workspace', 'work', 'src', 'code']);
   let path = null;
@@ -45,11 +49,10 @@ export const directorySuggestionWorkerSource = String.raw`(async (root, query) =
     return remaining <= 0 || directoryCount >= 256 || Date.now() >= deadline;
   };
   const emit = (partial = true) => {
-    const needle = typed.toLocaleLowerCase();
     const score = entry => entry.name.toLocaleLowerCase() === needle ? 0 : entry.name.toLocaleLowerCase().startsWith(needle) ? 1 : 2;
     const list = [...entries.values()];
-    if (discovery) list.sort((a, b) => score(a) - score(b) || a.path.split(sep).length - b.path.split(sep).length || a.path.localeCompare(b.path));
-    process.stdout.write(JSON.stringify({kind: 'suggestions', root, path, parent: path && dirname(path) !== path ? dirname(path) : null, entries: list.slice(0, 50), truncated: partial || truncated || entries.size > 50}) + '\n');
+    if (discovery) list.sort((a, b) => (needle.startsWith('.') ? 0 : Number(a.hidden) - Number(b.hidden)) || score(a) - score(b) || a.path.split(sep).length - b.path.split(sep).length || a.path.localeCompare(b.path));
+    process.stdout.write(JSON.stringify({kind: 'suggestions', root, path, parent: path && dirname(path) !== path ? dirname(path) : null, entries: list.slice(0, limit), truncated: partial || truncated || entries.size > limit}) + '\n');
   };
   const add = entry => { entries.set(entry.path, entry); emit(); };
   const children = async (directory, visit) => {
@@ -61,7 +64,7 @@ export const directorySuggestionWorkerSource = String.raw`(async (root, query) =
       if (exhausted()) break;
       remaining--;
       if (!child.isDirectory() && !child.isSymbolicLink()) continue;
-      if (discovery && (child.name.startsWith('.') || ignored.has(child.name) || child.isSymbolicLink())) continue;
+      if (discovery && (ignored.has(child.name) || child.isSymbolicLink())) continue;
       try {
         // Dirent already proves the plain entry is a directory. Only symlinks need
         // metadata here; every actual descent and final choose is canonicalized.
@@ -75,18 +78,24 @@ export const directorySuggestionWorkerSource = String.raw`(async (root, query) =
   try {
     if (!discovery) {
       const requested = !typed || typed === '~' ? root : fromHome ? resolve(root, typed.slice(2)) : resolve(typed);
-      let prefix = '';
-      try { path = await canonical(requested); add({name: basename(path), path, hidden: basename(path).startsWith('.')}); }
+      let prefix = dotTrail ? '.' : '';
+      try {
+        path = await canonical(requested);
+        if (dotTrail) emit();
+        else add({name: basename(path), path, hidden: basename(path).startsWith('.')});
+      }
       catch (error) {
-        if (code(error) !== 'ENOENT' || typed.endsWith('/') || (windows && typed.endsWith('\\'))) throw error;
+        if (dotTrail || code(error) !== 'ENOENT' || typed.endsWith('/') || (windows && typed.endsWith('\\'))) throw error;
         path = await canonical(dirname(requested)); prefix = basename(requested).toLocaleLowerCase();
+        emit();
       }
       const found = [];
       await children(path, entry => {
-        if ((!entry.hidden || prefix.startsWith('.')) && entry.name.toLocaleLowerCase().includes(prefix)) { found.push(entry); add(entry); }
+        const lower = entry.name.toLocaleLowerCase();
+        const matches = prefix.startsWith('.') ? entry.hidden && lower.includes(prefix) : lower.includes(prefix);
+        if (matches) found.push(entry);
       });
-      for (const entry of found) entries.delete(entry.path);
-      for (const entry of found.sort((a, b) => a.name.localeCompare(b.name))) entries.set(entry.path, entry);
+      for (const entry of found.sort((a, b) => Number(a.hidden) - Number(b.hidden) || a.name.localeCompare(b.name))) entries.set(entry.path, entry);
     } else {
       const queue = [{path: root, depth: 0, preferred: false}];
       const seen = new Set([root]);
@@ -95,8 +104,8 @@ export const directorySuggestionWorkerSource = String.raw`(async (root, query) =
         const directory = queue.shift();
         try {
           await children(directory.path, entry => {
-            if (entry.name.toLocaleLowerCase().includes(typed.toLocaleLowerCase())) add(entry);
-            if (entry.symlink || seen.has(entry.path) || noDescent.has(entry.name) || /\.(?:pvm|vmwarevm)$/.test(entry.name)) return;
+            if ((needle.startsWith('.') ? entry.hidden && entry.name.toLocaleLowerCase().includes(needle) : entry.name.toLocaleLowerCase().includes(needle))) add(entry);
+            if (entry.hidden || entry.symlink || seen.has(entry.path) || noDescent.has(entry.name) || /\.(?:pvm|vmwarevm)$/.test(entry.name)) return;
             if (directory.depth >= 8) { truncated = true; return; }
             seen.add(entry.path);
             queue.push({path: entry.path, depth: directory.depth + 1, preferred: directory.preferred || preferred.has(entry.name.toLocaleLowerCase())});

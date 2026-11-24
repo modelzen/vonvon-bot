@@ -106,10 +106,13 @@ export const DIRECTORY_PROBLEM_TEXT: Record<DirectoryProblem, string> = {
 };
 
 /** 群目录: groups an older version put in a wrong place; nothing is moved for them. */
-function DirectoryProblems({members}: {members: readonly Membership[]}) {
+function DirectoryProblems({members, onOpenMembership}: {members: readonly Membership[]; onOpenMembership?: (id: Membership['id']) => void}) {
   return <>
-    <ul className="diagnostics-scopes">{members.map(member => <li key={member.id}>「{member.name}」{DIRECTORY_PROBLEM_TEXT[member.directoryProblem!]}：<code>{member.directory}</code></li>)}</ul>
-    请在项目页的「工作区」中更换目录。原文件不会自动迁移。
+    <ul className="diagnostics-scopes">{members.map(member => <li key={member.id}>
+      「{member.name}」{DIRECTORY_PROBLEM_TEXT[member.directoryProblem!]}：<code>{member.directory}</code>
+      {onOpenMembership && <> <Button size="sm" variant="ghost" onClick={() => onOpenMembership(member.id)}>去更换</Button></>}
+    </li>)}</ul>
+    请在群设置的「工作区」中更换目录。原文件不会自动迁移。
   </>;
 }
 
@@ -133,9 +136,9 @@ function SmartDiagnostics({agent, snapshot, now}: {agent: Agent; snapshot: Deskt
   </>;
 }
 
-function BotDiagnostics({agent, snapshot, read, tools, onOpenSetup, onError}: {
+function BotDiagnostics({agent, snapshot, read, tools, onOpenSetup, onOpenMembership, onError}: {
   agent: Agent; snapshot: DesktopSnapshot; read: SetupRead | undefined; tools: readonly SetupStep[];
-  onOpenSetup: () => void; onError: (message: string) => void;
+  onOpenSetup: () => void; onOpenMembership?: (id: Membership['id']) => void; onError: (message: string) => void;
 }) {
   const shell = useShellCapabilities();
   const now = Date.now();
@@ -192,7 +195,7 @@ function BotDiagnostics({agent, snapshot, read, tools, onOpenSetup, onError}: {
       trailing={<span className="setup-step-trailing">{toolScopes.badge}{toolsGrantUrl && <Button size="sm"
         onClick={() => void openExternalUrl(toolsGrantUrl, 'app-console', shell).catch(error => onError(error instanceof Error ? error.message : '无法打开开发者后台。'))}>去开通</Button>}</span>}/>}
     <SettingsRow title="Provider" description={toolText || '尚未连接群聊'}/>
-    {misplaced.length > 0 && <SettingsRow title="群目录" description={<DirectoryProblems members={misplaced}/>} trailing={badge(`${misplaced.length} 个群放错了位置`, 'warning')}/>}
+    {misplaced.length > 0 && <SettingsRow title="群目录" description={<DirectoryProblems members={misplaced} onOpenMembership={onOpenMembership}/>} trailing={badge(`${misplaced.length} 个群放错了位置`, 'warning')}/>}
     <SmartDiagnostics agent={agent} snapshot={snapshot} now={now}/>
     <SettingsRow title="最近没回的消息" description={<NotRepliedList records={records} agent={agent} snapshot={snapshot} now={now}/>}/>
     {crashes && <SettingsRow title="最近的崩溃" description={<CrashList records={crashes} now={now}/>}/>}
@@ -218,10 +221,11 @@ function CrashBars({snapshot, ready, busy, run}: {snapshot: DesktopSnapshot; rea
 /** 状态与诊断 (product.md 3.1 item 8): the red bar of a crash pause, the shown device's tools (「X」 on a remote one),
  * its decision models' keys (s23g2) and the daemon's crashes, then each bot's connection, setup, scopes, tools, misplaced
  * group directories, recent not-replied messages and crashes, with the daemon log beside the machine details. */
-export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpenProviders, onOpenSecrets, onNotice}: {
+export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpenProviders, onOpenSecrets, onOpenMembership, onNotice}: {
   snapshot: DesktopSnapshot; ready: boolean; busy: boolean;
   run: (command: Command) => Promise<CommandResult>;
   onOpenSetup: (agentId: AgentId) => void; onOpenProviders: (provider?: SetupProvider) => void; onOpenSecrets: () => void;
+  onOpenMembership?: (id: Membership['id']) => void;
   onNotice: (message: string, error: boolean) => void;
 }) {
   const client = useClient();
@@ -278,7 +282,7 @@ export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpe
       </details>
     </SettingsGroup>
     <section className="diag-bots" aria-label="Bot 状态"><div className="diag-section-heading"><h2>Bot 状态</h2><span>{snapshot.agents.length} 个 Bot</span></div>
-      <div className="diag-bot-list">{!snapshot.agents.length && <p className="diag-empty">尚未添加 Bot。添加后会显示连接状态和诊断记录。</p>}{snapshot.agents.map(agent => <BotDiagnostics key={agent.id} agent={agent} snapshot={snapshot} read={reads[agent.id]} tools={tools} onOpenSetup={() => onOpenSetup(agent.id)} onError={message => onNotice(message, true)}/>)}</div>
+      <div className="diag-bot-list">{!snapshot.agents.length && <p className="diag-empty">尚未添加 Bot。添加后会显示连接状态和诊断记录。</p>}{snapshot.agents.map(agent => <BotDiagnostics key={agent.id} agent={agent} snapshot={snapshot} read={reads[agent.id]} tools={tools} onOpenSetup={() => onOpenSetup(agent.id)} onOpenMembership={onOpenMembership} onError={message => onNotice(message, true)}/>)}</div>
     </section>
   </div>;
 }
