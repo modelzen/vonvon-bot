@@ -3,7 +3,7 @@ import type {ToolState} from '@vonvon/protocol';
 export type SetupProvider = 'codex' | 'claude';
 export const providerNames = {codex: 'Codex', claude: 'Claude'};
 export const providerBackends = {codex: 'codex-appserver', claude: 'claude-agent'} as const;
-export const providerIcons = {codex: './agent-icons/terminal.png', claude: './agent-icons/code.png'};
+export const providerIcons = {codex: './agent-icons/codex-light.png', claude: './agent-icons/claude-code.svg'};
 export const providerInstalled = (tool?: ToolState) => tool?.installation === 'installed' && tool.compatibility?.status !== 'tooOld';
 export const providerAuthenticated = (tool?: ToolState) => tool?.authentication === 'signedIn' || tool?.authentication === 'notRequired';
 /** A Provider may be offered for actual group work only when both checks pass. */
