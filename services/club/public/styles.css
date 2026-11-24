@@ -468,26 +468,6 @@ code {
   flex: 1;
 }
 
-.copy-hint-btn {
-  appearance: none;
-  border: 1px solid var(--line);
-  background: var(--bg-soft);
-  color: var(--ink-2);
-  font-size: 11.5px;
-  font-weight: 500;
-  border-radius: var(--r-pill);
-  padding: 3px 8px;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: all var(--t-fast) var(--ease);
-}
-
-.copy-hint-btn:hover {
-  border-color: var(--orange);
-  color: var(--ink);
-  background: var(--orange-soft);
-}
-
 .card-meta-row {
   display: flex;
   align-items: center;

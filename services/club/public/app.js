@@ -169,19 +169,6 @@
     title.title = item.name;
     titleRow.appendChild(title);
 
-    if (item.installHint) {
-      const copyBtn = document.createElement('button');
-      copyBtn.type = 'button';
-      copyBtn.className = 'copy-hint-btn';
-      copyBtn.textContent = '复制安装';
-      copyBtn.title = '复制一句话发给你的飞书 Bot 私聊安装';
-      copyBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        copyText(item.installHint, '已复制安装话术，去飞书私聊发给你的 Bot 吧');
-      });
-      titleRow.appendChild(copyBtn);
-    }
-
     const metaRow = document.createElement('div');
     metaRow.className = 'card-meta-row';
 
