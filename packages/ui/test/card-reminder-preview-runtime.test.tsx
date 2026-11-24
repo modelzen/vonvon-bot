@@ -1,5 +1,6 @@
 import {expect,it,vi} from 'vitest';
 import {isValidElement,type ReactElement,type ReactNode} from 'react';
+import {CARD_DISPLAY_REMINDER_EID} from '@vonvon/protocol';
 import {FeishuCardPreview,FeishuContentSample} from '../src/settings/card-display/FeishuCardPreview';
 import {composeCard,defaultCardDisplay} from '../src/settings/card-display/card-display-model';
 import {toolPreviewFrames,toolPreviewLayoutInputs,toolPreviewFramesRequested,toolPreviewLayoutInputsRequested} from '../src/settings/card-display/card-preview-frames';
@@ -31,7 +32,7 @@ it('keeps the requested button editable and draggable, without a second request 
   const tree=nodes(FeishuCardPreview({card,editing:true,onRequestReminder:request,onSelect:select,onPointerDragStart:drag,onRemove:vi.fn(),nonRemovableComponents:['reminder']}));
   const wrapper=tree.find(node=>node.props['data-card-component']==='reminder')!;
   expect(tree.some(node=>node.type==='button'&&node.props['data-action']==='run.remind')).toBe(false);
-  const local=nodes(wrapper);const button=local.find(node=>node.type==='button'&&node.props['data-element-id']==='display-reminder')!;
+  const local=nodes(wrapper);const button=local.find(node=>node.type==='button'&&node.props['data-element-id']===CARD_DISPLAY_REMINDER_EID)!;
   expect(button.props.disabled).toBe(true);expect(nodes(button).find(node=>node.props.className==='vcr-button-label')!.props.children).toBe('✅ 已记住，完成后叫你');
   expect(button.props.onClick).toBeUndefined();expect(button.props.onPointerDown).toBeUndefined();
   const edit=local.find(node=>node.props.className==='vcr-widget-edit')!;
@@ -45,13 +46,13 @@ it('keeps the requested button editable and draggable, without a second request 
 
 it('preserves native pixel and fill button widths in the card and chooser sample',()=>{
   for(const [width,cssWidth] of [['172px','172px'],['fill','100%'],['default',undefined]] as const){
-    const data={tag:'button',element_id:'display-reminder',width,size:'medium',margin:'2px',text:{tag:'plain_text',content:'🔔 完成之后提醒我'}};
+    const data={tag:'button',element_id:CARD_DISPLAY_REMINDER_EID,width,size:'medium',margin:'2px',text:{tag:'plain_text',content:'🔔 完成之后提醒我'}};
     const tree=nodes(FeishuCardPreview({card:{schema:'2.0',body:{elements:[data]}}}));
-    const button=tree.find(node=>node.type==='button'&&node.props['data-element-id']==='display-reminder')!;
+    const button=tree.find(node=>node.type==='button'&&node.props['data-element-id']===CARD_DISPLAY_REMINDER_EID)!;
     expect(button.props.style).toEqual({margin:'2px',width:cssWidth});
     expect(button.props['data-width']).toBe(width);
     expect(nodes(button).find(node=>node.props.className==='vcr-button-label')!.props.children).toBe('🔔 完成之后提醒我');
-    const sample=nodes(FeishuContentSample({node:data})).find(node=>node.type==='span'&&node.props['data-element-id']==='display-reminder')!;
+    const sample=nodes(FeishuContentSample({node:data})).find(node=>node.type==='span'&&node.props['data-element-id']===CARD_DISPLAY_REMINDER_EID)!;
     expect(sample.props.style.width).toBe(cssWidth);expect(sample.props['data-width']).toBe(width);
     expect(nodes(sample).find(node=>node.props.className==='vcr-button-label')!.props.children).toBe('🔔 完成之后提醒我');
   }
@@ -64,6 +65,6 @@ it('keeps reminder samples noninteractive and tags them for the same button-heig
   const sample=nodes(FeishuContentSample({node:{tag:'button',text:{tag:'plain_text',content:'🛎️ 完成后叫我'},behaviors:[{value:{a:'run.remind'}}]}}));
   expect(button.props['data-action']).toBe('run.remind');
   expect(sample.find(node=>node.type==='span'&&node.props['data-action']==='run.remind')!.props.onClick).toBeUndefined();
-  const requestedSample=nodes(FeishuContentSample({node:{tag:'button',element_id:'display-reminder',disabled:true,text:{tag:'plain_text',content:'🛎️ 完成后叫我'}}}));
-  expect(requestedSample.find(node=>node.type==='span'&&node.props['data-element-id']==='display-reminder')!.props.onClick).toBeUndefined();
+  const requestedSample=nodes(FeishuContentSample({node:{tag:'button',element_id:CARD_DISPLAY_REMINDER_EID,disabled:true,text:{tag:'plain_text',content:'🛎️ 完成后叫我'}}}));
+  expect(requestedSample.find(node=>node.type==='span'&&node.props['data-element-id']===CARD_DISPLAY_REMINDER_EID)!.props.onClick).toBeUndefined();
 });

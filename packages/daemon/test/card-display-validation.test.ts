@@ -27,3 +27,13 @@ it('rejects duplicate native IDs and oversized generated structures',()=>{
   expect(()=>assertCardDisplayRender({schema:'2.0',body:{elements:[{tag:'markdown',element_id:'answer'},{tag:'markdown',element_id:'answer'}]}})).toThrow('重复');
   expect(()=>assertCardDisplayRender({schema:'2.0',body:{elements:Array.from({length:201},()=>({tag:'markdown',content:'x'}))}})).toThrow('过多');
 });
+
+it.each(['display-reminder', '1answer', '', 'a'.repeat(21), 42])(
+  'rejects invalid CardKit element ID %j before persistence',
+  (elementId) => {
+    expect(() => assertCardDisplayRender({
+      schema:'2.0',
+      body:{elements:[{tag:'markdown', element_id:elementId}]},
+    })).toThrow('卡片组件 ID 格式无效');
+  },
+);

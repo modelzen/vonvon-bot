@@ -139,7 +139,7 @@
 .vcr-button[data-size="large"] { min-height: 36px; }
 .vcr-button { cursor: default; }
 .vcr-button[data-preview-component], .vcr-button[data-action="run.remind"] { cursor: pointer; }
-.vcr-button[data-action="run.remind"], .vcr-button[data-element-id="display-reminder"], .vcr-button:has(> .vcr-icon[data-token="stop-record_filled"]) { height:32px; min-height:32px; }
+.vcr-button[data-action="run.remind"], .vcr-button[data-element-id="display_reminder"], .vcr-button:has(> .vcr-icon[data-token="stop-record_filled"]) { height:32px; min-height:32px; }
 .vcr-button:disabled { cursor: default; opacity:.6; }
 .vcr-button:focus-visible, .vcr-panel-header:focus-visible { outline: 2px solid #3370ff; outline-offset: 2px; }
 .vcr-icon { display: inline-block; width: 16px; height: 16px; flex: none; }
