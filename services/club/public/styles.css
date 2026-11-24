@@ -567,33 +567,58 @@ code {
   line-height: 1.7;
 }
 
-/* Footer aligned with vonvon.cc */
+/* Footer aligned 1:1 with vonvon.cc */
 .foot {
   border-top: 1px solid var(--line);
   background: var(--bg);
-  padding: 32px 0 24px;
+  padding: 56px 0 32px;
 }
 
 .foot-in {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
-  gap: 16px 32px;
+  gap: 32px;
   flex-wrap: wrap;
 }
 
-.foot-statement {
+.foot-brand {
+  display: grid;
+  gap: 12px;
+}
+
+.foot-brand img {
+  width: 96px;
+  height: 96px;
+  display: block;
+  mix-blend-mode: multiply;
+}
+
+.foot-brand p {
   margin: 0;
-  font-size: 13px;
-  color: var(--ink-3);
-  line-height: 1.6;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.5;
+}
+
+.foot-brand .foot-contact {
+  color: var(--ink-2);
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.foot-contact a:hover {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .foot-links {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 20px;
-  font-size: 13.5px;
+  gap: 4px 22px;
+  font-size: 14px;
   color: var(--ink-2);
 }
 
@@ -607,8 +632,8 @@ code {
   display: flex;
   flex-wrap: wrap;
   gap: 6px 20px;
-  margin-top: 18px;
-  padding-top: 16px;
+  margin-top: 36px;
+  padding-top: 20px;
   border-top: 1px solid var(--line-2);
   color: var(--ink-3);
   font-size: 12px;
