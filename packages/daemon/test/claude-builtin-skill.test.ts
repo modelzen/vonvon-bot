@@ -58,7 +58,7 @@ it.each([['qa', undefined], ['write', undefined], ['full', undefined], ['qa', { 
       expect(options.plugins).toEqual([{ type: 'local', path: PACKAGE, skipMcpDiscovery: true }]);
       expect(options.settings).toMatchObject({ ...AUTO_COMPACT_SETTINGS, enabledPlugins: { 'vonvon@inline': true } });
       if (native) expect(options.settings).toHaveProperty('plansDirectory');
-      expect(options.skills).toEqual(['own-skill', 'vonvon:vonvon-schedule', 'vonvon:vonvon-feishu', 'vonvon:vonvon-config']);
+      expect(options.skills).toEqual(['own-skill', 'vonvon:vonvon-schedule', 'vonvon:vonvon-feishu', 'vonvon:vonvon-config', 'vonvon:vonvon-template']);
     }
   });
 

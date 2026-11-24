@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Vonvon 灵感 Club · 飞书 AI 同事配方社区</title>
+  <meta name="description" content="发现和分享好用的 Vonvon Bot 飞书 AI 同事配方。点击卡片直达创作者公开飞书文档，在飞书私聊里一句话创建你的专属 Bot 群。">
+  <meta name="theme-color" content="#ffffff">
+  <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="stylesheet" href="/styles.css?v=3">
+</head>
+<body>
+  <header class="nav">
+    <div class="nav-in">
+      <a class="nav-brand" href="/" aria-label="Vonvon 灵感 Club 首页">
+        <img src="/logo-224.webp" width="30" height="30" alt="Vonvon Bot 戴帽子的小猫 logo">
+        <span class="nav-brand-text">
+          <span class="nav-brand-title">Vonvon 灵感 Club</span>
+        </span>
+      </a>
+
+      <nav class="nav-links" aria-label="页面导航">
+        <a href="https://vonvon.cc/" target="_blank" rel="noopener noreferrer">官网</a>
+        <a href="https://vonvon.cc/docs/" target="_blank" rel="noopener noreferrer">文档</a>
+        <a href="https://vonvon.cc/get/" target="_blank" rel="noopener noreferrer">下载</a>
+      </nav>
+
+      <div class="nav-cta">
+        <button class="btn btn-primary btn-sm" id="open-create-btn" type="button">+ 创作我的配方</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap main">
+    <section class="toolbar hidden" id="toolbar" aria-label="搜索与排序">
+      <div class="search-wrap">
+        <svg class="search-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <circle cx="9" cy="9" r="6" stroke="currentColor" stroke-width="1.6"/>
+          <path d="M13.5 13.5L17 17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+        <input id="search-input" class="search-input" type="search" placeholder="搜索配方名称、简介或作者…" autocomplete="off">
+      </div>
+
+      <div class="sort-tabs" role="tablist" aria-label="排序方式">
+        <button class="sort-tab active" data-sort="hot" role="tab" aria-selected="true" type="button">热门</button>
+        <button class="sort-tab" data-sort="new" role="tab" aria-selected="false" type="button">最新</button>
+      </div>
+    </section>
+
+    <section class="grid" id="card-grid" aria-live="polite"></section>
+
+    <section class="empty-state hidden" id="empty-state">
+      <img class="empty-mascot" src="/logo-224.webp" width="64" height="64" alt="Vonvon Bot 小猫">
+      <h1 class="empty-title" id="empty-title">还没有公开配方</h1>
+      <p class="empty-desc" id="empty-desc">成为第一位创作者：把你的好玩法整理成配方和公开飞书文档，分享给更多飞书玩家。</p>
+      <button class="btn btn-primary" id="empty-create-btn" type="button">+ 创作第一个配方</button>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <div class="wrap foot-in">
+      <div class="foot-brand">
+        <p class="foot-statement">Vonvon 灵感 Club 仅展示创作者公开的飞书宣传文档与匿名安装计数，不托管配方正文与 Skill 代码。</p>
+      </div>
+      <nav class="foot-links" aria-label="页脚">
+        <a href="https://vonvon.cc/" target="_blank" rel="noopener noreferrer">官网</a>
+        <a href="https://vonvon.cc/get/" target="_blank" rel="noopener noreferrer">下载</a>
+        <a href="https://vonvon.cc/docs/" target="_blank" rel="noopener noreferrer">文档</a>
+        <a href="https://vonvon.cc/changelog/" target="_blank" rel="noopener noreferrer">更新日志</a>
+        <a href="https://github.com/modelzen/vonvon-bot/issues" target="_blank" rel="noopener noreferrer">反馈与建议</a>
+      </nav>
+    </div>
+    <div class="wrap foot-base">
+      <span>© 2026 modelzen</span>
+      <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">浙ICP备2026050514号</a>
+    </div>
+  </footer>
+
+  <div class="modal-backdrop hidden" id="create-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="modal-title">创作并分享你的 Bot 配方</h2>
+        <button class="modal-close" id="close-modal-btn" type="button" aria-label="关闭">✕</button>
+      </div>
+      <p class="modal-lead">不用写配置文件，也不用懂 Git。复制下面这句话发给你的 <strong>Vonvon Bot 私聊</strong>，Bot 会一步步带你整理并打包：</p>
+
+      <div class="copy-box">
+        <code id="create-prompt-text">帮我创作一个配方</code>
+        <button class="btn btn-primary btn-sm" id="copy-prompt-btn" type="button">一键复制</button>
+      </div>
+
+      <ol class="modal-steps">
+        <li><strong>丢给 Bot 任意素材</strong>：一个你调顺手的飞书群、一篇干货帖子、一份飞书文档，或者直接口述你的想法。</li>
+        <li><strong>配一篇公开飞书宣传文档</strong>：把文档右上角分享权限设为「互联网上获得链接的人可阅读」（顺手加张封面图更好看），并在文档里写清楚获取方式或联系方式。</li>
+        <li><strong>自由分发与曝光</strong>：选择「公开宣传」只展示你的飞书文档链接，<strong>绝不上传你的 Skill 或正文</strong>——开源分享或自行分发 <code>.vonvon.zip</code> 都由你决定。</li>
+      </ol>
+
+      <div class="modal-foot">
+        <span>还没有安装 Vonvon Bot？</span>
+        <a class="btn btn-line btn-sm" href="https://vonvon.cc/get/" target="_blank" rel="noopener noreferrer">免费下载桌面端 / 服务端 →</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="/app.js?v=3" defer></script>
+</body>
+</html>
