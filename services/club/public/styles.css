@@ -115,7 +115,7 @@ code {
 .nav-in {
   display: flex;
   align-items: center;
-  gap: 24px;
+  gap: 16px;
   height: 100%;
   max-width: calc(var(--wrap) + var(--gutter) * 2);
   margin: 0 auto;
@@ -127,6 +127,7 @@ code {
   align-items: center;
   gap: 10px;
   flex: none;
+  margin-right: auto;
 }
 
 .nav-brand img {
@@ -164,7 +165,6 @@ code {
 }
 
 .nav-cta {
-  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 10px;
