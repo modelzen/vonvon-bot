@@ -26,7 +26,7 @@ const providerOf = (backend: string) => {
   const label = backendLabel(backend);
   return {
     provider: label === backend ? `${label}（暂不支持修改）` : label,
-    icon: backend === 'codex-appserver' ? './agent-icons/terminal.png' : backend === 'claude-agent' ? './agent-icons/code.png' : undefined,
+    icon: backend === 'codex-appserver' ? './agent-icons/codex-light.png' : backend === 'claude-agent' ? './agent-icons/claude-code.svg' : undefined,
   };
 };
 

@@ -21,7 +21,7 @@ const selector = (props = providerProps) => nodes(ModelAccessFields(props)).find
 it('keeps a single available Provider in the original segmented control with its icon', () => {
   const html = render(createElement(ModelAccessFields, providerProps));
   expect(html).toContain('role="radiogroup"');
-  expect(html).toContain('src="./agent-icons/terminal.png"');
+  expect(html).toContain('src="./agent-icons/codex-light.png"');
   expect(html).toContain('type="radio"');
   expect(html).toContain('>Codex</span>');
   expect(selector().props.options).toEqual([{value: 'codex-appserver', label: 'Codex', disabled: false}]);
@@ -33,8 +33,8 @@ it('offers available Providers and clears dependent choices only for a valid dif
   expect(control.props.options.map((item: {value: string}) => item.value)).toEqual(['codex-appserver', 'claude-agent']);
   const html = render(createElement(ModelAccessFields, {...providerProps, providers: [...providerProps.providers, {id: 'claude-agent', displayName: 'Claude'}]}));
   expect(html).toContain('role="radiogroup"');
-  expect(html).toContain('src="./agent-icons/terminal.png"');
-  expect(html).toContain('src="./agent-icons/code.png"');
+  expect(html).toContain('src="./agent-icons/codex-light.png"');
+  expect(html).toContain('src="./agent-icons/claude-code.svg"');
   control.props.onChange('codex-appserver'); control.props.onChange('unknown-provider');
   expect(changed).not.toHaveBeenCalled();
   control.props.onChange('claude-agent');

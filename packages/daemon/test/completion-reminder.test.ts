@@ -273,19 +273,19 @@ describe('smart completion reminders (s27b3)', () => {
   const modes = ['manual', 'long', 'failures', 'always'] as const;
   const outcomes = ['done', 'error', 'idle_timeout', 'interrupted'] as const;
   for (const mode of modes) {
-    it.each(outcomes.flatMap(outcome => [false, true].map(manuallyRequested => ({ outcome, manuallyRequested }))))(`${mode}: only human errors and timeouts bypass policy ($outcome, requested=$manuallyRequested)`, async ({ outcome, manuallyRequested }) => {
+    it.each(outcomes.flatMap(outcome => [false, true].map(manuallyRequested => ({ outcome, manuallyRequested }))))(`${mode}: human failure and manual opt-in policy ($outcome, requested=$manuallyRequested)`, async ({ outcome, manuallyRequested }) => {
       const { channel, reply } = replyChannel();
       const info = vi.spyOn(log, 'info').mockImplementation(() => undefined);
       try {
         const input = { smart: true as const, requesterKind: 'user' as const, requesterOpenId: 'ou_owner', cardMsgId: 'om_smart', outcome, requestedAt: 0, manuallyRequested, cardUpdated: true, replyInThread: true };
-        const expected = outcome === 'error' || outcome === 'idle_timeout';
+        const expected = outcome === 'error' || outcome === 'idle_timeout' || (outcome === 'done' && mode === 'manual' && manuallyRequested);
         expect(await sendCompletionReminderReply({ channel, cfg: config(mode), dedupe: dedupe(), now: () => 300_000 }, input)).toBe(expected ? 'sent' : 'skipped');
         expect(reply).toHaveBeenCalledTimes(expected ? 1 : 0);
         if (expected) {
           expect(reply.mock.calls[0]?.[0]).toMatchObject({ path: { message_id: 'om_smart' }, data: { msg_type: 'post', reply_in_thread: true } });
           const content = JSON.parse(reply.mock.calls[0]![0].data.content);
           expect(content.zh_cn.content[0][0]).toEqual({ tag: 'at', user_id: 'ou_owner' });
-          expect(content.zh_cn.content[0][1].text).toContain(outcome === 'error' ? '执行失败' : '响应超时');
+          expect(content.zh_cn.content[0][1].text).toContain(outcome === 'done' ? '已完成' : outcome === 'error' ? '执行失败' : '响应超时');
           expect(info).toHaveBeenCalledWith('card', 'completion-reminder', expect.objectContaining({ smart: true }));
         }
       } finally { info.mockRestore(); }
@@ -321,12 +321,14 @@ describe('smart completion reminders (s27b3)', () => {
     } finally { fail.mockRestore(); }
   });
 
-  it('offers the manual button only for an ordinary run outside smart groups', () => {
+  it('offers the manual button for an ordinary human run in either group mode', () => {
     const run = { runLoop: true as const, requesterKind: 'user' as const };
     expect(reminderButtonOffered(config('manual'), run)).toBe(true);
-    expect(reminderButtonOffered(config('manual'), { ...run, smart: true })).toBe(false);
+    expect(reminderButtonOffered(config('manual'), { ...run, smart: true })).toBe(true);
+    expect(reminderButtonOffered(config('manual'), { ...run, smart: true, directMessage: true })).toBe(false);
+    expect(reminderButtonOffered(config('manual'), { ...run, smart: true, requesterKind: 'unknown' })).toBe(false);
     expect(reminderButtonOffered(config('manual'), { ...run, requesterKind: 'bot', smart: false })).toBe(false);
-    for (const mode of ['long', 'failures', 'always'] as const) expect(reminderButtonOffered(config(mode), run)).toBe(false);
+    for (const mode of ['long', 'failures', 'always'] as const) expect(reminderButtonOffered(config(mode), { ...run, smart: true })).toBe(false);
   });
 
   it('never offers subscriptions for maintenance, goal preparation or between-turn compaction', () => {

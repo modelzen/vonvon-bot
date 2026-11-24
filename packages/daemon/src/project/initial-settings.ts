@@ -97,7 +97,7 @@ export async function prepareNewGroupSettings(input:{backend:string; kind:Sessio
   return {
     modelAccess,
     skills:{disabledPaths:[]},
-    presentation:{voiceEnabled:true,showToolCalls:true,showModel:'running',cardDisplay:null,completionMode:'manual',longTaskMinutes:5},
+    presentation:{voiceEnabled:true,showToolCalls:true,showModel:'running',cardDisplay:null,completionMode:'failures',longTaskMinutes:5},
     smartRules:{...DEFAULT_SMART_RULES},
     judge:judge.kind === 'decision' ? judge : {kind:'llm',backend:judge.backend,model:judge.model,...(judge.effort ? {effort:judge.effort}:{}),...(judge.custom ? {custom:true as const}:{})},
   };
