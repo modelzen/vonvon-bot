@@ -7,7 +7,7 @@
   <meta name="description" content="发现和分享好用的 Vonvon Bot 飞书 AI 同事配方。点击卡片直达创作者公开飞书文档，在飞书私聊里一句话创建你的专属 Bot 群。">
   <meta name="theme-color" content="#ffffff">
   <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
-  <link rel="stylesheet" href="/styles.css?v=4">
+  <link rel="stylesheet" href="/styles.css?v=5">
 </head>
 <body>
   <header class="nav">
@@ -79,28 +79,35 @@
   <div class="modal-backdrop hidden" id="create-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <div class="modal-card">
       <div class="modal-head">
-        <h2 id="modal-title">创作并分享你的 Bot 配方</h2>
+        <h2 id="modal-title">把你的好玩法变成可复用的配方</h2>
         <button class="modal-close" id="close-modal-btn" type="button" aria-label="关闭">✕</button>
       </div>
-      <p class="modal-lead">不用写配置文件，也不用懂 Git，按下面几步就能把你的好玩法变成可分享的配方：</p>
+      <p class="modal-lead">不用写配置文件，也不用懂 Git。只要你手头有下面任意一种积累，都能直接整理成配方分享给更多人：</p>
+
+      <div class="scene-list" aria-label="适合创作配方的常见场景">
+        <span class="scene-item">跑顺手的常用项目或飞书群</span>
+        <span class="scene-item">已经调教好的 Bot 角色</span>
+        <span class="scene-item">攒下来的一组顺手 Skills</span>
+        <span class="scene-item">现成教程、文档或工作流点子</span>
+      </div>
 
       <ol class="modal-steps">
         <li>
-          <strong>先安装并连接 Vonvon Bot</strong><span class="step-note">（已安装可跳过）</span>：先下载桌面端或服务端并绑定你的飞书 Bot。
+          <strong>先安装并连接 Vonvon Bot</strong><span class="step-note">（已安装可跳过）</span>：下载桌面端或服务端，连上你的飞书 Bot。
           <div class="step-action">
             <a class="btn btn-line btn-sm" href="https://vonvon.cc/get/" target="_blank" rel="noopener noreferrer">免费下载 Vonvon Bot →</a>
           </div>
         </li>
         <li>
-          <strong>在飞书私聊发给你的 Bot</strong>：复制下面这句话发给它，然后把调顺手的飞书群、文档或想法直接丢给它，Bot 会带你整理并打包：
+          <strong>发给你的飞书 Bot 私聊，剩下的交给它引导</strong>：复制下面这句话发给它，把项目、群、Skills 或想法直接丢给它，它会一步步带你整理、配好飞书宣传页并打包：
           <div class="copy-box">
             <code id="create-prompt-text">帮我创作一个配方</code>
             <button class="btn btn-primary btn-sm" id="copy-prompt-btn" type="button">一键复制</button>
           </div>
         </li>
-        <li><strong>配一篇公开飞书宣传文档</strong>：把文档右上角「分享」权限设为「互联网上获得链接的人可阅读」（顺手加张封面图更好看），并在文档里写清介绍与获取方式。</li>
-        <li><strong>自由分发与免费曝光</strong>：选择「公开宣传」只展示你的飞书文档链接与封面，<strong>绝不上传你的 Skill 或正文</strong>——免费分享或自行分发 <code>.vonvon.zip</code> 都由你决定。</li>
       </ol>
+
+      <p class="modal-note">公开宣传仅展示你的飞书宣传文档链接与封面，<strong>绝不上传你的 Skill 或配方正文</strong>。</p>
     </div>
   </div>
 
