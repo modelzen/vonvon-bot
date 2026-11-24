@@ -1,4 +1,9 @@
-.join-directory-context{font-size:12px;color:var(--color-text-secondary);margin:0 0 16px}
+.join-directory-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px}
+.join-directory-context{font-size:12px;color:var(--color-text-secondary);margin:0}
+.join-directory-hidden-toggle{display:inline-flex;align-items:center;gap:5px;min-height:26px;padding:2px 8px;border:1px solid var(--color-border);border-radius:6px;background:var(--color-surface);color:var(--color-text-secondary);font:inherit;font-size:11.5px;cursor:pointer;flex-shrink:0}
+.join-directory-hidden-toggle[aria-pressed=true]{border-color:color-mix(in srgb,var(--color-accent,#2864dc) 28%,var(--color-border));background:color-mix(in srgb,var(--color-accent,#2864dc) 7%,transparent);color:var(--color-text)}
+.join-directory-hidden-toggle:disabled{opacity:.45;cursor:default}
+.join-directory-hidden-toggle:focus-visible{outline:2px solid var(--color-accent,#2864dc);outline-offset:2px}
 .join-directory-input{display:flex;gap:8px;align-items:center;padding:0 10px;border:1px solid var(--color-border);border-radius:8px;background:var(--color-surface)}
 .join-directory-input:focus-within{border-color:var(--color-accent,#2864dc);box-shadow:0 0 0 2px color-mix(in srgb,var(--color-accent,#2864dc) 12%,transparent)}
 .join-directory-input>svg{color:var(--color-text-secondary);flex-shrink:0}
@@ -7,6 +12,8 @@
 .join-directory-results{height:292px;max-height:45vh;overflow:auto;margin-top:12px;scroll-padding:8px}
 .join-directory-option{display:flex;align-items:center;gap:4px;border-radius:7px;padding-right:5px}
 .join-directory-option[aria-selected=true]{background:var(--color-surface-muted)}
+.join-directory-option[data-hidden] .join-directory-select>svg{opacity:.55}
+.join-directory-option[data-hidden] .join-directory-select strong{color:var(--color-text-secondary)}
 .join-directory-select{display:flex;gap:10px;align-items:center;width:100%;min-width:0;text-align:left;padding:10px;background:transparent;border:0;cursor:pointer;color:var(--color-text)}
 .join-directory-select:disabled{cursor:wait}
 .join-directory-select>svg{color:var(--color-text-secondary);flex-shrink:0}

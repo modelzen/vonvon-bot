@@ -43,6 +43,12 @@ export function groupTabForSection(section?: string): GroupDesignTab {
     case '模型与权限':
     case '可用模型': return 'model';
     case '权限':
+    case '工作区':
+    case '工作目录':
+    case '目录':
+    case '主目录':
+    case '更换目录':
+    case '添加目录':
     case '工作目录权限':
     case '能挡到什么':
     case '高级设置': return 'model';
@@ -69,7 +75,7 @@ type Props = {member: Membership; agent: Agent; group: Group; snapshot: DesktopS
 // Intent: configure one Bot within one group, without exposing session management as navigation.
 // Hierarchy: target first, Bot/project scope next, then compact settings pages. System type
 // share Today's 4px spacing rhythm; history/help stay visible, and the group name opens Feishu.
-export function GroupWorkspace({member, agent, group, snapshot, dmMode, initialTab, focusNew, newMemoryCount, revealHistory, onTabChange, onBot, onBotProfile, onOpenTools, onOpenProviders, onOpenSecrets, onChanged}: Props) {
+export function GroupWorkspace({member, agent, group, snapshot, dmMode, initialTab, focusNew, newMemoryCount, revealHistory, onTabChange, onBot, onBotProfile, onProject, onOpenTools, onOpenProviders, onOpenSecrets, onChanged}: Props) {
   const client = useClient();
   const shell = useShellCapabilities();
   const where = useActiveDevice();
@@ -117,7 +123,7 @@ export function GroupWorkspace({member, agent, group, snapshot, dmMode, initialT
       setProject(reply.project);
     }).catch(error => {if (active) setError(error instanceof Error ? error.message : '无法读取群状态。');});
     return () => {active = false;};
-  }, [client, member.id, member.name, agent.running]);
+  }, [client, member.id, member.name, member.directory, agent.running]);
   const sameProject = (other: ProjectRecord) => project && ['name','chatId','cwd','kind','backend','enabled'].every(key => other[key as keyof ProjectRecord] === project[key as keyof ProjectRecord]);
   async function update(change: {enabled?: boolean; conversation?: Conversation; project?: ProjectId}, remove = false) {
     if (!project || saving.current || !running.current) return false;
@@ -188,7 +194,7 @@ export function GroupWorkspace({member, agent, group, snapshot, dmMode, initialT
     {tab === 'memory' ? <section id={settingAnchor('记忆')} aria-label="记忆">
       {dmMode ? <DmMemory key={member.id} agent={agent} revision={snapshot.revision} onBotProfile={() => guard.navigate(onBotProfile)}/> : memberProject ? <ProjectMemoryMap key={memberProject.id} focusNew={focusNew} groupsInitiallyOpen={false} initialRoleMembershipId={initialTab === 'role' ? member.id : undefined} selectedAgentId={member.agentId} selectedGroupId={member.groupId} onBotProfile={() => guard.navigate(onBotProfile)} project={memberProject} snapshot={snapshot} onMembership={id => {const target = snapshot.memberships.find(item => item.id === id); if (target) guard.navigate(() => onBot(target));}}/> : <p className="group-control-note">这个群的项目记忆暂不可用。</p>}
     </section> : tab === 'schedule' ? <ScheduleTab key={member.id} botId={member.agentId} {...dmMode ? {dm: true} : {chatId: member.groupId}} deviceTitle={deviceTitle(snapshot.application.platform)}/>
-    : <GroupDesignSettings key={member.id} refreshVersion={version} dm={dmMode} scope={{kind:'project',botId:member.agentId,projectName:dmMode ? member.groupId : member.name}} tab={tab} tools={snapshot.tools} agent={agent} botName={agent.name} groupName={group.name} onOpenTools={onOpenTools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets} responseHeader={dmMode ? undefined : conversationControl}/>}
+    : <GroupDesignSettings key={member.id} refreshVersion={version} dm={dmMode} scope={{kind:'project',botId:member.agentId,projectName:dmMode ? member.groupId : member.name}} tab={tab} tools={snapshot.tools} agent={agent} member={dmMode ? undefined : member} snapshot={snapshot} botName={agent.name} groupName={group.name} onChanged={onChanged} onProject={!dmMode && onProject ? id => guard.navigate(() => onProject(id)) : undefined} onOpenTools={onOpenTools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets} responseHeader={dmMode ? undefined : conversationControl}/>}
     <Dialog open={dialog === 'history'} title={<span className="conversation-dialog-title">对话记录</span>} description={`${group.name} · ${agent.name}`} onClose={() => setDialog(null)}><div id={settingAnchor("会话管理")}>{agent.running ? <ConversationPanel agentId={agent.id} groupId={group.id} projectName={member.name} conversation={conversation} request={client.collaboration}/> : <p>Bot 运行后可查看对话记录。</p>}</div></Dialog>
     <Dialog open={dialog === 'help'} title="在群里使用" onClose={() => setDialog(null)}><GroupUsage conversation={conversation} botName={agent.name}/></Dialog>
     <ConfirmDialog open={dialog === 'remove'} title="解除这个群的绑定？" confirmLabel="解除绑定" tone="danger" pending={busy} onCancel={() => setDialog(null)} onConfirm={() => {setDialog(null); void update({},true);}} description={`解除 ${agent.name} 与「${group.name}」的关联。Bot 加入的群会退出；Bot 创建的群会尝试转交群主。${whereName(where)}上的目录和文件保留。`}/>

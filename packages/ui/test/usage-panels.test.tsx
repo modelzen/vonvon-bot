@@ -209,6 +209,6 @@ describe('此刻 page', () => {
   it('puts usage above 群动态', () => {
     const web = home();
     expect(web.indexOf('aria-label="用量"')).toBeLessThan(web.indexOf('aria-label="群动态"'));
-    expect(web).toContain('./agent-icons/decision.png');
+    expect(web).toContain('./agent-icons/typesafe.png');
   });
 });

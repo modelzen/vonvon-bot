@@ -16,7 +16,7 @@ export type CollaborationRoute =
   | {kind: 'list'; view: CollaborationView}
   | {kind: 'agent'; id: AgentId; pane: AgentPane}
   | {kind: 'group'; id: GroupId}
-  | {kind: 'project'; id: ProjectId; pane: ProjectPane}
+  | {kind: 'project'; id: ProjectId; pane: ProjectPane; from?: {route: CollaborationRoute; label: string}}
   | {kind: 'membership'; id: MembershipId; pane: MembershipPane; parent: MembershipParent}
   /** A Bot's private chat: the same workspace as a group, with no group behind it. `from`: the Bot page's tab it was opened from. */
   | {kind: 'dm'; agentId: AgentId; tab: GroupDesignTab; from?: AgentPane};
@@ -84,6 +84,7 @@ export function openDm(agentId: AgentId, tab: GroupDesignTab = 'model', from?: A
 export function routeBack(route: CollaborationRoute): CollaborationRoute {
   if (route.kind === 'membership') return route.parent;
   if (route.kind === 'dm') return {kind: 'agent', id: route.agentId, pane: route.from ?? {kind: 'groups'}};
+  if (route.kind === 'project' && route.from) return route.from.route;
   if (route.kind === 'list') return route;
   return {kind: 'list', view: routeView(route)};
 }

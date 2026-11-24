@@ -22,7 +22,8 @@ type Fn = Mock<(...args: any[]) => any>;
 export const fake: {
   project: Record<string, unknown> | undefined; topicGroup: boolean;
   backend: { capabilities: { steer: boolean }; id: string; listModels: Fn; resumeThread: Fn; startThread: Fn };
-  createCard: Fn; stream: Fn; final: Fn; send: Fn; reply: Fn; topicList: Fn; messageGet: Fn; chatGet: Fn; getSession: Fn; listSessions: Fn; upsertSession: Fn;
+  createCard: Fn; stream: Fn; final: Fn; send: Fn; reply: Fn; fileCreate: Fn; topicList: Fn; messageGet: Fn; chatGet: Fn; getSession: Fn; listSessions: Fn; upsertSession: Fn;
+  finalizedByCard: Map<string, unknown>;
   log: { info: Fn; warn: Fn; fail: Fn };
   run?: (job: ScheduledJob) => Promise<ScheduledOutcome>;
   /** The context update every turn carries (planTurnUpdate's text); none by default. */
@@ -36,6 +37,8 @@ export const fake: {
   stream: vi.fn(),
   send: vi.fn(async (..._args: unknown[]) => ({ messageId: 'root' })),
   reply: vi.fn(async (..._args: unknown[]) => ({ code: 0, data: {} })),
+  fileCreate: vi.fn(async (..._args: unknown[]) => ({ file_key: 'file_key_mock' })),
+  finalizedByCard: new Map(),
   messageGet: vi.fn(),
   chatGet: vi.fn(),
   topicList: vi.fn(async (..._args: unknown[]) => ({ code: 0, data: { items: [{ message_id: 'anchor', chat_id: 'chat', thread_id: 'topic-old' }] } })),
@@ -66,15 +69,26 @@ vi.mock('../../src/bot/session-title-coordinator', () => ({
 }));
 vi.mock('../../src/card/run-card-stream', () => ({
   RunCardStream: class {
-    create = fake.createCard;
-    getCardId() { return 'card_entity'; }
+    private msgId = '';
+    async create(...args: unknown[]) {
+      const id = await fake.createCard.apply(this, args);
+      this.msgId = String(id ?? '');
+      return id;
+    }
+    getCardId() { return this.msgId ? `entity_${this.msgId}` : 'card_entity'; }
     async updateElement() { return true; }
     streamCoalesced = fake.stream;
     async drain() {}
     setImageWorker() {}
     async settleImages() { return new Map(); }
-    updateCard = fake.final;
-    finalizeCard = fake.final;
+    async updateCard(...args: unknown[]) {
+      if (this.msgId) fake.finalizedByCard.set(this.msgId, args[1]);
+      return fake.final.apply(this, args);
+    }
+    async finalizeCard(...args: unknown[]) {
+      if (this.msgId) fake.finalizedByCard.set(this.msgId, args[1]);
+      return fake.final.apply(this, args);
+    }
     stats() { return { pushCount: 0, cardPushes: 0, elPushes: 0, totalRttMs: 0, maxRttMs: 0 }; }
   },
 }));
@@ -175,6 +189,9 @@ export async function setup(kind: 'single' | 'multi' | 'smart', opts: { entries?
   fake.createCard.mockResolvedValue('card');
   fake.final.mockResolvedValue(true);
   fake.send.mockResolvedValue({ messageId: 'root' });
+  fake.reply.mockResolvedValue({ code: 0, data: {} });
+  fake.fileCreate.mockReset().mockResolvedValue({ file_key: 'file_key_mock' });
+  fake.finalizedByCard.clear();
   fake.messageGet.mockReset().mockResolvedValue({ data: { items: [{ thread_id: 'topic-new' }] } });
   fake.listSessions.mockReset().mockResolvedValue([]);
   fake.chatGet.mockReset().mockImplementation(async () => ({ code: 0, data: { chat_mode: fake.topicGroup ? 'topic' : 'group' } }));
@@ -182,6 +199,7 @@ export async function setup(kind: 'single' | 'multi' | 'smart', opts: { entries?
   const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: 'steer', access: { ownerOpenId: 'owner', admins: ['owner'] }, ...opts.preferences } };
   const channel = { send: fake.send, rawClient: { im: { v1: {
     message: { get: fake.messageGet, list: fake.topicList, reply: fake.reply },
+    file: { create: fake.fileCreate },
     chat: { get: fake.chatGet },
     messageReaction: { create: vi.fn(async () => ({ data: {} })), delete: async () => ({}) },
   } } } };

@@ -1,7 +1,7 @@
 import {useCallback, useContext, useEffect, useRef, useState, type ReactNode} from 'react';
 import {DEFAULT_DM_SMART_RULES_TEXT, smartRulesText} from '@vonvon/protocol';
 import {Blocks, ChevronRight, Folder, GitBranch, Plus, RefreshCw, Search, X} from 'lucide-react';
-import {backendLabel, isKnownJudgeSelection, type Agent, type AgentId, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ProjectSettingsView, type SettingsReply, type ToolState} from '@vonvon/protocol';
+import {backendLabel, isKnownJudgeSelection, type Agent, type AgentId, type DecisionModelsView, type DesktopSnapshot, type JudgeSelectionView, type Membership, type ModelCatalog, type ProjectId, type ProjectSettingsView, type SettingsReply, type ToolState} from '@vonvon/protocol';
 import {useActiveDevice, useClient} from '../client-context';
 import {settingAnchor} from '../search';
 import {onDevice, updateServerText, whereName} from '../device-copy';
@@ -25,6 +25,7 @@ import {useDecisionCatalogs} from './useDecisionCatalogs';
 import './group-design-settings.css';
 import {BotAdministrators} from '../management/AdministratorsPanel';
 import {CardDisplayEntry} from './card-display/CardDisplayStudio';
+import {GroupWorkspaceSection} from './GroupWorkspaceSection';
 
 /** 模型与权限 shares one settings view; permission remains a compatible internal section key. */
 export type GroupSettingsTab = 'capabilities' | 'role' | 'model' | 'response' | 'permission';
@@ -39,8 +40,12 @@ type Props = {
   tab: GroupSettingsTab;
   tools?: readonly ToolState[];
   agent?: Agent;
+  member?: Membership;
+  snapshot?: DesktopSnapshot;
   botName?: string;
   groupName?: string;
+  onChanged?: () => Promise<void>;
+  onProject?: (id: ProjectId) => void;
   onOpenTools?: () => void;
   onOpenProviders?: () => void;
   onOpenSecrets?: (provider?: string) => void;
@@ -63,7 +68,7 @@ function providerChoices(providers: Provider[], current: string) {
   return [...providers.map(provider => ({value: provider.id, label: provider.displayName, disabled: false})), ...(!providers.some(provider => provider.id === current) && current ? [{value: current, label: `${backendLabel(current)}（当前不可用）`, disabled: true}] : [])];
 }
 function providerIcon(backend: string) {
-  const path = backend === 'codex-appserver' ? './agent-icons/terminal.png' : backend === 'claude-agent' ? './agent-icons/code.png' : undefined;
+  const path = backend === 'codex-appserver' ? './agent-icons/codex-light.png' : backend === 'claude-agent' ? './agent-icons/claude-code.svg' : undefined;
   return path ? <img src={path} className={backend === 'codex-appserver' ? 'gd-provider-icon--codex' : undefined} alt="" width={16} height={16}/> : <Blocks size={16} aria-hidden="true"/>;
 }
 export function GroupDesignSettings(props: Props) {
@@ -128,7 +133,7 @@ function DmConversation({section, save}: {section: NonNullable<GroupSections['co
   </section></div>;
 }
 
-export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, onOpenProviders, onOpenSecrets, responseHeader, dm, agent, botName, groupName}: Omit<Props, 'scope'> & {view: ProjectSettingsView; refresh: () => Promise<void>}) {
+export function GroupSettingsContent({view, refresh, tab, tools, member, snapshot, onChanged, onProject, onOpenTools, onOpenProviders, onOpenSecrets, responseHeader, dm, agent, botName, groupName}: Omit<Props, 'scope'> & {view: ProjectSettingsView; refresh: () => Promise<void>}) {
   const client = useClient();
   const where = useActiveDevice();
   const discovery = useProviderDiscovery(tools);
@@ -149,7 +154,7 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
     return reply;
   }
   const relevant: (Section<unknown> | undefined)[] = tab === 'capabilities' ? [sections.skills, ...(dm ? [] : [sections.presentation])]
-    : tab === 'role' ? [sections.role] : tab === 'model' ? [sections.modelAccess, ...(dm ? [] : [sections.permission])]
+    : tab === 'role' ? [sections.role] : tab === 'model' ? [sections.modelAccess, ...(dm ? [] : [sections.permission, sections.workspace])]
     : tab === 'permission' ? [sections.permission]
     : dm ? [sections.conversation, ...(view.identity.kind === 'smart' ? [sections.smartRules, sections.judge] : [])]
     : [...(view.identity.kind !== 'smart' ? [sections.response] : []), ...(view.identity.backend !== 'claude-agent' ? [sections.run] : []), sections.permission, sections.presentation, ...(view.identity.kind === 'smart' ? [sections.judge, sections.smartRules] : [])];
@@ -186,6 +191,7 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
           onOpenProviders={onOpenProviders} dm={dm} permissionName={dm ? undefined : sections.permission.stored.options.tiers.find(tier => tier.tier === sections.permission.stored.mode)?.name} savedBackend={view.identity.backend}/>}
         validate={value => providers.some(provider => provider.id === value.backend) ? modelAccessProblem(value, modelCatalog.current) : `这个 Provider 现在不可用，先${onDevice(where, '安装')}并配置好。`}/> : <MissingSection/>)}
       {(tab === 'model' || tab === 'permission') && (dm ? <DmFixedSettings view={view}/> : <ProjectPanel view={view} refresh={refresh} partition="permission" independent/>)}
+      {tab === 'model' && !dm && <GroupWorkspaceSection key={`${view.scope.botId}:${view.scope.projectName}`} view={view} member={member} snapshot={snapshot} onRefresh={refresh} onChanged={onChanged} onProject={onProject}/>}
       {tab === 'response' && <>
         <section className="gd-conversation-section" aria-label="聊天方式">
         {typeof responseHeader === 'function' ? responseHeader(!dm && view.identity.kind !== 'smart' ? <div className="group-no-mention"><ProjectPanel view={view} refresh={refresh} partition="response" independent hideJudge/></div> : null) : responseHeader}
@@ -282,16 +288,17 @@ export function WorkspaceFields({value, onChange, disabled}: {value: Workspace; 
       if (choices?.length) onChange({...value, [field]: [...new Set([...value[field], ...choices.map(choice => choice.displayPath)])]});
     } catch (failure) {setError(failText(failure));} finally {setPicking(false);}
   }
+  const fields: readonly ('directories' | 'repositories')[] = value.repositories.length > 0 ? ['directories', 'repositories'] : ['directories'];
   return <>
-    {(['directories', 'repositories'] as const).map(field => <div className="gd-workspace-section" key={field}>
-      <div className="gd-section-heading"><h3>{field === 'directories' ? '目录' : '代码仓库'}</h3><button type="button" className="gd-text-action" disabled={disabled || picking} onClick={() => void add(field)}><Plus size={13}/>{field === 'directories' ? '添加目录' : '添加仓库'}</button></div>
+    {fields.map(field => <div className="gd-workspace-section" key={field}>
+      <div className="gd-section-heading"><h3>{field === 'directories' ? '目录' : '代码仓库'}</h3>{field === 'directories' && <button type="button" className="gd-text-action" disabled={disabled || picking} onClick={() => void add(field)}><Plus size={13}/>添加目录</button>}</div>
       <ul className="gd-directory-list">{value[field].map(path => <li className="gd-directory-row" key={path}>
         {field === 'directories' ? <Folder size={17}/> : <GitBranch size={17}/>}<span className="gd-directory-copy"><strong>{pathName(path)}</strong><small title={path}>{path}</small></span>
         <div className="gd-directory-actions">{field === 'directories' && (value.primary === path ? <span className="gd-primary-label">主目录</span> : <button className="gd-text-action" type="button" disabled={disabled || picking} onClick={() => onChange({...value, primary: path})}>设为主目录</button>)}
           <button type="button" className="gd-icon-action" disabled={disabled || picking || field === 'directories' && value.primary === path} aria-label={`移除${pathName(path)}`} title={field === 'directories' && value.primary === path ? '请先选择其他主目录' : where.isRemote ? `移除引用，保留${whereName(where)}上的文件` : '移除引用，保留本机文件'} onClick={() => onChange({...value, [field]: value[field].filter(item => item !== path)})}><X size={14}/></button>
         </div>
       </li>)}</ul>
-      {!value[field].length && <p className="gd-note">{field === 'directories' ? '尚未添加目录' : '尚未添加代码仓库'}</p>}
+      {!value[field].length && <p className="gd-note">尚未添加目录</p>}
     </div>)}
     {error && <p className="gd-empty gd-warning" role="alert">{error}</p>}
   </>;

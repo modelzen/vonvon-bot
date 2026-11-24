@@ -82,6 +82,32 @@ it('shows read errors with retry and clears them after a successful retry', asyn
   expect(ui.choose).toHaveLength(2);
 });
 
+it('shows dot-prefixed hidden directories by default and toggles them client-side unless explicitly queried', async () => {
+  harness.client.directory.mockResolvedValue({
+    kind: 'suggestions',
+    root: '/host',
+    path: '/host',
+    parent: '/',
+    truncated: false,
+    entries: [
+      {name: 'host', path: '/host', hidden: false},
+      {name: 'Projects', path: '/host/Projects', hidden: false},
+      {name: '.vonvon-bot', path: '/host/.vonvon-bot', hidden: true},
+    ],
+  });
+  let ui = await load();
+  expect(ui.choose).toHaveLength(3);
+  expect(ui.all.some(node => node.props['data-hidden'] && node.props.role === 'option')).toBe(true);
+  const toggle = ui.all.find(node => node.type === 'button' && node.props.className === 'join-directory-hidden-toggle')!;
+  expect(toggle.props['aria-pressed']).toBe(true);
+  toggle.props.onClick(); ui = render();
+  expect(ui.choose).toHaveLength(2);
+  expect(harness.client.directory).toHaveBeenCalledTimes(1);
+  // Explicit dot prefix reveals hidden folders even while the toggle is off.
+  ui.input.props.onChange({target: {value: '/host/.'}}); render(); await vi.advanceTimersByTimeAsync(200); ui = await settle();
+  expect(ui.choose).toHaveLength(3);
+});
+
 it('ignores an in-flight choice when the parent cancels the step', async () => {
   const ui = await load();
   let resolve!: (value: DirectoryReply) => void;

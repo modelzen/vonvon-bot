@@ -11,7 +11,7 @@ import { admitDirectorySettings, resolveProjectsRootDir } from '../config/direct
 import { log } from '../core/logger';
 import { feishuError } from '../utils/feishu-error';
 import { addProject, bindNoMention, bindProject, listProjectsIn, previousDirectoryIn, previousProjectIdIn, sessionModeOf, storedMode, type PreviousDirectory, type Project, type RegistryLocation, type SessionMode } from './registry';
-import { createLibraryProject, LibraryError, projectWithMainFolder, readLibrary, resolveDirectory, workspaceMirror, type LibraryProject } from './library';
+import { createLibraryProject, projectWithMainFolder, readLibrary, resolveDirectory, workspaceMirror, type LibraryProject } from './library';
 import { directoryContext, legacyDirectoryProblems } from './directory-audit';
 import { DirectoryError, directoryError } from '../config/directory-errors';
 import type { PermissionMode } from '../agent/types';
@@ -198,11 +198,6 @@ async function joinableProject(id: string): Promise<LibraryProject> {
 async function mainFolderOwner(workspace: Pick<Project, 'cwd'>): Promise<LibraryProject | undefined> {
   return projectWithMainFolder((await readLibrary()).projects, (await resolveDirectory(workspace.cwd)).path);
 }
-/** A main folder that is a project's already is refused before a group is made: sharing it means joining that project. */
-async function assertMainFolderFree(workspace: Pick<Project, 'cwd'>): Promise<void> {
-  const owner = await mainFolderOwner(workspace);
-  if (owner) throw new LibraryError('primary-taken', `这个文件夹已经是项目「${owner.name}」的主目录。请选择其他目录`, { id: owner.id, name: owner.name });
-}
 
 /** Makes the project a new binding of a folder belongs to, before its row (§2.1). `workspace` is admitted. */
 async function newBindingProject(bot: BotIdentity, group: { chatId: string; name: string }, workspace: Pick<Project, 'cwd' | 'directories'>): Promise<{ id: string }> {
@@ -257,7 +252,6 @@ export async function createProject(channel: Pick<LarkChannel, 'rawClient'>, req
   if (input.project !== undefined && existingPath) throw new Error('加入已有项目时不能再选文件夹');
   const joined = input.project === undefined ? undefined : await joinableProject(input.project);
   const explicit = existingPath ? await admitExistingDirectory(existingPath, location.dataRoot) : undefined;
-  if (explicit) await assertMainFolderFree(explicit);
   const root = existingPath || joined ? '' : resolveProjectsRootDir(input.projectsRootDir);
   await assertBotIdentity(input.bot);
   const initialSettings = await prepareNewGroupSettings({backend, kind:input.kind, judge:input.judge});
@@ -379,10 +373,8 @@ export async function joinExistingGroup(channel: LarkChannel, request: JoinGroup
       else {
         const restored = existingPath || scope.allocatedPath ? undefined : await restorableDirectory(await previousDirectoryIn(location.file, input.chatId), location.dataRoot, root);
         workspace = existingPath ? await admitExistingDirectory(existingPath, location.dataRoot) : restored ?? await scope.prepareDefault();
-        // A chosen folder that is a project's already is refused; a default one (allocated for this group, or the one it
-        // had) that is a project's means the group's own binding came back.
-        if (existingPath) await assertMainFolderFree(workspace);
-        else joined = await mainFolderOwner(workspace);
+        // A default folder allocated for this group (or restored for it) reconnects to its existing project; an explicitly chosen folder creates an independent project even when another group uses the same directory.
+        if (!existingPath) joined = await mainFolderOwner(workspace);
         if (joined) { workspace = workspaceMirror(joined.workspace); project = { id: joined.id }; }
         else project = await newBindingProject(input.bot, { chatId: input.chatId, name }, workspace);
       }

@@ -105,8 +105,11 @@ describe('desktop group commands in the owning bot', () => {
     expect(saved.projects[0]).not.toHaveProperty('addedBy');
     expect(saved.projects[0]).toMatchObject({ kind: 'multi', noMention: true });
     await expect(caller.call({ kind: 'bindGroup', input: { ...input(dir), kind: 'single' } })).rejects.toThrow('不可修改');
-    await expect(caller.call({ kind: 'bindGroup', input: { ...input(dir), chatId: 'oc_other' } })).rejects.toThrow('已经是项目「First」的主目录');
     await expect(caller.call({ kind: 'bindGroup', input: { ...input(await workspace()), chatId: 'oc_other' } })).rejects.toThrow('项目名');
+    const sharedDir = await caller.call({ kind: 'bindGroup', input: { ...input(dir), chatId: 'oc_shared_dir', projectName: 'Shared Dir' } });
+    expect(sharedDir).toMatchObject({ cwd: await realpath(dir), chatId: 'oc_shared_dir', name: 'Shared Dir' });
+    expect((sharedDir as { projectId?: string }).projectId).not.toBe(saved.projects[0].projectId);
+    await import('../src/project/registry').then(m => m.removeProject('Shared Dir'));
     const page = await caller.call({ kind: 'joinedGroups', cursor: 'cursor1' });
     expect(page).toEqual({ groups: [{ chatId: 'oc_a', name: 'Group A', bound: true }], nextCursor: 'page2' });
     expect(fixture.list).toHaveBeenCalledWith({ params: { page_size: 50, page_token: 'cursor1' } });

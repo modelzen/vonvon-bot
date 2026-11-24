@@ -13,9 +13,13 @@ export function assertCardDisplayRender(card:Record<string,unknown>):void {
     if(Array.isArray(value)){value.forEach(visit);return;}
     const item=value as Record<string,unknown>;
     if(typeof item.tag==='string')count++;
-    if(typeof item.element_id==='string'){
-      if(ids.has(item.element_id))throw new Error(`卡片组件 ID 重复：${item.element_id}`);
-      ids.add(item.element_id);
+    if ('element_id' in item) {
+      const elementId = item.element_id;
+      if (typeof elementId !== 'string' || !/^[A-Za-z][A-Za-z0-9_]{0,19}$/.test(elementId)) {
+        throw new Error('卡片组件 ID 格式无效：必须以字母开头，仅含字母、数字和下划线，且最多 20 字符');
+      }
+      if (ids.has(elementId)) throw new Error(`卡片组件 ID 重复：${elementId}`);
+      ids.add(elementId);
     }
     if(Object.keys(item).some(key=>key.startsWith('__preview')||key.startsWith('__widget')))throw new Error('卡片含有预览专用字段');
     Object.values(item).forEach(visit);

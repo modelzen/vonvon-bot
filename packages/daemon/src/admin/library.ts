@@ -14,7 +14,7 @@ import { assertBridgeImportReservation } from '../import/bridge/reservation';
 import { listProjectsIn, mutateProject, previousProjectIdIn, withStoredRows, type Project } from '../project/registry';
 import { detachSessionsForChatIn } from '../bot/session-store';
 import {
-  deleteLibraryProject, isProjectId, libraryLocation, LibraryError, newProjectId, ownLibrary, PROJECT_NAME_MAX, projectWithMainFolder, readLibrary, resolveDirectory, sameMainFolder,
+  deleteLibraryProject, isProjectId, libraryLocation, LibraryError, newProjectId, ownLibrary, PROJECT_NAME_MAX, readLibrary, resolveDirectory, sameMainFolder,
   renameLibraryProject, setLibraryWorkspace, workspaceMirror,
   type LibraryProject, type LibraryWorkspace, type ResolvedDirectory,
 } from '../project/library';
@@ -401,7 +401,7 @@ async function checkDrift(bots: readonly BotEntry[], report: LibraryStartupRepor
     let changed = false;
     for (const project of draft.projects) {
       const now = await resolveDirectory(project.workspace.primary);
-      if (!now.resolved || now.path === project.workspace.primary || await projectWithMainFolder(draft.projects, now.path, project.id)) continue;
+      if (!now.resolved || now.path === project.workspace.primary) continue;
       project.workspace = { ...project.workspace, primary: now.path };
       project.revision += 1;
       changed = true;

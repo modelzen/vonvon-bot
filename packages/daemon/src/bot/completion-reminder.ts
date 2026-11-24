@@ -34,13 +34,14 @@ export interface CompletionReminderReplyDeps {
 
 export type CompletionReminderReplyResult = 'sent' | 'skipped' | 'failed';
 
-/** Only ordinary runs outside smart groups offer manual reminder controls. */
+/** Smart groups offer manual reminders only for tasks started by a known person. */
 export function reminderButtonOffered(
   cfg: AppConfig,
-  run: Pick<CompletionReminderReplyInput, 'requesterKind' | 'smart'> & { runLoop?: true; isGoal?: boolean; compacting?: boolean },
+  run: Pick<CompletionReminderReplyInput, 'requesterKind' | 'smart'> & { runLoop?: true; isGoal?: boolean; compacting?: boolean; directMessage?: boolean },
 ): boolean {
   return run.runLoop === true && !run.isGoal && !run.compacting &&
-    shouldShowCompletionReminderButton(cfg) && run.requesterKind !== 'bot' && !run.smart;
+    shouldShowCompletionReminderButton(cfg) &&
+    (run.smart ? !run.directMessage && run.requesterKind === 'user' : run.requesterKind !== 'bot');
 }
 
 /**
@@ -65,7 +66,9 @@ export async function sendCompletionReminderReply(
 
   const elapsedMs = Math.max(0, (deps.now?.() ?? Date.now()) - input.requestedAt);
   if (input.smart) {
-    if (input.requesterKind !== 'user' || (input.outcome === 'done' && input.cardUpdated)) return 'skipped';
+    if (input.requesterKind !== 'user') return 'skipped';
+    const optedIn = input.manuallyRequested && shouldShowCompletionReminderButton(deps.cfg);
+    if (input.outcome === 'done' && input.cardUpdated && !optedIn) return 'skipped';
   } else {
     // A failed terminal card needs an observable fallback in every mode.
     const policyMatch = shouldSendCompletionReminder(deps.cfg, {
