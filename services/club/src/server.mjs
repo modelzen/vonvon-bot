@@ -98,10 +98,19 @@ export function createClubServer({
   adminToken = '',
   publicBaseUrl = 'https://club.vonvon.cc',
   writeLimiter = new RateLimiter({ windowMs: 60_000, maxHits: 60 }),
+  refreshLimiter = new RateLimiter({ windowMs: 60_000, maxHits: 20 }),
+  docRefreshCooldownMs = 30_000,
+  swrStaleMs = 5 * 60 * 1000,
+  swrBatchCooldownMs = 60_000,
   coverFetcher = fetchFeishuCoverViaLarkCli,
   feishuPublicFetcher = null,
 } = {}) {
   const cleanBase = publicBaseUrl.replace(/\/+$/, '');
+  const inFlightSync = new Map();
+  const docLastRefreshed = new Map();
+  let swrRunning = false;
+  let lastSwrAt = 0;
+
   const cleanupOrphanCover = async (coverUrl) => {
     if (!coversDir || !coverUrl || !/^\/covers\/[a-f0-9]{16,64}\.(?:png|jpg|webp)$/.test(coverUrl)) return;
     if (store.isCoverReferenced(coverUrl)) return;
@@ -109,29 +118,70 @@ export function createClubServer({
   };
 
   /**
-   * Best-effort sync of a public Feishu document's real like_count and (when missing) cover image.
+   * Best-effort coalesced sync of a public Feishu document's real like_count and (when missing) cover image.
    * Never throws and never blocks callers.
    */
   const syncOneFeishuDoc = async (templateId, authorPublicKey, docUrl, { needCover = false } = {}) => {
     if (!feishuPublicFetcher || !isFeishuDocUrl(docUrl)) return { ok: false, reason: 'skipped' };
-    try {
-      const fetched = await feishuPublicFetcher(docUrl, { fetchCover: needCover });
-      if (!fetched?.ok) {
-        store.updateDocStats(templateId, authorPublicKey, { docLikeCount: undefined });
-        return { ok: false, reason: fetched?.reason ?? 'fetch_failed' };
+    const key = `${templateId}\0${authorPublicKey}`;
+    const existing = inFlightSync.get(key);
+    if (existing) return existing;
+
+    const promise = (async () => {
+      try {
+        const fetched = await feishuPublicFetcher(docUrl, { fetchCover: needCover });
+        const now = Date.now();
+        if (docLastRefreshed.size >= 2000) docLastRefreshed.clear();
+        docLastRefreshed.set(key, now);
+        if (!fetched?.ok) {
+          store.updateDocStats(templateId, authorPublicKey, { docLikeCount: undefined, syncedAt: now });
+          return { ok: false, reason: fetched?.reason ?? 'fetch_failed' };
+        }
+        store.updateDocStats(templateId, authorPublicKey, { docLikeCount: fetched.docLikeCount, syncedAt: now });
+        let coverUrl = null;
+        if (needCover && coversDir && fetched.coverBytes) {
+          const saved = await saveCoverBytes(coversDir, fetched.coverBytes);
+          const applied = store.setCoverUrlIfMissing(templateId, authorPublicKey, saved.url);
+          if (applied) coverUrl = saved.url;
+          else await cleanupOrphanCover(saved.url);
+        }
+        return { ok: true, docLikeCount: fetched.docLikeCount ?? null, ...(coverUrl ? { coverUrl } : {}) };
+      } catch {
+        return { ok: false, reason: 'sync_error' };
+      } finally {
+        inFlightSync.delete(key);
       }
-      store.updateDocStats(templateId, authorPublicKey, { docLikeCount: fetched.docLikeCount });
-      let coverUrl = null;
-      if (needCover && coversDir && fetched.coverBytes) {
-        const saved = await saveCoverBytes(coversDir, fetched.coverBytes);
-        const applied = store.setCoverUrlIfMissing(templateId, authorPublicKey, saved.url);
-        if (applied) coverUrl = saved.url;
-        else await cleanupOrphanCover(saved.url);
+    })();
+
+    inFlightSync.set(key, promise);
+    return promise;
+  };
+
+  /** Non-blocking SWR: quietly refreshes up to 3 stale Feishu docs when someone actually browses `/api/list`. */
+  const scheduleSwrRefresh = (items) => {
+    if (!feishuPublicFetcher || swrRunning) return;
+    const now = Date.now();
+    if (now - lastSwrAt < swrBatchCooldownMs) return;
+    const stale = items
+      .filter(item =>
+        isFeishuDocUrl(item.docUrl)
+        && (!item.docStatsSyncedAt || now - item.docStatsSyncedAt >= swrStaleMs),
+      )
+      .slice(0, 3);
+    if (!stale.length) return;
+
+    swrRunning = true;
+    lastSwrAt = now;
+    void (async () => {
+      try {
+        for (const item of stale) {
+          await syncOneFeishuDoc(item.id, item.authorPublicKey, item.docUrl, { needCover: !item.coverUrl });
+          if (stale.length > 1) await new Promise(r => setTimeout(r, 500));
+        }
+      } finally {
+        swrRunning = false;
       }
-      return { ok: true, docLikeCount: fetched.docLikeCount ?? null, ...(coverUrl ? { coverUrl } : {}) };
-    } catch {
-      return { ok: false, reason: 'sync_error' };
-    }
+    })();
   };
 
   const server = createServer(async (req, res) => {
@@ -166,7 +216,38 @@ export function createClubServer({
           author: url.searchParams.get('author') ?? '',
           authorPublicKey: url.searchParams.get('authorPublicKey') ?? '',
         });
+        scheduleSwrRefresh(data.items);
         return sendJson(res, 200, { ok: true, ...data }, { 'cache-control': 'no-store' });
+      }
+
+      if (method === 'POST' && pathname === '/api/refresh-doc') {
+        if (!refreshLimiter.allow(`ref:${ip}`)) return sendJson(res, 429, { ok: false, error: '刷新过于频繁' });
+        const body = await readJsonBody(req);
+        const id = typeof body.id === 'string' ? body.id.trim() : '';
+        const authorPublicKey = typeof body.authorPublicKey === 'string' ? body.authorPublicKey.trim() : '';
+        if (!id || !TEMPLATE_ID_REGEX.test(id) || !authorPublicKey) {
+          return sendJson(res, 400, { ok: false, error: '缺少合法的配方标识' });
+        }
+        const matches = store.getById(id, authorPublicKey);
+        if (!matches.length) return sendJson(res, 404, { ok: false, error: '未找到公开配方' });
+        const item = matches[0];
+        if (!feishuPublicFetcher || !isFeishuDocUrl(item.docUrl)) {
+          return sendJson(res, 200, { ok: true, id, docLikeCount: item.docLikeCount, refreshed: false });
+        }
+        const key = `${id}\0${authorPublicKey}`;
+        const lastAt = Math.max(docLastRefreshed.get(key) ?? 0, item.docStatsSyncedAt ?? 0);
+        if (Date.now() - lastAt < docRefreshCooldownMs) {
+          return sendJson(res, 200, { ok: true, id, docLikeCount: item.docLikeCount, refreshed: false, cached: true });
+        }
+        const synced = await syncOneFeishuDoc(id, authorPublicKey, item.docUrl, { needCover: !item.coverUrl });
+        const latest = store.getById(id, authorPublicKey)[0] ?? item;
+        return sendJson(res, 200, {
+          ok: true,
+          id,
+          docLikeCount: latest.docLikeCount,
+          coverUrl: latest.coverUrl,
+          refreshed: Boolean(synced.ok),
+        });
       }
 
       if (method === 'GET' && pathname.startsWith('/api/templates/')) {

@@ -196,6 +196,21 @@ describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
     assert.match(listAfterInstalls.items[0].coverUrl ?? '', /^\/covers\/[a-f0-9]+\.png$/);
     assert.equal(listAfterInstalls.stats.totalInstalls, 2);
 
+    // On-demand click-return refresh respects per-doc cooldown cache and rejects missing items.
+    const refCached = await (await fetch(`${baseUrl}/api/refresh-doc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'modelzen/daily-brief', authorPublicKey: packed.authorPublicKey }),
+    })).json();
+    assert.equal(refCached.ok, true);
+    assert.equal(refCached.docLikeCount, 7);
+    assert.equal(refCached.cached, true);
+    assert.equal((await fetch(`${baseUrl}/api/refresh-doc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'nonexistent', authorPublicKey: packed.authorPublicKey }),
+    })).status, 404);
+
     // 4. Site /api/like endpoint is removed (405/404) and public Feishu HTML parser extracts stats + cover URL.
     const removedLike = await fetch(`${baseUrl}/api/like`, {
       method: 'POST',

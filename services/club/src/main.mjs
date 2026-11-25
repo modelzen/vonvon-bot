@@ -16,8 +16,8 @@ const autoTrustKeys = (process.env.CLUB_AUTO_TRUST_KEYS ?? '')
   .map(k => k.trim())
   .filter(Boolean);
 const requireAuthorTrust = process.env.CLUB_REQUIRE_AUTHOR_TRUST === '1' || process.env.CLUB_REQUIRE_AUTHOR_TRUST === 'true';
-const syncIntervalMs = Math.max(5 * 60 * 1000, Number(process.env.CLUB_FEISHU_SYNC_INTERVAL_MS ?? 30 * 60 * 1000));
-const syncStaleMs = Math.max(5 * 60 * 1000, Number(process.env.CLUB_FEISHU_SYNC_STALE_MS ?? 45 * 60 * 1000));
+const syncIntervalMs = Math.max(15 * 60 * 1000, Number(process.env.CLUB_FEISHU_SYNC_INTERVAL_MS ?? 6 * 60 * 60 * 1000));
+const syncStaleMs = Math.max(15 * 60 * 1000, Number(process.env.CLUB_FEISHU_SYNC_STALE_MS ?? 4 * 60 * 60 * 1000));
 
 const store = new ClubStore(join(dataDir, 'club.sqlite'), { autoTrustKeys, requireAuthorTrust });
 const coversDir = join(dataDir, 'covers');

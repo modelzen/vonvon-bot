@@ -1,5 +1,6 @@
 (() => {
   const state = { sort: 'hot', q: '' };
+  let pendingDocRefresh = null;
 
   const toolbarEl = document.getElementById('toolbar');
   const gridEl = document.getElementById('card-grid');
@@ -190,6 +191,18 @@
       metrics.appendChild(docLikes);
     }
 
+    if (isFeishuHost(item.docUrl)) {
+      link.addEventListener('click', () => {
+        pendingDocRefresh = {
+          id: item.id,
+          authorPublicKey: item.authorPublicKey,
+          clickedAt: Date.now(),
+          metricsEl: metrics,
+          item,
+        };
+      });
+    }
+
     metaRow.append(authorInfo, metrics);
     body.append(metaRow);
     link.append(preview, titleRow, body);
@@ -288,6 +301,41 @@
       setTimeout(() => { btn.textContent = '一键复制'; }, 1800);
     });
   }
+
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState !== 'visible' || !pendingDocRefresh) return;
+    const pending = pendingDocRefresh;
+    const elapsed = Date.now() - pending.clickedAt;
+    if (elapsed < 2000) return;
+    pendingDocRefresh = null;
+    if (elapsed > 30 * 60 * 1000) return;
+    try {
+      const res = await fetch('/api/refresh-doc', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: pending.id, authorPublicKey: pending.authorPublicKey }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) return;
+      if (typeof data.docLikeCount === 'number') {
+        pending.item.docLikeCount = data.docLikeCount;
+        let pill = pending.metricsEl.querySelector('.doc-like-pill');
+        if (data.docLikeCount > 0) {
+          if (!pill) {
+            pill = document.createElement('span');
+            pill.className = 'doc-like-pill';
+            pending.metricsEl.appendChild(pill);
+          }
+          pill.textContent = `👍 ${data.docLikeCount}`;
+          pill.title = `飞书宣传文档获赞 ${data.docLikeCount}（点击打开文档可点赞）`;
+        } else if (pill) {
+          pill.remove();
+        }
+      }
+    } catch {
+      // Best-effort silent refresh
+    }
+  });
 
   loadList();
 })();

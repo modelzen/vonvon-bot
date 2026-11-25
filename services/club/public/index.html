@@ -7,7 +7,7 @@
   <meta name="description" content="发现和分享好用的 Vonvon Bot 飞书 AI 同事配方。点击卡片直达创作者公开飞书文档，在飞书私聊里一句话创建你的专属 Bot 群。">
   <meta name="theme-color" content="#ffffff">
   <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
-  <link rel="stylesheet" href="/styles.css?v=13">
+  <link rel="stylesheet" href="/styles.css?v=14">
 </head>
 <body>
   <header class="nav">
@@ -87,8 +87,16 @@
       </div>
 
       <div class="prereq-bar">
-        <span><strong>前提：</strong>需安装 Vonvon Bot<span class="step-note">（已安装可跳过）</span></span>
-        <a class="btn btn-line btn-sm" href="https://vonvon.cc/get/" target="_blank" rel="noopener noreferrer">下载 Vonvon Bot →</a>
+        <div class="prereq-text">
+          <span class="step-num">1</span>
+          <span><strong>先安装 Vonvon Bot</strong><span class="step-note">（已安装可跳过）</span></span>
+        </div>
+        <a class="btn btn-dark btn-sm" href="https://vonvon.cc/get/" target="_blank" rel="noopener noreferrer">下载客户端 →</a>
+      </div>
+
+      <div class="step-heading">
+        <span class="step-num">2</span>
+        <span><strong>选择一种方式，发送一句话开始</strong></span>
       </div>
 
       <div class="modal-mode-tabs" role="tablist" aria-label="选择创作方式">
@@ -121,6 +129,6 @@
 
   <div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
 
-  <script src="/app.js?v=8" defer></script>
+  <script src="/app.js?v=9" defer></script>
 </body>
 </html>
