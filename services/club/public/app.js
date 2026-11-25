@@ -262,22 +262,6 @@
   createModal.addEventListener('click', (e) => { if (e.target === createModal) closeModal(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 
-  const modeTabs = document.querySelectorAll('.modal-mode-tab');
-  const feishuPanel = document.getElementById('mode-panel-feishu');
-  const agentPanel = document.getElementById('mode-panel-agent');
-  for (const tab of modeTabs) {
-    tab.addEventListener('click', () => {
-      const mode = tab.dataset.mode || 'feishu';
-      for (const other of modeTabs) {
-        const active = other === tab;
-        other.classList.toggle('active', active);
-        other.setAttribute('aria-selected', String(active));
-      }
-      feishuPanel.classList.toggle('hidden', mode !== 'feishu');
-      agentPanel.classList.toggle('hidden', mode !== 'agent');
-    });
-  }
-
   for (const btn of document.querySelectorAll('.copy-prompt-btn')) {
     btn.addEventListener('click', () => {
       const targetEl = document.getElementById(btn.dataset.copyTarget || '');
