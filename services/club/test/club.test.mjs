@@ -110,6 +110,13 @@ describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
     const favicon = await fetch(`${baseUrl}/favicon-32.png`);
     assert.equal(favicon.status, 200);
     assert.equal(favicon.headers.get('content-type'), 'image/png');
+    const skillDoc = await fetch(`${baseUrl}/skills/vonvon-recipe-creator/SKILL.md`);
+    assert.equal(skillDoc.status, 200);
+    assert.match(skillDoc.headers.get('content-type') ?? '', /text\/markdown/);
+    assert.match(await skillDoc.text(), /name: vonvon-recipe-creator/);
+    const schemaDoc = await fetch(`${baseUrl}/skills/vonvon-recipe-creator/references/manifest-schema.md`);
+    assert.equal(schemaDoc.status, 200);
+    assert.match(schemaDoc.headers.get('content-type') ?? '', /text\/markdown/);
   });
 
   it('runs real CLI pack --publish -> instant public listing -> multi-user stage dedup -> like -> cover -> delete', async () => {

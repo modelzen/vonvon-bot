@@ -7,7 +7,7 @@
   <meta name="description" content="发现和分享好用的 Vonvon Bot 飞书 AI 同事配方。点击卡片直达创作者公开飞书文档，在飞书私聊里一句话创建你的专属 Bot 群。">
   <meta name="theme-color" content="#ffffff">
   <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
-  <link rel="stylesheet" href="/styles.css?v=8">
+  <link rel="stylesheet" href="/styles.css?v=9">
 </head>
 <body>
   <header class="nav">
@@ -91,21 +91,46 @@
         <span class="scene-item">现成教程、文档或工作流点子</span>
       </div>
 
-      <ol class="modal-steps">
-        <li>
-          <strong>先安装并连接 Vonvon Bot</strong><span class="step-note">（已安装可跳过）</span>：下载桌面端或服务端，连上你的飞书 Bot。
-          <div class="step-action">
-            <a class="btn btn-line btn-sm" href="https://vonvon.cc/get/" target="_blank" rel="noopener noreferrer">免费下载 Vonvon Bot →</a>
-          </div>
-        </li>
-        <li>
-          <strong>发给你的飞书 Bot 私聊，剩下的交给它引导</strong>：复制下面这句话发给它，把项目、群、Skills 或想法直接丢给它，它会一步步带你整理、配好飞书宣传页并打包：
-          <div class="copy-box">
-            <code id="create-prompt-text">帮我创作一个配方</code>
-            <button class="btn btn-primary btn-sm" id="copy-prompt-btn" type="button">一键复制</button>
-          </div>
-        </li>
-      </ol>
+      <div class="modal-mode-tabs" role="tablist" aria-label="选择创作方式">
+        <button class="modal-mode-tab active" data-mode="feishu" role="tab" aria-selected="true" type="button">飞书 Bot 私聊（推荐）</button>
+        <button class="modal-mode-tab" data-mode="agent" role="tab" aria-selected="false" type="button">用你自己的 Agent</button>
+      </div>
+
+      <div class="modal-mode-panel" id="mode-panel-feishu" role="tabpanel">
+        <ol class="modal-steps">
+          <li>
+            <strong>先安装并连接 Vonvon Bot</strong><span class="step-note">（已安装可跳过）</span>：下载桌面端或服务端，连上你的飞书 Bot。
+            <div class="step-action">
+              <a class="btn btn-line btn-sm" href="https://vonvon.cc/get/" target="_blank" rel="noopener noreferrer">免费下载 Vonvon Bot →</a>
+            </div>
+          </li>
+          <li>
+            <strong>发给你的飞书 Bot 私聊，剩下的交给它引导</strong>：支持直接从已有飞书群提取、飞书选择卡片交互、自动建宣传页并一键上架：
+            <div class="copy-box">
+              <code id="create-prompt-feishu">帮我创作一个配方</code>
+              <button class="btn btn-primary btn-sm copy-prompt-btn" data-copy-target="create-prompt-feishu" data-toast="已复制，打开飞书发给你的 Vonvon Bot 私聊即可开始" type="button">一键复制</button>
+            </div>
+          </li>
+        </ol>
+      </div>
+
+      <div class="modal-mode-panel hidden" id="mode-panel-agent" role="tabpanel">
+        <ol class="modal-steps">
+          <li>
+            <strong>发给你的任意 Agent（Codex / Claude Code / Codex Cloud / Cursor 等）</strong>：复制下面这句话直接发送，它会自动读取 Vonvon 配方创作 Skill 并一步步带你整理成标准配方：
+            <div class="copy-box copy-box-multi">
+              <code id="create-prompt-agent">请先读取 https://club.vonvon.cc/skills/vonvon-recipe-creator/SKILL.md 并按里面的流程，帮我创作一个 Vonvon Bot 配方。</code>
+              <button class="btn btn-primary btn-sm copy-prompt-btn" data-copy-target="create-prompt-agent" data-toast="已复制，直接发给你的 Codex / Claude Code 等 Agent 即可开始" type="button">一键复制</button>
+            </div>
+          </li>
+          <li>
+            <strong>自动适配本地与云端环境</strong>：本地已装 <code>vonvon</code> CLI 时可直接脱敏打包并签名上架；在 Codex Cloud 等云端环境里会帮你整理好规范的配方仓库与宣传文案，回到本机或飞书私聊 10 秒即可上架。
+            <div class="step-action">
+              <a class="btn btn-line btn-sm" href="/skills/vonvon-recipe-creator/SKILL.md" target="_blank" rel="noopener noreferrer">查看 Skill 源码 →</a>
+            </div>
+          </li>
+        </ol>
+      </div>
 
       <p class="modal-note">公开宣传仅展示你的飞书宣传文档链接与封面，<strong>绝不上传你的 Skill 或配方正文</strong>。</p>
     </div>
@@ -113,6 +138,6 @@
 
   <div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
 
-  <script src="/app.js?v=5" defer></script>
+  <script src="/app.js?v=6" defer></script>
 </body>
 </html>

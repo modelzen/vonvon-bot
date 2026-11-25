@@ -262,13 +262,32 @@
   createModal.addEventListener('click', (e) => { if (e.target === createModal) closeModal(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 
-  const copyPromptBtn = document.getElementById('copy-prompt-btn');
-  copyPromptBtn.addEventListener('click', () => {
-    const promptText = document.getElementById('create-prompt-text').textContent.trim();
-    copyText(promptText, '已复制，打开飞书发给你的 Vonvon Bot 私聊即可开始');
-    copyPromptBtn.textContent = '已复制 ✓';
-    setTimeout(() => { copyPromptBtn.textContent = '一键复制'; }, 1800);
-  });
+  const modeTabs = document.querySelectorAll('.modal-mode-tab');
+  const feishuPanel = document.getElementById('mode-panel-feishu');
+  const agentPanel = document.getElementById('mode-panel-agent');
+  for (const tab of modeTabs) {
+    tab.addEventListener('click', () => {
+      const mode = tab.dataset.mode || 'feishu';
+      for (const other of modeTabs) {
+        const active = other === tab;
+        other.classList.toggle('active', active);
+        other.setAttribute('aria-selected', String(active));
+      }
+      feishuPanel.classList.toggle('hidden', mode !== 'feishu');
+      agentPanel.classList.toggle('hidden', mode !== 'agent');
+    });
+  }
+
+  for (const btn of document.querySelectorAll('.copy-prompt-btn')) {
+    btn.addEventListener('click', () => {
+      const targetEl = document.getElementById(btn.dataset.copyTarget || '');
+      if (!targetEl) return;
+      const promptText = targetEl.textContent.trim();
+      copyText(promptText, btn.dataset.toast || '已复制');
+      btn.textContent = '已复制 ✓';
+      setTimeout(() => { btn.textContent = '一键复制'; }, 1800);
+    });
+  }
 
   loadList();
 })();
