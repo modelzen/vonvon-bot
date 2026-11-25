@@ -146,9 +146,8 @@ export function parsePublicFeishuHtml(html, finalUrl = 'https://my.feishu.cn/') 
     const docToken = docTokenMatch?.[1] ?? '';
     let hostSuffix = 'feishu.cn';
     try {
-      const h = new URL(finalUrl).hostname.toLowerCase();
-      if (h.endsWith('larksuite.com')) hostSuffix = 'larksuite.com';
-      else if (h.endsWith('larkoffice.com')) hostSuffix = 'larkoffice.com';
+      const domain = new URL(finalUrl).hostname.toLowerCase().split('.').slice(-2).join('.');
+      if (domain === 'larksuite.com' || domain === 'larkoffice.com') hostSuffix = domain;
     } catch { /* default feishu.cn */ }
     const params = new URLSearchParams({
       fallback_source: '1',
