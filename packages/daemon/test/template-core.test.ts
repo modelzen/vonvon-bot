@@ -890,6 +890,34 @@ describe('wave-1 template reliability upgrades (+x mode, repo hygiene, skill pru
     expect(fetchedGated.hint).toContain('demo-0.1.0.vonvon.zip');
   });
 
+  it('decodes escaped Feishu link separators in a single pass', () => {
+    const html = String.raw`<a href="https:\/\/example.com\/demo.vonvon.zip?a=1\u0026b=2&amp;c=3\u0026amp;literal=4">配方</a>`;
+    expect(extractFeishuDocSourceHints(html).directZipUrls).toEqual([
+      'https://example.com/demo.vonvon.zip?a=1&b=2&c=3&amp;literal=4',
+    ]);
+  });
+
+  it.each(['larksuite.com', 'larkoffice.com'])('uses the matching Lark stream endpoint for %s', async domain => {
+    const attachment = 'boxcnSsr1234567890';
+    const docUrl = `https://workspace.${domain}/docx/DocTok123456789012`;
+    const streamUrl = `https://internal-api-drive-stream.${domain}/space/api/box/stream/download/all/${attachment}/`;
+    const fixtureZip = createZip([{ path: 'vonvon-bot.json', data: Buffer.from('{}') }]);
+    const dest = join(await makeTempDir('vonvon-lark-fetch-'), 'out');
+    const requests: string[] = [];
+    const result = await fetchTemplateSource(docUrl, dest, {
+      skipLarkCli: true,
+      fetchImpl: async input => {
+        const url = String(input);
+        requests.push(url);
+        if (url === docUrl) return new Response(`<source token="${attachment}" name="demo.vonvon.zip"/>`);
+        if (url === streamUrl) return new Response(new Uint8Array(fixtureZip));
+        return new Response('not found', { status: 404 });
+      },
+    });
+    expect(requests).toEqual([docUrl, streamUrl]);
+    expect(result).toMatchObject({ resolved: true, via: 'feishu-public', attachmentName: 'demo.vonvon.zip' });
+  });
+
   it('hardens inspect warnings, partial merge versioning, stage frontmatter gate, draft-group private skips, and odd UTF-16BE', async () => {
     // Odd-length UTF-16BE must not crash swap16; JSON-escaped Windows home paths must be caught.
     const oddUtf16Be = Buffer.from([0xfe, 0xff, 0x00, 0x41, 0x00]);
