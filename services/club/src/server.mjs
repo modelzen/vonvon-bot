@@ -334,7 +334,7 @@ export function createClubServer({
         if (!verifyUnpublishSignature(id, authorPublicKey, timestamp, signature)) {
           return sendJson(res, 403, { ok: false, error: 'Ed25519 下架签名校验失败或请求已过期' });
         }
-        const { deleted, previousCoverUrl } = store.deleteTemplate(id, authorPublicKey);
+        const { deleted, previousCoverUrl } = store.withdrawTemplate(id, authorPublicKey);
         if (!deleted) return sendJson(res, 404, { ok: false, error: '未找到属于你的该公开配方' });
         await cleanupOrphanCover(previousCoverUrl);
         return sendJson(res, 200, { ok: true, id, authorPublicKey, deleted: true });

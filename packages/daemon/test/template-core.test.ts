@@ -48,8 +48,11 @@ describe('template zip codec', () => {
       { path: 'workspace/知识库/竞品说明.md', data: Buffer.from('中文内容测试\n'.repeat(200), 'utf8') },
       { path: 'skills/daily-setup/SKILL.md', data: Buffer.from('---\nname: daily-setup\n---\n引导', 'utf8') },
     ]);
-    // Local header general-purpose bit flag must include UTF-8 bit 11 (0x0800).
+    // Both local header and central directory header must include UTF-8 bit 11 (0x0800).
     expect(archive.readUInt16LE(6) & 0x0800).toBe(0x0800);
+    const cdPos = archive.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+    expect(cdPos).toBeGreaterThan(0);
+    expect(archive.readUInt16LE(cdPos + 8) & 0x0800).toBe(0x0800);
     const entries = readZip(archive);
     expect(entries.map(e => e.path)).toEqual([
       'skills/daily-setup/SKILL.md',
@@ -885,5 +888,78 @@ describe('wave-1 template reliability upgrades (+x mode, repo hygiene, skill pru
     expect(fetchedGated.reason).toBe('attachment_requires_login');
     expect(fetchedGated.attachmentName).toBe('demo-0.1.0.vonvon.zip');
     expect(fetchedGated.hint).toContain('demo-0.1.0.vonvon.zip');
+  });
+
+  it('hardens inspect warnings, partial merge versioning, stage frontmatter gate, draft-group private skips, and odd UTF-16BE', async () => {
+    // Odd-length UTF-16BE must not crash swap16; JSON-escaped Windows home paths must be caught.
+    const oddUtf16Be = Buffer.from([0xfe, 0xff, 0x00, 0x41, 0x00]);
+    expect(scanFilesForSecrets([{ path: 'odd.txt', data: oddUtf16Be }])).toEqual([]);
+    const escapedWin = scanFilesForSecrets([{ path: 'cfg.json', data: Buffer.from('{"dir":"C:\\\\Users\\\\realuser\\\\docs"}') }]);
+    expect(escapedWin.some(f => f.rule === 'windows-home-path')).toBe(true);
+
+    // Inspect warns explicitly when author writes group.permission instead of group.recommendedPermission.
+    const typoDir = await makeTempDir('vonvon-typo-');
+    await writeTree(typoDir, {
+      'vonvon-bot.json': JSON.stringify({
+        schemaVersion: 1, id: 'typo-check', version: '0.1.0', name: '测试', summary: '简介',
+        author: { name: 'Tester' }, group: { permission: 'qa', role: '助手' },
+      }),
+      'skills/bad-skill/SKILL.md': '# missing frontmatter',
+    });
+    const insp = await inspectTemplate(typoDir);
+    expect(insp.warnings.some(w => w.includes('group.permission'))).toBe(true);
+    // Stage refuses invalid skill frontmatter before mutating destination.
+    const badDest = join(await makeTempDir('vonvon-bad-stage-'), 'dest');
+    await expect(stageTemplate(typoDir, badDest, { mode: 'fresh', noTelemetry: true })).rejects.toThrow(/frontmatter/);
+
+    // Partial merge conflict keeps previous installed version and skips telemetry.
+    const v1Dir = await makeTempDir('vonvon-v1-');
+    const v2Dir = await makeTempDir('vonvon-v2-');
+    const mergeDest = join(await makeTempDir('vonvon-merge-'), 'ws');
+    await writeTree(v1Dir, {
+      'vonvon-bot.json': JSON.stringify({ schemaVersion: 1, id: 'merge-test', version: '0.1.0', public: true, docUrl: 'https://my.feishu.cn/docx/abc', name: 'M', summary: 'S', author: { name: 'A' } }),
+      'skills/s1/SKILL.md': '---\nname: s1\ndescription: d1\n---\nbody1',
+      'workspace/tool.py': 'v1',
+    });
+    await writeTree(v2Dir, {
+      'vonvon-bot.json': JSON.stringify({ schemaVersion: 1, id: 'merge-test', version: '0.2.0', public: true, docUrl: 'https://my.feishu.cn/docx/abc', name: 'M', summary: 'S', author: { name: 'A' } }),
+      'skills/s1/SKILL.md': '---\nname: s1\ndescription: d2\n---\nbody2',
+      'workspace/tool.py': 'v2',
+    });
+    const s1 = await stageTemplate(v1Dir, mergeDest, { mode: 'fresh', noTelemetry: true });
+    expect(s1.partial).toBe(false);
+    expect(s1.version).toBe('0.1.0');
+    const s2 = await stageTemplate(v2Dir, mergeDest, { mode: 'merge', updateSkills: true });
+    expect(s2.partial).toBe(true);
+    expect(s2.conflictingWorkspaceFiles).toEqual(['tool.py']);
+    expect(s2.version).toBe('0.1.0');
+    expect(s2.telemetry.reason).toBe('partial_conflict');
+    const metaAfter = JSON.parse(await readFile(join(mergeDest, INSTALLED_META_FILENAME), 'utf8'));
+    expect(metaAfter.templates[0].version).toBe('0.1.0');
+
+    // draftTemplateFromDirectory skips memory.json, honors explicit id/author, and respects cleared live role.
+    const srcGroup = await makeTempDir('vonvon-srcgrp-');
+    const draftDest = join(await makeTempDir('vonvon-draftdst-'), 'draft');
+    await writeTree(srcGroup, {
+      'vonvon-bot.json': JSON.stringify({ schemaVersion: 1, id: 'old-id', version: '0.1.0', name: 'Old', summary: 'Old', author: { name: 'OldAuthor' }, group: { role: 'StaleRole' } }),
+      'memory.json': '{"secret":"private"}',
+      'AGENTS.md': '# Guide',
+      '.agents/skills/helper/SKILL.md': '---\nname: helper\ndescription: helps\n---\nhello',
+    });
+    const drafted = await draftTemplateFromDirectory({
+      sourceDir: srcGroup,
+      destDir: draftDest,
+      groupName: '测试群',
+      id: 'new-slug',
+      authorName: 'Clay Zhang',
+      roleReadOk: true,
+      schedulesReadOk: true,
+    });
+    expect(drafted.id).toBe('new-slug');
+    expect(drafted.roleIncluded).toBe(false);
+    expect(drafted.skippedEntries.some(e => e.path === 'memory.json' && e.reason === 'forbidden')).toBe(true);
+    const draftedManifest = JSON.parse(await readFile(join(draftDest, 'vonvon-bot.json'), 'utf8'));
+    expect(draftedManifest.author.name).toBe('Clay Zhang');
+    expect(draftedManifest.group.role).toBeUndefined();
   });
 });

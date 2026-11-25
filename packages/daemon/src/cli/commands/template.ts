@@ -126,7 +126,7 @@ export async function runTemplateInspect(source: string, options: { sourceUrl?: 
       result.public
         ? `公开宣传：是${result.docUrl ? ` · ${result.docUrl}` : ''}`
         : '公开宣传：否（仅本地私用，不会上报社区）',
-      `签名状态：${result.signatureStatus === 'valid' ? '有效' : result.signatureStatus === 'invalid' ? '无效' : '未签名'}`,
+      `宣传名片签名：${result.signatureStatus === 'valid' ? '有效' : result.signatureStatus === 'invalid' ? '无效' : '无（私用或未签名公开配方）'}`,
       `Skill（${result.skills.length}）：${result.skills.length ? result.skills.map(s => `${s.name}${s.setup ? ' [setup]' : ''}`).join('、') : '无'}`,
       `预置工作区文件（${result.workspaceFiles.length}）：${result.workspaceFiles.length ? result.workspaceFiles.slice(0, 10).join('、') : '无'}`,
       ...(result.group.recommendedPermission ? [`建议权限：${result.group.recommendedPermission}${result.group.permissionNote ? `（${result.group.permissionNote}）` : ''}`] : []),
@@ -165,7 +165,7 @@ export async function runTemplateStage(
       noTelemetry: options.telemetry === false,
     });
     const lines = [
-      `已铺设配方 ${result.id} v${result.version} 到 ${result.dest}（模式：${result.mode}）`,
+      `已铺设配方 ${result.id} v${result.version} 到 ${result.dest}（模式：${result.mode}${result.partial ? '，部分文件冲突未覆盖' : ''}）`,
       `写入工作区文件：${result.writtenWorkspaceFiles.length} 个`,
       `新增 Skill：${result.addedSkills.length ? result.addedSkills.join('、') : '无'}`,
       ...(result.updatedSkills.length ? [`已更新 Skill：${result.updatedSkills.join('、')}`] : []),
@@ -253,7 +253,7 @@ function normalizePermissionTier(value: unknown): 'qa' | 'write' | 'full' | unde
 
 export async function runTemplateDraftGroup(
   group: string,
-  options: { dest?: string; bot?: string; author?: string },
+  options: { dest?: string; bot?: string; id?: string; author?: string },
   io: Io,
   daemon: Daemon = withDaemon,
 ): Promise<void> {
@@ -268,6 +268,7 @@ export async function runTemplateDraftGroup(
       const membership = pickGroup(snapshot.memberships, bot, group);
 
       let roleSupplement: string | undefined;
+      let roleReadOk = false;
       let recommendedPermission = normalizePermissionTier(membership.effectMode ?? membership.permission?.administrator);
       let disabledSkillPaths: string[] = [];
       let settingsWarning: string | undefined;
@@ -280,6 +281,7 @@ export async function runTemplateDraftGroup(
         );
         if (reply.kind === 'view' && reply.view.scope.kind === 'project') {
           const view = reply.view as ProjectSettingsView;
+          roleReadOk = true;
           const roleStored = view.sections.role?.stored?.supplement;
           if (typeof roleStored === 'string' && roleStored.trim()) roleSupplement = roleStored.trim();
           const permMode = normalizePermissionTier(view.sections.permission?.stored?.mode);
@@ -292,10 +294,12 @@ export async function runTemplateDraftGroup(
 
       const schedules: TemplateSchedule[] = [];
       const skippedSchedules: { name: string; reason: string }[] = [];
+      let schedulesReadOk = false;
       let scheduleWarning: string | undefined;
       try {
         const schedReply = await call('读取群定时任务', c => c.schedule(bot.id, { action: 'list', chatId: membership.groupId }));
         const tasks = want('读取群定时任务', schedReply, 'tasks').tasks;
+        schedulesReadOk = true;
         for (const task of tasks) {
           const converted = toTemplateSchedule(task);
           if (converted) schedules.push(converted);
@@ -312,9 +316,11 @@ export async function runTemplateDraftGroup(
         groupName: membership.name,
         sourceDir: membership.directory,
         roleSupplement,
+        roleReadOk,
         recommendedPermission,
         disabledSkillPaths,
         schedules,
+        schedulesReadOk,
         skippedSchedules,
         warnings: [settingsWarning, scheduleWarning].filter((w): w is string => Boolean(w)),
       };
@@ -325,10 +331,13 @@ export async function runTemplateDraftGroup(
       destDir: options.dest,
       groupName: extracted.groupName,
       groupId: extracted.groupId,
+      ...(options.id ? { id: options.id } : {}),
       ...(options.author ? { authorName: options.author } : {}),
       ...(extracted.roleSupplement ? { roleSupplement: extracted.roleSupplement } : {}),
+      roleReadOk: extracted.roleReadOk,
       ...(extracted.recommendedPermission ? { recommendedPermission: extracted.recommendedPermission } : {}),
       ...(extracted.schedules.length ? { schedules: extracted.schedules } : {}),
+      schedulesReadOk: extracted.schedulesReadOk,
       disabledSkillPaths: extracted.disabledSkillPaths,
     });
 

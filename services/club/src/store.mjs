@@ -28,7 +28,23 @@ export function compareVersions(a, b) {
   if (pa.pre === pb.pre) return 0;
   if (!pa.pre) return 1;
   if (!pb.pre) return -1;
-  return pa.pre < pb.pre ? -1 : 1;
+  const aParts = pa.pre.split('.');
+  const bParts = pb.pre.split('.');
+  const preLen = Math.max(aParts.length, bParts.length);
+  for (let i = 0; i < preLen; i++) {
+    const x = aParts[i];
+    const y = bParts[i];
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    if (x === y) continue;
+    const xNum = /^\d+$/.test(x);
+    const yNum = /^\d+$/.test(y);
+    if (xNum && yNum) return Number(x) - Number(y);
+    if (xNum) return -1;
+    if (yNum) return 1;
+    return x < y ? -1 : 1;
+  }
+  return 0;
 }
 
 /**
@@ -115,6 +131,9 @@ export class ClubStore {
     if (!cols.has('doc_stats_synced_at')) {
       this.#db.exec('ALTER TABLE templates ADD COLUMN doc_stats_synced_at INTEGER');
     }
+    if (!cols.has('withdrawn_at')) {
+      this.#db.exec('ALTER TABLE templates ADD COLUMN withdrawn_at INTEGER');
+    }
 
     for (const key of this.#autoTrustKeys) {
       this.#db.prepare(`
@@ -147,11 +166,11 @@ export class ClubStore {
 
   #upsertTemplate(promo, authorPublicKey, signature, now, { skipIfExists = false } = {}) {
     const existing = this.#db.prepare(
-      'SELECT version, cover_url FROM templates WHERE id = ? AND author_public_key = ?',
+      'SELECT version, cover_url, withdrawn_at FROM templates WHERE id = ? AND author_public_key = ?',
     ).get(promo.id, authorPublicKey);
 
     if (existing && skipIfExists) {
-      return { changed: false, existed: true, coverUrl: existing.cover_url ?? null };
+      return { changed: false, existed: true, withdrawn: Boolean(existing.withdrawn_at), coverUrl: existing.cover_url ?? null };
     }
 
     const docUrl = promo.docUrl ?? promo.repository ?? '';
@@ -159,8 +178,8 @@ export class ClubStore {
       INSERT INTO templates (
         id, author_public_key, version, name, summary, tags_json, skill_names_json,
         doc_url, install_hint, repository, cover_url, author_json, pricing_json,
-        acquisition_json, promo_signature, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+        acquisition_json, promo_signature, withdrawn_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, ?, ?)
       ON CONFLICT(id, author_public_key) DO UPDATE SET
         version = excluded.version,
         name = excluded.name,
@@ -174,6 +193,7 @@ export class ClubStore {
         pricing_json = excluded.pricing_json,
         acquisition_json = excluded.acquisition_json,
         promo_signature = excluded.promo_signature,
+        withdrawn_at = NULL,
         updated_at = excluded.updated_at
     `).run(
       promo.id,
@@ -193,7 +213,12 @@ export class ClubStore {
       now,
       now,
     );
-    return { changed: true, existed: Boolean(existing), coverUrl: existing?.cover_url ?? null };
+    return {
+      changed: true,
+      existed: Boolean(existing && !existing.withdrawn_at),
+      withdrawn: false,
+      coverUrl: existing?.cover_url ?? null,
+    };
   }
 
   /**
@@ -206,9 +231,9 @@ export class ClubStore {
     if (author.blocked) return { ok: false, blocked: true };
 
     const existing = this.#db.prepare(
-      'SELECT version FROM templates WHERE id = ? AND author_public_key = ?',
+      'SELECT version, withdrawn_at FROM templates WHERE id = ? AND author_public_key = ?',
     ).get(promo.id, authorPublicKey);
-    if (existing && compareVersions(promo.version, existing.version) < 0) {
+    if (existing && !existing.withdrawn_at && compareVersions(promo.version, existing.version) < 0) {
       return { ok: false, downgrade: true, currentVersion: existing.version };
     }
 
@@ -226,43 +251,50 @@ export class ClubStore {
    * When a user installs an unsigned GitHub repo whose manifest omits `author.publicKey`
    * (e.g. `modelzen/vonvon-assistant`), attribute the install to the author's published
    * signed card if `id` AND (`docUrl` or `repository`) match, instead of spawning a
-   * duplicate unsigned ghost card on the catalog.
+   * duplicate unsigned ghost card on the catalog (and respect withdrawn signed cards so
+   * installing an old unsigned repo cannot resurrect an author-unpublished listing).
    */
-  #findMatchingSignedKey(promo) {
+  #findMatchingSignedEntry(promo) {
     const docUrl = promo.docUrl ?? null;
     const repo = promo.repository ?? null;
     if (!docUrl && !repo) return null;
     const rows = this.#db.prepare(`
-      SELECT t.author_public_key, t.doc_url, t.repository
+      SELECT t.author_public_key, t.doc_url, t.repository, t.withdrawn_at
       FROM templates t
       JOIN authors a ON a.public_key = t.author_public_key
       WHERE t.id = ? AND t.author_public_key NOT LIKE 'unsigned:%' AND a.blocked = 0
-      ORDER BY a.trusted DESC, t.updated_at DESC
+      ORDER BY (t.withdrawn_at IS NULL) DESC, a.trusted DESC, t.updated_at DESC
     `).all(promo.id);
-    const matchedKeys = new Set();
+    const matched = new Map();
     for (const r of rows) {
       if ((docUrl && r.doc_url && r.doc_url === docUrl) || (repo && r.repository && r.repository === repo)) {
-        matchedKeys.add(r.author_public_key);
+        matched.set(r.author_public_key, { key: r.author_public_key, withdrawn: Boolean(r.withdrawn_at) });
       }
     }
-    return matchedKeys.size === 1 ? [...matchedKeys][0] : null;
+    return matched.size === 1 ? [...matched.values()][0] : null;
   }
 
   /**
    * Called on `vonvon template stage`: idempotently records deduplicated unique installs.
    * Seeds missing cards for unpublished public packs, but NEVER overwrites an existing card
-   * (preventing older installed packages from rolling back newer author-published listings).
+   * and NEVER resurrects an author-withdrawn (unpublished) listing.
    */
   recordInstall(promo, signature, { sourceKind, anonInstallKey }, now = Date.now()) {
-    const matchedSignedKey = !promo.author.publicKey ? this.#findMatchingSignedKey(promo) : null;
+    const matchedSigned = !promo.author.publicKey ? this.#findMatchingSignedEntry(promo) : null;
+    if (matchedSigned?.withdrawn) {
+      return { ok: true, id: promo.id, authorPublicKey: matchedSigned.key, deduplicated: false, ignored: 'withdrawn', trusted: false };
+    }
     const authorPublicKey = promo.author.publicKey
-      || matchedSignedKey
+      || matchedSigned?.key
       || `unsigned:${sha256Hex(promo.docUrl ?? promo.repository ?? promo.id).slice(0, 24)}`;
     const author = this.#ensureAuthor(authorPublicKey, promo.author.name, now);
     if (author.blocked) return { ok: false, blocked: true };
 
-    if (!matchedSignedKey) {
-      this.#upsertTemplate(promo, authorPublicKey, signature, now, { skipIfExists: true });
+    if (!matchedSigned) {
+      const upsert = this.#upsertTemplate(promo, authorPublicKey, signature, now, { skipIfExists: true });
+      if (upsert.withdrawn) {
+        return { ok: true, id: promo.id, authorPublicKey, deduplicated: false, ignored: 'withdrawn', trusted: author.trusted };
+      }
     }
 
     const existingInstall = this.#db.prepare(
@@ -309,6 +341,7 @@ export class ClubStore {
       docStatsSyncedAt: row.doc_stats_synced_at ? Number(row.doc_stats_synced_at) : null,
       trusted: Boolean(row.trusted),
       ...(row.blocked !== undefined ? { blocked: Boolean(row.blocked) } : {}),
+      ...(row.withdrawn_at ? { withdrawnAt: Number(row.withdrawn_at) } : {}),
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at),
     };
@@ -324,7 +357,7 @@ export class ClubStore {
         (SELECT COUNT(*) FROM installs i WHERE i.template_id = t.id AND i.author_public_key = t.author_public_key AND i.installed_at >= ?) AS recent_install_count
       FROM templates t
       JOIN authors a ON a.public_key = t.author_public_key
-      WHERE a.trusted = 1 AND a.blocked = 0
+      WHERE a.trusted = 1 AND a.blocked = 0 AND t.withdrawn_at IS NULL
     `).all(since);
 
     let items = rows.map(r => this.#hydrateRow(r));
@@ -385,14 +418,14 @@ export class ClubStore {
             (SELECT COUNT(*) FROM installs i WHERE i.template_id = t.id AND i.author_public_key = t.author_public_key) AS install_count,
             (SELECT COUNT(*) FROM installs i WHERE i.template_id = t.id AND i.author_public_key = t.author_public_key AND i.installed_at >= ?) AS recent_install_count
           FROM templates t JOIN authors a ON a.public_key = t.author_public_key
-          WHERE t.id = ? AND t.author_public_key = ? AND a.blocked = 0 ${trustClause}
+          WHERE t.id = ? AND t.author_public_key = ? AND a.blocked = 0 AND t.withdrawn_at IS NULL ${trustClause}
         `).all(since, id, authorPublicKey)
       : this.#db.prepare(`
           SELECT t.*, a.trusted,
             (SELECT COUNT(*) FROM installs i WHERE i.template_id = t.id AND i.author_public_key = t.author_public_key) AS install_count,
             (SELECT COUNT(*) FROM installs i WHERE i.template_id = t.id AND i.author_public_key = t.author_public_key AND i.installed_at >= ?) AS recent_install_count
           FROM templates t JOIN authors a ON a.public_key = t.author_public_key
-          WHERE t.id = ? AND a.blocked = 0 ${trustClause}
+          WHERE t.id = ? AND a.blocked = 0 AND t.withdrawn_at IS NULL ${trustClause}
           ORDER BY a.trusted DESC, install_count DESC
         `).all(since, id);
     return rows.map(r => this.#hydrateRow(r));
@@ -415,7 +448,7 @@ export class ClubStore {
       SELECT t.id, t.author_public_key, t.doc_url, t.cover_url, t.doc_stats_synced_at
       FROM templates t
       JOIN authors a ON a.public_key = t.author_public_key
-      WHERE a.trusted = 1 AND a.blocked = 0
+      WHERE a.trusted = 1 AND a.blocked = 0 AND t.withdrawn_at IS NULL
         AND (t.doc_stats_synced_at IS NULL OR t.doc_stats_synced_at < ?)
       ORDER BY COALESCE(t.doc_stats_synced_at, 0) ASC, t.updated_at DESC
       LIMIT ?
@@ -429,7 +462,7 @@ export class ClubStore {
 
   setCoverUrlIfMissing(templateId, authorPublicKey, coverUrl) {
     const res = this.#db.prepare(
-      'UPDATE templates SET cover_url = ? WHERE id = ? AND author_public_key = ? AND cover_url IS NULL',
+      'UPDATE templates SET cover_url = ? WHERE id = ? AND author_public_key = ? AND cover_url IS NULL AND withdrawn_at IS NULL',
     ).run(coverUrl, templateId, authorPublicKey);
     return res.changes > 0;
   }
@@ -452,7 +485,7 @@ export class ClubStore {
       'SELECT cover_url FROM templates WHERE id = ? AND author_public_key = ?',
     ).get(templateId, authorPublicKey);
     const res = this.#db.prepare(
-      'UPDATE templates SET cover_url = ? WHERE id = ? AND author_public_key = ?',
+      'UPDATE templates SET cover_url = ? WHERE id = ? AND author_public_key = ? AND withdrawn_at IS NULL',
     ).run(coverUrl, templateId, authorPublicKey);
     const previousCoverUrl = prev?.cover_url && prev.cover_url !== coverUrl ? prev.cover_url : null;
     return { updated: res.changes > 0, previousCoverUrl };
@@ -462,7 +495,7 @@ export class ClubStore {
     return Boolean(this.#db.prepare(`
       SELECT 1 FROM templates t
       JOIN authors a ON a.public_key = t.author_public_key
-      WHERE t.cover_url = ? AND a.trusted = 1 AND a.blocked = 0
+      WHERE t.cover_url = ? AND a.trusted = 1 AND a.blocked = 0 AND t.withdrawn_at IS NULL
       LIMIT 1
     `).get(coverUrl));
   }
@@ -476,7 +509,7 @@ export class ClubStore {
       SELECT COUNT(DISTINCT t.cover_url) AS cnt
       FROM templates t
       JOIN authors a ON a.public_key = t.author_public_key
-      WHERE t.cover_url IS NOT NULL AND a.trusted = 0 AND a.blocked = 0
+      WHERE t.cover_url IS NOT NULL AND a.trusted = 0 AND a.blocked = 0 AND t.withdrawn_at IS NULL
     `).get();
     return Number(row?.cnt ?? 0);
   }
@@ -510,6 +543,24 @@ export class ClubStore {
     return true;
   }
 
+  /**
+   * Author self-unpublish: persists withdrawal tombstone so subsequent `/api/install` reports from
+   * previously distributed `.vonvon.zip` packages can NEVER resurrect a withdrawn listing.
+   * Preserves historical install counts; only an explicit author `publish()` clears `withdrawn_at`.
+   */
+  withdrawTemplate(templateId, authorPublicKey, now = Date.now()) {
+    const prev = this.#db.prepare(
+      'SELECT cover_url, withdrawn_at FROM templates WHERE id = ? AND author_public_key = ?',
+    ).get(templateId, authorPublicKey);
+    if (!prev || prev.withdrawn_at) {
+      return { deleted: false, previousCoverUrl: null };
+    }
+    const res = this.#db.prepare(
+      'UPDATE templates SET withdrawn_at = ?, cover_url = NULL, updated_at = ? WHERE id = ? AND author_public_key = ? AND withdrawn_at IS NULL',
+    ).run(now, now, templateId, authorPublicKey);
+    return { deleted: res.changes > 0, previousCoverUrl: prev.cover_url ?? null };
+  }
+
   deleteTemplate(templateId, authorPublicKey) {
     const prev = this.#db.prepare(
       'SELECT cover_url FROM templates WHERE id = ? AND author_public_key = ?',
@@ -536,7 +587,7 @@ export class ClubStore {
         (SELECT COUNT(*) FROM installs i WHERE i.template_id = t.id AND i.author_public_key = t.author_public_key AND i.installed_at >= ?) AS recent_install_count
       FROM templates t
       JOIN authors a ON a.public_key = t.author_public_key
-      WHERE a.trusted = 0 AND a.blocked = 0
+      WHERE a.trusted = 0 AND a.blocked = 0 AND t.withdrawn_at IS NULL
       ORDER BY install_count DESC, t.updated_at DESC
     `).all(since);
     return rows.map(r => ({ ...this.#hydrateRow(r), authorNote: r.note ?? '' }));

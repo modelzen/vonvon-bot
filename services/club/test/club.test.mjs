@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 import { canonicalPromoBytes } from '../src/crypto.mjs';
 import { parsePublicFeishuHtml } from '../src/feishu-public.mjs';
 import { createClubServer } from '../src/server.mjs';
-import { ClubStore } from '../src/store.mjs';
+import { ClubStore, compareVersions } from '../src/store.mjs';
 
 const execFileAsync = promisify(execFile);
 const HERE = fileURLToPath(new URL('.', import.meta.url));
@@ -311,6 +311,38 @@ describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
     const listAfterUnpub = await (await fetch(`${baseUrl}/api/list`)).json();
     assert.equal(listAfterUnpub.items.length, 0);
     assert.equal((await fetch(`${baseUrl}${goodCover.coverUrl}`)).status, 404);
+
+    // 8. Withdrawn listing MUST NOT be resurrected by installing an old signed ZIP or unsigned GitHub repo.
+    const userCHome = join(workDir, 'user-c-home');
+    const groupC = join(workDir, 'group-c');
+    await execFileAsync(process.execPath, [
+      VONVON_BIN, 'template', 'stage', outZip, '--dest', groupC, '--mode', 'fresh', '--json',
+    ], {
+      env: { ...process.env, VONVON_HOME: userCHome, VONVON_CLUB_API_URL: baseUrl, VONVON_SESSION: '', FEISHU_CODEX_BRIDGE: '' },
+    });
+    assert.equal((await (await fetch(`${baseUrl}/api/list`)).json()).items.length, 0);
+
+    // Unsigned install matching withdrawn signed docUrl also cannot spawn a ghost card.
+    const ghostRes = await fetch(`${baseUrl}/api/install`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        promo: {
+          schemaVersion: 1, public: true, id: 'modelzen/daily-brief', version: '0.1.0',
+          name: '行业日报助手', summary: '每天定时抓取核心动态并输出飞书简报。',
+          tags: ['日报'], skillNames: ['daily-setup'],
+          docUrl: 'https://my.feishu.cn/docx/AFKNdf4QaooL5OxSR8bc5H7vn7b',
+          author: { name: 'Clay Zhang' }, pricing: { kind: 'free' }, acquisition: ['local'],
+        },
+        sourceKind: 'github',
+        anonInstallKey: 'c'.repeat(64),
+      }),
+    });
+    assert.equal(ghostRes.status, 200);
+    assert.equal((await (await fetch(`${baseUrl}/api/list`)).json()).items.length, 0);
+
+    // SemVer pre-release numeric identifiers compare numerically (rc.10 > rc.2).
+    assert.ok(compareVersions('1.0.0-rc.10', '1.0.0-rc.2') > 0);
   });
 
   it('rejects tampered signatures, non-https URLs, and isolates hijacked same-id packages by authorPublicKey', async () => {

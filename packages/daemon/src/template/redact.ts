@@ -32,6 +32,10 @@ const FORBIDDEN_FILENAMES = new Set([
   'setup-state.json',
 ]);
 
+export function isForbiddenPrivateFilename(filePath: string): boolean {
+  return FORBIDDEN_FILENAMES.has(basename(filePath).toLowerCase());
+}
+
 const PLACEHOLDER_USERNAMES = new Set([
   'user', 'username', 'yourname', 'your-name', 'name', 'example', 'alice', 'bob', 'demo', 'test', 'xxx', 'placeholder',
 ]);
@@ -100,7 +104,7 @@ const CONTENT_RULES: readonly ContentRule[] = [
   {
     id: 'windows-home-path',
     message: '检测到疑似 Windows 本机用户绝对路径（C:\\Users\\...）',
-    pattern: /\b[A-Za-z]:\\Users\\([A-Za-z0-9._-]+)(?:\\|(?=["'\s)]|$))/g,
+    pattern: /\b[A-Za-z]:\\{1,2}Users\\{1,2}([A-Za-z0-9._-]+)(?:\\|(?=["'\s)]|$))/g,
     ignore: (match) => isPlaceholderUsername(match[1] ?? ''),
   },
 ];
@@ -108,10 +112,15 @@ const CONTENT_RULES: readonly ContentRule[] = [
 function decodeTextIfPossible(data: Buffer): string | undefined {
   if (data.length >= 2) {
     if (data[0] === 0xff && data[1] === 0xfe) {
-      return data.subarray(2).toString('utf16le');
+      const body = data.subarray(2);
+      const evenLen = body.length - (body.length % 2);
+      return body.subarray(0, evenLen).toString('utf16le');
     }
     if (data[0] === 0xfe && data[1] === 0xff) {
-      const swapped = Buffer.from(data.subarray(2));
+      const body = data.subarray(2);
+      const evenLen = body.length - (body.length % 2);
+      if (evenLen === 0) return '';
+      const swapped = Buffer.from(body.subarray(0, evenLen));
       swapped.swap16();
       return swapped.toString('utf16le');
     }

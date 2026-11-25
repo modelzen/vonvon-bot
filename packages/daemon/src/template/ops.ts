@@ -7,7 +7,7 @@ import {
   fetchLocalFeishuCover, publishTemplatePromo, reportTemplateInstall,
   type InstallReportResult, type PublishResult, type TemplateSourceKind,
 } from './club-client';
-import { scanFilesForSecrets, type RedactionFinding } from './redact';
+import { isForbiddenPrivateFilename, scanFilesForSecrets, type RedactionFinding } from './redact';
 import {
   buildPublicPromoPayload, effectiveAcquisition, effectiveDocUrl, effectiveGroupSpec, effectivePricing,
   installedTemplatesFileSchema, isPublicTemplate, templateManifestSchema, TEMPLATE_ID_REGEX,
@@ -81,6 +81,7 @@ export interface StageResult {
   mode: 'fresh' | 'merge';
   id: string;
   version: string;
+  partial: boolean;
   writtenWorkspaceFiles: string[];
   conflictingWorkspaceFiles: string[];
   addedSkills: string[];
@@ -294,6 +295,21 @@ function parseLoadedPackage(sourceKind: TemplateSourceKind, files: LoadedFile[])
 
   const workspaceFiles: LoadedFile[] = [];
   const layoutWarnings: string[] = [];
+  if (rawJson && typeof rawJson === 'object') {
+    const rawObj = rawJson as Record<string, unknown>;
+    if ('description' in rawObj) {
+      layoutWarnings.push('vonvon-bot.json 顶层的 description 不会被读取，请使用 summary');
+    }
+    if (rawObj.group && typeof rawObj.group === 'object') {
+      const rawGroup = rawObj.group as Record<string, unknown>;
+      if ('permission' in rawGroup && !('recommendedPermission' in rawGroup)) {
+        layoutWarnings.push('vonvon-bot.json 中的 group.permission 不会被读取，请改为 group.recommendedPermission（qa / write / full）');
+      }
+      if ('groupName' in rawGroup && !('defaultName' in rawGroup)) {
+        layoutWarnings.push('vonvon-bot.json 中的 group.groupName 不会被读取，请改为 group.defaultName');
+      }
+    }
+  }
   const strayTopFiles: string[] = [];
   let readme: Buffer | undefined;
 
@@ -662,6 +678,18 @@ export async function stageTemplate(
   const mode = options.mode ?? 'fresh';
   const { sourceKind, files } = await loadRawEntries(source, options.sourceUrl);
   const pkg = parseLoadedPackage(sourceKind, files);
+
+  if (!hasEffectiveCapability(pkg)) {
+    throw new Error('配方不包含有效 Skill、预置工作区文件或本群角色（空壳配方无法安装）');
+  }
+  const invalidSkills = findInvalidSkills(pkg);
+  if (invalidSkills.length > 0) {
+    throw new Error(`以下 Skill 的 SKILL.md 缺少合法 YAML frontmatter（name / description），无法安装：${invalidSkills.join('、')}`);
+  }
+  if (checkSignature(pkg) === 'invalid') {
+    throw new Error('公开宣传签名校验失败：清单内容可能已被篡改，已拒绝安装');
+  }
+
   const dest = await ensureSafeDestDir(destDir);
 
   if (mode === 'fresh') {
@@ -670,6 +698,12 @@ export async function stageTemplate(
       throw new Error(`目标工作区非空，fresh 模式拒绝覆写已有文件（如需增量合并请用 --mode merge）：${dest}`);
     }
   }
+
+  // Read existing metadata BEFORE mutating destination so symlink/corrupt metadata fails cleanly upfront.
+  const existingMeta = await readInstalledMeta(dest);
+  const priorRecord = existingMeta.templates.find(
+    item => item.id === pkg.manifest.id && (item.authorPublicKey ?? '') === (pkg.manifest.author.publicKey ?? ''),
+  );
 
   // Pre-scan all workspace files and skills before writing anything so symlink or type errors
   // never leave partial mutations behind.
@@ -733,19 +767,25 @@ export async function stageTemplate(
     else if (hasDiff || hasMissing) updatedSkills.push(skillName);
   }
 
+  const partial = conflictingWorkspaceFiles.length > 0 || conflictingSkills.length > 0;
   const docUrl = effectiveDocUrl(pkg.manifest);
+  const appliedSkills = [...new Set([
+    ...(partial && priorRecord ? priorRecord.skills : []),
+    ...[...pkg.skills.keys()].filter(name => !conflictingSkills.includes(name)),
+  ])].sort();
+  const recordedVersion = partial && priorRecord ? priorRecord.version : pkg.manifest.version;
   const installedMetaPath = await writeInstalledMeta(dest, {
     id: pkg.manifest.id,
     ...(pkg.manifest.author.publicKey ? { authorPublicKey: pkg.manifest.author.publicKey } : {}),
-    version: pkg.manifest.version,
+    version: recordedVersion,
     ...(options.sourceUrl ?? pkg.manifest.repository ? { sourceUrl: options.sourceUrl ?? pkg.manifest.repository } : {}),
     ...(docUrl ? { docUrl } : {}),
-    skills: [...pkg.skills.keys()],
+    skills: appliedSkills,
     installedAt: new Date().toISOString(),
   });
 
-  let telemetry: InstallReportResult = { attempted: false, ok: false, reason: 'not_public' };
-  if (isPublicTemplate(pkg.manifest)) {
+  let telemetry: InstallReportResult = { attempted: false, ok: false, reason: partial ? 'partial_conflict' : 'not_public' };
+  if (!partial && isPublicTemplate(pkg.manifest)) {
     const promo = buildPublicPromoPayload(pkg.manifest, [...pkg.skills.keys()]);
     telemetry = await reportTemplateInstall(promo, pkg.manifest.promoSignature, sourceKind, {
       dataRoot: options.dataRoot,
@@ -760,7 +800,8 @@ export async function stageTemplate(
     dest,
     mode,
     id: pkg.manifest.id,
-    version: pkg.manifest.version,
+    version: recordedVersion,
+    partial,
     writtenWorkspaceFiles,
     conflictingWorkspaceFiles,
     addedSkills,
@@ -925,10 +966,13 @@ export interface DraftFromGroupInput {
   destDir: string;
   groupName: string;
   groupId?: string;
+  id?: string;
   authorName?: string;
   roleSupplement?: string;
+  roleReadOk?: boolean;
   recommendedPermission?: 'qa' | 'write' | 'full';
   schedules?: TemplateSchedule[];
+  schedulesReadOk?: boolean;
   disabledSkillPaths?: readonly string[];
 }
 
@@ -1106,9 +1150,20 @@ export async function draftTemplateFromDirectory(input: DraftFromGroupInput): Pr
   const extractedSkills = new Map<string, { entries: LoadedFile[]; description?: string }>();
   const skillRoots = ['skills', '.agents/skills', '.claude/skills'] as const;
   for (const rootRel of skillRoots) {
+    const parentSeg = rootRel.includes('/') ? rootRel.split('/')[0]! : undefined;
+    if (parentSeg) {
+      const parentInfo = await lstat(join(sourceDir, parentSeg)).catch(() => undefined);
+      if (!parentInfo || parentInfo.isSymbolicLink() || !parentInfo.isDirectory()) {
+        if (parentInfo?.isSymbolicLink()) skippedEntries.push({ path: parentSeg, reason: 'symlink' });
+        continue;
+      }
+    }
     const rootFull = join(sourceDir, rootRel);
     const rootInfo = await lstat(rootFull).catch(() => undefined);
-    if (!rootInfo || rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) continue;
+    if (!rootInfo || rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) {
+      if (rootInfo?.isSymbolicLink()) skippedEntries.push({ path: rootRel, reason: 'symlink' });
+      continue;
+    }
     const candidates = (await readdir(rootFull, { withFileTypes: true })).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const entry of candidates) {
       const skillName = entry.name;
@@ -1150,6 +1205,10 @@ export async function draftTemplateFromDirectory(input: DraftFromGroupInput): Pr
           if (info.isDirectory()) {
             await walkSkill(full);
           } else if (info.isFile()) {
+            if (isForbiddenWorkspacePath(relInside) || isForbiddenPrivateFilename(relInside)) {
+              skippedEntries.push({ path: `${rootRel}/${skillName}/${relInside}`, reason: 'forbidden' });
+              continue;
+            }
             fileCount++;
             if (fileCount > MAX_ARCHIVE_FILES) {
               throw new Error(`提取的文件数量超过配方上限（最多 ${MAX_ARCHIVE_FILES} 个）`);
@@ -1231,7 +1290,7 @@ export async function draftTemplateFromDirectory(input: DraftFromGroupInput): Pr
         }
         await walkWorkspace(full);
       } else if (info.isFile()) {
-        if (isForbiddenWorkspacePath(rel)) {
+        if (isForbiddenWorkspacePath(rel) || isForbiddenPrivateFilename(rel)) {
           skippedEntries.push({ path: rel, reason: 'forbidden' });
           continue;
         }
@@ -1270,9 +1329,19 @@ export async function draftTemplateFromDirectory(input: DraftFromGroupInput): Pr
       };
     });
 
-  const mergedRole = input.roleSupplement?.trim() || existingGroup.role?.trim() || undefined;
+  const explicitId = input.id?.trim();
+  if (explicitId && !TEMPLATE_ID_REGEX.test(explicitId)) {
+    throw new Error(`配方 id 格式不合法（仅允许小写字母、数字、连字符）：${input.id}`);
+  }
+  const explicitAuthor = input.authorName?.trim().slice(0, 80);
+
+  const mergedRole = input.roleReadOk
+    ? (input.roleSupplement?.trim() || undefined)
+    : (input.roleSupplement?.trim() || existingGroup.role?.trim() || undefined);
   const mergedPermission = input.recommendedPermission ?? existingGroup.recommendedPermission;
-  const mergedSchedules = input.schedules?.length ? input.schedules : existingGroup.schedules;
+  const mergedSchedules = input.schedulesReadOk
+    ? (input.schedules?.length ? input.schedules.slice(0, 20) : undefined)
+    : (input.schedules?.length ? input.schedules.slice(0, 20) : existingGroup.schedules?.slice(0, 20));
   const groupSpec: TemplateGroupSpec = {
     defaultName: existingGroup.defaultName ?? input.groupName.trim().slice(0, 100),
     ...(mergedRole ? { role: mergedRole.slice(0, 5000) } : {}),
@@ -1285,7 +1354,7 @@ export async function draftTemplateFromDirectory(input: DraftFromGroupInput): Pr
   const draftManifest: TemplateManifest = existingManifest
     ? {
         schemaVersion: 1,
-        id: existingManifest.id,
+        id: explicitId || existingManifest.id,
         version: existingManifest.version,
         public: false,
         name: existingManifest.name,
@@ -1297,7 +1366,7 @@ export async function draftTemplateFromDirectory(input: DraftFromGroupInput): Pr
         ...(existingManifest.license ? { license: existingManifest.license } : {}),
         ...(existingManifest.credits?.length ? { credits: existingManifest.credits } : {}),
         author: {
-          name: existingManifest.author.name,
+          name: explicitAuthor || existingManifest.author.name,
           ...(existingManifest.author.url ? { url: existingManifest.author.url } : {}),
           ...(existingManifest.author.contact ? { contact: existingManifest.author.contact } : {}),
         },
@@ -1311,12 +1380,12 @@ export async function draftTemplateFromDirectory(input: DraftFromGroupInput): Pr
       }
     : {
         schemaVersion: 1,
-        id: deriveTemplateId(input.groupName),
+        id: explicitId || deriveTemplateId(input.groupName),
         version: '0.1.0',
         public: false,
         name: input.groupName.trim().slice(0, 80) || '未命名配方',
         summary: `基于飞书群「${input.groupName.trim().slice(0, 60)}」整理的 Vonvon 配方。`,
-        author: { name: input.authorName?.trim().slice(0, 80) || '创作者' },
+        author: { name: explicitAuthor || '创作者' },
         group: groupSpec,
         ...(skillSummaries.length ? { skills: skillSummaries } : {}),
       };
