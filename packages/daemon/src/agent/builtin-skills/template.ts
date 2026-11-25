@@ -65,11 +65,11 @@ export const templateSkill: BuiltinSkill = {
 ### 2. 必须经由 \`stage\` 落盘（绝不绕过手拷）
 - **新建专属群**：
   1. \`vonvon group create <群名> --conversation multi --json\`（按用户常用后端可加 \`--tool claude\` 或 \`--tool codex\`，并记下返回的 \`groupId\` 与 \`folder\`）；
-  2. 未明确确认 \`full\` 时先收紧权限：\`vonvon settings set --group <群> permission.mode=write\`（或 \`qa\`）；
+  2. 未明确确认 \`full\` 时先收紧权限：\`vonvon settings set --group <群> permission.mode=write\`（或 \`qa\`）；**注意 \`permission.mode\` 与 \`role.supplement\` 属于不同配置节，必须分两条 \`vonvon settings set\` 命令执行，不能合在一条里**；
   3. \`vonvon template stage <source> --dest <工作区目录> --mode fresh --json\`（仓库来源加 \`--source-url <仓库地址>\`）；
-  4. 如有本群角色（\`group.role\`），写入群补充职责，**绝不覆盖 Bot 全局 \`SOUL.md\`**（多行内容用 JSON 字符串转义换行）：\`vonvon settings set --group <群> role.supplement='"<内容>"'\`；
+  4. 如有本群角色（\`group.role\`），单独执行一次写入群补充职责，**绝不覆盖 Bot 全局 \`SOUL.md\`**（多行内容用 JSON 字符串转义换行）：\`vonvon settings set --group <群> role.supplement='"<内容>"'\`；
   5. 如有用户确认启用的定时任务，用 \`vonvon schedule add --group <群> --name <任务名> --daily 09:00 "<提示词>"\`（按 \`when\` 选用 \`--daily HH:mm\`、\`--weekly mon,tue,wed,thu,fri@09:00\`、\`--every 30m\` 或 \`--cron "0 9 * * 1-5"\`；任务名不超过 40 字，提示词以 \`-\` 开头时前面加 \`--\`）；
-  6. 引导用户打开新群，若有 \`firstMessage\` 或 \`setup\` 技能，给出首句提示。
+  6. 在私聊回复中附带可点击的飞书新群链接 \`[打开「<群名>」](https://applink.feishu.cn/client/chat/open?openChatId=<groupId>)\`，若有 \`firstMessage\` 或 \`setup\` 技能，给出进群首句提示。
 - **导入已有群 / 升级**：
   1. 用 \`vonvon group show <群> --json\` 找主工作区并读 \`.vonvon-template.json\` 看已装版本；
   2. 必要时先 \`vonvon template extract <source> --dest <空临时目录> --json\` 对比差异，用 \`vonvon template stage <source> --dest <工作区目录> --mode merge --json\` 写入无冲突文件；
