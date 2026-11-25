@@ -611,13 +611,19 @@ export interface AgentCapabilities {
   approvals: boolean;
 }
 
+export type AgentSkillSource = 'builtin' | 'workspace' | 'user' | 'plugin' | 'system' | 'provider';
+
 export interface AgentSkill {
-  /** Native selector; Claude names use claude:<name> when no file path is exposed. */
+  /** Native selector; Claude names use claude:<name>, VonVon builtins use vonvon:<name>. */
   path: string;
   name: string;
   description: string;
-  source: 'workspace' | 'user' | 'provider';
+  source: AgentSkillSource;
   enabled: boolean;
+  /** Local file path on disk for viewing when `path` is a non-path selector. */
+  location?: string;
+  /** Rendered SKILL.md content when shipped inline (VonVon built-in skills). */
+  content?: string;
 }
 
 export interface AgentBackend {

@@ -108,6 +108,26 @@ it('hands a bound group\'s session the group package', async () => {
   expect(fake.ensure).toHaveBeenCalledWith('app', 'group', builtinSkillsOfSet('group'));
 });
 
+it('builds a subset builtin package when one VonVon skill is disabled and omits the package when all are disabled', async () => {
+  fake.project = { name: 'g', chatId: 'chat', cwd: join(root, 'work'), kind: 'multi', mode: 'qa', createdAt: 1, blank: false, skills: { disabledPaths: ['vonvon:vonvon-schedule'] } };
+  fake.ensure.mockResolvedValue({ path: '/builtin/group-subset', changed: true });
+  const { o, startThread } = orchestrator(true);
+  await o.onMessage(message());
+  await vi.waitFor(() => expect(startThread).toHaveBeenCalled());
+  await o.shutdown();
+  expect(startThread.mock.calls[0]![0].profile?.capabilityPackages).toEqual([{ path: '/builtin/group-subset', kind: 'builtin' }]);
+  expect(fake.ensure).toHaveBeenCalledWith('app', 'group', [builtinSkillsOfSet('group')[1]], expect.stringMatching(/^subset-[a-f0-9]{12}$/));
+
+  vi.clearAllMocks();
+  fake.project = { name: 'g', chatId: 'chat', cwd: join(root, 'work'), kind: 'multi', mode: 'qa', createdAt: 1, blank: false, skills: { disabledPaths: ['vonvon:vonvon-schedule', 'vonvon:vonvon-feishu'] } };
+  const second = orchestrator(true);
+  await second.o.onMessage(message());
+  await vi.waitFor(() => expect(second.startThread).toHaveBeenCalled());
+  await second.o.shutdown();
+  expect(second.startThread.mock.calls[0]![0].profile?.capabilityPackages).toEqual([]);
+  expect(fake.ensure).not.toHaveBeenCalled();
+});
+
 it('starts the session without the package when writing it fails, and records why', async () => {
   fake.ensure.mockRejectedValue(new Error('disk full'));
   const profile = await groupProfile();

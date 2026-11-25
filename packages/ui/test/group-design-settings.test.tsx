@@ -57,15 +57,39 @@ it('keeps the group role editor separate from stored memories', () => {
   expect(role).toContain('aria-label="Bot 其他说明"');
   expect(role.match(/<textarea/g)).toHaveLength(2);
 });
-it('shows discovered skills and no fabricated tool authorization state', () => {
-  const html = render('capabilities');
-  expect(html).toContain('实际技能');
-  expect(html).toContain('aria-label="使用 实际技能"');
+it('shows categorized skill regions including VonVon and no fabricated tool authorization state', () => {
+  const categorized = fixture();
+  categorized.skills = [
+    {name: 'vonvon-schedule', description: '定时任务说明', path: 'vonvon:vonvon-schedule', source: 'builtin', enabled: true, location: '/Users/example/.vonvon-bot/bots/cli_example/capabilities/builtin/group/skills/vonvon-schedule/SKILL.md', content: '# 定时任务'},
+    {name: 'verify', description: '项目技能说明', path: 'claude:verify', source: 'workspace', enabled: true, location: '/Users/example/project/.claude/skills/verify/SKILL.md'},
+    {name: 'agent-reach', description: '全局技能说明', path: 'claude:agent-reach', source: 'user', enabled: true, location: '/Users/example/.claude/skills/agent-reach/SKILL.md'},
+    {name: 'ai-mac-sign:mac-sign', description: '插件技能说明', path: 'claude:ai-mac-sign:mac-sign', source: 'plugin', enabled: true},
+    {name: 'skill-creator', description: '系统技能说明', path: '/Users/example/.codex/skills/.system/skill-creator/SKILL.md', source: 'system', enabled: true},
+  ];
+  const html = render('capabilities', categorized);
+  expect(html).toContain('aria-label="按来源筛选技能"');
+  expect(html).toContain('VonVon');
+  expect(html).toContain('本项目技能');
+  expect(html).toContain('Provider 全局技能');
+  expect(html).toContain('Provider 插件技能');
+  expect(html).toContain('Provider 系统技能');
+  expect(html).not.toContain('VonVon 内置');
+  expect(html).not.toContain('不可删除');
+  expect(html).toContain('aria-label="使用 vonvon-schedule"');
+  expect(html).toContain('aria-label="使用 verify"');
+  expect(html).toContain('aria-label="使用 agent-reach"');
+  expect(html).toContain('aria-label="使用 ai-mac-sign:mac-sign"');
+  expect(html).toContain('aria-label="使用 skill-creator"');
+  expect(html).toContain('5 项 · 5 已启用');
   expect(html).not.toContain('添加技能');
   expect(html).toContain('重新读取');
   expect(html).toContain('工具');
   expect(html).not.toContain('待安装');
   expect(html).not.toContain('待授权');
+  const single = fixture();
+  const singleHtml = render('capabilities', single);
+  expect(singleHtml).toContain('实际技能');
+  expect(singleHtml).not.toContain('aria-label="按来源筛选技能"');
   const empty = fixture(); empty.skills = [];
   expect(render('capabilities', empty)).toContain('尚未发现技能');
   expect(render('capabilities', empty)).not.toContain('实际技能');

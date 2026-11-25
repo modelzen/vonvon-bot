@@ -85,6 +85,14 @@ it('adds no whitelist where the group has none, so every skill stays listed', as
   expect(options).not.toHaveProperty('skills');
 });
 
+it('drops disabled VonVon skills from the Claude skill whitelist', async () => {
+  const options = await open(fixture(), 'start', {
+    ...profile(true, ['own-skill']),
+    skills: { disabledPaths: ['claude:off'], enabledNames: ['own-skill'], disabledBuiltinNames: ['vonvon:vonvon-schedule'] },
+  });
+  expect(options.skills).toEqual(['own-skill', 'vonvon:vonvon-feishu', 'vonvon:vonvon-config', 'vonvon:vonvon-template']);
+});
+
 it('logs when the CLI reports it did not load the plugin, and only then', async () => {
   const init = (plugins: { name: string; path: string }[]) => ({ type: 'system', subtype: 'init', plugins, skills: [] }) as unknown as SDKMessage;
   const warn = vi.spyOn(log, 'warn');

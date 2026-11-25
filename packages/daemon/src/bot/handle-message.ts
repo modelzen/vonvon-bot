@@ -15,7 +15,7 @@ import { settleTurn, recordUsage, type TurnStores } from './turn-usage';
 import { assemble, judgeContext, loadContextSources, openingInstructions, planTurnUpdate, contextOf, newNonce, type ContextPlace } from './context-assembly';
 import { groupSkillProfile } from '../agent/group-skills';
 import { completeBuiltinPackage, ensureBuiltinPackage } from '../agent/builtin-skills/package';
-import { builtinSkillsOfSet } from '../agent/builtin-skills/registry';
+import { builtinSubsetVariant, enabledBuiltinSkills } from '../agent/builtin-skills/registry';
 import type { SessionProfile } from '../agent/session-profile';
 import { SESSION_BOT_ENV, SESSION_CLI_ENV, SESSION_ENV, SESSION_LARK_CLI_ENV, SESSION_SCOPE_ENV, sessionScope } from '../config/session-env';
 import { appendLarkCliToPath, resolveLarkCliBin } from '../platform/lark-cli';
@@ -1271,7 +1271,7 @@ export function createOrchestrator(
     // The generic tool is a private chat's alone: a group cannot reach other groups or write to Feishu through it (7.6).
     const feishuApi = schedule && Boolean(project?.dm);
     // The task skill goes with the tools (T4b); a package that cannot be written leaves the last whole one, or none.
-    const capabilityPackages = schedule && backend.profileCapabilities?.capabilityPackages ? await builtinPackage(project?.chatId, project?.dm ? 'dm' : 'group') : [];
+    const capabilityPackages = schedule && backend.profileCapabilities?.capabilityPackages ? await builtinPackage(project?.chatId, project?.dm ? 'dm' : 'group', project?.skills?.disabledPaths) : [];
     // What the Feishu tools download must be readable outside full access too.
     const downloads = schedule && project ? inboundChatDir(project.chatId) : undefined;
     if (downloads) await prepareInboundDir(downloads);
@@ -1281,14 +1281,21 @@ export function createOrchestrator(
     if (assembled && built) openings.set(built, contextOf(assembled, nonce));
     return built;
   }
-  async function builtinPackage(chatId: string | undefined, set: 'group' | 'dm'): Promise<SessionProfile['capabilityPackages']> {
+  async function builtinPackage(chatId: string | undefined, set: 'group' | 'dm', disabledPaths?: readonly string[]): Promise<SessionProfile['capabilityPackages']> {
+    const selected = enabledBuiltinSkills(set, disabledPaths);
+    if (!selected.length) return [];
+    const variant = builtinSubsetVariant(set, selected);
     try {
-      const { path } = await ensureBuiltinPackage(cfg.accounts.app.id, set, builtinSkillsOfSet(set));
+      const { path } = variant
+        ? await ensureBuiltinPackage(cfg.accounts.app.id, set, selected, variant)
+        : await ensureBuiltinPackage(cfg.accounts.app.id, set, selected);
       return [{ path, kind: 'builtin' }];
     } catch (error) {
       // A resumed Codex thread still lists the skills from its rollout, so the package already there must stay
       // handed over (and readable); only without a whole one does the session start without the skill.
-      const kept = await completeBuiltinPackage(cfg.accounts.app.id, set);
+      const kept = variant
+        ? await completeBuiltinPackage(cfg.accounts.app.id, set, variant)
+        : await completeBuiltinPackage(cfg.accounts.app.id, set);
       log.fail('agent', error, { phase: 'builtin-package-failed', chatId, kept: Boolean(kept) });
       return kept ? [{ path: kept, kind: 'builtin' }] : [];
     }
