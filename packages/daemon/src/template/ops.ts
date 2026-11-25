@@ -645,35 +645,6 @@ async function fileMatches(rootDir: string, cleanRel: string, expected: Buffer):
   }
 }
 
-async function cleanStaleSkillFiles(rootDir: string, skillRelRoot: string, expectedRelPaths: ReadonlySet<string>): Promise<boolean> {
-  const skillDir = resolve(rootDir, ...skillRelRoot.split('/'));
-  if (!skillDir.startsWith(rootDir + sep)) return false;
-  const rootInfo = await lstat(skillDir).catch(() => undefined);
-  if (!rootInfo || rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) return false;
-  let pruned = false;
-
-  async function prune(current: string, relPrefix: string): Promise<void> {
-    const entries = await readdir(current, { withFileTypes: true });
-    for (const entry of entries) {
-      const full = join(current, entry.name);
-      const rel = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
-      const info = await lstat(full);
-      if (info.isSymbolicLink()) continue;
-      if (info.isDirectory()) {
-        await prune(full, rel);
-        const remaining = await readdir(full).catch(() => []);
-        if (remaining.length === 0) await rm(full, { recursive: true, force: true }).catch(() => undefined);
-      } else if (info.isFile() && !expectedRelPaths.has(rel)) {
-        await unlink(full).catch(() => undefined);
-        pruned = true;
-      }
-    }
-  }
-
-  await prune(skillDir, '');
-  return pruned;
-}
-
 export async function stageTemplate(
   source: string,
   destDir: string,
@@ -735,7 +706,9 @@ export async function stageTemplate(
       writtenWorkspaceFiles.push(file.path);
     } else if (status === 'same' && file.executable && process.platform !== 'win32') {
       const full = await assertNoSymlinksAlongPath(dest, normalizeZipPath(file.path));
-      await chmod(full, 0o755).catch(() => undefined);
+      const info = await lstat(full);
+      const nextMode = (info.mode & 0o777) | 0o100 | ((info.mode & 0o040) ? 0o010 : 0) | ((info.mode & 0o004) ? 0o001 : 0);
+      if ((info.mode & 0o777) !== nextMode) await chmod(full, nextMode);
     } else if (status === 'different') {
       conflictingWorkspaceFiles.push(file.path);
     }
@@ -751,18 +724,13 @@ export async function stageTemplate(
       continue;
     }
 
-    const expectedPaths = new Set(skillFiles.map(sf => sf.path));
-    let prunedAny = false;
     for (const root of skillTargets) {
       for (const sf of skillFiles) {
         await writeSafeFile(dest, `${root}/${skillName}/${sf.path}`, sf.data, { executable: sf.executable });
       }
-      if (existed && options.updateSkills) {
-        if (await cleanStaleSkillFiles(dest, `${root}/${skillName}`, expectedPaths)) prunedAny = true;
-      }
     }
     if (!existed) addedSkills.push(skillName);
-    else if (hasDiff || hasMissing || prunedAny) updatedSkills.push(skillName);
+    else if (hasDiff || hasMissing) updatedSkills.push(skillName);
   }
 
   const docUrl = effectiveDocUrl(pkg.manifest);

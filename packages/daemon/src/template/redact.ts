@@ -142,6 +142,27 @@ function decodeTextIfPossible(data: Buffer): string | undefined {
   return undefined;
 }
 
+const ENV_TEMPLATE_FILES = new Set(['.env.example', '.env.sample', '.env.template', '.env.dist']);
+const SENSITIVE_ENV_KEY_RE = /(?:SECRET|PASSWORD|PASSWD|TOKEN|API_?KEY|PRIVATE_?KEY|ACCESS_?KEY|CREDENTIAL|DATABASE_URL|DSN|AUTH_?KEY)/i;
+const PLACEHOLDER_ENV_VAL_RE = /^(?:$|replace[-_]?me|change[-_]?me|your[-_a-z0-9]*|example[-_a-z0-9]*|placeholder|dummy|sample|test|xxx+|todo|none|null|false|true|\d+|<[^>]+>|\$\{[^}]+\}|\{\{[^}]+\}\}|https?:\/\/(?:localhost|127\.0\.0\.1|example\.(?:com|org|net))(?:[:/].*)?)$/i;
+
+function isSuspiciousEnvTemplateLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith('#')) return false;
+  const m = trimmed.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+  if (!m) return false;
+  const key = m[1]!;
+  if (!SENSITIVE_ENV_KEY_RE.test(key)) return false;
+  let val = m[2]!.trim();
+  // Strip trailing inline comment outside quotes
+  if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+    val = val.slice(1, -1).trim();
+  } else {
+    val = val.replace(/\s+#.*$/, '').trim();
+  }
+  return !PLACEHOLDER_ENV_VAL_RE.test(val);
+}
+
 /**
  * Scan candidate template files before packing. Rejects forbidden Vonvon private state files,
  * credentials, real Feishu IDs, and local absolute user paths.
@@ -163,9 +184,18 @@ export function scanFilesForSecrets(files: readonly { path: string; data: Buffer
     const text = decodeTextIfPossible(file.data);
     if (text === undefined) continue;
     const lines = text.split(/\r?\n/);
+    const isEnvTemplate = ENV_TEMPLATE_FILES.has(base);
 
     for (let idx = 0; idx < lines.length; idx++) {
       const line = lines[idx]!;
+      if (isEnvTemplate && isSuspiciousEnvTemplateLine(line)) {
+        findings.push({
+          file: file.path,
+          line: idx + 1,
+          rule: 'env-template-secret',
+          message: '检测到 .env 模板文件中包含非占位符的敏感配置值，请替换为占位符或留空',
+        });
+      }
       for (const rule of CONTENT_RULES) {
         rule.pattern.lastIndex = 0;
         let match: RegExpExecArray | null;

@@ -1,23 +1,109 @@
-import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { lookup as dnsLookup } from 'node:dns/promises';
+import { lstat, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { isIP } from 'node:net';
 import { tmpdir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
-import { promisify } from 'node:util';
+import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { paths } from '../config/paths';
 import { resolveLarkCliBin } from '../platform/lark-cli';
+import { spawnProcess } from '../platform/spawn';
 import { binChildEnv } from '../platform/tool-path';
 import { MAX_ARCHIVE_BYTES } from './zip';
 import type { TemplateSourceKind } from './club-client';
-
-const execFileAsync = promisify(execFile);
 
 const FETCH_TIMEOUT_MS = 15_000;
 const GIT_CLONE_TIMEOUT_MS = 45_000;
 const LARK_CLI_TIMEOUT_MS = 20_000;
 const MAX_REDIRECTS = 8;
+const MAX_CANDIDATES = 4;
 const MAX_HTML_BYTES = 4 * 1024 * 1024;
 const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+/** Cross-platform process runner using `spawnProcess` (handles Windows `.cmd` npm shims safely without `shell: true`). */
+function execProcess(
+  command: string,
+  args: readonly string[],
+  options: { timeoutMs: number; maxBuffer: number; env?: NodeJS.ProcessEnv },
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawnProcess(command, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      ...(options.env ? { env: options.env } : {}),
+    });
+    const outChunks: Buffer[] = [];
+    const errChunks: Buffer[] = [];
+    let outBytes = 0;
+    let errBytes = 0;
+    let settled = false;
+    const finish = (err?: Error): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (err) rejectPromise(err);
+      else resolvePromise({ stdout: Buffer.concat(outChunks).toString('utf8'), stderr: Buffer.concat(errChunks).toString('utf8') });
+    };
+    const timer = setTimeout(() => {
+      try { child.kill('SIGTERM'); } catch { /* ignore */ }
+      finish(new Error(`command timed out after ${options.timeoutMs}ms: ${command}`));
+    }, options.timeoutMs);
+    child.stdout?.on('data', (chunk: Buffer) => {
+      outBytes += chunk.length;
+      if (outBytes > options.maxBuffer) {
+        try { child.kill('SIGTERM'); } catch { /* ignore */ }
+        finish(new Error(`stdout exceeded ${options.maxBuffer} bytes: ${command}`));
+        return;
+      }
+      outChunks.push(chunk);
+    });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      errBytes += chunk.length;
+      if (errBytes <= options.maxBuffer) errChunks.push(chunk);
+    });
+    child.on('error', err => finish(err));
+    child.on('close', code => {
+      if (code === 0) finish();
+      else finish(new Error(`${command} exited with code ${code ?? 'unknown'}`));
+    });
+  });
+}
+
+function isPrivateIpAddress(ip: string): boolean {
+  const lower = ip.toLowerCase();
+  if (lower.startsWith('::ffff:')) return isPrivateIpAddress(lower.slice(7));
+  if (isIP(lower) === 4) {
+    const parts = lower.split('.').map(Number);
+    if (parts.length !== 4 || parts.some(Number.isNaN)) return true;
+    const [a, b] = parts as [number, number, number, number];
+    return a === 0 || a === 10 || a === 127
+      || (a === 169 && b === 254)
+      || (a === 172 && b >= 16 && b <= 31)
+      || (a === 192 && b === 168)
+      || (a === 100 && b >= 64 && b <= 127)
+      || a >= 224;
+  }
+  if (isIP(lower) === 6) {
+    return lower === '::' || lower === '::1'
+      || lower.startsWith('fc') || lower.startsWith('fd')
+      || lower.startsWith('fe8') || lower.startsWith('fe9') || lower.startsWith('fea') || lower.startsWith('feb')
+      || lower.startsWith('ff');
+  }
+  return true;
+}
+
+async function isPublicHostname(hostname: string): Promise<boolean> {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal')) {
+    return false;
+  }
+  if (isIP(host)) return !isPrivateIpAddress(host);
+  try {
+    const addrs = await dnsLookup(host, { all: true, verbatim: true });
+    if (!addrs.length) return false;
+    return addrs.every(a => !isPrivateIpAddress(a.address));
+  } catch {
+    return false;
+  }
+}
 
 export interface FetchTemplateResult {
   url: string;
@@ -67,6 +153,8 @@ export function parseGitHubRepoUrl(raw: string): { repoUrl: string; branch?: str
     if (u.protocol !== 'https:' || u.hostname.toLowerCase() !== 'github.com') return undefined;
     const parts = u.pathname.split('/').filter(Boolean);
     if (parts.length < 2) return undefined;
+    // Reject non-repository GitHub asset/UI URLs (e.g. `/releases/download/.../*.vonvon.zip`).
+    if (parts.length >= 3 && parts[2] !== 'tree') return undefined;
     const owner = parts[0]!;
     const repo = parts[1]!.replace(/\.git$/i, '');
     if (!/^[A-Za-z0-9_.-]+$/.test(owner) || !/^[A-Za-z0-9_.-]+$/.test(repo)) return undefined;
@@ -163,6 +251,9 @@ export function extractFeishuDocSourceHints(content: string): FeishuDocSourceHin
 
   const githubRe = /https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)(?:\/tree\/[A-Za-z0-9._/%-]+)?/g;
   for (const m of normalized.matchAll(githubRe)) {
+    const owner = (m[1] ?? '').toLowerCase();
+    // Skip Feishu SSR frontend bundle boilerplate repo references that appear in every public Feishu page.
+    if (owner === 'lark-base-team') continue;
     const cleaned = m[0].replace(/[),.;:!?'"`<>\]}]+$/, '').replace(/\.git$/i, '');
     const parsed = parseGitHubRepoUrl(cleaned);
     if (parsed) {
@@ -234,6 +325,8 @@ async function fetchWithCookies(
 ): Promise<{ ok: true; finalUrl: string; contentType: string; bytes: Buffer } | { ok: false; reason: string }> {
   const fetchImpl = options.fetchImpl ?? fetch;
   let current = initialUrl;
+  let originHost = '';
+  try { originHost = new URL(initialUrl).hostname.toLowerCase(); } catch { /* validated below */ }
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     let parsed: URL;
     try {
@@ -242,8 +335,12 @@ async function fetchWithCookies(
       return { ok: false, reason: 'invalid_url' };
     }
     if (parsed.protocol !== 'https:') return { ok: false, reason: 'non_https' };
-    if (!options.allowAnyHttps && !isAllowedFeishuHost(parsed.hostname)) {
+    const hopHost = parsed.hostname.toLowerCase();
+    if (!options.allowAnyHttps && !isAllowedFeishuHost(hopHost)) {
       return { ok: false, reason: 'disallowed_redirect_host' };
+    }
+    if (!options.fetchImpl && !(await isPublicHostname(hopHost))) {
+      return { ok: false, reason: 'private_address_blocked' };
     }
 
     const headers: Record<string, string> = {
@@ -251,7 +348,8 @@ async function fetchWithCookies(
       'accept-language': 'zh-CN,zh;q=0.9',
       ...(options.referer ? { referer: options.referer } : {}),
     };
-    const cookie = [...jar.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
+    const canSendCookies = hopHost === originHost || (isAllowedFeishuHost(originHost) && isAllowedFeishuHost(hopHost));
+    const cookie = canSendCookies ? [...jar.entries()].map(([k, v]) => `${k}=${v}`).join('; ') : '';
     if (cookie) headers.cookie = cookie;
 
     const res = await fetchImpl(current, {
@@ -260,7 +358,7 @@ async function fetchWithCookies(
       headers,
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
-    mergeCookies(jar, res);
+    if (canSendCookies) mergeCookies(jar, res);
 
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get('location');
@@ -313,8 +411,8 @@ async function cloneGitHubRepo(
   if (gitRunner) {
     await gitRunner(args);
   } else {
-    await execFileAsync('git', args, {
-      timeout: GIT_CLONE_TIMEOUT_MS,
+    await execProcess('git', args, {
+      timeoutMs: GIT_CLONE_TIMEOUT_MS,
       maxBuffer: 2 * 1024 * 1024,
       env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
     });
@@ -325,7 +423,10 @@ async function cloneGitHubRepo(
     const candidate = resolve(cloneTarget, parsed.subdir);
     const realClone = await realpath(cloneTarget);
     const realCand = await realpath(candidate);
-    if (!realCand.startsWith(realClone)) throw new Error('仓库子目录越界');
+    const rel = relative(realClone, realCand);
+    if (rel === '..' || rel.startsWith('..' + '/') || rel.startsWith('..' + '\\') || isAbsolute(rel)) {
+      throw new Error('仓库子目录越界');
+    }
     localPath = realCand;
   }
   return { localPath, sourceUrl: rawRepoUrl };
@@ -341,8 +442,8 @@ async function tryLarkCliFetchDoc(
   try {
     const stdout = execLark
       ? await execLark(args)
-      : (await execFileAsync(bin, args, {
-          timeout: LARK_CLI_TIMEOUT_MS,
+      : (await execProcess(bin, args, {
+          timeoutMs: LARK_CLI_TIMEOUT_MS,
           maxBuffer: 4 * 1024 * 1024,
           ...(process.platform !== 'win32' && bin !== 'lark-cli' ? { env: binChildEnv(bin) } : {}),
         })).stdout;
@@ -378,8 +479,8 @@ async function tryLarkCliMediaDownload(
   try {
     const stdout = execLark
       ? await execLark(args)
-      : (await execFileAsync(bin, args, {
-          timeout: LARK_CLI_TIMEOUT_MS,
+      : (await execProcess(bin, args, {
+          timeoutMs: LARK_CLI_TIMEOUT_MS,
           maxBuffer: 512 * 1024,
           ...(process.platform !== 'win32' && bin !== 'lark-cli' ? { env: binChildEnv(bin) } : {}),
         })).stdout;
@@ -413,14 +514,16 @@ async function tryLarkCliDriveDownload(
   try {
     const stdout = execLark
       ? await execLark(args)
-      : (await execFileAsync(bin, args, {
-          timeout: LARK_CLI_TIMEOUT_MS,
+      : (await execProcess(bin, args, {
+          timeoutMs: LARK_CLI_TIMEOUT_MS,
           maxBuffer: 512 * 1024,
           ...(process.platform !== 'win32' && bin !== 'lark-cli' ? { env: binChildEnv(bin) } : {}),
         })).stdout;
     const parsed = JSON.parse(stdout) as { ok?: boolean; data?: { saved_path?: string } };
     if (!parsed?.ok) return undefined;
     savedPath = typeof parsed.data?.saved_path === 'string' ? parsed.data.saved_path : tmpOut;
+    const st = await stat(savedPath);
+    if (st.size > MAX_ARCHIVE_BYTES) return undefined;
     const bytes = await readFile(savedPath);
     if (bytes.length > MAX_ARCHIVE_BYTES || !isZipMagic(bytes)) return undefined;
     const finalPath = join(destDir, sanitizeZipFilename(basename(savedPath)));
@@ -515,20 +618,7 @@ export async function fetchTemplateSource(
   const dest = await ensureEmptyDestDir(destDir);
   const dataRoot = options.dataRoot ?? paths.appDir;
 
-  // 1. Direct GitHub repository URL
-  if (parseGitHubRepoUrl(url)) {
-    const cloned = await cloneGitHubRepo(url, dest, options.gitRunner);
-    return {
-      url,
-      resolved: true,
-      localPath: cloned.localPath,
-      sourceKind: 'github',
-      sourceUrl: cloned.sourceUrl,
-      via: 'git-clone',
-    };
-  }
-
-  // 2. Direct `.vonvon.zip` HTTPS download
+  // 1. Direct `.vonvon.zip` HTTPS download (checked before GitHub repo clone so GitHub Release assets work!)
   if (/\.vonvon\.zip$/i.test(parsedUrl.pathname)) {
     const jar = new Map<string, string>();
     const res = await fetchWithCookies(url, jar, {
@@ -561,6 +651,19 @@ export async function fetchTemplateSource(
       sourceKind: 'zip',
       sourceUrl: url,
       via: 'direct-download',
+    };
+  }
+
+  // 2. Direct GitHub repository URL
+  if (parseGitHubRepoUrl(url)) {
+    const cloned = await cloneGitHubRepo(url, dest, options.gitRunner);
+    return {
+      url,
+      resolved: true,
+      localPath: cloned.localPath,
+      sourceKind: 'github',
+      sourceUrl: cloned.sourceUrl,
+      via: 'git-clone',
     };
   }
 
@@ -625,7 +728,12 @@ export async function fetchTemplateSource(
     }
 
     // Tier 2: anonymous guest-cookie SSR fetch of public internet-readable Feishu doc
-    if (hints.embeddedZips.length === 0 && hints.repositories.length === 0 && hints.directZipUrls.length === 0) {
+    // Also run when Tier-1 found embedded `.vonvon.zip` attachments but authenticated media-download failed.
+    const needPublicFallback =
+      (hints.embeddedZips.length === 0 && hints.repositories.length === 0 && hints.directZipUrls.length === 0)
+      || (hints.embeddedZips.length > 0 && !guestJar);
+    if (needPublicFallback) {
+      const hadTier1Hints = hints.embeddedZips.length > 0 || hints.repositories.length > 0 || hints.directZipUrls.length > 0;
       const jar = new Map<string, string>();
       const page = await fetchWithCookies(url, jar, {
         fetchImpl: options.fetchImpl,
@@ -635,9 +743,13 @@ export async function fetchTemplateSource(
         guestJar = jar;
         finalDocUrl = page.finalUrl;
         const publicHints = extractFeishuDocSourceHints(page.bytes.toString('utf8'));
-        hints = publicHints;
-        via = 'feishu-public';
-      } else if (!page.ok) {
+        if (!hadTier1Hints) {
+          hints = publicHints;
+          via = 'feishu-public';
+        } else if (!hints.docToken && publicHints.docToken) {
+          hints = { ...hints, docToken: publicHints.docToken };
+        }
+      } else if (!hadTier1Hints && !page.ok) {
         return {
           url,
           resolved: false,
@@ -645,7 +757,7 @@ export async function fetchTemplateSource(
           reason: page.reason,
           hint: '未能读取该飞书文档（可能未开启「互联网上获得链接的人可阅读」或需要登录）。请确认文档已公开，或直接把文档末尾的 .vonvon.zip 压缩包发给我安装。',
         };
-      } else {
+      } else if (!hadTier1Hints) {
         return {
           url,
           resolved: false,
@@ -658,7 +770,7 @@ export async function fetchTemplateSource(
 
     // Try guest-cookie stream download if we have embedded `.vonvon.zip` tokens
     if (hints.embeddedZips.length > 0 && guestJar) {
-      for (const att of hints.embeddedZips) {
+      for (const att of hints.embeddedZips.slice(0, MAX_CANDIDATES)) {
         const downloaded = await tryGuestDownloadEmbeddedZip(
           att.token,
           att.name,
@@ -687,7 +799,7 @@ export async function fetchTemplateSource(
     }
 
     // Try direct HTTPS `.vonvon.zip` links embedded in the doc
-    for (const zipUrl of hints.directZipUrls) {
+    for (const zipUrl of hints.directZipUrls.slice(0, MAX_CANDIDATES)) {
       try {
         const res = await fetchWithCookies(zipUrl, new Map(), {
           fetchImpl: options.fetchImpl,
@@ -713,7 +825,7 @@ export async function fetchTemplateSource(
     }
 
     // Try cloning GitHub repository links found in the doc (only keep ones that actually contain `vonvon-bot.json`)
-    for (const repoUrl of hints.repositories) {
+    for (const repoUrl of hints.repositories.slice(0, MAX_CANDIDATES)) {
       const subDest = join(dest, `gh-${randomUUID().slice(0, 6)}`);
       await mkdir(subDest, { recursive: true });
       try {

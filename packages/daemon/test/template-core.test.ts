@@ -781,8 +781,8 @@ describe('wave-1 template reliability upgrades (+x mode, repo hygiene, skill pru
 
     const upgraded = await stageTemplate(v2Zip, stageDir, { mode: 'merge', updateSkills: true, dataRoot, noTelemetry: true });
     expect(upgraded.updatedSkills).toEqual(['demo']);
-    await expect(stat(join(stageDir, '.agents/skills/demo/old-helper.py'))).rejects.toThrow();
-    await expect(stat(join(stageDir, '.claude/skills/demo/old-helper.py'))).rejects.toThrow();
+    // Existing user/local files inside a skill directory are preserved safely on upgrade instead of blindly deleted.
+    expect(await readFile(join(stageDir, '.agents/skills/demo/old-helper.py'), 'utf8')).toContain('old');
     expect(await readFile(join(stageDir, '.agents/skills/demo/new-helper.py'), 'utf8')).toContain('new');
 
     // Rejects forbidden .env / .mcp.json smuggled inside skills/
@@ -796,23 +796,49 @@ describe('wave-1 template reliability upgrades (+x mode, repo hygiene, skill pru
     });
     await expect(inspectTemplate(evilSkillDir)).rejects.toThrow(/Skill 目录不允许包含/);
 
-    // Rejects schedule name > 40 chars (matches vonvon schedule add --name 40-char limit)
-    const badSched = templateManifestSchema.safeParse({
-      schemaVersion: 1, id: 'sched-too-long', version: '0.1.0', name: '定时名超长', summary: 'x', author: { name: 'x' },
-      group: { schedules: [{ name: '超'.repeat(41), when: { kind: 'daily', time: '09:00' }, prompt: 'go' }] },
+    // Rejects real credentials placed in .env.example while allowing clean placeholders.
+    expect(scanFilesForSecrets([{ path: '.env.example', data: Buffer.from('DB_PASSWORD=replace-me\nAPI_KEY=\n') }])).toEqual([]);
+    expect(scanFilesForSecrets([{ path: '.env.example', data: Buffer.from('DB_PASSWORD=S3cr3tPr0dPass99!\n') }])).toHaveLength(1);
+
+    // Preserves v1 backward compatibility for 41–80 char schedule names while still rejecting >80 chars.
+    const longSched45 = templateManifestSchema.safeParse({
+      schemaVersion: 1, id: 'sched-45', version: '0.1.0', name: '定时名45字', summary: 'x', author: { name: 'x' },
+      group: { schedules: [{ name: '超'.repeat(45), when: { kind: 'daily', time: '09:00' }, prompt: 'go' }] },
     });
-    expect(badSched.success).toBe(false);
+    expect(longSched45.success).toBe(true);
+    const badSched85 = templateManifestSchema.safeParse({
+      schemaVersion: 1, id: 'sched-85', version: '0.1.0', name: '定时名85字', summary: 'x', author: { name: 'x' },
+      group: { schedules: [{ name: '超'.repeat(85), when: { kind: 'daily', time: '09:00' }, prompt: 'go' }] },
+    });
+    expect(badSched85.success).toBe(false);
 
     // Numeric placeholders like /home/user2 are allowed while real paths stay blocked.
     expect(scanFilesForSecrets([{ path: 'doc.md', data: Buffer.from('/home/user2/demo') }])).toEqual([]);
     expect(scanFilesForSecrets([{ path: 'doc.md', data: Buffer.from('/Users/clay/secret') }])).toHaveLength(1);
   });
 
-  it('extracts Feishu DocxXML/SSR template hints and resolves guest-cookie zip or graceful login fallback', async () => {
+  it('extracts Feishu DocxXML/SSR template hints, blocks SSRF loopback, and routes GitHub release zips directly', async () => {
     const xmlHints = extractFeishuDocSourceHints(
-      '<title>人生指南</title><p>仓库 https://github.com/modelzen/vonvon-assistant</p><source token="boxcnAbc1234567890" name="how-to-live-better-0.1.0.vonvon.zip"/>',
+      '<title>人生指南</title><p>仓库 https://github.com/Lark-Base-Team/dashboard-page-preview https://github.com/modelzen/vonvon-assistant</p><source token="boxcnAbc1234567890" name="how-to-live-better-0.1.0.vonvon.zip"/>',
     );
+    expect(xmlHints.repositories).toEqual(['https://github.com/modelzen/vonvon-assistant']);
     expect(xmlHints.title).toBe('人生指南');
+
+    // SSRF guard blocks loopback direct zip download when using real network check
+    const ssrfDest = join(await makeTempDir('vonvon-ssrf-'), 'out');
+    const ssrfRes = await fetchTemplateSource('https://127.0.0.1/evil.vonvon.zip', ssrfDest);
+    expect(ssrfRes.resolved).toBe(false);
+    expect(ssrfRes.reason).toBe('private_address_blocked');
+
+    // GitHub release .vonvon.zip asset downloads directly instead of trying to git-clone the repo
+    const relDest = join(await makeTempDir('vonvon-ghrel-'), 'out');
+    const relFakeZip = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00]);
+    const relRes = await fetchTemplateSource('https://github.com/org/repo/releases/download/v1.0/demo.vonvon.zip', relDest, {
+      fetchImpl: async () => new Response(relFakeZip, { status: 200 }),
+    });
+    expect(relRes.resolved).toBe(true);
+    expect(relRes.via).toBe('direct-download');
+    expect(relRes.sourceKind).toBe('zip');
     expect(xmlHints.repositories).toEqual(['https://github.com/modelzen/vonvon-assistant']);
     expect(xmlHints.embeddedZips).toEqual([{ name: 'how-to-live-better-0.1.0.vonvon.zip', token: 'boxcnAbc1234567890' }]);
 

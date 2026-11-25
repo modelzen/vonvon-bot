@@ -5,8 +5,12 @@ export const MAX_COVER_UPLOAD_BYTES = 5 * 1024 * 1024;
 
 export function isHttpsUrl(value) {
   if (typeof value !== 'string' || value.length > 2048) return false;
+  const trimmed = value.trim();
+  // Reject whitespace and ASCII control chars that WHATWG URL parser silently strips (prevents multiline prompt injection).
+  // eslint-disable-next-line no-control-regex
+  if (!trimmed || /[\s\x00-\x1f\x7f]/.test(trimmed)) return false;
   try {
-    const url = new URL(value.trim());
+    const url = new URL(trimmed);
     return url.protocol === 'https:';
   } catch {
     return false;

@@ -23,21 +23,48 @@
     try {
       await navigator.clipboard.writeText(text);
       showToast(successMsg);
+      return true;
     } catch {
-      const area = document.createElement('textarea');
-      area.value = text;
-      area.style.position = 'fixed';
-      area.style.opacity = '0';
-      document.body.appendChild(area);
-      area.select();
-      document.execCommand('copy');
-      area.remove();
-      showToast(successMsg);
+      try {
+        const area = document.createElement('textarea');
+        area.value = text;
+        area.setAttribute('readonly', '');
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.select();
+        const ok = document.execCommand('copy');
+        area.remove();
+        if (ok) {
+          showToast(successMsg);
+          return true;
+        }
+      } catch {
+        // Fall through to manual prompt fallback.
+      }
+      showToast('自动复制受限，请手动复制弹窗中的口令');
+      window.prompt('复制下面这句，发给飞书 Vonvon Bot 私聊即可安装：', text);
+      return false;
     }
   }
 
   function isSafeHttps(url) {
-    return typeof url === 'string' && /^https:\/\//i.test(url);
+    if (typeof url !== 'string' || !/^https:\/\//i.test(url) || /[\s\x00-\x1f\x7f]/.test(url)) return false;
+    try {
+      return new URL(url).protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }
+
+  function isSupportedGitHubRepo(url) {
+    if (!isSafeHttps(url)) return false;
+    try {
+      const u = new URL(url);
+      return u.hostname.toLowerCase() === 'github.com' && u.pathname.split('/').filter(Boolean).length >= 2;
+    } catch {
+      return false;
+    }
   }
 
   function isFeishuHost(url) {
@@ -191,24 +218,28 @@
       metrics.appendChild(docLikes);
     }
 
-    const installSource = isSafeHttps(item.repository)
+    const installSource = isSupportedGitHubRepo(item.repository)
       ? item.repository
-      : isSafeHttps(item.docUrl)
+      : isFeishuHost(item.docUrl) && isSafeHttps(item.docUrl)
         ? item.docUrl
-        : '';
+        : isSafeHttps(item.docUrl) && /\.vonvon\.zip(?:[?#]|$)/i.test(item.docUrl)
+          ? item.docUrl
+          : '';
     if (installSource) {
       const copyBtn = document.createElement('button');
       copyBtn.type = 'button';
       copyBtn.className = 'card-install-btn';
       copyBtn.textContent = '复制口令';
       copyBtn.title = '复制一句话安装口令，发给飞书 Vonvon Bot 私聊即可安装';
-      copyBtn.addEventListener('click', (event) => {
+      copyBtn.addEventListener('click', async (event) => {
         event.preventDefault();
         event.stopPropagation();
         const prompt = `帮我安装这个配方：${installSource}`;
-        copyText(prompt, '已复制安装口令，发给你的飞书 Vonvon Bot 私聊即可安装');
-        copyBtn.textContent = '已复制 ✓';
-        setTimeout(() => { copyBtn.textContent = '复制口令'; }, 1800);
+        const copied = await copyText(prompt, '已复制安装口令，发给你的飞书 Vonvon Bot 私聊即可安装');
+        if (copied) {
+          copyBtn.textContent = '已复制 ✓';
+          setTimeout(() => { copyBtn.textContent = '复制口令'; }, 1800);
+        }
       });
       metrics.appendChild(copyBtn);
     }
@@ -227,8 +258,8 @@
 
     metaRow.append(authorInfo, metrics);
     body.append(metaRow);
-    link.append(preview, titleRow, body);
-    card.append(link);
+    link.append(preview, titleRow);
+    card.append(link, body);
     return card;
   }
 
@@ -314,13 +345,15 @@
   }
 
   for (const btn of document.querySelectorAll('.copy-prompt-btn')) {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       const targetEl = document.getElementById(btn.dataset.copyTarget || '');
       if (!targetEl) return;
       const promptText = targetEl.textContent.trim();
-      copyText(promptText, btn.dataset.toast || '已复制');
-      btn.textContent = '已复制 ✓';
-      setTimeout(() => { btn.textContent = '一键复制'; }, 1800);
+      const copied = await copyText(promptText, btn.dataset.toast || '已复制');
+      if (copied) {
+        btn.textContent = '已复制 ✓';
+        setTimeout(() => { btn.textContent = '一键复制'; }, 1800);
+      }
     });
   }
 
@@ -346,7 +379,8 @@
           if (!pill) {
             pill = document.createElement('span');
             pill.className = 'doc-like-pill';
-            pending.metricsEl.appendChild(pill);
+            const installBtn = pending.metricsEl.querySelector('.card-install-btn');
+            pending.metricsEl.insertBefore(pill, installBtn);
           }
           pill.textContent = `👍 ${data.docLikeCount}`;
           pill.title = `飞书宣传文档获赞 ${data.docLikeCount}（点击打开文档可点赞）`;

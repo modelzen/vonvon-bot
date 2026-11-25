@@ -21,7 +21,7 @@ export const templateScheduleWhenSchema = z.discriminatedUnion('kind', [
 ]);
 
 export const templateScheduleSchema = z.object({
-  name: z.string().trim().min(1).max(40),
+  name: z.string().trim().min(1).max(80),
   when: templateScheduleWhenSchema,
   prompt: z.string().trim().min(1).max(4000),
   enabledByDefault: z.boolean().optional(),

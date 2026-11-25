@@ -1,16 +1,51 @@
-import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { promisify } from 'node:util';
 import { resolveLarkCliBin } from '../platform/lark-cli';
+import { spawnProcess } from '../platform/spawn';
 import { binChildEnv } from '../platform/tool-path';
 import { paths } from '../config/paths';
 import { scanPromoForSecrets } from './redact';
 import type { PublicPromoPayload } from './schema';
 
-const execFileAsync = promisify(execFile);
+function execLarkJson(
+  bin: string,
+  args: readonly string[],
+  options: { timeoutMs: number; maxBuffer: number; env?: NodeJS.ProcessEnv },
+): Promise<string> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawnProcess(bin, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      ...(options.env ? { env: options.env } : {}),
+    });
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let settled = false;
+    const finish = (err?: Error): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (err) rejectPromise(err);
+      else resolvePromise(Buffer.concat(chunks).toString('utf8'));
+    };
+    const timer = setTimeout(() => {
+      try { child.kill('SIGTERM'); } catch { /* ignore */ }
+      finish(new Error('lark-cli cover download timed out'));
+    }, options.timeoutMs);
+    child.stdout?.on('data', (chunk: Buffer) => {
+      bytes += chunk.length;
+      if (bytes > options.maxBuffer) {
+        try { child.kill('SIGTERM'); } catch { /* ignore */ }
+        finish(new Error('lark-cli output too large'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    child.on('error', err => finish(err));
+    child.on('close', code => (code === 0 ? finish() : finish(new Error(`lark-cli exit ${code ?? 'unknown'}`))));
+  });
+}
 
 export const DEFAULT_CLUB_API_URL = 'https://club.vonvon.cc';
 const TELEMETRY_SALT_FILENAME = 'template-telemetry-id';
@@ -66,10 +101,10 @@ export async function fetchLocalFeishuCover(
   const stem = join(baseTmp, `vonvon-cover-${process.pid}-${randomUUID().slice(0, 8)}`);
   let savedPath: string | undefined;
   try {
-    const { stdout } = await execFileAsync(bin, [
+    const stdout = await execLarkJson(bin, [
       'docs', '+resource-download', '--as', 'user', '--doc', docUrl!, '--type', 'cover', '--output', stem, '--overwrite', '--json',
     ], {
-      timeout: COVER_FETCH_TIMEOUT_MS,
+      timeoutMs: COVER_FETCH_TIMEOUT_MS,
       maxBuffer: 512 * 1024,
       ...(process.platform !== 'win32' && bin !== 'lark-cli' ? { env: binChildEnv(bin) } : {}),
     });

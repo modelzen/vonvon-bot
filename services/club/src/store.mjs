@@ -239,12 +239,13 @@ export class ClubStore {
       WHERE t.id = ? AND t.author_public_key NOT LIKE 'unsigned:%' AND a.blocked = 0
       ORDER BY a.trusted DESC, t.updated_at DESC
     `).all(promo.id);
+    const matchedKeys = new Set();
     for (const r of rows) {
       if ((docUrl && r.doc_url && r.doc_url === docUrl) || (repo && r.repository && r.repository === repo)) {
-        return r.author_public_key;
+        matchedKeys.add(r.author_public_key);
       }
     }
-    return null;
+    return matchedKeys.size === 1 ? [...matchedKeys][0] : null;
   }
 
   /**
