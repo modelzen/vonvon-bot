@@ -223,17 +223,46 @@ export class ClubStore {
   }
 
   /**
+   * When a user installs an unsigned GitHub repo whose manifest omits `author.publicKey`
+   * (e.g. `modelzen/vonvon-assistant`), attribute the install to the author's published
+   * signed card if `id` AND (`docUrl` or `repository`) match, instead of spawning a
+   * duplicate unsigned ghost card on the catalog.
+   */
+  #findMatchingSignedKey(promo) {
+    const docUrl = promo.docUrl ?? null;
+    const repo = promo.repository ?? null;
+    if (!docUrl && !repo) return null;
+    const rows = this.#db.prepare(`
+      SELECT t.author_public_key, t.doc_url, t.repository
+      FROM templates t
+      JOIN authors a ON a.public_key = t.author_public_key
+      WHERE t.id = ? AND t.author_public_key NOT LIKE 'unsigned:%' AND a.blocked = 0
+      ORDER BY a.trusted DESC, t.updated_at DESC
+    `).all(promo.id);
+    for (const r of rows) {
+      if ((docUrl && r.doc_url && r.doc_url === docUrl) || (repo && r.repository && r.repository === repo)) {
+        return r.author_public_key;
+      }
+    }
+    return null;
+  }
+
+  /**
    * Called on `vonvon template stage`: idempotently records deduplicated unique installs.
    * Seeds missing cards for unpublished public packs, but NEVER overwrites an existing card
    * (preventing older installed packages from rolling back newer author-published listings).
    */
   recordInstall(promo, signature, { sourceKind, anonInstallKey }, now = Date.now()) {
+    const matchedSignedKey = !promo.author.publicKey ? this.#findMatchingSignedKey(promo) : null;
     const authorPublicKey = promo.author.publicKey
+      || matchedSignedKey
       || `unsigned:${sha256Hex(promo.docUrl ?? promo.repository ?? promo.id).slice(0, 24)}`;
     const author = this.#ensureAuthor(authorPublicKey, promo.author.name, now);
     if (author.blocked) return { ok: false, blocked: true };
 
-    this.#upsertTemplate(promo, authorPublicKey, signature, now, { skipIfExists: true });
+    if (!matchedSignedKey) {
+      this.#upsertTemplate(promo, authorPublicKey, signature, now, { skipIfExists: true });
+    }
 
     const existingInstall = this.#db.prepare(
       'SELECT anon_install_key FROM installs WHERE template_id = ? AND author_public_key = ? AND anon_install_key = ?',

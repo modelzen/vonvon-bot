@@ -416,6 +416,23 @@ describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
     assert.equal(afterStaleInstall.items[0].name, '原版爆款 v2');
     assert.equal(afterStaleInstall.items[0].installCount, 1);
 
+    // Unsigned GitHub-repo install matching id + docUrl credits the signed published card instead of spawning a ghost card.
+    const { publicKey: _omitPk, ...unsignedAuthor } = basePromo.author;
+    const unsignedGithubPromo = { ...basePromo, author: unsignedAuthor };
+    assert.equal((await fetch(`${baseUrl}/api/install`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        promo: unsignedGithubPromo,
+        sourceKind: 'github',
+        anonInstallKey: 'c'.repeat(64),
+      }),
+    })).status, 200);
+    const afterGithubInstall = await (await fetch(`${baseUrl}/api/list?q=star/top-template`)).json();
+    assert.equal(afterGithubInstall.items.length, 1, 'unsigned GitHub install must not spawn a duplicate ghost card');
+    assert.equal(afterGithubInstall.items[0].authorPublicKey, legKey.publicKey);
+    assert.equal(afterGithubInstall.items[0].installCount, 2);
+
     // Tampered docUrl with original signature -> 403.
     const tampered = { ...basePromo, docUrl: 'https://evil.example/phish' };
     assert.equal((await fetch(`${baseUrl}/api/publish`, {
