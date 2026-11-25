@@ -36,6 +36,13 @@ const PLACEHOLDER_USERNAMES = new Set([
   'user', 'username', 'yourname', 'your-name', 'name', 'example', 'alice', 'bob', 'demo', 'test', 'xxx', 'placeholder',
 ]);
 
+function isPlaceholderUsername(raw: string): boolean {
+  const user = raw.toLowerCase();
+  return PLACEHOLDER_USERNAMES.has(user)
+    || /^(?:user|demo|test|example|alice|bob)\d+$/.test(user)
+    || /^<.+>$/.test(user);
+}
+
 interface ContentRule {
   id: string;
   message: string;
@@ -88,19 +95,13 @@ const CONTENT_RULES: readonly ContentRule[] = [
     id: 'unix-home-path',
     message: '检测到疑似本机用户绝对路径（/Users/... 或 /home/...）',
     pattern: /(?:\/Users|\/home)\/([A-Za-z0-9._-]+)(?:\/|(?=["'\s)]|$))/g,
-    ignore: (match) => {
-      const user = (match[1] ?? '').toLowerCase();
-      return PLACEHOLDER_USERNAMES.has(user) || /^<.+>$/.test(user);
-    },
+    ignore: (match) => isPlaceholderUsername(match[1] ?? ''),
   },
   {
     id: 'windows-home-path',
     message: '检测到疑似 Windows 本机用户绝对路径（C:\\Users\\...）',
     pattern: /\b[A-Za-z]:\\Users\\([A-Za-z0-9._-]+)(?:\\|(?=["'\s)]|$))/g,
-    ignore: (match) => {
-      const user = (match[1] ?? '').toLowerCase();
-      return PLACEHOLDER_USERNAMES.has(user) || /^<.+>$/.test(user);
-    },
+    ignore: (match) => isPlaceholderUsername(match[1] ?? ''),
   },
 ];
 

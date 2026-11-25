@@ -73,6 +73,7 @@ const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   // A1: no address and no terminal (and --json is none): the candidates and a command to copy; disable with nothing open
   [['remote', 'enable'], 2], [['remote', 'disable'], 2], [['remote', 'candidates'], 0],
   [['update', '--to', 'latest'], 2],
+  [['template', 'fetch', 'not-a-url', '--dest', 'out'], 1],
   [['template', 'inspect', 'missing.vonvon.zip'], 1], [['template', 'extract', 'missing.vonvon.zip', '--dest', 'out'], 1],
   [['template', 'stage', 'missing.vonvon.zip', '--dest', 'out'], 1], [['template', 'pack', 'missing-dir', '--out', 'out.vonvon.zip'], 1],
   [['template', 'draft-group', 'missing-group', '--dest', 'out'], 3],

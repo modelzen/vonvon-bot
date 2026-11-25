@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { lstat, mkdir, readdir, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { paths } from '../config/paths';
 import { loadOrCreateAuthorKey, signCoverBytes, signPromoPayload, verifyPromoPayload } from './author-key';
@@ -25,6 +25,7 @@ export type SignatureStatus = 'valid' | 'invalid' | 'unsigned';
 interface LoadedFile {
   path: string;
   data: Buffer;
+  executable?: boolean;
 }
 
 interface ParsedTemplatePackage {
@@ -33,12 +34,14 @@ interface ParsedTemplatePackage {
   manifest: TemplateManifest;
   rawManifestText: string;
   readme?: Buffer;
-  /** Map from skillName -> relative path inside skill dir -> file Buffer. */
+  /** Map from skillName -> relative path inside skill dir -> LoadedFile. */
   skills: Map<string, LoadedFile[]>;
   /** Workspace files relative to target group `<cwd>`. */
   workspaceFiles: LoadedFile[];
   /** All raw entries (excluding OS junk) for inspection / extraction. */
   allFiles: LoadedFile[];
+  /** Non-blocking layout anomalies surfaced during `inspect`. */
+  layoutWarnings: string[];
 }
 
 export interface InspectResult {
@@ -132,6 +135,13 @@ const FORBIDDEN_WORKSPACE_FILES = new Set([
   '.env',
 ]);
 
+const SAFE_ENV_TEMPLATES = new Set([
+  '.env.example',
+  '.env.sample',
+  '.env.template',
+  '.env.dist',
+]);
+
 function isForbiddenWorkspacePath(relPath: string): boolean {
   const parts = relPath.split('/').map(p => p.toLowerCase());
   const first = parts[0] ?? '';
@@ -139,7 +149,18 @@ function isForbiddenWorkspacePath(relPath: string): boolean {
   if (FORBIDDEN_WORKSPACE_ROOTS.has(first)) return true;
   if (parts.some(p => p === '.git' || p === 'node_modules')) return true;
   if (FORBIDDEN_WORKSPACE_FILES.has(leaf)) return true;
-  if (leaf.startsWith('.env.')) return true;
+  if (leaf.startsWith('.env.') && !SAFE_ENV_TEMPLATES.has(leaf)) return true;
+  return false;
+}
+
+function detectExecutableOnDisk(relPath: string, mode: number, data: Buffer): boolean {
+  if (process.platform !== 'win32') return (mode & 0o111) !== 0;
+  // Windows lacks POSIX +x bits: detect `#!` scripts under `scripts/` or `.sh` so cross-platform packs keep +x.
+  const lower = relPath.toLowerCase();
+  if ((lower.includes('/scripts/') || lower.startsWith('scripts/') || lower.endsWith('.sh'))
+    && data.length >= 2 && data[0] === 0x23 && data[1] === 0x21) {
+    return true;
+  }
   return false;
 }
 
@@ -166,6 +187,8 @@ async function readDirectoryFiles(rootDir: string): Promise<LoadedFile[]> {
     const entries = await readdir(current, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.DS_Store' || entry.name === 'Thumbs.db') continue;
+      // Ignore top-level `.github/` in cloned GitHub repos (CI workflows / issue templates never belong in a group workspace).
+      if (current === rootDir && entry.name === '.github') continue;
       const full = join(current, entry.name);
       const info = await lstat(full);
       if (info.isSymbolicLink()) {
@@ -182,7 +205,9 @@ async function readDirectoryFiles(rootDir: string): Promise<LoadedFile[]> {
           throw new Error(`配方总大小超过上限（最大 ${Math.round(MAX_UNCOMPRESSED_BYTES / (1024 * 1024))} MB）`);
         }
         const rel = normalizeZipPath(relative(rootDir, full).split(sep).join('/'));
-        files.push({ path: rel, data: await readFile(full) });
+        const data = await readFile(full);
+        const executable = detectExecutableOnDisk(rel, info.mode, data);
+        files.push({ path: rel, data, ...(executable ? { executable: true } : {}) });
       }
     }
   }
@@ -200,7 +225,11 @@ function unwrapSingleTopDir(entries: LoadedFile[]): LoadedFile[] {
     if (cleaned.some(e => e.path === `${prefix}${MANIFEST_FILENAME}`)) {
       return cleaned
         .filter(e => e.path.startsWith(prefix) && e.path.length > prefix.length)
-        .map(e => ({ path: normalizeZipPath(e.path.slice(prefix.length)), data: e.data }));
+        .map(e => ({
+          path: normalizeZipPath(e.path.slice(prefix.length)),
+          data: e.data,
+          ...(e.executable ? { executable: true } : {}),
+        }));
     }
   }
   return cleaned;
@@ -251,31 +280,38 @@ function parseLoadedPackage(sourceKind: TemplateSourceKind, files: LoadedFile[])
   const hasWorkspaceDir = files.some(f => f.path.startsWith('workspace/'));
   const layout: TemplateLayout = hasWorkspaceDir ? 'standard' : 'repo-root';
 
-  const skillBuckets = new Map<string, Map<string, Buffer>>();
-  const addSkillFile = (skillName: string, innerPath: string, data: Buffer, priority: boolean) => {
+  const skillBuckets = new Map<string, Map<string, { data: Buffer; executable?: boolean }>>();
+  const addSkillFile = (skillName: string, innerPath: string, data: Buffer, executable: boolean | undefined, priority: boolean) => {
     let bucket = skillBuckets.get(skillName);
     if (!bucket) {
       bucket = new Map();
       skillBuckets.set(skillName, bucket);
     }
-    if (priority || !bucket.has(innerPath)) bucket.set(innerPath, data);
+    if (priority || !bucket.has(innerPath)) {
+      bucket.set(innerPath, { data, ...(executable ? { executable: true } : {}) });
+    }
   };
 
   const workspaceFiles: LoadedFile[] = [];
+  const layoutWarnings: string[] = [];
+  const strayTopFiles: string[] = [];
   let readme: Buffer | undefined;
 
   for (const file of files) {
     if (file.path === MANIFEST_FILENAME) continue;
     if (file.path === 'README.md') {
       readme = file.data;
-      if (layout === 'repo-root') workspaceFiles.push({ path: file.path, data: file.data });
+      if (layout === 'repo-root') workspaceFiles.push({ path: file.path, data: file.data, ...(file.executable ? { executable: true } : {}) });
       continue;
     }
 
     const skillMatch = isSkillPath(file.path);
     if (skillMatch) {
+      if (isForbiddenWorkspacePath(skillMatch.innerPath)) {
+        throw new Error(`Skill 目录不允许包含可执行环境配置或私密内部文件：${file.path}`);
+      }
       // Top-level `skills/` takes priority over `.agents/skills/` or `.claude/skills/` duplicates.
-      addSkillFile(skillMatch.skillName, skillMatch.innerPath, file.data, skillMatch.root === 'skills');
+      addSkillFile(skillMatch.skillName, skillMatch.innerPath, file.data, file.executable, skillMatch.root === 'skills');
       continue;
     }
 
@@ -287,32 +323,45 @@ function parseLoadedPackage(sourceKind: TemplateSourceKind, files: LoadedFile[])
           if (isForbiddenWorkspacePath(cleanInner)) {
             throw new Error(`工作区不允许包含可执行环境配置或隐藏内部文件：${cleanInner}`);
           }
-          workspaceFiles.push({ path: cleanInner, data: file.data });
+          workspaceFiles.push({ path: cleanInner, data: file.data, ...(file.executable ? { executable: true } : {}) });
         }
       } else if (isForbiddenWorkspacePath(file.path)) {
         throw new Error(`配方包不允许包含可执行环境配置或隐藏内部文件：${file.path}`);
+      } else if (!file.path.startsWith('.')) {
+        strayTopFiles.push(file.path);
       }
     } else {
       if (isForbiddenWorkspacePath(file.path)) {
         throw new Error(`工作区不允许包含可执行环境配置或隐藏内部文件：${file.path}`);
       }
-      workspaceFiles.push({ path: file.path, data: file.data });
+      workspaceFiles.push({ path: file.path, data: file.data, ...(file.executable ? { executable: true } : {}) });
     }
   }
 
   // Only keep valid skill folders containing `SKILL.md`.
   const skills = new Map<string, LoadedFile[]>();
+  const missingSkillMd: string[] = [];
   for (const [name, bucket] of [...skillBuckets.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
-    if (!bucket.has('SKILL.md')) continue;
+    if (!bucket.has('SKILL.md')) {
+      missingSkillMd.push(name);
+      continue;
+    }
     const entries = [...bucket.entries()]
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([path, data]) => ({ path, data }));
+      .map(([path, entry]) => ({ path, data: entry.data, ...(entry.executable ? { executable: true } : {}) }));
     skills.set(name, entries);
+  }
+  if (missingSkillMd.length > 0) {
+    layoutWarnings.push(`以下 skills 子目录缺少 SKILL.md，已被忽略：${missingSkillMd.join('、')}`);
+  }
+  if (strayTopFiles.length > 0) {
+    const shown = strayTopFiles.slice(0, 5).join('、');
+    layoutWarnings.push(`标准布局（含 workspace/）下存在顶层散落文件，安装时不会自动写入群工作区（如需预置请移入 workspace/）：${shown}${strayTopFiles.length > 5 ? ` 等 ${strayTopFiles.length} 个` : ''}`);
   }
 
   workspaceFiles.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
-  return { sourceKind, layout, manifest, rawManifestText, readme, skills, workspaceFiles, allFiles: files };
+  return { sourceKind, layout, manifest, rawManifestText, readme, skills, workspaceFiles, allFiles: files, layoutWarnings };
 }
 
 /**
@@ -368,7 +417,7 @@ export async function inspectTemplate(source: string, options: { sourceUrl?: str
   const signatureStatus = checkSignature(pkg);
   const capable = hasEffectiveCapability(pkg);
   const invalidSkills = findInvalidSkills(pkg);
-  const warnings: string[] = [];
+  const warnings: string[] = [...pkg.layoutWarnings];
 
   if (!capable) {
     warnings.push('配方不包含有效 Skill、预置工作区文件或本群角色（空壳配方无法对外发布）');
@@ -487,7 +536,12 @@ async function ensureSafeParentDirs(rootDir: string, cleanRel: string): Promise<
   return resolve(rootDir, ...parts);
 }
 
-async function writeSafeFile(rootDir: string, relPath: string, data: Buffer, options: { exclusive?: boolean } = {}): Promise<string> {
+async function writeSafeFile(
+  rootDir: string,
+  relPath: string,
+  data: Buffer,
+  options: { exclusive?: boolean; executable?: boolean } = {},
+): Promise<string> {
   const cleanRel = normalizeZipPath(relPath);
   await assertNoSymlinksAlongPath(rootDir, cleanRel);
   const full = await ensureSafeParentDirs(rootDir, cleanRel);
@@ -496,11 +550,17 @@ async function writeSafeFile(rootDir: string, relPath: string, data: Buffer, opt
   }
   if (options.exclusive) {
     await writeFile(full, data, { flag: 'wx' });
+    if (options.executable && process.platform !== 'win32') {
+      await chmod(full, 0o755);
+    }
     return full;
   }
   const tmp = join(dirname(full), `.vonvon-stage-${process.pid}-${randomUUID().slice(0, 8)}.tmp`);
   try {
     await writeFile(tmp, data, { flag: 'wx' });
+    if (options.executable && process.platform !== 'win32') {
+      await chmod(tmp, 0o755);
+    }
     await assertNoSymlinksAlongPath(rootDir, cleanRel);
     await rename(tmp, full);
   } catch (err) {
@@ -519,7 +579,7 @@ export async function extractTemplate(source: string, destDir: string, options: 
     throw new Error(`解包目标目录非空（请指定空目录）：${dest}`);
   }
   for (const file of pkg.allFiles) {
-    await writeSafeFile(dest, file.path, file.data);
+    await writeSafeFile(dest, file.path, file.data, { executable: file.executable });
   }
   return {
     dest,
@@ -585,6 +645,35 @@ async function fileMatches(rootDir: string, cleanRel: string, expected: Buffer):
   }
 }
 
+async function cleanStaleSkillFiles(rootDir: string, skillRelRoot: string, expectedRelPaths: ReadonlySet<string>): Promise<boolean> {
+  const skillDir = resolve(rootDir, ...skillRelRoot.split('/'));
+  if (!skillDir.startsWith(rootDir + sep)) return false;
+  const rootInfo = await lstat(skillDir).catch(() => undefined);
+  if (!rootInfo || rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) return false;
+  let pruned = false;
+
+  async function prune(current: string, relPrefix: string): Promise<void> {
+    const entries = await readdir(current, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = join(current, entry.name);
+      const rel = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
+      const info = await lstat(full);
+      if (info.isSymbolicLink()) continue;
+      if (info.isDirectory()) {
+        await prune(full, rel);
+        const remaining = await readdir(full).catch(() => []);
+        if (remaining.length === 0) await rm(full, { recursive: true, force: true }).catch(() => undefined);
+      } else if (info.isFile() && !expectedRelPaths.has(rel)) {
+        await unlink(full).catch(() => undefined);
+        pruned = true;
+      }
+    }
+  }
+
+  await prune(skillDir, '');
+  return pruned;
+}
+
 export async function stageTemplate(
   source: string,
   destDir: string,
@@ -620,19 +709,21 @@ export async function stageTemplate(
   }
 
   const skillTargets = ['.agents/skills', '.claude/skills'] as const;
-  const skillPlan: { skillName: string; skillFiles: LoadedFile[]; existed: boolean; hasDiff: boolean }[] = [];
+  const skillPlan: { skillName: string; skillFiles: LoadedFile[]; existed: boolean; hasDiff: boolean; hasMissing: boolean }[] = [];
   for (const [skillName, skillFiles] of pkg.skills.entries()) {
     let existed = false;
     let hasDiff = false;
+    let hasMissing = false;
     for (const root of skillTargets) {
       for (const sf of skillFiles) {
         const rel = `${root}/${skillName}/${sf.path}`;
         const status = await fileMatches(dest, rel, sf.data);
         if (status !== 'missing') existed = true;
+        else hasMissing = true;
         if (status === 'different') hasDiff = true;
       }
     }
-    skillPlan.push({ skillName, skillFiles, existed, hasDiff });
+    skillPlan.push({ skillName, skillFiles, existed, hasDiff, hasMissing });
   }
 
   const writtenWorkspaceFiles: string[] = [];
@@ -640,8 +731,11 @@ export async function stageTemplate(
 
   for (const { file, status } of workspacePlan) {
     if (status === 'missing') {
-      await writeSafeFile(dest, file.path, file.data, { exclusive: true });
+      await writeSafeFile(dest, file.path, file.data, { exclusive: true, executable: file.executable });
       writtenWorkspaceFiles.push(file.path);
+    } else if (status === 'same' && file.executable && process.platform !== 'win32') {
+      const full = await assertNoSymlinksAlongPath(dest, normalizeZipPath(file.path));
+      await chmod(full, 0o755).catch(() => undefined);
     } else if (status === 'different') {
       conflictingWorkspaceFiles.push(file.path);
     }
@@ -651,19 +745,24 @@ export async function stageTemplate(
   const updatedSkills: string[] = [];
   const conflictingSkills: string[] = [];
 
-  for (const { skillName, skillFiles, existed, hasDiff } of skillPlan) {
+  for (const { skillName, skillFiles, existed, hasDiff, hasMissing } of skillPlan) {
     if (existed && hasDiff && !options.updateSkills) {
       conflictingSkills.push(skillName);
       continue;
     }
 
+    const expectedPaths = new Set(skillFiles.map(sf => sf.path));
+    let prunedAny = false;
     for (const root of skillTargets) {
       for (const sf of skillFiles) {
-        await writeSafeFile(dest, `${root}/${skillName}/${sf.path}`, sf.data);
+        await writeSafeFile(dest, `${root}/${skillName}/${sf.path}`, sf.data, { executable: sf.executable });
+      }
+      if (existed && options.updateSkills) {
+        if (await cleanStaleSkillFiles(dest, `${root}/${skillName}`, expectedPaths)) prunedAny = true;
       }
     }
     if (!existed) addedSkills.push(skillName);
-    else if (hasDiff) updatedSkills.push(skillName);
+    else if (hasDiff || hasMissing || prunedAny) updatedSkills.push(skillName);
   }
 
   const docUrl = effectiveDocUrl(pkg.manifest);
@@ -778,14 +877,14 @@ export async function packTemplate(
   }
   for (const [skillName, skillEntries] of pkg.skills.entries()) {
     for (const entry of skillEntries) {
-      archiveFiles.push({ path: `skills/${skillName}/${entry.path}`, data: entry.data });
+      archiveFiles.push({ path: `skills/${skillName}/${entry.path}`, data: entry.data, ...(entry.executable ? { executable: true } : {}) });
     }
   }
   let workspaceFileCount = 0;
   for (const wf of pkg.workspaceFiles) {
     // Avoid duplicating README.md into workspace/ when coming from repo-root layout.
     if (pkg.layout === 'repo-root' && wf.path === 'README.md') continue;
-    archiveFiles.push({ path: `workspace/${wf.path}`, data: wf.data });
+    archiveFiles.push({ path: `workspace/${wf.path}`, data: wf.data, ...(wf.executable ? { executable: true } : {}) });
     workspaceFileCount++;
   }
 
@@ -1091,7 +1190,9 @@ export async function draftTemplateFromDirectory(input: DraftFromGroupInput): Pr
             if (totalBytes > MAX_UNCOMPRESSED_BYTES) {
               throw new Error(`提取的文件总大小超过配方上限（最大 ${Math.round(MAX_UNCOMPRESSED_BYTES / (1024 * 1024))} MB）`);
             }
-            skillEntries.push({ path: relInside, data: await readFile(full) });
+            const data = await readFile(full);
+            const executable = detectExecutableOnDisk(relInside, info.mode, data);
+            skillEntries.push({ path: relInside, data, ...(executable ? { executable: true } : {}) });
           }
         }
       }
@@ -1178,7 +1279,9 @@ export async function draftTemplateFromDirectory(input: DraftFromGroupInput): Pr
         if (totalBytes > MAX_UNCOMPRESSED_BYTES) {
           throw new Error(`提取的文件总大小超过配方上限（最大 ${Math.round(MAX_UNCOMPRESSED_BYTES / (1024 * 1024))} MB）`);
         }
-        workspaceFiles.push({ path: rel, data: await readFile(full) });
+        const data = await readFile(full);
+        const executable = detectExecutableOnDisk(rel, info.mode, data);
+        workspaceFiles.push({ path: rel, data, ...(executable ? { executable: true } : {}) });
       }
     }
   }
@@ -1255,11 +1358,11 @@ export async function draftTemplateFromDirectory(input: DraftFromGroupInput): Pr
   if (readmeBuf) collectedFiles.push({ path: 'README.md', data: readmeBuf });
   for (const [skillName, info] of extractedSkills.entries()) {
     for (const entry of info.entries) {
-      collectedFiles.push({ path: `skills/${skillName}/${entry.path}`, data: entry.data });
+      collectedFiles.push({ path: `skills/${skillName}/${entry.path}`, data: entry.data, ...(entry.executable ? { executable: true } : {}) });
     }
   }
   for (const wf of workspaceFiles) {
-    collectedFiles.push({ path: `workspace/${wf.path}`, data: wf.data });
+    collectedFiles.push({ path: `workspace/${wf.path}`, data: wf.data, ...(wf.executable ? { executable: true } : {}) });
   }
 
   // 6. Write standard-layout draft directory cleanly to disk.
@@ -1268,6 +1371,9 @@ export async function draftTemplateFromDirectory(input: DraftFromGroupInput): Pr
     const outPath = join(dest, ...file.path.split('/'));
     await mkdir(dirname(outPath), { recursive: true });
     await writeFile(outPath, file.data);
+    if (file.executable && process.platform !== 'win32') {
+      await chmod(outPath, 0o755);
+    }
   }
 
   const redactionWarnings = scanFilesForSecrets(collectedFiles);

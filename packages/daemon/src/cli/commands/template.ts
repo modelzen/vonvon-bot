@@ -11,6 +11,7 @@ import { verifyPidLockOwner } from '../../server/owner-verification';
 import { readRunningPidLock } from '../../server/pid-lock';
 import { readAuthorKey, signUnpublishRequest } from '../../template/author-key';
 import { listMyPublishedTemplates, resolveClubBaseUrl, unpublishTemplatePromo } from '../../template/club-client';
+import { fetchTemplateSource } from '../../template/fetch';
 import {
   draftTemplateFromDirectory, extractTemplate, inspectTemplate, packTemplate, PackRedactionError, stageTemplate,
 } from '../../template/ops';
@@ -90,6 +91,29 @@ function wrapError(err: unknown): never {
     throw new CommandError('refused', err.message, { reason: 'redaction_failed' });
   }
   throw new CommandError('failed', err instanceof Error ? err.message : String(err));
+}
+
+export async function runTemplateFetch(url: string, options: { dest?: string }, io: Io): Promise<void> {
+  if (!options.dest?.trim()) throw badArgs('缺少必填参数 --dest <空目录>');
+  try {
+    const result = await fetchTemplateSource(url, options.dest);
+    const lines = result.resolved
+      ? [
+          `已获取配方源 → ${result.localPath}（类型：${result.sourceKind ?? 'unknown'}，方式：${result.via ?? 'auto'}）`,
+          ...(result.title ? [`文档标题：${result.title}`] : []),
+          ...(result.attachmentName ? [`附件：${result.attachmentName}`] : []),
+          ...(result.sourceUrl && result.sourceUrl !== result.url ? [`来源地址：${result.sourceUrl}`] : []),
+        ]
+      : [
+          `未能自动下载配方文件（原因：${result.reason ?? 'unknown'}）`,
+          ...(result.title ? [`文档标题：${result.title}`] : []),
+          ...(result.attachmentName ? [`检测到内嵌附件：${result.attachmentName}`] : []),
+          ...(result.hint ? [result.hint] : []),
+        ];
+    print(io, lines, result);
+  } catch (err) {
+    wrapError(err);
+  }
 }
 
 export async function runTemplateInspect(source: string, options: { sourceUrl?: string }, io: Io): Promise<void> {
@@ -212,7 +236,7 @@ function toTemplateSchedule(task: ScheduledTaskView): TemplateSchedule | undefin
       return undefined;
   }
   if (!when) return undefined;
-  const name = task.name.trim().slice(0, 80);
+  const name = task.name.trim().slice(0, 40);
   const prompt = task.instruction.trim().slice(0, 4000);
   if (!name || !prompt) return undefined;
   return {

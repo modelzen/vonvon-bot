@@ -191,6 +191,28 @@
       metrics.appendChild(docLikes);
     }
 
+    const installSource = isSafeHttps(item.repository)
+      ? item.repository
+      : isSafeHttps(item.docUrl)
+        ? item.docUrl
+        : '';
+    if (installSource) {
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'card-install-btn';
+      copyBtn.textContent = '复制口令';
+      copyBtn.title = '复制一句话安装口令，发给飞书 Vonvon Bot 私聊即可安装';
+      copyBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const prompt = `帮我安装这个配方：${installSource}`;
+        copyText(prompt, '已复制安装口令，发给你的飞书 Vonvon Bot 私聊即可安装');
+        copyBtn.textContent = '已复制 ✓';
+        setTimeout(() => { copyBtn.textContent = '复制口令'; }, 1800);
+      });
+      metrics.appendChild(copyBtn);
+    }
+
     if (isFeishuHost(item.docUrl)) {
       link.addEventListener('click', () => {
         pendingDocRefresh = {

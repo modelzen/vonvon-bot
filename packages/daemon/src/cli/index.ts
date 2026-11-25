@@ -917,7 +917,15 @@ covers(program.command('now'), 'snapshot.get').description("What each bot is doi
   .action(async (options: Json & { bot?: string }) => { await (await import('./commands/now')).runNow(options.bot, io(options)); });
 covers(program.command('snapshot'), 'snapshot.get').description("The web page's whole state: a summary, or all of it with --json").option(...JSON_FLAG)
   .action(async (options: Json) => { await (await import('./commands/now')).runSnapshot(io(options)); });
-const template = program.command('template').description('Inspect, stage, extract and pack Vonvon Bot templates (.vonvon.zip)');
+const template = program.command('template').description('Fetch, inspect, stage, extract and pack Vonvon Bot templates (.vonvon.zip)');
+template.command('fetch <url>').description('Resolve a Feishu promo doc URL, GitHub repo URL, or .vonvon.zip URL into a local inspectable path')
+  .requiredOption('--dest <dir>', 'Empty destination directory')
+  .option(...JSON_FLAG)
+  .action(async (url: string, options: Json & { dest?: string }) => {
+    const mod = await import('./commands/template');
+    await mod.verifyTemplateSessionAllowed(process.env, program.opts<{ scope?: string }>().scope);
+    await mod.runTemplateFetch(url, options, io(options));
+  });
 template.command('inspect <source>').description('Validate a .vonvon.zip file or template directory and print its summary')
   .option('--source-url <url>', 'Original repository or download URL for metadata context')
   .option(...JSON_FLAG)

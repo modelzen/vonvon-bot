@@ -20,8 +20,8 @@
 ```
 
 ### 禁止进入配方的内容
-- 顶层或嵌套的 `.git/`、`.github/`、`.claude/`、`.codex/`、`.agents/`、`.cursor/`、`.vscode/`、`.idea/`、`node_modules/`
-- `.mcp.json`、`mcp.json`、`.env`、`.env.*`、`.npmrc`、`.yarnrc`、`.vonvon-template.json`
+- `.git/`、`.claude/`、`.codex/`、`.agents/`、`.cursor/`、`.vscode/`、`.idea/`、`node_modules/`（克隆 GitHub 仓库时顶层 `.github/` 会被自动忽略，不会写入群工作区）
+- `.mcp.json`、`mcp.json`、`.env`、`.env.*`（不含真实密钥的 `.env.example` / `.env.sample` / `.env.template` / `.env.dist` 样例允许保留）、`.npmrc`、`.yarnrc`、`.vonvon-template.json`
 - 任何符号链接（symlink）
 - 任何真实密钥/Token、私人飞书 ID（`cli_*` / `oc_*` / `ou_*`）或开发者本机绝对路径
 
@@ -75,8 +75,9 @@
 - **`id`**：必填，正则 `^[a-z0-9][a-z0-9-]{0,62}(?:\/[a-z0-9][a-z0-9-]{0,62})?$`（仅允许小写字母、数字、连字符，支持单段或 `author/slug` 两段）。
 - **`version`**：必填，推荐语义化版本（如 `0.1.0`；更新线上已发布配方时应递增，服务端拒绝旧版本降级覆盖）。
 - **`public`**：布尔值，缺省严格视为 `false`。仅当用户明确同意上架到 `https://club.vonvon.cc/` 时设为 `true`，且必须提供合法 `https://` 的 `docUrl`（或 `repository`）。
-- **`name`**：1–80 字；**`summary`**：1–300 字；**`tags`**：最多 12 个，每个 1–32 字。
+- **`name`**：1–80 字；**`summary`**：1–300 字；**`tags`**：最多 12 个，每个 1–32 字；**`license`**：最多 120 字。
 - **`group.recommendedPermission`**：仅限 `"qa"` | `"write"` | `"full"`。
+- **`group.schedules[].name`**：1–40 字（与 `vonvon schedule add --name` 一致）。
 - **`group.schedules[].when`**：支持 4 种结构：
   - `{ "kind": "daily", "time": "HH:mm" }`
   - `{ "kind": "weekly", "days": [1,2,3,4,5], "time": "HH:mm" }`（`1`=周一 … `7`=周日）

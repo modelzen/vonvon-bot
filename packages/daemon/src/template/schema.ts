@@ -21,7 +21,7 @@ export const templateScheduleWhenSchema = z.discriminatedUnion('kind', [
 ]);
 
 export const templateScheduleSchema = z.object({
-  name: z.string().trim().min(1).max(80),
+  name: z.string().trim().min(1).max(40),
   when: templateScheduleWhenSchema,
   prompt: z.string().trim().min(1).max(4000),
   enabledByDefault: z.boolean().optional(),
@@ -30,7 +30,7 @@ export const templateScheduleSchema = z.object({
 export const templateCreditSchema = z.object({
   name: z.string().trim().min(1).max(120),
   url: httpsUrlSchema.optional(),
-  license: z.string().trim().min(1).max(64).optional(),
+  license: z.string().trim().min(1).max(120).optional(),
 });
 
 export const templateAuthorSchema = z.object({
@@ -85,7 +85,7 @@ export const templateManifestSchema = z.object({
   docUrl: httpsUrlSchema.optional(),
   homepage: httpsUrlSchema.optional(),
   installHint: z.string().trim().min(1).max(300).optional(),
-  license: z.string().trim().min(1).max(64).optional(),
+  license: z.string().trim().min(1).max(120).optional(),
   credits: z.array(templateCreditSchema).max(30).optional(),
   author: templateAuthorSchema,
   repository: httpsUrlSchema.optional(),

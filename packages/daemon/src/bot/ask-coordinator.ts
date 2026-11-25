@@ -289,11 +289,15 @@ export class AskCoordinator {
       { actor: this.names.peek(input.openId) ?? `成员 …${input.openId.slice(-6)}`, byDm: input.openId });
     return true;
   }
+  private formatAnsweredAt(now: Date): string {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  }
   private settle(turn: Turn, entry: Entry, resolution: AskResolution, options: { actor?: string; providerResolved?: boolean; byDm?: string; presentation?: AskCardState } = {}): void {
     if (entry.state.kind === 'settled') return;
     const messageId = entry.state.kind === 'visible' ? entry.state.messageId : undefined;
     const presentation: AskCardState = options.presentation ?? (resolution.kind === 'answered'
-      ? { kind: 'answered', answer: resolution.answer, actor: options.actor ?? '', at: new Date().toISOString() }
+      ? { kind: 'answered', answer: resolution.answer, actor: options.actor ?? '', at: this.formatAnsweredAt(new Date()) }
       : resolution.reason === 'timeout' ? { kind: 'timed-out' }
       : resolution.reason === 'stopped' ? { kind: 'stopped' } : { kind: 'unavailable', reason: resolution.reason });
     entry.answeredByDm = options.byDm;

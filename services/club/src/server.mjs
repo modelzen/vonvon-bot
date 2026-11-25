@@ -121,11 +121,11 @@ export function createClubServer({
    * Best-effort coalesced sync of a public Feishu document's real like_count and (when missing) cover image.
    * Never throws and never blocks callers.
    */
-  const syncOneFeishuDoc = async (templateId, authorPublicKey, docUrl, { needCover = false } = {}) => {
+  const syncOneFeishuDoc = async (templateId, authorPublicKey, docUrl, { needCover = false, overwriteCover = false } = {}) => {
     if (!feishuPublicFetcher || !isFeishuDocUrl(docUrl)) return { ok: false, reason: 'skipped' };
     const key = `${templateId}\0${authorPublicKey}`;
     const existing = inFlightSync.get(key);
-    if (existing) return existing;
+    if (existing && !overwriteCover) return existing;
 
     const promise = (async () => {
       try {
@@ -141,9 +141,15 @@ export function createClubServer({
         let coverUrl = null;
         if (needCover && coversDir && fetched.coverBytes) {
           const saved = await saveCoverBytes(coversDir, fetched.coverBytes);
-          const applied = store.setCoverUrlIfMissing(templateId, authorPublicKey, saved.url);
-          if (applied) coverUrl = saved.url;
-          else await cleanupOrphanCover(saved.url);
+          if (overwriteCover) {
+            const { previousCoverUrl } = store.setCoverUrl(templateId, authorPublicKey, saved.url);
+            await cleanupOrphanCover(previousCoverUrl);
+            coverUrl = saved.url;
+          } else {
+            const applied = store.setCoverUrlIfMissing(templateId, authorPublicKey, saved.url);
+            if (applied) coverUrl = saved.url;
+            else await cleanupOrphanCover(saved.url);
+          }
         }
         return { ok: true, docLikeCount: fetched.docLikeCount ?? null, ...(coverUrl ? { coverUrl } : {}) };
       } catch {
@@ -296,10 +302,11 @@ export function createClubServer({
           }
         }
 
-        // Best-effort guest fetch of public Feishu doc like_count (and cover if author did not upload one).
+        // Best-effort guest fetch of public Feishu doc like_count (and refresh cover if author did not upload one).
         if (feishuPublicFetcher && isFeishuDocUrl(targetDocUrl)) {
           const synced = await syncOneFeishuDoc(saved.id, saved.authorPublicKey, targetDocUrl, {
             needCover: !coverUrl && canAcceptCover,
+            overwriteCover: !coverUrl && canAcceptCover,
           });
           if (!coverUrl && synced.coverUrl) coverUrl = synced.coverUrl;
         }

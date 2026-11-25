@@ -528,6 +528,38 @@ code {
   font-variant-numeric: tabular-nums;
 }
 
+.card-install-btn {
+  appearance: none;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--orange-ink);
+  background: var(--orange-soft);
+  border: 1px solid rgba(235, 111, 56, 0.24);
+  border-radius: 999px;
+  padding: 2px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+
+.card-install-btn:hover {
+  background: var(--orange);
+  border-color: var(--orange);
+  color: #ffffff;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* Empty state */
 .empty-state {
   text-align: center;

@@ -12,6 +12,7 @@ import { SESSION_BOT_ENV, SESSION_ENV, SESSION_SCOPE_ENV } from '../src/config/s
 import { appendLarkCliToPath, resolveLarkCliBin } from '../src/platform/lark-cli';
 import { DEVICES_DIR } from '../src/remote/files';
 import { authorKeyPath, loadOrCreateAuthorKey, signPromoPayload, verifyPromoPayload } from '../src/template/author-key';
+import { extractFeishuDocSourceHints, fetchTemplateSource, parseGitHubRepoUrl } from '../src/template/fetch';
 import {
   draftTemplateFromDirectory, extractTemplate, inspectTemplate, INSTALLED_META_FILENAME, packTemplate, PackRedactionError, stageTemplate,
 } from '../src/template/ops';
@@ -691,5 +692,172 @@ describe('lark-cli resolution & post-ask run card rotation primitives', () => {
       continued: 'ask',
     });
     expect(JSON.stringify(frozen)).toContain('已收到选择，后续输出见下一张卡片');
+  });
+});
+
+describe('wave-1 template reliability upgrades (+x mode, repo hygiene, skill pruning, template fetch)', () => {
+  it('preserves POSIX executable permissions across draft-group -> pack -> readZip -> extract -> stage', async () => {
+    if (process.platform === 'win32') return;
+    const dataRoot = await makeTempDir('vonvon-exec-home-');
+    const groupDir = await makeTempDir('vonvon-exec-group-');
+    await writeTree(groupDir, {
+      'AGENTS.md': '# Exec Test\n',
+      'scripts/run.sh': '#!/bin/sh\necho workspace-ok\n',
+      '.agents/skills/demo-tool/SKILL.md': '---\nname: demo-tool\ndescription: 执行脚本测试\n---\nBody\n',
+      '.agents/skills/demo-tool/scripts/cli': '#!/bin/sh\necho skill-ok\n',
+    });
+    await chmod(join(groupDir, 'scripts/run.sh'), 0o755);
+    await chmod(join(groupDir, '.agents/skills/demo-tool/scripts/cli'), 0o755);
+
+    const draftDir = join(await makeTempDir('vonvon-exec-draft-'), 'draft');
+    await draftTemplateFromDirectory({ sourceDir: groupDir, destDir: draftDir, groupName: 'exec-group' });
+    expect((await stat(join(draftDir, 'workspace/scripts/run.sh'))).mode & 0o111).toBeGreaterThan(0);
+    expect((await stat(join(draftDir, 'skills/demo-tool/scripts/cli'))).mode & 0o111).toBeGreaterThan(0);
+
+    const outZip = join(await makeTempDir('vonvon-exec-out-'), 'exec.vonvon.zip');
+    await packTemplate(draftDir, outZip, { dataRoot });
+
+    const zipEntries = readZip(await readFile(outZip));
+    expect(zipEntries.find(e => e.path === 'workspace/scripts/run.sh')?.executable).toBe(true);
+    expect(zipEntries.find(e => e.path === 'skills/demo-tool/scripts/cli')?.executable).toBe(true);
+    expect(zipEntries.find(e => e.path === 'workspace/AGENTS.md')?.executable).toBe(false);
+
+    const extractDir = join(await makeTempDir('vonvon-exec-ext-'), 'ext');
+    await extractTemplate(outZip, extractDir);
+    expect((await stat(join(extractDir, 'workspace/scripts/run.sh'))).mode & 0o111).toBeGreaterThan(0);
+    expect((await stat(join(extractDir, 'skills/demo-tool/scripts/cli'))).mode & 0o111).toBeGreaterThan(0);
+
+    const stageDir = await makeTempDir('vonvon-exec-stage-');
+    await stageTemplate(outZip, stageDir, { mode: 'fresh', dataRoot, noTelemetry: true });
+    expect((await stat(join(stageDir, 'scripts/run.sh'))).mode & 0o111).toBeGreaterThan(0);
+    expect((await stat(join(stageDir, '.agents/skills/demo-tool/scripts/cli'))).mode & 0o111).toBeGreaterThan(0);
+    expect((await stat(join(stageDir, '.claude/skills/demo-tool/scripts/cli'))).mode & 0o111).toBeGreaterThan(0);
+
+    // Merge mode repairs missing +x on unchanged script without flagging a conflict.
+    await chmod(join(stageDir, 'scripts/run.sh'), 0o644);
+    const merged = await stageTemplate(outZip, stageDir, { mode: 'merge', dataRoot, noTelemetry: true });
+    expect(merged.conflictingWorkspaceFiles).toEqual([]);
+    expect((await stat(join(stageDir, 'scripts/run.sh'))).mode & 0o111).toBeGreaterThan(0);
+  });
+
+  it('ignores top-level .github/ in cloned repos, allows .env.example, rejects secrets in skills/, and prunes stale files on --update-skills', async () => {
+    const dataRoot = await makeTempDir('vonvon-hygiene-home-');
+    const repoDir = await makeTempDir('vonvon-hygiene-repo-');
+    await writeTree(repoDir, {
+      'vonvon-bot.json': JSON.stringify({
+        schemaVersion: 1,
+        id: 'hygiene-demo',
+        version: '0.1.0',
+        name: '仓库规范测试',
+        summary: '验证 .github 和 .env.example 以及复合协议长度',
+        license: 'MIT (code) / CC-BY-4.0 (docs) / CC0-1.0 (awesome-code-animation)',
+        author: { name: 'Tester' },
+        group: {
+          schedules: [{ name: '每周五团队复盘汇总', when: { kind: 'weekly', days: [5], time: '17:00' }, prompt: '复盘' }],
+        },
+      }),
+      '.github/workflows/ci.yml': 'name: ci\n',
+      '.env.example': 'API_KEY=replace-me\n',
+      'skills/demo/SKILL.md': '---\nname: demo\ndescription: 示例技能\n---\nExample path /home/user2/work\n',
+      'skills/demo/old-helper.py': 'print("old")\n',
+    });
+
+    const inspected = await inspectTemplate(repoDir);
+    expect(inspected.workspaceFiles).toContain('.env.example');
+    expect(inspected.workspaceFiles).not.toContain('.github/workflows/ci.yml');
+
+    const v1Zip = join(await makeTempDir('vonvon-hygiene-z1-'), 'v1.vonvon.zip');
+    await packTemplate(repoDir, v1Zip, { dataRoot });
+
+    const stageDir = await makeTempDir('vonvon-hygiene-stage-');
+    await stageTemplate(v1Zip, stageDir, { mode: 'fresh', dataRoot, noTelemetry: true });
+    expect(await readFile(join(stageDir, '.agents/skills/demo/old-helper.py'), 'utf8')).toContain('old');
+
+    // Upgrade skill v0.2.0 removing old-helper.py and adding new-helper.py
+    await rm(join(repoDir, 'skills/demo/old-helper.py'));
+    await writeFile(join(repoDir, 'skills/demo/new-helper.py'), 'print("new")\n');
+    const v2Zip = join(await makeTempDir('vonvon-hygiene-z2-'), 'v2.vonvon.zip');
+    await packTemplate(repoDir, v2Zip, { dataRoot });
+
+    const upgraded = await stageTemplate(v2Zip, stageDir, { mode: 'merge', updateSkills: true, dataRoot, noTelemetry: true });
+    expect(upgraded.updatedSkills).toEqual(['demo']);
+    await expect(stat(join(stageDir, '.agents/skills/demo/old-helper.py'))).rejects.toThrow();
+    await expect(stat(join(stageDir, '.claude/skills/demo/old-helper.py'))).rejects.toThrow();
+    expect(await readFile(join(stageDir, '.agents/skills/demo/new-helper.py'), 'utf8')).toContain('new');
+
+    // Rejects forbidden .env / .mcp.json smuggled inside skills/
+    const evilSkillDir = await makeTempDir('vonvon-evil-skill-');
+    await writeTree(evilSkillDir, {
+      'vonvon-bot.json': JSON.stringify({
+        schemaVersion: 1, id: 'evil-skill', version: '0.1.0', name: '恶意技能', summary: '尝试夹带 .env', author: { name: 'x' },
+      }),
+      'skills/demo/SKILL.md': '---\nname: demo\ndescription: x\n---\nbody',
+      'skills/demo/.mcp.json': '{}',
+    });
+    await expect(inspectTemplate(evilSkillDir)).rejects.toThrow(/Skill 目录不允许包含/);
+
+    // Rejects schedule name > 40 chars (matches vonvon schedule add --name 40-char limit)
+    const badSched = templateManifestSchema.safeParse({
+      schemaVersion: 1, id: 'sched-too-long', version: '0.1.0', name: '定时名超长', summary: 'x', author: { name: 'x' },
+      group: { schedules: [{ name: '超'.repeat(41), when: { kind: 'daily', time: '09:00' }, prompt: 'go' }] },
+    });
+    expect(badSched.success).toBe(false);
+
+    // Numeric placeholders like /home/user2 are allowed while real paths stay blocked.
+    expect(scanFilesForSecrets([{ path: 'doc.md', data: Buffer.from('/home/user2/demo') }])).toEqual([]);
+    expect(scanFilesForSecrets([{ path: 'doc.md', data: Buffer.from('/Users/clay/secret') }])).toHaveLength(1);
+  });
+
+  it('extracts Feishu DocxXML/SSR template hints and resolves guest-cookie zip or graceful login fallback', async () => {
+    const xmlHints = extractFeishuDocSourceHints(
+      '<title>人生指南</title><p>仓库 https://github.com/modelzen/vonvon-assistant</p><source token="boxcnAbc1234567890" name="how-to-live-better-0.1.0.vonvon.zip"/>',
+    );
+    expect(xmlHints.title).toBe('人生指南');
+    expect(xmlHints.repositories).toEqual(['https://github.com/modelzen/vonvon-assistant']);
+    expect(xmlHints.embeddedZips).toEqual([{ name: 'how-to-live-better-0.1.0.vonvon.zip', token: 'boxcnAbc1234567890' }]);
+
+    const ssrHtml = `<html><title>配方页</title><script>window.SERVER_DATA=Object({"meta":{"token":"DocTok123456789012"}});var x={"file":{"name":"demo-0.1.0.vonvon.zip","token":"boxcnSsr1234567890"}};</script></html>`;
+    const ssrHints = extractFeishuDocSourceHints(ssrHtml);
+    expect(ssrHints.docToken).toBe('DocTok123456789012');
+    expect(ssrHints.embeddedZips).toEqual([{ name: 'demo-0.1.0.vonvon.zip', token: 'boxcnSsr1234567890' }]);
+    expect(parseGitHubRepoUrl('https://github.com/modelzen/vonvon-assistant/tree/main/sub')).toEqual({
+      repoUrl: 'https://github.com/modelzen/vonvon-assistant',
+      branch: 'main',
+      subdir: 'sub',
+    });
+
+    // Mock anonymous guest fetch succeeding on embedded `.vonvon.zip`
+    const fakeZip = createZip([{ path: 'vonvon-bot.json', data: Buffer.from('{}') }]);
+    const destOk = join(await makeTempDir('vonvon-fetch-ok-'), 'in');
+    const fetchedOk = await fetchTemplateSource('https://my.feishu.cn/docx/DocTok123456789012', destOk, {
+      skipLarkCli: true,
+      fetchImpl: (async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.includes('/docx/')) return new Response(ssrHtml, { status: 200, headers: { 'content-type': 'text/html' } });
+        if (url.includes('/download/all/boxcnSsr1234567890/')) {
+          return new Response(new Uint8Array(fakeZip), { status: 200, headers: { 'content-type': 'application/zip' } });
+        }
+        return new Response('not found', { status: 404 });
+      }) as typeof fetch,
+    });
+    expect(fetchedOk.resolved).toBe(true);
+    expect(fetchedOk.sourceKind).toBe('zip');
+    expect(fetchedOk.attachmentName).toBe('demo-0.1.0.vonvon.zip');
+    expect(fetchedOk.localPath?.endsWith('demo-0.1.0.vonvon.zip')).toBe(true);
+
+    // Mock login-gated embedded attachment -> graceful fallback without throwing
+    const destGated = join(await makeTempDir('vonvon-fetch-gated-'), 'in');
+    const fetchedGated = await fetchTemplateSource('https://my.feishu.cn/docx/DocTok123456789012', destGated, {
+      skipLarkCli: true,
+      fetchImpl: (async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.includes('/docx/')) return new Response(ssrHtml, { status: 200, headers: { 'content-type': 'text/html' } });
+        return new Response('login required', { status: 403 });
+      }) as typeof fetch,
+    });
+    expect(fetchedGated.resolved).toBe(false);
+    expect(fetchedGated.reason).toBe('attachment_requires_login');
+    expect(fetchedGated.attachmentName).toBe('demo-0.1.0.vonvon.zip');
+    expect(fetchedGated.hint).toContain('demo-0.1.0.vonvon.zip');
   });
 });

@@ -17,11 +17,15 @@ export interface ZipEntryInput {
   /** Forward-slash relative path inside the archive (e.g. `skills/demo/SKILL.md`). */
   path: string;
   data: Uint8Array;
+  /** Preserve POSIX executable bit (`0o755`) in the ZIP central directory external attributes. */
+  executable?: boolean;
 }
 
 export interface ZipEntry {
   path: string;
   data: Buffer;
+  /** True when the archive entry carried Unix executable mode bits (`0o111`). */
+  executable: boolean;
 }
 
 export interface ZipLimits {
@@ -92,7 +96,7 @@ export function createZip(entries: readonly ZipEntryInput[]): Buffer {
     if (seen.has(path) || seenLower.has(lower)) throw new Error(`压缩包内存在重复或大小写冲突路径：${path}`);
     seen.add(path);
     seenLower.add(lower);
-    return { path, data: Buffer.from(entry.data) };
+    return { path, data: Buffer.from(entry.data), executable: Boolean(entry.executable) };
   }).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
   const localParts: Buffer[] = [];
@@ -138,7 +142,8 @@ export function createZip(entries: readonly ZipEntryInput[]): Buffer {
     central.writeUInt16LE(0, 32);
     central.writeUInt16LE(0, 34);
     central.writeUInt16LE(0, 36);
-    central.writeUInt32LE((0o100644 << 16) >>> 0, 38);
+    const unixMode = entry.executable ? 0o100755 : 0o100644;
+    central.writeUInt32LE((unixMode << 16) >>> 0, 38);
     central.writeUInt32LE(offset, 42);
     nameBytes.copy(central, 46);
 
@@ -231,9 +236,11 @@ export function readZip(raw: Uint8Array, limits: ZipLimits = {}): ZipEntry[] {
 
     // Reject Unix symlinks regardless of trailing slash.
     const madeByUnix = (versionMadeBy >>> 8) === 3;
-    if (madeByUnix && (((externalAttr >>> 16) & UNIX_FILE_TYPE_MASK) === UNIX_SYMLINK_TYPE)) {
+    const unixExternalMode = madeByUnix ? ((externalAttr >>> 16) & 0o177777) : 0;
+    if (madeByUnix && ((unixExternalMode & UNIX_FILE_TYPE_MASK) === UNIX_SYMLINK_TYPE)) {
       throw new Error(`压缩包内不允许符号链接：${rawName}`);
     }
+    const executable = madeByUnix ? ((unixExternalMode & 0o111) !== 0) : false;
 
     // Skip explicit directory entries after checking path safety.
     if (rawName.endsWith('/') || rawName.endsWith('\\')) {
@@ -311,7 +318,7 @@ export function readZip(raw: Uint8Array, limits: ZipLimits = {}): ZipEntry[] {
       throw new Error(`压缩包条目校验和错误：${normalized}`);
     }
 
-    entries.push({ path: normalized, data });
+    entries.push({ path: normalized, data, executable });
   }
 
   return entries;
