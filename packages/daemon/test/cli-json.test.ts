@@ -76,6 +76,7 @@ const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   [['template', 'inspect', 'missing.vonvon.zip'], 1], [['template', 'extract', 'missing.vonvon.zip', '--dest', 'out'], 1],
   [['template', 'stage', 'missing.vonvon.zip', '--dest', 'out'], 1], [['template', 'pack', 'missing-dir', '--out', 'out.vonvon.zip'], 1],
   [['template', 'draft-group', 'missing-group', '--dest', 'out'], 3],
+  [['template', 'published'], 0], [['template', 'unpublish', 'missing-id'], 1],
   // argument errors from commander itself
   [['nope'], 2], [['bot', 'list', '--nope'], 2], [['group'], 2],
 ];

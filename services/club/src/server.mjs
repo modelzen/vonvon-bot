@@ -2,9 +2,9 @@ import { createServer } from 'node:http';
 import { readFile, unlink } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { constantTimeEqual, sha256Hex, verifyCoverSignature, verifyPromoSignature } from './crypto.mjs';
+import { constantTimeEqual, sha256Hex, verifyCoverSignature, verifyPromoSignature, verifyUnpublishSignature } from './crypto.mjs';
 import { fetchFeishuCoverViaLarkCli, saveCoverBytes } from './covers.mjs';
-import { ANON_KEY_REGEX, MAX_COVER_UPLOAD_BYTES, MAX_JSON_BODY_BYTES, RateLimiter, validatePromoPayload } from './validate.mjs';
+import { ANON_KEY_REGEX, isFeishuDocUrl, MAX_COVER_UPLOAD_BYTES, MAX_JSON_BODY_BYTES, RateLimiter, TEMPLATE_ID_REGEX, validatePromoPayload } from './validate.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const DEFAULT_PUBLIC_DIR = resolve(HERE, '../public');
@@ -97,14 +97,40 @@ export function createClubServer({
   adminToken = '',
   publicBaseUrl = 'https://club.vonvon.cc',
   writeLimiter = new RateLimiter({ windowMs: 60_000, maxHits: 60 }),
-  likeLimiter = new RateLimiter({ windowMs: 60_000, maxHits: 40 }),
   coverFetcher = fetchFeishuCoverViaLarkCli,
+  feishuPublicFetcher = null,
 } = {}) {
   const cleanBase = publicBaseUrl.replace(/\/+$/, '');
   const cleanupOrphanCover = async (coverUrl) => {
     if (!coversDir || !coverUrl || !/^\/covers\/[a-f0-9]{16,64}\.(?:png|jpg|webp)$/.test(coverUrl)) return;
     if (store.isCoverReferenced(coverUrl)) return;
     await unlink(join(coversDir, coverUrl.slice('/covers/'.length))).catch(() => undefined);
+  };
+
+  /**
+   * Best-effort sync of a public Feishu document's real like_count and (when missing) cover image.
+   * Never throws and never blocks callers.
+   */
+  const syncOneFeishuDoc = async (templateId, authorPublicKey, docUrl, { needCover = false } = {}) => {
+    if (!feishuPublicFetcher || !isFeishuDocUrl(docUrl)) return { ok: false, reason: 'skipped' };
+    try {
+      const fetched = await feishuPublicFetcher(docUrl, { fetchCover: needCover });
+      if (!fetched?.ok) {
+        store.updateDocStats(templateId, authorPublicKey, { docLikeCount: undefined });
+        return { ok: false, reason: fetched?.reason ?? 'fetch_failed' };
+      }
+      store.updateDocStats(templateId, authorPublicKey, { docLikeCount: fetched.docLikeCount });
+      let coverUrl = null;
+      if (needCover && coversDir && fetched.coverBytes) {
+        const saved = await saveCoverBytes(coversDir, fetched.coverBytes);
+        const applied = store.setCoverUrlIfMissing(templateId, authorPublicKey, saved.url);
+        if (applied) coverUrl = saved.url;
+        else await cleanupOrphanCover(saved.url);
+      }
+      return { ok: true, docLikeCount: fetched.docLikeCount ?? null, ...(coverUrl ? { coverUrl } : {}) };
+    } catch {
+      return { ok: false, reason: 'sync_error' };
+    }
   };
 
   const server = createServer(async (req, res) => {
@@ -132,14 +158,12 @@ export function createClubServer({
       }
 
       if (method === 'GET' && pathname === '/api/list') {
-        const voterRaw = typeof req.headers['x-club-voter'] === 'string' ? req.headers['x-club-voter'].trim().slice(0, 128) : '';
-        const voterHash = voterRaw ? sha256Hex(`voter:${voterRaw}`) : '';
         const data = store.listPublic({
           sort: url.searchParams.get('sort') ?? 'hot',
           q: url.searchParams.get('q') ?? '',
           tag: url.searchParams.get('tag') ?? '',
           author: url.searchParams.get('author') ?? '',
-          voterHash,
+          authorPublicKey: url.searchParams.get('authorPublicKey') ?? '',
         });
         return sendJson(res, 200, { ok: true, ...data }, { 'cache-control': 'no-store' });
       }
@@ -190,6 +214,14 @@ export function createClubServer({
           }
         }
 
+        // Best-effort guest fetch of public Feishu doc like_count (and cover if author did not upload one).
+        if (feishuPublicFetcher && isFeishuDocUrl(targetDocUrl)) {
+          const synced = await syncOneFeishuDoc(saved.id, saved.authorPublicKey, targetDocUrl, {
+            needCover: !coverUrl && canAcceptCover,
+          });
+          if (!coverUrl && synced.coverUrl) coverUrl = synced.coverUrl;
+        }
+
         return sendJson(res, 200, {
           ok: true,
           status: saved.status,
@@ -198,6 +230,25 @@ export function createClubServer({
           url: `${cleanBase}/`,
           ...(coverUrl ? { coverUrl } : {}),
         });
+      }
+
+      if (method === 'POST' && pathname === '/api/unpublish') {
+        if (!writeLimiter.allow(`unpub:${ip}`)) return sendJson(res, 429, { ok: false, error: '请求过于频繁，请稍后再试' });
+        const body = await readJsonBody(req);
+        const id = typeof body.id === 'string' ? body.id.trim() : '';
+        const authorPublicKey = typeof body.authorPublicKey === 'string' ? body.authorPublicKey.trim() : '';
+        const timestamp = body.timestamp;
+        const signature = body.signature;
+        if (!id || !TEMPLATE_ID_REGEX.test(id) || !authorPublicKey) {
+          return sendJson(res, 400, { ok: false, error: '缺少合法的配方标识或作者公钥' });
+        }
+        if (!verifyUnpublishSignature(id, authorPublicKey, timestamp, signature)) {
+          return sendJson(res, 403, { ok: false, error: 'Ed25519 下架签名校验失败或请求已过期' });
+        }
+        const { deleted, previousCoverUrl } = store.deleteTemplate(id, authorPublicKey);
+        if (!deleted) return sendJson(res, 404, { ok: false, error: '未找到属于你的该公开配方' });
+        await cleanupOrphanCover(previousCoverUrl);
+        return sendJson(res, 200, { ok: true, id, authorPublicKey, deleted: true });
       }
 
       if (method === 'POST' && pathname === '/api/install') {
@@ -222,26 +273,31 @@ export function createClubServer({
         return sendJson(res, 200, { ok: true, id: result.id, deduplicated: result.deduplicated });
       }
 
-      if (method === 'POST' && pathname === '/api/like') {
-        if (!likeLimiter.allow(`like:${ip}`)) return sendJson(res, 429, { ok: false, error: '点赞过于频繁，请稍后再试' });
-        const body = await readJsonBody(req);
-        const id = typeof body.id === 'string' ? body.id.trim() : '';
-        const authorPublicKey = typeof body.authorPublicKey === 'string' ? body.authorPublicKey.trim() : '';
-        if (!id || !authorPublicKey) return sendJson(res, 400, { ok: false, error: '缺少配方标识' });
-        const voterRaw = typeof req.headers['x-club-voter'] === 'string' && req.headers['x-club-voter'].trim()
-          ? `voter:${req.headers['x-club-voter'].trim().slice(0, 128)}`
-          : `ip:${ip}`;
-        const result = store.toggleLike(id, authorPublicKey, sha256Hex(voterRaw));
-        if (!result) return sendJson(res, 404, { ok: false, error: '配方不存在或尚未公开' });
-        return sendJson(res, 200, { ok: true, ...result });
-      }
-
       // Admin endpoints (protected by CLUB_ADMIN_TOKEN)
       if (pathname.startsWith('/api/admin/')) {
         if (!verifyAdmin(req, adminToken)) return sendJson(res, 401, { ok: false, error: '未授权' });
 
+        if (method === 'GET' && pathname === '/api/admin/templates') {
+          return sendJson(res, 200, { ok: true, items: store.listAllForAdmin() });
+        }
+
         if (method === 'GET' && pathname === '/api/admin/pending') {
           return sendJson(res, 200, { ok: true, items: store.listPending() });
+        }
+
+        if (method === 'POST' && pathname === '/api/admin/sync-feishu') {
+          const body = await readJsonBody(req);
+          const id = typeof body.id === 'string' ? body.id.trim() : '';
+          const authorPublicKey = typeof body.authorPublicKey === 'string' ? body.authorPublicKey.trim() : '';
+          const targets = id
+            ? store.getById(id, authorPublicKey || undefined, { includeUntrusted: true })
+            : store.listFeishuSyncCandidates(Date.now() + 1, 50);
+          const results = [];
+          for (const t of targets) {
+            const r = await syncOneFeishuDoc(t.id, t.authorPublicKey, t.docUrl, { needCover: !t.coverUrl });
+            results.push({ id: t.id, authorPublicKey: t.authorPublicKey, ...r });
+          }
+          return sendJson(res, 200, { ok: true, synced: results.length, results });
         }
 
         if (method === 'POST' && pathname === '/api/admin/authors/trust') {

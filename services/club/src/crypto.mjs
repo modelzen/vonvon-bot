@@ -57,6 +57,26 @@ export function verifyCoverSignature(templateId, version, docUrl, authorPublicKe
   }
 }
 
+export const UNPUBLISH_MAX_SKEW_MS = 5 * 60 * 1000;
+
+export function verifyUnpublishSignature(templateId, authorPublicKey, timestamp, signature, now = Date.now()) {
+  if (typeof signature !== 'string' || !templateId || !authorPublicKey) return false;
+  if (typeof timestamp !== 'number' || !Number.isSafeInteger(timestamp)) return false;
+  if (Math.abs(now - timestamp) > UNPUBLISH_MAX_SKEW_MS) return false;
+  try {
+    const rawPub = Buffer.from(authorPublicKey, 'base64url');
+    if (rawPub.length !== 32) return false;
+    const spki = Buffer.concat([ED25519_SPKI_PREFIX, rawPub]);
+    const key = createPublicKey({ key: spki, format: 'der', type: 'spki' });
+    const sig = Buffer.from(signature, 'base64url');
+    if (sig.length !== 64) return false;
+    const message = Buffer.from(`vonvon-template-unpublish/1\n${templateId}\n${authorPublicKey}\n${timestamp}`, 'utf8');
+    return cryptoVerify(null, message, key, sig);
+  } catch {
+    return false;
+  }
+}
+
 export function sha256Hex(text) {
   return createHash('sha256').update(text).digest('hex');
 }

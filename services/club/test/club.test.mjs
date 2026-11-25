@@ -8,6 +8,7 @@ import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { canonicalPromoBytes } from '../src/crypto.mjs';
+import { parsePublicFeishuHtml } from '../src/feishu-public.mjs';
 import { createClubServer } from '../src/server.mjs';
 import { ClubStore } from '../src/store.mjs';
 
@@ -36,6 +37,10 @@ function makeKeypair() {
       const msg = Buffer.from(`vonvon-template-cover/1\n${templateId}\n${version}\n${docUrl}\n${rawPub.toString('base64url')}\n${hash}`, 'utf8');
       return cryptoSign(null, msg, privateKey).toString('base64url');
     },
+    signUnpublish(templateId, timestamp) {
+      const msg = Buffer.from(`vonvon-template-unpublish/1\n${templateId}\n${rawPub.toString('base64url')}\n${timestamp}`, 'utf8');
+      return cryptoSign(null, msg, privateKey).toString('base64url');
+    },
   };
 }
 
@@ -59,6 +64,12 @@ describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
         const { saveCoverBytes } = await import('../src/covers.mjs');
         const saved = await saveCoverBytes(coversDir, TINY_PNG);
         return { ok: true, ...saved };
+      },
+      feishuPublicFetcher: async (docUrl, { fetchCover }) => {
+        if (docUrl.includes('AFKNdf4QaooL5OxSR8bc5H7vn7b')) {
+          return { ok: true, docLikeCount: 7, ...(fetchCover ? { coverBytes: TINY_PNG } : {}) };
+        }
+        return { ok: false, reason: 'not_found' };
       },
     });
     await new Promise(resolveListen => server.listen(0, '127.0.0.1', resolveListen));
@@ -174,24 +185,71 @@ describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
 
     const listAfterInstalls = await (await fetch(`${baseUrl}/api/list`)).json();
     assert.equal(listAfterInstalls.items[0].installCount, 2);
+    assert.equal(listAfterInstalls.items[0].docLikeCount, 7);
+    assert.match(listAfterInstalls.items[0].coverUrl ?? '', /^\/covers\/[a-f0-9]+\.png$/);
     assert.equal(listAfterInstalls.stats.totalInstalls, 2);
 
-    // 4. No-login like toggle works per voter.
-    const like1 = await (await fetch(`${baseUrl}/api/like`, {
+    // 4. Site /api/like endpoint is removed (405/404) and public Feishu HTML parser extracts stats + cover URL.
+    const removedLike = await fetch(`${baseUrl}/api/like`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-club-voter': 'visitor-1' },
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ id: 'modelzen/daily-brief', authorPublicKey: packed.authorPublicKey }),
-    })).json();
-    assert.deepEqual(like1, { ok: true, liked: true, likeCount: 1 });
+    });
+    assert.equal(removedLike.status, 405);
+    const parsedHtml = parsePublicFeishuHtml(
+      `%22like_count%22%3A12%2C%22pv%22%3A45%2C%22uv%22%3A9%7D window.SERVER_DATA = Object({"meta":{"token":"DocTok1234567890"}}) "cover":{"token":"CovTok1234567890"}`,
+      'https://my.feishu.cn/wiki/Abc',
+    );
+    assert.equal(parsedHtml.docLikeCount, 12);
+    assert.equal(parsedHtml.docPv, 45);
+    assert.equal(parsedHtml.docUv, 9);
+    assert.equal(parsedHtml.coverUrls.length, 1);
+    assert.match(parsedHtml.coverUrls[0], /CovTok1234567890/);
 
-    const like1Off = await (await fetch(`${baseUrl}/api/like`, {
+    // 5. Creator lists own published templates via CLI (`vonvon template published`) without needing to remember IDs.
+    const pubListRun = await execFileAsync(process.execPath, [
+      VONVON_BIN, 'template', 'published', '--json',
+    ], {
+      env: { ...process.env, VONVON_HOME: creatorHome, VONVON_CLUB_API_URL: baseUrl, VONVON_SESSION: '', FEISHU_CODEX_BRIDGE: '' },
+    });
+    const pubList = JSON.parse(pubListRun.stdout);
+    assert.equal(pubList.ok, true);
+    assert.equal(pubList.items.length, 1);
+    assert.equal(pubList.items[0].id, 'modelzen/daily-brief');
+    assert.equal(pubList.items[0].docLikeCount, 7);
+
+    // Another user cannot unpublish creator's template (forged / wrong key -> 403 or 404).
+    const otherKey = makeKeypair();
+    const nowTs = Date.now();
+    assert.equal((await fetch(`${baseUrl}/api/unpublish`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-club-voter': 'visitor-1' },
-      body: JSON.stringify({ id: 'modelzen/daily-brief', authorPublicKey: packed.authorPublicKey }),
-    })).json();
-    assert.deepEqual(like1Off, { ok: true, liked: false, likeCount: 0 });
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        id: 'modelzen/daily-brief',
+        authorPublicKey: packed.authorPublicKey,
+        timestamp: nowTs,
+        signature: otherKey.signUnpublish('modelzen/daily-brief', nowTs),
+      }),
+    })).status, 403);
+    assert.equal((await fetch(`${baseUrl}/api/unpublish`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        id: 'modelzen/daily-brief',
+        authorPublicKey: otherKey.publicKey,
+        timestamp: nowTs,
+        signature: otherKey.signUnpublish('modelzen/daily-brief', nowTs),
+      }),
+    })).status, 404);
 
-    // 5. Admin cover validation rejects fake SVG bytes and accepts real PNG / stubbed Feishu cover fetch.
+    // Admin templates list sees full listing.
+    const adminList = await (await fetch(`${baseUrl}/api/admin/templates`, {
+      headers: { authorization: `Bearer ${adminToken}` },
+    })).json();
+    assert.equal(adminList.ok, true);
+    assert.equal(adminList.items.length, 1);
+
+    // 6. Admin cover validation rejects fake SVG bytes and accepts real PNG / stubbed Feishu cover fetch.
     const badCover = await fetch(`${baseUrl}/api/admin/cover`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
@@ -219,15 +277,18 @@ describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
     assert.equal(imgRes.status, 200);
     assert.equal(imgRes.headers.get('content-type'), 'image/png');
 
-    // 6. Admin delete cleanly removes template and cascading stats.
-    const delRes = await fetch(`${baseUrl}/api/admin/templates/delete`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
-      body: JSON.stringify({ id: 'modelzen/daily-brief', authorPublicKey: packed.authorPublicKey }),
+    // 7. Creator self-unpublishes via real CLI `vonvon template unpublish <id> --json`.
+    const unpubRun = await execFileAsync(process.execPath, [
+      VONVON_BIN, 'template', 'unpublish', 'modelzen/daily-brief', '--json',
+    ], {
+      env: { ...process.env, VONVON_HOME: creatorHome, VONVON_CLUB_API_URL: baseUrl, VONVON_SESSION: '', FEISHU_CODEX_BRIDGE: '' },
     });
-    assert.equal(delRes.status, 200);
-    const listAfterDelete = await (await fetch(`${baseUrl}/api/list`)).json();
-    assert.equal(listAfterDelete.items.length, 0);
+    const unpub = JSON.parse(unpubRun.stdout);
+    assert.equal(unpub.ok, true);
+    assert.equal(unpub.deleted, true);
+    const listAfterUnpub = await (await fetch(`${baseUrl}/api/list`)).json();
+    assert.equal(listAfterUnpub.items.length, 0);
+    assert.equal((await fetch(`${baseUrl}${goodCover.coverUrl}`)).status, 404);
   });
 
   it('rejects tampered signatures, non-https URLs, and isolates hijacked same-id packages by authorPublicKey', async () => {

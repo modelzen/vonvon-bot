@@ -8,7 +8,7 @@ import type { BuiltinSkill } from './package';
 export const templateSkill: BuiltinSkill = {
   name: 'vonvon-template',
   title: '配方',
-  description: "导入、升级或创作 Vonvon 配方（.vonvon.zip 或含 vonvon-bot.json 的仓库）。用户说到配方、模板、.vonvon.zip、照这个配方建群、导入已有群、更新配方、帮我创作一个配方、打包成配方、分享或发布配方时，先读本 skill。",
+  description: "导入、升级、创作或下架 Vonvon 配方（.vonvon.zip 或含 vonvon-bot.json 的仓库）。用户说到配方、模板、.vonvon.zip、照这个配方建群、导入已有群、更新配方、帮我创作一个配方、打包成配方、分享发布或下架配方时，先读本 skill。",
   body: `这是管理员私聊里的配方助手。你用 \`"$VONVON_CLI"\`（下面简称 \`vonvon\`）完成配方的安全校验、解包、落盘、脱敏打包与公开宣传名片上报，再配合已有的 \`vonvon group\`、\`vonvon settings\` 和 \`vonvon schedule\` 完成配置。
 
 ## 交互原则（创作与导入均严格遵守）
@@ -108,5 +108,12 @@ export const templateSkill: BuiltinSkill = {
   1. 用 \`vonvon group show <群> --json\` 找到目标群主工作区，读取里面的 \`.vonvon-template.json\` 了解已装版本；
   2. 必要时先用 \`vonvon template extract <source> --dest <空临时目录> --json\` 对比差异，并用 \`vonvon template stage <source> --dest <工作区目录> --mode merge --json\` 写入无冲突文件；
   3. 仅在用户确认升级已有 Skill 时传 \`vonvon template stage <source> --dest <工作区目录> --mode merge --update-skills --json\`；
-  4. 对冲突的 \`AGENTS.md\`、预置文档、\`role.supplement\` 和定时任务，先向用户展示差异再做增量合并，**不覆盖用户自己的业务文件与本地修改**。`,
+  4. 对冲突的 \`AGENTS.md\`、预置文档、\`role.supplement\` 和定时任务，先向用户展示差异再做增量合并，**不覆盖用户自己的业务文件与本地修改**。
+
+## 三、查看或下架我发过的公开配方（创作者自助撤回）
+- 当用户想查看自己在 Vonvon 灵感 Club 发过哪些配方，或想下架重复/测试配方时，**绝不要让用户自己回忆或手输配方 ID**：
+  1. 先直接运行 \`vonvon template published --json\`，自动用本机创作者公钥查询当前所有上架中的配方；
+  2. 若列表为空，直接告知当前设备没有公开中的配方；
+  3. 若用户要下架，**立刻发一张可点击选择卡片**列出查到的配方（每项标清中文名称、版本、\`id\`、更新时间和安装数），等用户点选确认要下架哪一条；
+  4. 收到用户确认后运行 \`vonvon template unpublish <id> --json\` 完成 Ed25519 签名下架，并告知用户「已从 Vonvon 灵感 Club 撤回，本地压缩包与飞书文档不受影响」。`,
 };

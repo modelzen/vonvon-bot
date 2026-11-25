@@ -221,3 +221,84 @@ export async function reportTemplateInstall(
     return { attempted: true, ok: false, reason: err instanceof Error ? err.name : 'network_error' };
   }
 }
+
+export interface PublishedTemplateSummary {
+  id: string;
+  version: string;
+  name: string;
+  summary: string;
+  docUrl: string;
+  coverUrl: string | null;
+  installCount: number;
+  docLikeCount: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export async function listMyPublishedTemplates(
+  authorPublicKey: string,
+  options: {
+    baseUrl?: string;
+    fetchImpl?: typeof fetch;
+    timeoutMs?: number;
+  } = {},
+): Promise<PublishedTemplateSummary[]> {
+  const baseUrl = (options.baseUrl ?? resolveClubBaseUrl()).replace(/\/+$/, '');
+  const fetchFn = options.fetchImpl ?? fetch;
+  const params = new URLSearchParams({ sort: 'new', authorPublicKey });
+  const response = await fetchFn(`${baseUrl}/api/list?${params}`, {
+    method: 'GET',
+    signal: AbortSignal.timeout(options.timeoutMs ?? PUBLISH_TIMEOUT_MS),
+  });
+  const body = await response.json().catch(() => ({})) as {
+    ok?: boolean;
+    items?: PublishedTemplateSummary[];
+    error?: string;
+  };
+  if (!response.ok || !body.ok) {
+    throw new Error(body.error ?? `查询已发布配方失败（HTTP ${response.status}）`);
+  }
+  return Array.isArray(body.items) ? body.items : [];
+}
+
+export interface UnpublishResult {
+  id: string;
+  authorPublicKey: string;
+  deleted: true;
+  url: string;
+}
+
+export async function unpublishTemplatePromo(
+  templateId: string,
+  authorPublicKey: string,
+  timestamp: number,
+  signature: string,
+  options: {
+    baseUrl?: string;
+    fetchImpl?: typeof fetch;
+    timeoutMs?: number;
+  } = {},
+): Promise<UnpublishResult> {
+  const baseUrl = (options.baseUrl ?? resolveClubBaseUrl()).replace(/\/+$/, '');
+  const fetchFn = options.fetchImpl ?? fetch;
+  const response = await fetchFn(`${baseUrl}/api/unpublish`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id: templateId, authorPublicKey, timestamp, signature }),
+    signal: AbortSignal.timeout(options.timeoutMs ?? PUBLISH_TIMEOUT_MS),
+  });
+  const body = await response.json().catch(() => ({})) as {
+    ok?: boolean;
+    deleted?: boolean;
+    error?: string;
+  };
+  if (!response.ok || !body.ok) {
+    throw new Error(body.error ?? `下架失败（HTTP ${response.status}）`);
+  }
+  return {
+    id: templateId,
+    authorPublicKey,
+    deleted: true,
+    url: `${baseUrl}/`,
+  };
+}

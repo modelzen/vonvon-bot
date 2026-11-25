@@ -9,10 +9,12 @@ import { paths } from '../../config/paths';
 import { inBotSession, SESSION_BOT_ENV, SESSION_SCOPE_ENV } from '../../config/session-env';
 import { verifyPidLockOwner } from '../../server/owner-verification';
 import { readRunningPidLock } from '../../server/pid-lock';
+import { readAuthorKey, signUnpublishRequest } from '../../template/author-key';
+import { listMyPublishedTemplates, resolveClubBaseUrl, unpublishTemplatePromo } from '../../template/club-client';
 import {
   draftTemplateFromDirectory, extractTemplate, inspectTemplate, packTemplate, PackRedactionError, stageTemplate,
 } from '../../template/ops';
-import type { TemplateSchedule } from '../../template/schema';
+import { TEMPLATE_ID_REGEX, type TemplateSchedule } from '../../template/schema';
 
 const NOT_DM_MESSAGE = '群聊和云文档评论会话不能运行配方命令。请私聊我或在终端里操作。';
 const OWNER_CRED_MESSAGE = '无法核验主人身份凭据，已拒绝在当前会话运行配方命令。请私聊我或在主人终端里操作。';
@@ -328,6 +330,59 @@ export async function runTemplateDraftGroup(
       ...extracted.warnings.map(w => `提示：${w}`),
     ];
     print(io, lines, result);
+  } catch (err) {
+    wrapError(err);
+  }
+}
+
+export async function runTemplatePublished(io: Io): Promise<void> {
+  try {
+    const key = await readAuthorKey();
+    if (!key) {
+      print(io, ['当前这台设备还没有发布过公开配方。'], {
+        authorPublicKey: null,
+        clubUrl: resolveClubBaseUrl(),
+        items: [],
+      });
+      return;
+    }
+    const items = await listMyPublishedTemplates(key.publicKey);
+    const lines = items.length
+      ? [
+          `你在 Vonvon 灵感 Club（${resolveClubBaseUrl()}）当前公开了 ${items.length} 个配方：`,
+          ...items.map(item => {
+            const likes = typeof item.docLikeCount === 'number' && item.docLikeCount > 0 ? ` · 👍 ${item.docLikeCount}` : '';
+            const updated = new Date(item.updatedAt).toISOString().slice(0, 16).replace('T', ' ');
+            return `- ${item.name}（id: ${item.id} · v${item.version} · ${item.installCount} 安装${likes} · 更新于 ${updated} UTC）${item.docUrl ? ` · ${item.docUrl}` : ''}`;
+          }),
+        ]
+      : ['你在 Vonvon 灵感 Club 当前没有公开中的配方。'];
+    print(io, lines, {
+      authorPublicKey: key.publicKey,
+      clubUrl: resolveClubBaseUrl(),
+      items,
+    });
+  } catch (err) {
+    wrapError(err);
+  }
+}
+
+export async function runTemplateUnpublish(id: string, io: Io): Promise<void> {
+  const cleanId = id.trim();
+  if (!cleanId || !TEMPLATE_ID_REGEX.test(cleanId)) {
+    throw badArgs(`配方 id 格式不合法：${id}`);
+  }
+  try {
+    const key = await readAuthorKey();
+    if (!key) {
+      throw new CommandError('failed', '本机还没有创作者密钥，无法下架已发布配方。');
+    }
+    const timestamp = Date.now();
+    const signature = signUnpublishRequest(cleanId, key.publicKey, timestamp, key.privateKeyPem);
+    const result = await unpublishTemplatePromo(cleanId, key.publicKey, timestamp, signature);
+    print(io, [
+      `已从 Vonvon 灵感 Club 下架配方 ${result.id}（仅撤回社区展示卡片，你的本地配方包与飞书文档不受影响）。`,
+    ], result);
   } catch (err) {
     wrapError(err);
   }

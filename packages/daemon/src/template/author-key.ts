@@ -80,6 +80,13 @@ async function readValidatedAuthorKey(file: string): Promise<AuthorKeyPair | und
 }
 
 /**
+ * Read the owner's existing local Ed25519 author key without creating one if absent.
+ */
+export async function readAuthorKey(dataRoot: string = paths.appDir): Promise<AuthorKeyPair | undefined> {
+  return readValidatedAuthorKey(authorKeyPath(dataRoot));
+}
+
+/**
  * Load the owner's local Ed25519 author key from `<dataRoot>/devices/author-key.json`, creating it
  * atomically with exclusive 0600 permissions if absent.
  */
@@ -164,4 +171,15 @@ export function signCoverBytes(
 ): string {
   const key = createPrivateKey(privateKeyPem);
   return cryptoSign(null, canonicalCoverBytes(templateId, version, docUrl, authorPublicKey, coverBytes), key).toString('base64url');
+}
+
+export function signUnpublishRequest(
+  templateId: string,
+  authorPublicKey: string,
+  timestamp: number,
+  privateKeyPem: string,
+): string {
+  const key = createPrivateKey(privateKeyPem);
+  const msg = Buffer.from(`vonvon-template-unpublish/1\n${templateId}\n${authorPublicKey}\n${timestamp}`, 'utf8');
+  return cryptoSign(null, msg, key).toString('base64url');
 }

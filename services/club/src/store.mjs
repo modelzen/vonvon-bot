@@ -74,6 +74,8 @@ export class ClubStore {
         install_hint TEXT,
         repository TEXT,
         cover_url TEXT,
+        doc_like_count INTEGER,
+        doc_stats_synced_at INTEGER,
         author_json TEXT NOT NULL,
         pricing_json TEXT NOT NULL,
         acquisition_json TEXT NOT NULL,
@@ -105,6 +107,14 @@ export class ClubStore {
       CREATE INDEX IF NOT EXISTS idx_installs_recent ON installs (template_id, author_public_key, installed_at);
       CREATE INDEX IF NOT EXISTS idx_templates_updated ON templates (updated_at DESC);
     `);
+
+    const cols = new Set(this.#db.prepare('PRAGMA table_info(templates)').all().map(c => c.name));
+    if (!cols.has('doc_like_count')) {
+      this.#db.exec('ALTER TABLE templates ADD COLUMN doc_like_count INTEGER');
+    }
+    if (!cols.has('doc_stats_synced_at')) {
+      this.#db.exec('ALTER TABLE templates ADD COLUMN doc_stats_synced_at INTEGER');
+    }
 
     for (const key of this.#autoTrustKeys) {
       this.#db.prepare(`
@@ -244,12 +254,10 @@ export class ClubStore {
     return { ok: true, id: promo.id, authorPublicKey, deduplicated: Boolean(existingInstall), trusted: author.trusted };
   }
 
-  #hydrateRow(row, voterHash) {
-    const liked = voterHash
-      ? Boolean(this.#db.prepare(
-        'SELECT 1 FROM likes WHERE template_id = ? AND author_public_key = ? AND voter_hash = ?',
-      ).get(row.id, row.author_public_key, voterHash))
-      : false;
+  #hydrateRow(row) {
+    const docLikeCount = row.doc_like_count === null || row.doc_like_count === undefined
+      ? null
+      : Number(row.doc_like_count);
     return {
       id: row.id,
       authorPublicKey: row.author_public_key,
@@ -267,32 +275,31 @@ export class ClubStore {
       acquisition: JSON.parse(row.acquisition_json),
       installCount: Number(row.install_count ?? 0),
       recentInstallCount: Number(row.recent_install_count ?? 0),
-      likeCount: Number(row.like_count ?? 0),
-      liked,
+      docLikeCount,
+      docStatsSyncedAt: row.doc_stats_synced_at ? Number(row.doc_stats_synced_at) : null,
       trusted: Boolean(row.trusted),
+      ...(row.blocked !== undefined ? { blocked: Boolean(row.blocked) } : {}),
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at),
     };
   }
 
-  listPublic({ sort = 'hot', q = '', tag = '', author = '', voterHash = '', now = Date.now() } = {}) {
+  listPublic({ sort = 'hot', q = '', tag = '', author = '', authorPublicKey = '', now = Date.now() } = {}) {
     const since = now - SEVEN_DAYS_MS;
     const rows = this.#db.prepare(`
       SELECT
         t.*,
         a.trusted,
         (SELECT COUNT(*) FROM installs i WHERE i.template_id = t.id AND i.author_public_key = t.author_public_key) AS install_count,
-        (SELECT COUNT(*) FROM installs i WHERE i.template_id = t.id AND i.author_public_key = t.author_public_key AND i.installed_at >= ?) AS recent_install_count,
-        (SELECT COUNT(*) FROM likes l WHERE l.template_id = t.id AND l.author_public_key = t.author_public_key) AS like_count
+        (SELECT COUNT(*) FROM installs i WHERE i.template_id = t.id AND i.author_public_key = t.author_public_key AND i.installed_at >= ?) AS recent_install_count
       FROM templates t
       JOIN authors a ON a.public_key = t.author_public_key
       WHERE a.trusted = 1 AND a.blocked = 0
     `).all(since);
 
-    let items = rows.map(r => this.#hydrateRow(r, voterHash));
+    let items = rows.map(r => this.#hydrateRow(r));
     const totalTemplates = items.length;
     const totalInstalls = items.reduce((s, item) => s + item.installCount, 0);
-    const totalLikes = items.reduce((s, item) => s + item.likeCount, 0);
 
     const tagCounts = new Map();
     for (const item of items) {
@@ -318,17 +325,21 @@ export class ClubStore {
     if (cleanTag) items = items.filter(item => item.tags.some(t => t.toLowerCase() === cleanTag));
     const cleanAuthor = author.trim().toLowerCase();
     if (cleanAuthor) items = items.filter(item => item.author.name.toLowerCase() === cleanAuthor);
+    const cleanPubKey = authorPublicKey.trim();
+    if (cleanPubKey) items = items.filter(item => item.authorPublicKey === cleanPubKey);
 
-    if (sort === 'likes') {
-      items.sort((a, b) => b.likeCount - a.likeCount || b.installCount - a.installCount || b.updatedAt - a.updatedAt);
-    } else if (sort === 'new') {
+    if (sort === 'new') {
       items.sort((a, b) => b.updatedAt - a.updatedAt || b.installCount - a.installCount);
     } else {
-      items.sort((a, b) => b.installCount - a.installCount || b.likeCount - a.likeCount || b.updatedAt - a.updatedAt);
+      items.sort((a, b) =>
+        b.installCount - a.installCount
+        || (b.docLikeCount ?? 0) - (a.docLikeCount ?? 0)
+        || b.updatedAt - a.updatedAt,
+      );
     }
 
     return {
-      stats: { totalTemplates, totalInstalls, totalLikes },
+      stats: { totalTemplates, totalInstalls },
       popularTags,
       items,
     };
@@ -342,48 +353,68 @@ export class ClubStore {
       ? this.#db.prepare(`
           SELECT t.*, a.trusted,
             (SELECT COUNT(*) FROM installs i WHERE i.template_id = t.id AND i.author_public_key = t.author_public_key) AS install_count,
-            (SELECT COUNT(*) FROM installs i WHERE i.template_id = t.id AND i.author_public_key = t.author_public_key AND i.installed_at >= ?) AS recent_install_count,
-            (SELECT COUNT(*) FROM likes l WHERE l.template_id = t.id AND l.author_public_key = t.author_public_key) AS like_count
+            (SELECT COUNT(*) FROM installs i WHERE i.template_id = t.id AND i.author_public_key = t.author_public_key AND i.installed_at >= ?) AS recent_install_count
           FROM templates t JOIN authors a ON a.public_key = t.author_public_key
           WHERE t.id = ? AND t.author_public_key = ? AND a.blocked = 0 ${trustClause}
         `).all(since, id, authorPublicKey)
       : this.#db.prepare(`
           SELECT t.*, a.trusted,
             (SELECT COUNT(*) FROM installs i WHERE i.template_id = t.id AND i.author_public_key = t.author_public_key) AS install_count,
-            (SELECT COUNT(*) FROM installs i WHERE i.template_id = t.id AND i.author_public_key = t.author_public_key AND i.installed_at >= ?) AS recent_install_count,
-            (SELECT COUNT(*) FROM likes l WHERE l.template_id = t.id AND l.author_public_key = t.author_public_key) AS like_count
+            (SELECT COUNT(*) FROM installs i WHERE i.template_id = t.id AND i.author_public_key = t.author_public_key AND i.installed_at >= ?) AS recent_install_count
           FROM templates t JOIN authors a ON a.public_key = t.author_public_key
           WHERE t.id = ? AND a.blocked = 0 ${trustClause}
           ORDER BY a.trusted DESC, install_count DESC
         `).all(since, id);
-    return rows.map(r => this.#hydrateRow(r, ''));
+    return rows.map(r => this.#hydrateRow(r));
   }
 
-  toggleLike(templateId, authorPublicKey, voterHash, now = Date.now()) {
-    const exists = this.#db.prepare(`
-      SELECT 1 FROM templates t JOIN authors a ON a.public_key = t.author_public_key
-      WHERE t.id = ? AND t.author_public_key = ? AND a.trusted = 1 AND a.blocked = 0
-    `).get(templateId, authorPublicKey);
-    if (!exists) return null;
-
-    const already = this.#db.prepare(
-      'SELECT 1 FROM likes WHERE template_id = ? AND author_public_key = ? AND voter_hash = ?',
-    ).get(templateId, authorPublicKey, voterHash);
-
-    let liked;
-    if (already) {
-      this.#db.prepare('DELETE FROM likes WHERE template_id = ? AND author_public_key = ? AND voter_hash = ?')
-        .run(templateId, authorPublicKey, voterHash);
-      liked = false;
+  updateDocStats(templateId, authorPublicKey, { docLikeCount, syncedAt = Date.now() }) {
+    if (typeof docLikeCount === 'number' && Number.isSafeInteger(docLikeCount) && docLikeCount >= 0) {
+      this.#db.prepare(
+        'UPDATE templates SET doc_like_count = ?, doc_stats_synced_at = ? WHERE id = ? AND author_public_key = ?',
+      ).run(docLikeCount, syncedAt, templateId, authorPublicKey);
     } else {
-      this.#db.prepare('INSERT INTO likes (template_id, author_public_key, voter_hash, liked_at) VALUES (?, ?, ?, ?)')
-        .run(templateId, authorPublicKey, voterHash, now);
-      liked = true;
+      this.#db.prepare(
+        'UPDATE templates SET doc_stats_synced_at = ? WHERE id = ? AND author_public_key = ?',
+      ).run(syncedAt, templateId, authorPublicKey);
     }
+  }
 
-    const row = this.#db.prepare('SELECT COUNT(*) AS cnt FROM likes WHERE template_id = ? AND author_public_key = ?')
-      .get(templateId, authorPublicKey);
-    return { liked, likeCount: Number(row.cnt ?? 0) };
+  listFeishuSyncCandidates(staleBeforeMs, limit = 20) {
+    return this.#db.prepare(`
+      SELECT t.id, t.author_public_key, t.doc_url, t.cover_url, t.doc_stats_synced_at
+      FROM templates t
+      JOIN authors a ON a.public_key = t.author_public_key
+      WHERE a.trusted = 1 AND a.blocked = 0
+        AND (t.doc_stats_synced_at IS NULL OR t.doc_stats_synced_at < ?)
+      ORDER BY COALESCE(t.doc_stats_synced_at, 0) ASC, t.updated_at DESC
+      LIMIT ?
+    `).all(staleBeforeMs, limit).map(r => ({
+      id: r.id,
+      authorPublicKey: r.author_public_key,
+      docUrl: r.doc_url,
+      coverUrl: r.cover_url ?? null,
+    }));
+  }
+
+  setCoverUrlIfMissing(templateId, authorPublicKey, coverUrl) {
+    const res = this.#db.prepare(
+      'UPDATE templates SET cover_url = ? WHERE id = ? AND author_public_key = ? AND cover_url IS NULL',
+    ).run(coverUrl, templateId, authorPublicKey);
+    return res.changes > 0;
+  }
+
+  listAllForAdmin(now = Date.now()) {
+    const since = now - SEVEN_DAYS_MS;
+    const rows = this.#db.prepare(`
+      SELECT t.*, a.trusted, a.blocked, a.note,
+        (SELECT COUNT(*) FROM installs i WHERE i.template_id = t.id AND i.author_public_key = t.author_public_key) AS install_count,
+        (SELECT COUNT(*) FROM installs i WHERE i.template_id = t.id AND i.author_public_key = t.author_public_key AND i.installed_at >= ?) AS recent_install_count
+      FROM templates t
+      JOIN authors a ON a.public_key = t.author_public_key
+      ORDER BY t.updated_at DESC
+    `).all(since);
+    return rows.map(r => ({ ...this.#hydrateRow(r), authorNote: r.note ?? '' }));
   }
 
   setCoverUrl(templateId, authorPublicKey, coverUrl) {
@@ -462,7 +493,7 @@ export class ClubStore {
     const remaining = this.#db.prepare('SELECT COUNT(*) AS cnt FROM templates WHERE author_public_key = ?')
       .get(authorPublicKey);
     if (Number(remaining?.cnt ?? 0) === 0) {
-      this.#db.prepare('DELETE FROM authors WHERE public_key = ? AND blocked = 0').run(authorPublicKey);
+      this.#db.prepare('DELETE FROM authors WHERE public_key = ? AND trusted = 0 AND blocked = 0').run(authorPublicKey);
     }
     return { deleted: res.changes > 0, previousCoverUrl: prev?.cover_url ?? null };
   }
@@ -472,13 +503,12 @@ export class ClubStore {
     const rows = this.#db.prepare(`
       SELECT t.*, a.trusted, a.blocked, a.first_seen_at, a.note,
         (SELECT COUNT(*) FROM installs i WHERE i.template_id = t.id AND i.author_public_key = t.author_public_key) AS install_count,
-        (SELECT COUNT(*) FROM installs i WHERE i.template_id = t.id AND i.author_public_key = t.author_public_key AND i.installed_at >= ?) AS recent_install_count,
-        (SELECT COUNT(*) FROM likes l WHERE l.template_id = t.id AND l.author_public_key = t.author_public_key) AS like_count
+        (SELECT COUNT(*) FROM installs i WHERE i.template_id = t.id AND i.author_public_key = t.author_public_key AND i.installed_at >= ?) AS recent_install_count
       FROM templates t
       JOIN authors a ON a.public_key = t.author_public_key
       WHERE a.trusted = 0 AND a.blocked = 0
       ORDER BY install_count DESC, t.updated_at DESC
     `).all(since);
-    return rows.map(r => ({ ...this.#hydrateRow(r, ''), authorNote: r.note ?? '' }));
+    return rows.map(r => ({ ...this.#hydrateRow(r), authorNote: r.note ?? '' }));
   }
 }

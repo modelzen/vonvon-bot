@@ -1,5 +1,4 @@
 (() => {
-  const VOTER_STORAGE_KEY = 'vonvon_club_voter_id';
   const state = { sort: 'hot', q: '' };
 
   const toolbarEl = document.getElementById('toolbar');
@@ -10,19 +9,6 @@
   const searchInput = document.getElementById('search-input');
   const createModal = document.getElementById('create-modal');
   const toastEl = document.getElementById('toast');
-
-  function getVoterId() {
-    try {
-      let id = localStorage.getItem(VOTER_STORAGE_KEY);
-      if (!id) {
-        id = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
-        localStorage.setItem(VOTER_STORAGE_KEY, id);
-      }
-      return id;
-    } catch {
-      return '';
-    }
-  }
 
   let toastTimer = null;
   function showToast(text) {
@@ -125,7 +111,7 @@
     const card = document.createElement('article');
     card.className = 'card';
 
-    // Native anchor wraps preview + title so middle-click, Cmd/Ctrl+click and URL hover preview work cleanly.
+    // Native anchor wraps the whole card so middle-click, Cmd/Ctrl+click and URL hover preview work seamlessly.
     const link = document.createElement('a');
     link.className = 'card-link';
     if (isSafeHttps(item.docUrl)) {
@@ -162,9 +148,6 @@
     preview.appendChild(sourceBadge);
 
     // Lower Feishu-style footer
-    const body = document.createElement('div');
-    body.className = 'card-body';
-
     const titleRow = document.createElement('div');
     titleRow.className = 'card-title-row';
     titleRow.appendChild(createDocSvgIcon());
@@ -175,7 +158,8 @@
     title.title = item.name;
     titleRow.appendChild(title);
 
-    link.append(preview, titleRow);
+    const body = document.createElement('div');
+    body.className = 'card-body';
 
     const metaRow = document.createElement('div');
     metaRow.className = 'card-meta-row';
@@ -191,53 +175,25 @@
     const metrics = document.createElement('div');
     metrics.className = 'meta-metrics';
 
-    if (item.installCount > 0) {
-      const installs = document.createElement('span');
-      installs.className = 'install-count';
-      installs.textContent = `${item.installCount} 安装`;
-      metrics.appendChild(installs);
+    const installCount = Number.isFinite(Number(item.installCount)) ? Number(item.installCount) : 0;
+    const installs = document.createElement('span');
+    installs.className = 'install-count';
+    installs.textContent = `${installCount} 安装`;
+    installs.title = `已有 ${installCount} 个唯一用户安装`;
+    metrics.appendChild(installs);
+
+    if (typeof item.docLikeCount === 'number' && item.docLikeCount > 0) {
+      const docLikes = document.createElement('span');
+      docLikes.className = 'doc-like-pill';
+      docLikes.textContent = `👍 ${item.docLikeCount}`;
+      docLikes.title = `飞书宣传文档获赞 ${item.docLikeCount}（点击打开文档可点赞）`;
+      metrics.appendChild(docLikes);
     }
 
-    const likeBtn = document.createElement('button');
-    likeBtn.type = 'button';
-    likeBtn.className = item.liked ? 'like-btn liked' : 'like-btn';
-    likeBtn.setAttribute('aria-pressed', String(Boolean(item.liked)));
-    const likeIcon = document.createElement('span');
-    likeIcon.textContent = '👍';
-    const likeNum = document.createElement('span');
-    likeNum.textContent = item.likeCount > 0 ? String(item.likeCount) : '赞';
-    likeBtn.append(likeIcon, likeNum);
-
-    likeBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      likeBtn.disabled = true;
-      try {
-        const res = await fetch('/api/like', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', 'x-club-voter': getVoterId() },
-          body: JSON.stringify({ id: item.id, authorPublicKey: item.authorPublicKey }),
-        });
-        const data = await res.json();
-        if (res.ok && data.ok) {
-          item.liked = data.liked;
-          item.likeCount = data.likeCount;
-          likeBtn.className = data.liked ? 'like-btn liked' : 'like-btn';
-          likeBtn.setAttribute('aria-pressed', String(Boolean(data.liked)));
-          likeNum.textContent = data.likeCount > 0 ? String(data.likeCount) : '赞';
-        } else {
-          showToast(data.error || '点赞失败，请稍后重试');
-        }
-      } catch {
-        showToast('网络开小差了，请稍后重试');
-      } finally {
-        likeBtn.disabled = false;
-      }
-    });
-
-    metrics.appendChild(likeBtn);
     metaRow.append(authorInfo, metrics);
     body.append(metaRow);
-    card.append(link, body);
+    link.append(preview, titleRow, body);
+    card.append(link);
     return card;
   }
 
@@ -245,9 +201,7 @@
     const params = new URLSearchParams({ sort: state.sort });
     if (state.q) params.set('q', state.q);
     try {
-      const res = await fetch(`/api/list?${params}`, {
-        headers: { 'x-club-voter': getVoterId() },
-      });
+      const res = await fetch(`/api/list?${params}`);
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || '加载失败');
 

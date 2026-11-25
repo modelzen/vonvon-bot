@@ -966,6 +966,20 @@ template.command('draft-group <group>').description('Copy a bound group\'s real 
     mod.assertTemplateSessionAllowed(process.env, program.opts<{ scope?: string }>().scope);
     await mod.runTemplateDraftGroup(group, options, io(options));
   });
+template.command('published').description('List your own public templates currently live on Vonvon 灵感 Club')
+  .option(...JSON_FLAG)
+  .action(async (options: Json) => {
+    const mod = await import('./commands/template');
+    await mod.verifyTemplateSessionAllowed(process.env, program.opts<{ scope?: string }>().scope);
+    await mod.runTemplatePublished(io(options));
+  });
+template.command('unpublish <id>').description('Remove one of your own published templates from Vonvon 灵感 Club using your local author key')
+  .option(...JSON_FLAG)
+  .action(async (id: string, options: Json) => {
+    const mod = await import('./commands/template');
+    await mod.verifyTemplateSessionAllowed(process.env, program.opts<{ scope?: string }>().scope);
+    await mod.runTemplateUnpublish(id, io(options));
+  });
 
 /**
  * Exits once the JSON line, and whatever was written before it, is out: process.exit would cut a pipe's pending output
