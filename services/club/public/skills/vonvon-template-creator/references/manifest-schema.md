@@ -19,6 +19,15 @@
     └── AGENTS.md
 ```
 
+### 前置准备与 `<名称>-setup` 最佳实践
+- 当配方依赖**外部持续更新的 GitHub 仓库**（如知识库、文档库、画风图鉴、开源工具仓）、**隔离运行环境**（如 `.venv` / Node 依赖）、**外部 CLI/API** 或**首次初始化档案**时，**不要把整套大型上游仓库静态打进 `.vonvon.zip`**。
+- 推荐提供独立的 `skills/<名称>-setup/SKILL.md` 初始化技能：
+  1. 首次使用触发「初始化闸门」，同一轮一口气完成只读体检（不静默安装重型依赖）；
+  2. 提供清晰分档选项（如 A 档轻量拉仓/开箱、B 档可选进阶工具链），经用户确认后执行；
+  3. 将非敏感状态（本地仓库路径、提交号、已就绪档位、更新时间）记录到 `workspace/setup-state.json`（严禁写入密钥或飞书 ID）；
+  4. 支持随时一句「更新仓库/复检环境」同步最新上游内容，完成后无缝切回用户原任务。
+- 若 Setup Skill 需要在群工作区拉取仓库或写入 `workspace/setup-state.json`，`group.recommendedPermission` 应设为 `"write"`（无需 `"full"`）。
+
 ### 禁止进入配方的内容
 - `.git/`、`.claude/`、`.codex/`、`.agents/`、`.cursor/`、`.vscode/`、`.idea/`、`node_modules/`（克隆 GitHub 仓库时顶层 `.github/` 会被自动忽略，不会写入群工作区）
 - `.mcp.json`、`mcp.json`、`.env`、`.env.*`（不含真实密钥的 `.env.example` / `.env.sample` / `.env.template` / `.env.dist` 样例允许保留）、`.npmrc`、`.yarnrc`、`.vonvon-template.json`

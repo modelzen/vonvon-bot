@@ -223,6 +223,8 @@ describe('the template builtin skill', () => {
       'VONVON_NO_TELEMETRY=1',
       '绝不覆盖 Bot 全局 `SOUL.md`',
       '不写 `mcp.json`',
+      'workspace/setup-state.json',
+      '<名称>-setup',
     ]) expect(templateSkill.body).toContain(words);
     expect(templateSkill.body).not.toContain('方便在手机上看');
   });

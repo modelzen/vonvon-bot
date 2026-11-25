@@ -53,7 +53,7 @@ export const templateSkill: BuiltinSkill = {
   }
   \`\`\`
   - 关键字段提醒：简介字段是 \`summary\`（不是 \`description\`），作者是对象 \`author: { "name": "..." }\`，致谢是对象数组 \`credits: [{ "name", "url", "license" }]\`，权限建议是 \`group.recommendedPermission\`（\`qa\` / \`write\` / \`full\`，不是 \`group.permission\`），公开上架时才补 \`docUrl\`（\`"https://..."\`）并将 \`public\` 设为 \`true\`。
-- **禁止放入** \`.claude/\`、\`.codex/\`、\`.agents/\`、\`.git/\`、\`.mcp.json\` 或真实密钥 \`.env\`（允许无真实密钥的 \`.env.example\` / \`.env.sample\` 样例）；外部 CLI/Key/MCP 依赖写成 \`<名称>-setup\` 初始化技能，**不写 \`mcp.json\`**；清单里不写群会话模式或免 @ 等个人习惯，定时任务名称不超过 40 字；引用外部素材时写清 \`license\` 与 \`credits\`。
+- **禁止放入** \`.claude/\`、\`.codex/\`、\`.agents/\`、\`.git/\`、\`.mcp.json\` 或真实密钥 \`.env\`（允许无真实密钥的 \`.env.example\` / \`.env.sample\` 样例）；**需要提前准备的外部 GitHub 仓库、大型知识库/图鉴、Python/Node 独立环境、外部 CLI/Key/MCP 或个性化档案，不要静态硬塞进 \`.vonvon.zip\`，而应沉淀成 \`<名称>-setup\` 初始化技能**（一口气只读体检 → 分档确认按需拉取仓库/建隔离环境/初始化档案 → 写入非敏感 \`workspace/setup-state.json\` → 支持随时一键更新，并在主技能加初始化闸门），**不写 \`mcp.json\`**；清单里不写群会话习惯，定时任务名称不超过 40 字；引用外部素材时写清 \`license\` 与 \`credits\`。
 - 若用户选了 GitHub 仓库交付并提供已有仓库链接，主动确认是否直接按标准布局整理并更新该仓库。
 - 打包或交付前必须运行 \`vonvon template inspect <草稿目录> --json\` 校验，并**直接在聊天里给出清晰的配方概览**（基本信息与权限建议、本群角色、技能列表含名称与描述、工作区文件名列表及跳过条目、定时任务数量与明细、前置依赖与校验/脱敏状态），等用户确认内容无误（不要在用户确认概览和宣传页前反复提前 \`pack\`）。
 
