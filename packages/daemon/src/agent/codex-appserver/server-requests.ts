@@ -217,7 +217,7 @@ const askUserArgsSchema = z.object({
       label: z.string().trim().min(1).max(80),
       description: z.string().trim().max(300).optional(),
     })).max(10).optional(),
-  })).min(1).max(3),
+  })).min(1).max(4),
 });
 const toolAnswer = (text: string, success: boolean): JsonRpcAnswer => ({ result: { contentItems: [{ type: 'inputText', text }], success } satisfies DynamicToolCallResponse });
 

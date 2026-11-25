@@ -33,8 +33,8 @@ export const askUserToolSpec = {
       questions: {
         type: 'array',
         minItems: 1,
-        maxItems: 3,
-        description: '展示给用户的 1 到 3 个问题（通常 1 个即可，保持简洁）。',
+        maxItems: 4,
+        description: '展示给用户的 1 到 4 个问题（保持简洁）。',
         items: {
           type: 'object',
           properties: {
