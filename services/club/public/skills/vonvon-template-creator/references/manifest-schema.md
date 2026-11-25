@@ -24,13 +24,14 @@
 - 推荐提供独立的 `skills/<名称>-setup/SKILL.md` 初始化技能：
   1. 首次使用触发「初始化闸门」，同一轮一口气完成只读体检（不静默安装重型依赖）；
   2. 提供清晰分档选项（如 A 档轻量拉仓/开箱、B 档可选进阶工具链），经用户确认后执行；
-  3. 将非敏感状态（本地仓库路径、提交号、已就绪档位、更新时间）记录到 `workspace/setup-state.json`（严禁写入密钥或飞书 ID）；
-  4. 支持随时一句「更新仓库/复检环境」同步最新上游内容，完成后无缝切回用户原任务。
-- 若 Setup Skill 需要在群工作区拉取仓库或写入 `workspace/setup-state.json`，`group.recommendedPermission` 应设为 `"write"`（无需 `"full"`）。
+  3. 将非敏感状态（本地仓库路径、提交号、已就绪档位、更新时间）记录到 `workspace/setup-state.<配方id>.json`（单配方群也可用 `workspace/setup-state.json`，多配方共存建议按配方 id 命名防冲突；严禁写入密钥或飞书 ID）；
+  4. 支持随时一句「更新仓库/复检环境」：仅对配方自己管理的克隆目录在工作区干净时执行 `git pull --ff-only` 同步，绝不对用户自管目录执行 `git reset --hard`。
+- 若 Setup Skill 需要在群工作区拉取仓库或写入状态文件，`group.recommendedPermission` 应设为 `"write"`（无需 `"full"`）。
+- **导出/打包时务必排除运行期生成物**：`.venv/`、`venv/`、`__pycache__/`、`.runtime-tmp/`、初始化克隆的外部 Git 仓库、`setup-state*.json`、个人语音样本（`voice-samples/`）及个人人设档案（`creator-profile.md` 等）不得打包进配方。
 
 ### 禁止进入配方的内容
-- `.git/`、`.claude/`、`.codex/`、`.agents/`、`.cursor/`、`.vscode/`、`.idea/`、`node_modules/`（克隆 GitHub 仓库时顶层 `.github/` 会被自动忽略，不会写入群工作区）
-- `.mcp.json`、`mcp.json`、`.env`、`.env.*`（不含真实密钥的 `.env.example` / `.env.sample` / `.env.template` / `.env.dist` 样例允许保留）、`.npmrc`、`.yarnrc`、`.vonvon-template.json`
+- `.git/`、`.claude/`、`.codex/`、`.agents/`、`.cursor/`、`.vscode/`、`.idea/`、`node_modules/`、`.venv/`、`venv/`、`__pycache__/`、`.runtime-tmp/`、`voice-samples/`（克隆 GitHub 仓库时顶层 `.github/` 会被自动忽略，不会写入群工作区）
+- `.mcp.json`、`mcp.json`、`.env`、`.env.*`（不含真实密钥的 `.env.example` / `.env.sample` / `.env.template` / `.env.dist` 样例允许保留）、`.npmrc`、`.yarnrc`、`.vonvon-template.json`、`setup-state*.json`、`creator-profile.md`
 - 任何符号链接（symlink）
 - 任何真实密钥/Token、私人飞书 ID（`cli_*` / `oc_*` / `ou_*`）或开发者本机绝对路径
 

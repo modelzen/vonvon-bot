@@ -124,6 +124,22 @@ const FORBIDDEN_WORKSPACE_ROOTS = new Set([
   '.vscode',
   '.idea',
   'node_modules',
+  '.venv',
+  'venv',
+  '__pycache__',
+  '.runtime-tmp',
+  '.seo-bootstrap',
+]);
+
+const FORBIDDEN_NESTED_DIRS = new Set([
+  '.git',
+  'node_modules',
+  '.venv',
+  'venv',
+  '__pycache__',
+  '.runtime-tmp',
+  '.seo-bootstrap',
+  'voice-samples',
 ]);
 
 const FORBIDDEN_WORKSPACE_FILES = new Set([
@@ -148,7 +164,7 @@ function isForbiddenWorkspacePath(relPath: string): boolean {
   const first = parts[0] ?? '';
   const leaf = parts.at(-1) ?? '';
   if (FORBIDDEN_WORKSPACE_ROOTS.has(first)) return true;
-  if (parts.some(p => p === '.git' || p === 'node_modules')) return true;
+  if (parts.some(p => FORBIDDEN_NESTED_DIRS.has(p))) return true;
   if (FORBIDDEN_WORKSPACE_FILES.has(leaf)) return true;
   if (leaf.startsWith('.env.') && !SAFE_ENV_TEMPLATES.has(leaf)) return true;
   return false;
@@ -1274,7 +1290,7 @@ export async function draftTemplateFromDirectory(input: DraftFromGroupInput): Pr
 
       if (info.isDirectory()) {
         const lower = child.name.toLowerCase();
-        if ((isTopLevel && FORBIDDEN_WORKSPACE_ROOTS.has(lower)) || lower === '.git' || lower === 'node_modules') {
+        if ((isTopLevel && FORBIDDEN_WORKSPACE_ROOTS.has(lower)) || FORBIDDEN_NESTED_DIRS.has(lower)) {
           if (lower !== '.git' && lower !== '.agents' && lower !== '.claude') {
             skippedEntries.push({ path: `${rel}/`, reason: 'forbidden' });
           }

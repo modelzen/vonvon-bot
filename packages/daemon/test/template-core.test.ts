@@ -943,6 +943,13 @@ describe('wave-1 template reliability upgrades (+x mode, repo hygiene, skill pru
     await writeTree(srcGroup, {
       'vonvon-bot.json': JSON.stringify({ schemaVersion: 1, id: 'old-id', version: '0.1.0', name: 'Old', summary: 'Old', author: { name: 'OldAuthor' }, group: { role: 'StaleRole' } }),
       'memory.json': '{"secret":"private"}',
+      '.venv/bin/python': '#!/bin/sh\n',
+      'workspace/.venv/pyvenv.cfg': 'home = /usr/bin\n',
+      'workspace/voice-samples/me.wav': 'RIFF',
+      'workspace/creator-profile.md': '# Personal Persona\n',
+      'workspace/setup-state.json': '{"tier":"A"}',
+      'workspace/setup-state.how-to-live-better.json': '{"tier":"A"}',
+      '.claude-seo-runtime.json': '{"ready":true}',
       'AGENTS.md': '# Guide',
       '.agents/skills/helper/SKILL.md': '---\nname: helper\ndescription: helps\n---\nhello',
     });
@@ -957,7 +964,19 @@ describe('wave-1 template reliability upgrades (+x mode, repo hygiene, skill pru
     });
     expect(drafted.id).toBe('new-slug');
     expect(drafted.roleIncluded).toBe(false);
-    expect(drafted.skippedEntries.some(e => e.path === 'memory.json' && e.reason === 'forbidden')).toBe(true);
+    for (const blocked of [
+      'memory.json',
+      '.venv/',
+      'workspace/.venv/',
+      'workspace/voice-samples/',
+      'workspace/creator-profile.md',
+      'workspace/setup-state.json',
+      'workspace/setup-state.how-to-live-better.json',
+      '.claude-seo-runtime.json',
+    ]) {
+      expect(drafted.skippedEntries.some(e => e.path === blocked && e.reason === 'forbidden')).toBe(true);
+    }
+    expect(drafted.workspaceFiles).toEqual(['AGENTS.md']);
     const draftedManifest = JSON.parse(await readFile(join(draftDest, 'vonvon-bot.json'), 'utf8'));
     expect(draftedManifest.author.name).toBe('Clay Zhang');
     expect(draftedManifest.group.role).toBeUndefined();

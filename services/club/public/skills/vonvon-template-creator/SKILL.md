@@ -26,7 +26,7 @@ description: 在任意 Agent（Codex CLI、Codex Cloud、Claude Code、Cursor �
 ### 门禁 2：标准目录与安全脱敏
 按 [references/manifest-schema.md](./references/manifest-schema.md) 组装（仓库配方可直接整理在仓库根目录；压缩包草稿放在 `templates/<id>/draft/` 等干净目录）：
 - 顶层 `vonvon-bot.json`（`schemaVersion: 1`，缺省 `public: false`）、`README.md`、顶层单份 `skills/<名称>/SKILL.md`（开头必须带 YAML frontmatter `name` 与 `description`）、可选 `workspace/`。
-- **严禁放入**：`.git/`、`.claude/`、`.codex/`、`.agents/`、`.env`（允许无真实密钥的 `.env.example` / `.env.sample` 样例）、`.mcp.json`、`node_modules/` 或符号链接；**需要前置准备的外部 GitHub 仓库、持续更新的大型知识库/图鉴、Python/Node 隔离环境、外部 CLI/Key/MCP 或用户初始化档案，不要静态硬塞进 `.vonvon.zip`，应沉淀为 `<名称>-setup` 初始化技能**（一口气只读体检 → 分档确认按需拉取/初始化 → 写入非敏感 `workspace/setup-state.json` → 支持随时一键更新，并在主技能加初始化闸门），**不写 `mcp.json`**；不写群会话习惯，定时任务名不超过 40 字；扫描确认无真实 Key、Token、私钥、飞书 ID 或本机绝对路径；如实填写 `license` 与 `credits`。
+- **严禁放入**：`.git/`、`.claude/`、`.codex/`、`.agents/`、`.venv/`、`venv/`、`voice-samples/`、`.env`（允许无真实密钥的 `.env.example` / `.env.sample` 样例）、`.mcp.json`、`setup-state*.json`、`creator-profile.md`、`node_modules/` 或符号链接；**需要前置准备的外部 GitHub 仓库、持续更新的大型知识库/图鉴、Python/Node 隔离环境、外部 CLI/Key/MCP 或用户初始化档案，不要静态硬塞进 `.vonvon.zip`，应沉淀为 `<名称>-setup` 初始化技能**（一口气只读体检 → 分档确认按需拉取/初始化 → 写入非敏感 `workspace/setup-state.<配方id>.json` 或 `workspace/setup-state.json` → 仅对配方自管克隆在工作区干净时 `git pull --ff-only` 更新，并在主技能加初始化闸门），**不写 `mcp.json`**；不写群会话习惯，定时任务名不超过 40 字；扫描确认无真实 Key、Token、私钥、飞书 ID 或本机绝对路径；如实填写 `license` 与 `credits`。
 - 有 `vonvon` CLI 时必须跑 `vonvon template inspect <草稿目录> --json` 校验（无 CLI 时按 Schema 逐项核对），并在对话里直接给出清晰概览（基本信息、本群角色、技能名与描述、工作区文件名、定时任务、前置依赖与脱敏校验结果），等用户确认无误（不要在用户确认前提前多次打包）。
 
 ### 门禁 3：交付方式、公开与私用、历史同 ID 由用户拍板

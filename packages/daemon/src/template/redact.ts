@@ -30,10 +30,13 @@ const FORBIDDEN_FILENAMES = new Set([
   '.env.development',
   '.vonvon-template.json',
   'setup-state.json',
+  'creator-profile.md',
+  '.claude-seo-runtime.json',
 ]);
 
 export function isForbiddenPrivateFilename(filePath: string): boolean {
-  return FORBIDDEN_FILENAMES.has(basename(filePath).toLowerCase());
+  const leaf = basename(filePath).toLowerCase();
+  return FORBIDDEN_FILENAMES.has(leaf) || /^setup-state\.[a-z0-9._-]+\.json$/.test(leaf);
 }
 
 const PLACEHOLDER_USERNAMES = new Set([
