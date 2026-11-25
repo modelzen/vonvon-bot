@@ -4,8 +4,8 @@ import { SafeAppIdSchema } from './bot-namespace';
 import { KEYSTORE_READ_FILES } from './keystore';
 import { DEVICES_DIR } from '../remote/files';
 
-/** Every 0600 file at the data root (test/read-scope.test.ts checks). The device's key and who may connect are in
- * `devices/`, denied as a directory (remote/files.ts says why). */
+/** Every 0600 file at the data root (test/read-scope.test.ts checks). The device's key, who may connect, and
+ * the template author signing key are in `devices/`, denied as a directory (remote/files.ts says why). */
 export const ROOT_SECRETS = ['secrets.enc', 'master.key', '.keystore.salt', 'local-credential', 'config.json'] as const;
 export const SECRETS_GET_FILES: readonly string[] = KEYSTORE_READ_FILES;
 

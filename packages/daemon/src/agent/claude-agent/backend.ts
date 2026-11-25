@@ -41,6 +41,7 @@ export { ReadScopeError } from './read-scope';
 import { findTranscript, readCustomTitle, scanTranscript } from './transcript';
 import { foldSessionMessages, mapSessionSummary } from './history';
 import { ClaudeAgentThread, NATIVE_MEMORY_OFF, NATIVE_SCHEDULING_ENV, type TranscriptMark } from './thread';
+import { scanClaudeLocalSkillSources } from '../group-skills';
 import { claudeAccountConfigKey, claudeConfigDir, readConfiguredClaudeModel } from './configured-model';
 import { loginFromAccount, loginFromEnv, loginUnderService, readClaudeLogin } from './login';
 import { toolCommand } from '../../environment/tool-command';
@@ -460,16 +461,36 @@ export class ClaudeAgentBackend implements AgentBackend {
   async listSkills({ cwd, directories = [] }: { cwd: string; directories?: string[] }): Promise<AgentSkill[]> {
     const sdk = await this.sdkLoader();
     const abortController = new AbortController();
+    const localSourcesPromise = scanClaudeLocalSkillSources({ cwd, directories }).catch(() => undefined);
     const query = sdk.query({ prompt: idleClaudeInput(abortController.signal), options: {
       ...helperQueryOptions(cwd), settingSources: BRIDGE_SETTING_SOURCES,
       skills: 'all', additionalDirectories: directories, abortController,
     } });
     try {
-      const commands = await withAbortDeadline(query.supportedCommands(), abortController, MODEL_DISCOVERY_TIMEOUT_MS, 'skill discovery');
-      // The SDK is authoritative about user, workspace, plugin and synced sources.
-      // Its public catalog gives no paths; stable qualified names are native selectors.
-      return commands.filter(command => !command.builtin).map(command => ({ path: `claude:${command.name}`,
-        name: command.name, description: command.description, source: 'provider', enabled: true }));
+      const [commands, localSources] = await Promise.all([
+        withAbortDeadline(query.supportedCommands(), abortController, MODEL_DISCOVERY_TIMEOUT_MS, 'skill discovery'),
+        localSourcesPromise,
+      ]);
+      // The SDK is authoritative about user, workspace, plugin and bundled sources.
+      // Its public catalog gives no paths; cross-match local workspace/user directories for attribution and viewing.
+      return commands.filter(command => !command.builtin).map(command => {
+        const local = localSources?.get(command.name);
+        const source: AgentSkill['source'] = local
+          ? local.source
+          : command.name.includes(':')
+            ? 'plugin'
+            : localSources
+              ? 'system'
+              : 'provider';
+        return {
+          path: `claude:${command.name}`,
+          name: command.name,
+          description: command.description,
+          source,
+          enabled: true,
+          ...(local ? { location: local.location } : {}),
+        };
+      });
     } finally { abortController.abort(); query.close(); }
   }
 
@@ -694,6 +715,7 @@ export class ClaudeAgentBackend implements AgentBackend {
       settingSources: BRIDGE_SETTING_SOURCES,
       additionalDirectories: profile.additionalRoots.map(root => root.path),
       ...(profile.skills?.enabledNames ? { skills: [...profile.skills.enabledNames] } : {}),
+      ...(profile.skills?.disabledBuiltinNames?.length ? { disabledBuiltinNames: [...profile.skills.disabledBuiltinNames] } : {}),
       plugins: profile.capabilityPackages.map(pkg => pkg.path),
       env: sessionClaudeEnv(profile.env),
       query: sdk.query,
@@ -730,6 +752,7 @@ export class ClaudeAgentBackend implements AgentBackend {
       settingSources: BRIDGE_SETTING_SOURCES,
       additionalDirectories: profile.additionalRoots.map(root => root.path),
       ...(profile.skills?.enabledNames ? { skills: [...profile.skills.enabledNames] } : {}),
+      ...(profile.skills?.disabledBuiltinNames?.length ? { disabledBuiltinNames: [...profile.skills.disabledBuiltinNames] } : {}),
       plugins: profile.capabilityPackages.map(pkg => pkg.path),
       env: sessionClaudeEnv(profile.env),
       query: sdk.query,

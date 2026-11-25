@@ -15,9 +15,10 @@ import { settleTurn, recordUsage, type TurnStores } from './turn-usage';
 import { assemble, judgeContext, loadContextSources, openingInstructions, planTurnUpdate, contextOf, newNonce, type ContextPlace } from './context-assembly';
 import { groupSkillProfile } from '../agent/group-skills';
 import { completeBuiltinPackage, ensureBuiltinPackage } from '../agent/builtin-skills/package';
-import { builtinSkillsOfSet } from '../agent/builtin-skills/registry';
+import { builtinSubsetVariant, enabledBuiltinSkills } from '../agent/builtin-skills/registry';
 import type { SessionProfile } from '../agent/session-profile';
-import { SESSION_BOT_ENV, SESSION_CLI_ENV, SESSION_ENV, SESSION_SCOPE_ENV, sessionScope } from '../config/session-env';
+import { SESSION_BOT_ENV, SESSION_CLI_ENV, SESSION_ENV, SESSION_LARK_CLI_ENV, SESSION_SCOPE_ENV, sessionScope } from '../config/session-env';
+import { appendLarkCliToPath, resolveLarkCliBin } from '../platform/lark-cli';
 import type { HostApi } from '../admin/ipc';
 import { parseStoredJudge } from '../judge/model';
 import { presentationConfig } from './group-presentation';
@@ -35,7 +36,7 @@ import { ingestVoice, createIntakeQueue, type IngestedContext } from '../voice/i
 import type { VoiceReply } from '../voice/types';
 import { VoiceMessages } from '../voice/messages';
 import { steerWithDeadline, isRejectedSteer } from './steer-delivery';
-import { TurnCardEvents, type SteerCardEvent } from './turn-card-events';
+import { TurnCardEvents, type TurnCardEvent } from './turn-card-events';
 import { runSegment } from '../card/run-segment';
 import {
   RunCardContinuation,
@@ -1270,24 +1271,31 @@ export function createOrchestrator(
     // The generic tool is a private chat's alone: a group cannot reach other groups or write to Feishu through it (7.6).
     const feishuApi = schedule && Boolean(project?.dm);
     // The task skill goes with the tools (T4b); a package that cannot be written leaves the last whole one, or none.
-    const capabilityPackages = schedule && backend.profileCapabilities?.capabilityPackages ? await builtinPackage(project?.chatId, project?.dm ? 'dm' : 'group') : [];
+    const capabilityPackages = schedule && backend.profileCapabilities?.capabilityPackages ? await builtinPackage(project?.chatId, project?.dm ? 'dm' : 'group', project?.skills?.disabledPaths) : [];
     // What the Feishu tools download must be readable outside full access too.
     const downloads = schedule && project ? inboundChatDir(project.chatId) : undefined;
     if (downloads) await prepareInboundDir(downloads);
     const profile = assembled || skills ? { instructions: assembled ? openingInstructions(assembled, nonce, { hiddenBlocks: Boolean(project) && hiddenBlocksFor(backend.id) }) : '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: downloads ? [{ path: downloads, access: 'read' as const }] : [], capabilityPackages, mcpServers: [],
-      tools: { schedule, feishu: schedule || comment, ...(feishuEdit ? { feishuEdit } : {}), ...(feishuApi ? { feishuApi } : {}), ...(comment ? { documentsOnly: true } : {}), ...(project?.dm ? { acrossBots: true } : {}) }, ...(skills ? { skills } : {}) } : undefined;
+      tools: { schedule, feishu: schedule || comment, ...(schedule ? { askUser: true } : {}), ...(feishuEdit ? { feishuEdit } : {}), ...(feishuApi ? { feishuApi } : {}), ...(comment ? { documentsOnly: true } : {}), ...(project?.dm ? { acrossBots: true } : {}) }, ...(skills ? { skills } : {}) } : undefined;
     const built = await executionSessionProfile({ execution: { ...execution, permission: permission ?? execution.permission }, cwd, backend: backend.id, scope: project ? 'group' : 'ungrouped', profile });
     if (assembled && built) openings.set(built, contextOf(assembled, nonce));
     return built;
   }
-  async function builtinPackage(chatId: string | undefined, set: 'group' | 'dm'): Promise<SessionProfile['capabilityPackages']> {
+  async function builtinPackage(chatId: string | undefined, set: 'group' | 'dm', disabledPaths?: readonly string[]): Promise<SessionProfile['capabilityPackages']> {
+    const selected = enabledBuiltinSkills(set, disabledPaths);
+    if (!selected.length) return [];
+    const variant = builtinSubsetVariant(set, selected);
     try {
-      const { path } = await ensureBuiltinPackage(cfg.accounts.app.id, set, builtinSkillsOfSet(set));
+      const { path } = variant
+        ? await ensureBuiltinPackage(cfg.accounts.app.id, set, selected, variant)
+        : await ensureBuiltinPackage(cfg.accounts.app.id, set, selected);
       return [{ path, kind: 'builtin' }];
     } catch (error) {
       // A resumed Codex thread still lists the skills from its rollout, so the package already there must stay
       // handed over (and readable); only without a whole one does the session start without the skill.
-      const kept = await completeBuiltinPackage(cfg.accounts.app.id, set);
+      const kept = variant
+        ? await completeBuiltinPackage(cfg.accounts.app.id, set, variant)
+        : await completeBuiltinPackage(cfg.accounts.app.id, set);
       log.fail('agent', error, { phase: 'builtin-package-failed', chatId, kept: Boolean(kept) });
       return kept ? [{ path: kept, kind: 'builtin' }] : [];
     }
@@ -1565,7 +1573,13 @@ export function createOrchestrator(
         // devices 5.3: the session's shell gets its token, never the bare marker; no token, no session (the host is gone).
         const session = entry && host ? await sessionEnv(host, entry.sessionId, place) : undefined;
         // Every session finds `vonvon`, whichever Provider and place (dm-agent 9): on the PATH it inherits, or by this.
-        const env = { ...(sessionCli ? { [SESSION_CLI_ENV]: sessionCli } : {}), ...session };
+        const larkCli = project?.dm ? resolveLarkCliBin() : undefined;
+        if (larkCli) appendLarkCliToPath(larkCli);
+        const env = {
+          ...(sessionCli ? { [SESSION_CLI_ENV]: sessionCli } : {}),
+          ...(larkCli ? { [SESSION_LARK_CLI_ENV]: larkCli } : {}),
+          ...session,
+        };
         thread = await create({...opts, ...(entry ? {entry} : {}), ...(Object.keys(env).length ? {profile: withSessionEnv(opts.profile, env)} : {})});
         entry?.attach(thread);
       }
@@ -8270,8 +8284,14 @@ export function createOrchestrator(
           }
         }
 
-        const splitCard = async (event: SteerCardEvent): Promise<void> => {
+        const splitCard = async (event: TurnCardEvent): Promise<void> => {
+          const isSteer = event.type === 'steer_accepted';
           if (completionOnly) {
+            if (!isSteer) {
+              rc.askWaiting = undefined;
+              rc.askWaitingSubagentId = undefined;
+              return;
+            }
             // Preserve steer segmentation and quote the latest accepted input,
             // without publishing either segment while the run is still active.
             continuation.resetForSteer(render.snapshot(), Date.now());
@@ -8281,6 +8301,7 @@ export function createOrchestrator(
             rc.voiceMessages = event.voice ? [event.voice] : [];
             return;
           }
+          if (!cardMsgId) return;
           const nextStream = new RunCardStream();
           const nextBoundary = render.snapshot();
           const nextStartedAt = Date.now();
@@ -8288,35 +8309,42 @@ export function createOrchestrator(
             ...rc, rs: runSegment(nextBoundary, nextBoundary, nextStartedAt),
             cardKey: undefined, continued: undefined, processOnly: false, answerOnly: false, unboundedProcess: true,
             overflowAttachments: undefined, localFiles: undefined, images: undefined, sessionNotice: undefined,
-            // A steer's card answers that message, even an @ (s25b H1): never deleted as empty.
+            // A steer's or post-ask card answers that interaction: never deleted as empty.
             initiativeCard: undefined,
-            voiceMessages: event.voice ? [event.voice] : [],
+            voiceMessages: isSteer && event.voice ? [event.voice] : [],
           };
           let nextId: string;
           try {
             nextId = await nextStream.create(channel, opts.chatId, buildSafeLiveCard(next), {
-              replyTo: event.messageId, replyInThread: !opts.flat,
+              replyTo: !isSteer && opts.flat ? undefined : event.messageId,
+              replyInThread: !opts.flat,
             });
           } catch (err) {
-            log.fail('card', err, { phase: 'steer-card-create' });
-            if (event.voice) state.voiceReply?.add(event.voice);
-            void trackTask(channel.send(opts.chatId, { markdown: '补充消息已送达；新卡片创建失败，本轮继续在原卡片输出。' },
-              { replyTo: event.messageId, replyInThread: !opts.flat }).catch(() => undefined));
+            log.fail('card', err, { phase: isSteer ? 'steer-card-create' : 'ask-card-rotate' });
+            if (isSteer) {
+              if (event.voice) state.voiceReply?.add(event.voice);
+              void trackTask(channel.send(opts.chatId, { markdown: '补充消息已送达；新卡片创建失败，本轮继续在原卡片输出。' },
+                { replyTo: event.messageId, replyInThread: !opts.flat }).catch(() => undefined));
+            }
             return;
           }
           const previous = rc;
           const previousStream = stream;
-          const previousId = cardMsgId!;
+          const previousId = cardMsgId;
+          const carriedAskWaiting = previous.askWaiting;
+          const carriedAskWaitingSubagentId = previous.askWaitingSubagentId;
           previous.rs = { ...previous.rs, terminal: 'done', footer: null, completedAt: nextStartedAt };
-          previous.continued = 'steer';
+          previous.continued = isSteer ? 'steer' : 'ask';
+          previous.askWaiting = undefined;
+          previous.askWaitingSubagentId = undefined;
           completionReminderRefreshers.delete(previousId);
           runsByCard.delete(previousId);
           runStreams.delete(previousId);
           // Switch the live target before awaiting the frozen card's I/O. The
           // event queue retains all backend output produced while cards rotate.
           continuation.resetForSteer(nextBoundary, nextStartedAt);
-          next.askWaiting = rc.askWaiting;
-          next.askWaitingSubagentId = rc.askWaitingSubagentId;
+          next.askWaiting = carriedAskWaiting;
+          next.askWaitingSubagentId = carriedAskWaitingSubagentId;
           rc = next;
           stream = nextStream;
           cardMsgId = nextId;
@@ -8339,11 +8367,11 @@ export function createOrchestrator(
             }, (id, element) => previousStream.updateElement(channel, id, element));
             previous.images = await previousStream.settleImages(segmentImageText(previous.rs));
           } catch (err) {
-            log.fail('card', err, { phase: 'steer-card-assets' });
+            log.fail('card', err, { phase: isSteer ? 'steer-card-assets' : 'ask-card-assets' });
           }
           await refreshRunCardDisplayValues(previous,runCwd);
           await previousStream.finalizeCard(channel, buildRunCard({ ...previous, unboundedProcess: false }))
-            .catch(err => log.fail('card', err, { phase: 'steer-card-finalize' }));
+            .catch(err => log.fail('card', err, { phase: isSteer ? 'steer-card-finalize' : 'ask-card-finalize' }));
         };
         cardClock = setInterval(() => {
           if (rc.rs.terminal === 'running') pushLiveCard();
@@ -8382,6 +8410,7 @@ export function createOrchestrator(
         const originalInterrupt = state.interrupt;
         askTurn = asks.openTurn({ run, sessionKey: activeKey,
           placed: async messageId => { await adoptThreadId(messageId); return activeKey; },
+          answered: messageId => { cardEvents.askAnswered(messageId); },
           placement: { chatId: opts.chatId, replyTo: scheduled ? landingOf(scheduled) : currentTurn.seen?.id ?? opts.replyTo, replyInThread: !opts.flat, own: Boolean(currentProject?.dm) },
           initiator: { kind: currentTurn.requesterKind ?? 'unknown', openId: currentTurn.requesterOpenId }, idlePause,
           waiting: (label, subagentId) => { activity?.waiting(Boolean(label)); rc.askWaiting = label; rc.askWaitingSubagentId = subagentId; pushLiveCard(); },
@@ -8409,14 +8438,14 @@ export function createOrchestrator(
         let textChars = 0;
         let confirmedDone = false;
         for await (const ev of cardEvents.consume(guarded)) {
-          if (ev.type !== 'steer_accepted') activity?.accept(ev);
+          if (ev.type !== 'steer_accepted' && ev.type !== 'ask_answered') activity?.accept(ev);
           if (ev.type === 'done') confirmedDone = true;
           if (ev.type === 'turn_started') startedTurnId = ev.turnId;
           if (ev.type === 'awaiting_subagents') awaitingSubagents = true;
           if (ev.type === 'ask') { askTurn.enqueue(ev.request, ev.subagentId ? { subagentId: ev.subagentId, name: render.snapshot().subagents.find(row => row.id === ev.subagentId)?.name } : undefined); continue; }
           if (ev.type === 'ask_cancelled') { askTurn.cancel(ev.requestId); continue; }
           if (ev.type === 'done' || (ev.type === 'error' && !ev.willRetry)) { turnScope?.close(); askTurn.close('turn-ended'); }
-          if (ev.type === 'steer_accepted') {
+          if (ev.type === 'steer_accepted' || ev.type === 'ask_answered') {
             await splitCard(ev);
             continue;
           }

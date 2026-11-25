@@ -47,8 +47,12 @@ export function setCliContext(next: { scope?: Scope | undefined; env?: NodeJS.Pr
 }
 /** The global `--scope` this command was given, if any. */
 export const cliScope = (): Scope | undefined => context.scope;
+/** The environment this command runs in. */
+export const cliEnv = (): NodeJS.ProcessEnv => context.env;
 /** This command runs in a Bot's session: the daemon knows which Bot it is on. */
 export const cliInSession = (): boolean => inBotSession(context.env);
+/** Whether the latest `withDaemon` negotiation authenticated this caller as a DM bot session. */
+export const cliIsDmSession = (): boolean => Boolean(context.dm);
 
 /**
  * devices 5.3 and 8.3: an owner's `--scope` is the daemon's to apply. A read that falls back to the files with no daemon
@@ -168,6 +172,7 @@ export async function withDaemon<T>(fn: (call: Call, info?: ServerInfo) => Promi
   // Ordinary commands exit when the event loop drains, so an open socket would hang the CLI.
   let interrupted = false;
   try {
+    context.dm = false;
     if (inBotSession(context.env) || context.scope) {
       const scope = context.scope;
       // A private chat's session has no `--scope` (dm-agent 6.1): it negotiates without one.

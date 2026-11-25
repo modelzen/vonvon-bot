@@ -33,7 +33,7 @@ import { log } from '../core/logger';
 import { supplementOf } from '../bot/context-assembly';
 import { botFiles, readRole, readSoulText, readText, roleDraft, roleProblem, updateRole, waitForBotFiles } from '../bot/role-files';
 import { loadBots } from '../config/bots';
-import { discoverGroupSkills, discoverLocalGroupSkills } from '../agent/group-skills';
+import { discoverBuiltinGroupSkills, discoverGroupSkills, discoverLocalGroupSkills } from '../agent/group-skills';
 import { snapshotDefaultJudge, snapshotProviderJudge, requireDecisionKey } from '../project/initial-settings';
 import { readJudgeModels } from '../judge/global-models';
 import { assertValidCardDisplay } from '../card/card-display-validation';
@@ -756,13 +756,22 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       const groupDecides = isDecisionSelection(judgeSelection);
       const fullOnly = deps.backendFor(backendId).fullAccessOnly?.();
       let skillView: Pick<T.ProjectSettingsView, 'skills' | 'skillsError'>;
+      const builtins = await discoverBuiltinGroupSkills({ appId: botId, set: p.dm ? 'dm' : 'group', disabledPaths: data.skills.disabledPaths });
       if (deps.offline) {
-        try { skillView = { skills: await discoverLocalGroupSkills({ backendId, cwd: p.cwd, directories: data.workspace.directories, disabledPaths: data.skills.disabledPaths }), skillsError: '仅显示本地技能，Provider 插件在启动后读取' }; }
-        catch { skillView = { skillsError: '暂时无法读取本地技能目录，请检查工作区目录' }; }
+        try {
+          const local = await discoverLocalGroupSkills({ backendId, cwd: p.cwd, directories: data.workspace.directories, disabledPaths: data.skills.disabledPaths });
+          skillView = { skills: [...builtins, ...local], skillsError: '仅显示本地技能，Provider 插件在启动后读取' };
+        } catch {
+          skillView = { skillsError: '暂时无法读取本地技能目录，请检查工作区目录' };
+        }
       }
       else {
-        try { skillView = { skills: await (deps.discoverSkills ?? discoverGroupSkills)({ backend: deps.backendFor(backendId), cwd: p.cwd, directories: data.workspace.directories, disabledPaths: data.skills.disabledPaths }) }; }
-        catch { skillView = { skillsError: '暂时无法读取技能目录，请检查 Provider 状态后重试' }; }
+        try {
+          const discovered = await (deps.discoverSkills ?? discoverGroupSkills)({ backend: deps.backendFor(backendId), cwd: p.cwd, directories: data.workspace.directories, disabledPaths: data.skills.disabledPaths });
+          skillView = { skills: [...builtins, ...discovered] };
+        } catch {
+          skillView = { skillsError: '暂时无法读取技能目录，请检查 Provider 状态后重试' };
+        }
       }
       return {
         scope,

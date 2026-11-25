@@ -5,7 +5,7 @@ import { SESSION_ENV } from '../config/session-env';
 export interface SessionProfile {
   instructions: string;
   /** Native context filtering only; files and CLI permissions are unchanged. */
-  skills?: { disabledPaths: readonly string[]; enabledNames?: readonly string[] };
+  skills?: { disabledPaths: readonly string[]; enabledNames?: readonly string[]; disabledBuiltinNames?: readonly string[] };
   env: Readonly<Record<string, string>>;
   nativeSettings: { automaticMemory: false };
   additionalRoots: readonly { path: string; access: 'read' | 'write' }[];
@@ -17,9 +17,10 @@ export interface SessionProfile {
    * vonvon's own tools beyond the always-on ones: the schedule tools (定时任务 T3) and the Feishu read tools (dm-agent 7.3),
    * both in a bound group's sessions. `feishuEdit` adds feishu_doc_edit, by the session's tier (7.2). `documentsOnly`: a
    * comment's session, whose Feishu tools are the document column only (7.4). `feishuApi` adds feishu_api, a private
-   * chat's only (7.6). `acrossBots`: a private chat's, whose read tools take a `bot` (7.3).
+   * chat's only (7.6). `acrossBots`: a private chat's, whose read tools take a `bot` (7.3). `askUser`: adds the Codex
+   * `ask_user` dynamic tool so Codex can send interactive Feishu choice cards in normal (non-Plan) turns too.
    */
-  tools?: { schedule: boolean; feishu?: boolean; feishuEdit?: boolean; feishuApi?: boolean; documentsOnly?: boolean; acrossBots?: boolean };
+  tools?: { schedule: boolean; feishu?: boolean; feishuEdit?: boolean; feishuApi?: boolean; documentsOnly?: boolean; acrossBots?: boolean; askUser?: boolean };
 }
 
 export interface SessionProfileCapabilities {

@@ -53,6 +53,8 @@ export interface ClaudeThreadConfig {
   systemPromptAppend?: string;
   additionalDirectories?: string[];
   skills?: string[];
+  /** Built-in VonVon skill selectors (`vonvon:<name>`) disabled for this group/DM. */
+  disabledBuiltinNames?: string[];
   /** The profile's capability package directories, loaded as local plugins (T4b). */
   plugins?: string[];
   /** Which filesystem settings the SDK loads. The SDK default is none — so
@@ -383,6 +385,9 @@ export class ClaudeAgentThread implements AgentThread {
       }
     }
     const plugins = cfg.plugins ?? [];
+    const activeBuiltinNames = cfg.disabledBuiltinNames?.length
+      ? BUILTIN_SKILL_NAMES.filter(name => !cfg.disabledBuiltinNames!.includes(name))
+      : BUILTIN_SKILL_NAMES;
     const options: Options = {
       cwd: cfg.cwd,
       abortController: this.abortController,
@@ -396,7 +401,7 @@ export class ClaudeAgentThread implements AgentThread {
       ...(cfg.settingSources ? { settingSources: cfg.settingSources } : {}),
       ...(cfg.additionalDirectories?.length ? { additionalDirectories: cfg.additionalDirectories } : {}),
       ...(plugins.length ? { plugins: plugins.map(path => ({ type: 'local' as const, path, skipMcpDiscovery: true })) } : {}),
-      ...(cfg.skills ? { skills: plugins.length ? [...cfg.skills, ...BUILTIN_SKILL_NAMES] : cfg.skills } : {}),
+      ...(cfg.skills ? { skills: plugins.length ? [...cfg.skills, ...activeBuiltinNames] : cfg.skills } : {}),
       ...(cfg.env ? { env: cfg.env } : {}),
       settings: {
         ...AUTO_COMPACT_SETTINGS,

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { isSensitiveAsk, type AskAnswer, type AskChoiceAnswer, type AskRequest } from '../agent/types';
 import { keepAts } from './at-guard';
-import { actions, button, card, form, input as textInput, md, multiSelectMenu, note, selectMenu, submitButton, type ActionValue, type CardElement, type CardObject } from './cards';
+import { actions, button, card, form, hr, input as textInput, md, multiSelectMenu, note, noteMd, selectMenu, submitButton, type ActionValue, type CardElement, type CardObject } from './cards';
 
 // Feishu element IDs allow only letters, digits and underscores (20 characters max).
 export const ASK_CONTROLS_EID = 'ask_controls';
@@ -153,33 +153,78 @@ function answerSummary(request: AskRequest, answer: AskAnswer): string {
 export function buildAskCard(input: { request: AskRequest; from?: { name?: string }; state: AskCardState; respondents: readonly { openId: string; name: string }[]; scope?: 'group' | 'dm' | 'own' }): CardObject {
   const { request, state, respondents, scope = 'group' } = input;
   const elements: CardElement[] = [];
-  if (scope === 'dm') elements.push(md('这是群里 agent 问的问题。答案只交给 agent，不会出现在群里。'));
-  // 'own': the question of this private chat's own session; it is in the window of the only person who answers it.
-  if (request.kind === 'choices') {
-    for (const question of request.questions) {
-      elements.push(md(`**${question.title}**\n${question.detail}`));
-      if (question.selection !== 'text') elements.push(...question.options.map(option => md(`${option.label}${option.description ? `：${option.description}` : ''}`)));
+  if (scope === 'dm') elements.push(note('这是群里 agent 问的问题，答案只交给 agent，不会出现在群里。'));
+
+  const isPendingChoicesForm = state.kind === 'pending' && request.kind === 'choices' && !(scope === 'group' && isSensitiveAsk(request));
+
+  if (isPendingChoicesForm) {
+    // Group each question's heading, concise option notes, and full-width controls together inside the form
+    // so multi-question cards stay cleanly separated with zero ambiguous unlabeled boxes.
+    const multi = request.questions.length > 1;
+    const formElements: CardElement[] = [];
+    request.questions.forEach((question, index) => {
+      if (index > 0) formElements.push(hr());
+      const prefix = multi ? `${index + 1}. ` : '';
+      const modeHint = question.selection === 'multiple' ? '（可多选）' : '';
+      formElements.push(md(`**${prefix}${question.title}${modeHint}**${question.detail ? `\n${question.detail}` : ''}`));
+
+      if (question.selection === 'text') {
+        formElements.push(textInput({
+          name: `q${index}`,
+          width: 'fill',
+          placeholder: `请输入「${question.title}」`,
+          inputType: 'multiline_text',
+          rows: 2,
+          maxLength: 1000,
+        }));
+        return;
+      }
+
+      const described = question.options.filter(option => option.description);
+      if (described.length > 0) {
+        formElements.push(noteMd(described.map(option => `· **${option.label}**：${option.description}`).join('\n')));
+      }
+      const opts = {
+        name: `q${index}`,
+        width: 'fill' as const,
+        placeholder: question.selection === 'multiple' ? `请选择「${question.title}」（可多选）` : `请选择「${question.title}」`,
+        options: question.options.map(option => ({ label: option.label, value: option.id })),
+      };
+      formElements.push(question.selection === 'single' ? selectMenu(opts) : multiSelectMenu(opts));
+      if (question.other) {
+        formElements.push(textInput({
+          name: `q${index}_other`,
+          width: 'fill',
+          placeholder: `或输入「${question.title}」的自定义内容（选填）`,
+          maxLength: 1000,
+        }));
+      }
+    });
+    if (multi) formElements.push(hr());
+    formElements.push(submitButton(request.questions.every(q => q.selection === 'text') ? '提交回答' : '提交选择', callback(request, 'submit')));
+    elements.push(form('ask', formElements, ASK_CONTROLS_EID));
+  } else if (request.kind === 'choices') {
+    // Terminal states or sensitive-in-group notice: keep compact summary without repeating full option walls.
+    if (state.kind === 'pending') {
+      for (const question of request.questions) {
+        elements.push(md(`**${question.title}**${question.detail ? `\n${question.detail}` : ''}`));
+      }
+    } else if (state.kind !== 'answered') {
+      elements.push(noteMd(request.questions.map(q => `· **${q.title}**${q.detail ? `：${q.detail}` : ''}`).join('\n')));
     }
-  } else elements.push(md(request.detail));
-  elements.push(md(`回答后：${request.acceptedConsequence}\n\n未回答或拒绝后：${request.declinedConsequence}`));
+  } else {
+    elements.push(md(request.detail));
+  }
+
   if (scope === 'group') elements.push(md(`可回答：${respondents.length ? respondents.map(person => `<at id="${person.openId}">${person.name}</at>`).join('、') : '等待指定成员回答'}`));
+
   if (state.kind === 'pending') {
-    if (scope === 'dm') elements.push(note('点卡片回答，或回复这张卡'));
+    if (scope === 'dm') elements.push(note('点卡片回答，或直接回复这条消息'));
     if (scope === 'group' && isSensitiveAsk(request)) {
       elements.push(md('🔒 这个问题要填敏感信息，不在群里显示输入框。我已经私聊了能回答的人，请在和我的私聊里回答；答完这里会更新。'));
-    } else if (request.kind === 'choices') {
-      elements.push(form('ask', [
-        ...request.questions.flatMap((question, index) => {
-          if (question.selection === 'text') return [textInput({ name: `q${index}`, placeholder: question.title, inputType: 'multiline_text', rows: 2, maxLength: 1000 })];
-          const opts = { name: `q${index}`, placeholder: question.title, options: question.options.map(option => ({ label: option.label, value: option.id })) };
-          const selector = question.selection === 'single' ? selectMenu(opts) : multiSelectMenu(opts);
-          return question.other ? [selector, textInput({ name: `q${index}_other`, placeholder: '其他（直接打字）', maxLength: 1000 })] : [selector];
-        }),
-        submitButton(request.questions.every(q => q.selection === 'text') ? '提交回答' : '提交选择', callback(request, 'submit')),
-      ], ASK_CONTROLS_EID));
     } else if (request.kind === 'confirmation') {
       elements.push(actions([button('按这个方案做', callback(request, 'proceed'), 'primary'), button('不行，我来说', callback(request, 'explain'))], ASK_CONTROLS_EID));
-    } else {
+    } else if (request.kind === 'permission') {
       elements.push(actions([button('允许这一次', callback(request, 'allow-once'), 'primary'), button('拒绝', callback(request, 'deny'))], ASK_CONTROLS_EID));
     }
   } else {
@@ -199,7 +244,27 @@ export function buildAskCard(input: { request: AskRequest; from?: { name?: strin
       default: { const exhaustive: never = state; return exhaustive; }
     }
   }
+
+  // Keep consequence notes subtle at the bottom; in private own-chat choices, show a clean interaction hint instead of boilerplate.
+  if (scope === 'own' && request.kind === 'choices') {
+    if (state.kind === 'pending') elements.push(note('选完点「提交选择」即可，也可以直接在聊天里打字回复'));
+  } else {
+    elements.push(note(`回答后：${request.acceptedConsequence} · 未回答或拒绝后：${request.declinedConsequence}`));
+  }
+
+  const headerTag = state.kind === 'pending'
+    ? [{ text: request.kind === 'permission' ? '待授权' : '待选择', color: request.kind === 'permission' ? 'orange' : 'blue' }]
+    : state.kind === 'answered'
+      ? [{ text: '已回答', color: 'green' }]
+      : [{ text: '已结束', color: 'neutral' }];
+
   // The respondents' @ is the program's own: it stays real even when the chat's bot list cannot be read (s27a0).
-  return keepAts(card(elements, { header: { title: input.from ? `子 agent${input.from.name ? ` ${input.from.name}` : ''} 问：${request.title}` : request.title, template: state.kind === 'pending' ? 'blue' : 'grey' }, forward: false }),
-    respondents.map(person => person.openId));
+  return keepAts(card(elements, {
+    header: {
+      title: input.from ? `子 agent${input.from.name ? ` ${input.from.name}` : ''} 问：${request.title}` : request.title,
+      template: state.kind === 'pending' ? (request.kind === 'permission' ? 'orange' : 'wathet') : 'grey',
+      textTags: headerTag,
+    },
+    forward: false,
+  }), respondents.map(person => person.openId));
 }

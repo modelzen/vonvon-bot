@@ -917,6 +917,78 @@ covers(program.command('now'), 'snapshot.get').description("What each bot is doi
   .action(async (options: Json & { bot?: string }) => { await (await import('./commands/now')).runNow(options.bot, io(options)); });
 covers(program.command('snapshot'), 'snapshot.get').description("The web page's whole state: a summary, or all of it with --json").option(...JSON_FLAG)
   .action(async (options: Json) => { await (await import('./commands/now')).runSnapshot(io(options)); });
+const template = program.command('template').description('Fetch, inspect, stage, extract and pack Vonvon Bot templates (.vonvon.zip)');
+template.command('fetch <url>').description('Resolve a Feishu promo doc URL, GitHub repo URL, or .vonvon.zip URL into a local inspectable path')
+  .requiredOption('--dest <dir>', 'Empty destination directory')
+  .option(...JSON_FLAG)
+  .action(async (url: string, options: Json & { dest?: string }) => {
+    const mod = await import('./commands/template');
+    await mod.verifyTemplateSessionAllowed(process.env, program.opts<{ scope?: string }>().scope);
+    await mod.runTemplateFetch(url, options, io(options));
+  });
+template.command('inspect <source>').description('Validate a .vonvon.zip file or template directory and print its summary')
+  .option('--source-url <url>', 'Original repository or download URL for metadata context')
+  .option(...JSON_FLAG)
+  .action(async (source: string, options: Json & { sourceUrl?: string }) => {
+    const mod = await import('./commands/template');
+    await mod.verifyTemplateSessionAllowed(process.env, program.opts<{ scope?: string }>().scope);
+    await mod.runTemplateInspect(source, options, io(options));
+  });
+template.command('extract <source>').description('Safely unpack a template into an empty temporary directory for review or merging')
+  .requiredOption('--dest <dir>', 'Empty destination directory')
+  .option('--source-url <url>', 'Original repository or download URL')
+  .option(...JSON_FLAG)
+  .action(async (source: string, options: Json & { dest?: string; sourceUrl?: string }) => {
+    const mod = await import('./commands/template');
+    await mod.verifyTemplateSessionAllowed(process.env, program.opts<{ scope?: string }>().scope);
+    await mod.runTemplateExtract(source, options, io(options));
+  });
+template.command('stage <source>').description('Stage workspace files and dual-provider skills into a group workspace')
+  .requiredOption('--dest <dir>', 'Target group primary workspace directory')
+  .option('--mode <mode>', 'fresh (empty dir only) or merge (keep existing files, report conflicts)', 'fresh')
+  .option('--update-skills', 'Overwrite existing skill files when upgrading a template')
+  .option('--source-url <url>', 'Original repository or download URL recorded in .vonvon-template.json')
+  .option('--no-telemetry', 'Disable anonymous public template install reporting for this run')
+  .option(...JSON_FLAG)
+  .action(async (source: string, options: Json & { dest?: string; mode?: string; updateSkills?: boolean; sourceUrl?: string; telemetry?: boolean }) => {
+    const mod = await import('./commands/template');
+    await mod.verifyTemplateSessionAllowed(process.env, program.opts<{ scope?: string }>().scope);
+    await mod.runTemplateStage(source, options, io(options));
+  });
+template.command('pack <dir>').description('Validate, redact-check, sign and pack a template directory into a .vonvon.zip archive')
+  .requiredOption('--out <file>', 'Output .vonvon.zip file path')
+  .option('--publish', 'Publish public promo metadata (never skill/workspace content) to Vonvon 灵感 Club')
+  .option(...JSON_FLAG)
+  .action(async (dir: string, options: Json & { out?: string; publish?: boolean }) => {
+    const mod = await import('./commands/template');
+    await mod.verifyTemplateSessionAllowed(process.env, program.opts<{ scope?: string }>().scope);
+    await mod.runTemplatePack(dir, options, io(options));
+  });
+template.command('draft-group <group>').description('Copy a bound group\'s real workspace, local skills, and config into a clean template draft directory')
+  .requiredOption('--dest <dir>', 'Empty destination draft directory (must be outside the source group folder)')
+  .option(...BOT)
+  .option('--id <id>', 'Override the template id written into vonvon-bot.json (lowercase letters, digits, hyphens)')
+  .option('--author <name>', 'Override or set the author name written into vonvon-bot.json')
+  .option(...JSON_FLAG)
+  .action(async (group: string, options: Json & { dest?: string; bot?: string; id?: string; author?: string }) => {
+    const mod = await import('./commands/template');
+    mod.assertTemplateSessionAllowed(process.env, program.opts<{ scope?: string }>().scope);
+    await mod.runTemplateDraftGroup(group, options, io(options));
+  });
+template.command('published').description('List your own public templates currently live on Vonvon 灵感 Club')
+  .option(...JSON_FLAG)
+  .action(async (options: Json) => {
+    const mod = await import('./commands/template');
+    await mod.verifyTemplateSessionAllowed(process.env, program.opts<{ scope?: string }>().scope);
+    await mod.runTemplatePublished(io(options));
+  });
+template.command('unpublish <id>').description('Remove one of your own published templates from Vonvon 灵感 Club using your local author key')
+  .option(...JSON_FLAG)
+  .action(async (id: string, options: Json) => {
+    const mod = await import('./commands/template');
+    await mod.verifyTemplateSessionAllowed(process.env, program.opts<{ scope?: string }>().scope);
+    await mod.runTemplateUnpublish(id, io(options));
+  });
 
 /**
  * Exits once the JSON line, and whatever was written before it, is out: process.exit would cut a pipe's pending output

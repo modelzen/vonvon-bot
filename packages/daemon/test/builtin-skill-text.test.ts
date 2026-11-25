@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { configSkill } from '../src/agent/builtin-skills/config';
 import { dmFeishuSkill, feishuSkill } from '../src/agent/builtin-skills/feishu';
 import { dmScheduleSkill, scheduleSkill as scheduledTasksSkill } from '../src/agent/builtin-skills/schedule';
+import { templateSkill } from '../src/agent/builtin-skills/template';
 import { BRIDGE_DEVELOPER_INSTRUCTIONS, FILE_DELIVERY } from '../src/agent/bridge-instructions';
 import { BUILTIN_SKILL_NAMES } from '../src/agent/claude-agent/thread';
 import { builtinSkillNames, builtinSkillsOfSet } from '../src/agent/builtin-skills/registry';
@@ -178,14 +179,68 @@ describe('the config builtin skill', () => {
   });
 });
 
+describe('the template builtin skill', () => {
+  it('is vonvon-template, a private chat\'s only, with one-line trigger description', () => {
+    expect(templateSkill).toMatchObject({ name: 'vonvon-template', title: '配方' });
+    expect(templateSkill.description).not.toMatch(/[\r\n]/);
+    expect(templateSkill.description.length).toBeLessThanOrEqual(300);
+    for (const words of ['配方', '.vonvon.zip', '照这个配方建群', '帮我创作一个配方', '先读本 skill']) {
+      expect(templateSkill.description).toContain(words);
+    }
+    expect(builtinSkillsOfSet('group').map(skill => skill.name)).not.toContain(templateSkill.name);
+  });
+  it('guides public Feishu doc sharing, non-content upload notice, and safe staging/packing', () => {
+    for (const words of [
+      '`vonvon template draft-group <群> --dest <空草稿目录> --json`',
+      '`vonvon template inspect <source> --json`',
+      '`vonvon template stage <source> --dest <工作区目录> --mode fresh --json`',
+      '`vonvon template pack <草稿目录> --out <绝对输出路径>.vonvon.zip --publish --json`',
+      '`vonvon template published --json`',
+      '`vonvon template unpublish <id> --json`',
+      '绝不要让用户自己回忆或手输配方 ID',
+      '`vonvon env install lark-cli`',
+      '`vonvon env login lark-cli`',
+      '`ask_user`',
+      '每张卡控制在 1–2 道题',
+      '顺着用户的意图和节奏推进',
+      '直接在聊天里给出清晰的配方概览',
+      '禁止说「沿用原 GitHub 链接」',
+      '绝不未经询问擅自生成图片',
+      '绝不在正文里重复插同一张图',
+      '不要主动写「免费」字样',
+      '绝不静默覆盖历史配方',
+      '升级发布新版本',
+      '新建一个独立配方',
+      '先审阅再正式上架',
+      '`"$VONVON_LARK_CLI"`',
+      'artifacts/templates/',
+      '宣传页链接（`docUrl`）写入 `vonvon-bot.json`',
+      '互联网上获得链接的人可阅读',
+      '绝不会上传你的 Skill、配置、提示词、工作区文档等任何配方内容',
+      '绝不自己编造示例场景',
+      '不要强迫用户再重新导入或跑示例测试',
+      'Vonvon 灵感 Club',
+      'VONVON_NO_TELEMETRY=1',
+      '绝不覆盖 Bot 全局 `SOUL.md`',
+      '不写 `mcp.json`',
+      'workspace/setup-state.json',
+      '<名称>-setup',
+    ]) expect(templateSkill.body).toContain(words);
+    expect(templateSkill.body).not.toContain('方便在手机上看');
+  });
+  it('contains no credentials, real chat identifiers or machine paths', () => {
+    expect(JSON.stringify(templateSkill)).not.toMatch(/(?:cli_|oc_|ou_)[a-zA-Z0-9]{8,}|sk-[a-zA-Z0-9]{12,}|-----BEGIN|\/(?:home|Users)\//);
+  });
+});
+
 describe('the two sets', () => {
-  it('are the schedule and Feishu skills, and config in a private chat', () => {
+  it('are the schedule and Feishu skills, and config + template in a private chat', () => {
     expect(builtinSkillsOfSet('group').map(skill => skill.name)).toEqual(['vonvon-schedule', 'vonvon-feishu']);
-    expect(builtinSkillsOfSet('dm').map(skill => skill.name)).toEqual(['vonvon-schedule', 'vonvon-feishu', 'vonvon-config']);
+    expect(builtinSkillsOfSet('dm').map(skill => skill.name)).toEqual(['vonvon-schedule', 'vonvon-feishu', 'vonvon-config', 'vonvon-template']);
   });
   it('whitelist each name once, and not the name the Feishu skill had', () => {
-    expect(builtinSkillNames()).toEqual(['vonvon-schedule', 'vonvon-feishu', 'vonvon-config']);
-    expect(BUILTIN_SKILL_NAMES).toEqual(['vonvon:vonvon-schedule', 'vonvon:vonvon-feishu', 'vonvon:vonvon-config']);
+    expect(builtinSkillNames()).toEqual(['vonvon-schedule', 'vonvon-feishu', 'vonvon-config', 'vonvon-template']);
+    expect(BUILTIN_SKILL_NAMES).toEqual(['vonvon:vonvon-schedule', 'vonvon:vonvon-feishu', 'vonvon:vonvon-config', 'vonvon:vonvon-template']);
   });
 });
 

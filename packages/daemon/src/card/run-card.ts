@@ -126,7 +126,7 @@ function reminderControl(cardKey: string, requested: boolean): CardElement {
   };
 }
 
-export type ContinuationReason = 'steer' | 'capacity' | 'answer';
+export type ContinuationReason = 'steer' | 'ask' | 'capacity' | 'answer';
 
 /** Routing + render inputs for one run card. */
 export interface RunCardState {
@@ -308,9 +308,11 @@ export function buildRunCardBase(rc: RunCardState): {card:CardObject;parts:CardD
     ? '已达单卡容量，继续处理'
     : rc.continued === 'answer'
       ? '过程已折叠，最终答复见下一张卡片'
-      : rc.continued
-        ? '已接收补充，继续处理'
-        : summaryText(state);
+      : rc.continued === 'ask'
+        ? '已收到选择，继续处理'
+        : rc.continued
+          ? '已接收补充，继续处理'
+          : summaryText(state);
   const result = card(all.map(runTypography), { streaming: running, summary });
   result.body = { ...(result.body as Record<string, unknown>), vertical_spacing: '16px' };
   const usage = state.usage;
@@ -507,6 +509,8 @@ function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
     elements.push(greyNote('已达单卡容量，后续内容见下一张卡片'));
   } else if (rc.continued === 'answer') {
     elements.push(greyNote('过程已折叠，最终答复见下一张卡片'));
+  } else if (rc.continued === 'ask') {
+    elements.push(greyNote('已收到选择，后续输出见下一张卡片'));
   } else if (rc.continued) {
     elements.push(noteMd('已接收补充，后续输出见下一张卡片'));
   } else if (state.terminal === 'interrupted') {

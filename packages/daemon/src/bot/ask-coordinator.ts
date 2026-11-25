@@ -19,6 +19,8 @@ export interface AskTurnInput {
   fault: (error: unknown) => void;
   /** Adopt a newly created topic from the question carrier before accepting text. */
   placed?: (messageId: string) => Promise<string | undefined>;
+  /** Fired synchronously when a visible ask card is answered so the live run card can rotate below it. */
+  answered?: (messageId: string) => void;
 }
 export interface AskTurn {
   enqueue(request: AskRequest, from?: AskOrigin): void;
@@ -287,11 +289,15 @@ export class AskCoordinator {
       { actor: this.names.peek(input.openId) ?? `成员 …${input.openId.slice(-6)}`, byDm: input.openId });
     return true;
   }
+  private formatAnsweredAt(now: Date): string {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  }
   private settle(turn: Turn, entry: Entry, resolution: AskResolution, options: { actor?: string; providerResolved?: boolean; byDm?: string; presentation?: AskCardState } = {}): void {
     if (entry.state.kind === 'settled') return;
     const messageId = entry.state.kind === 'visible' ? entry.state.messageId : undefined;
     const presentation: AskCardState = options.presentation ?? (resolution.kind === 'answered'
-      ? { kind: 'answered', answer: resolution.answer, actor: options.actor ?? '', at: new Date().toISOString() }
+      ? { kind: 'answered', answer: resolution.answer, actor: options.actor ?? '', at: this.formatAnsweredAt(new Date()) }
       : resolution.reason === 'timeout' ? { kind: 'timed-out' }
       : resolution.reason === 'stopped' ? { kind: 'stopped' } : { kind: 'unavailable', reason: resolution.reason });
     entry.answeredByDm = options.byDm;
@@ -306,6 +312,10 @@ export class AskCoordinator {
     // Invoke the provider's local claim before doing presentation or any network work.
     if (!options.providerResolved) this.effect(() => turn.run.respondToAsk?.(entry.request.id, resolution), error => this.fault(turn, error));
     this.waiting(turn);
+    if (resolution.kind === 'answered' && messageId && turn.open) {
+      try { turn.answered?.(messageId); }
+      catch (err) { log.fail('card', err, { phase: 'ask-answered-hook' }); }
+    }
     this.promote(turn);
     if (messageId) this.terminal(turn, entry, messageId, presentation);
     for (const [id, dm] of entry.dm ?? []) {

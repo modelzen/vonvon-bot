@@ -303,7 +303,15 @@ export class AppServerClient {
       const denial = approvalAnswer(method);
       if (denial) return denial;
       if (method === 'item/tool/call') {
-        return dynamicToolCall(params, this.requestScope, threadId => this.toolHost?.threadId === threadId ? this.toolHost.host : undefined);
+        const id = frame.id;
+        return dynamicToolCall(
+          params,
+          this.requestScope,
+          threadId => this.toolHost?.threadId === threadId ? this.toolHost.host : undefined,
+          typeof id === 'string' || typeof id === 'number'
+            ? { rpcId: id, nextSerial: () => ++this.requestSerial, enqueue: question => this.notifications.push(question) }
+            : undefined,
+        );
       }
       if (method !== 'item/tool/requestUserInput') return undefined;
       const id = frame.id;
