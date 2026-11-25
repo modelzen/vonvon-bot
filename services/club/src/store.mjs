@@ -38,11 +38,13 @@ export function compareVersions(a, b) {
 export class ClubStore {
   #db;
   #autoTrustKeys;
+  #requireAuthorTrust;
 
-  constructor(dbPath, { autoTrustKeys = [] } = {}) {
+  constructor(dbPath, { autoTrustKeys = [], requireAuthorTrust = false } = {}) {
     if (dbPath !== ':memory:') mkdirSync(dirname(dbPath), { recursive: true });
     this.#db = new DatabaseSync(dbPath);
     this.#autoTrustKeys = new Set(autoTrustKeys.filter(Boolean));
+    this.#requireAuthorTrust = Boolean(requireAuthorTrust);
     this.#init();
   }
 
@@ -125,7 +127,7 @@ export class ClubStore {
       }
       return { trusted: Boolean(existing.trusted), blocked: Boolean(existing.blocked) };
     }
-    const trusted = this.#autoTrustKeys.has(publicKey) ? 1 : 0;
+    const trusted = !this.#requireAuthorTrust || this.#autoTrustKeys.has(publicKey) ? 1 : 0;
     this.#db.prepare(`
       INSERT INTO authors (public_key, name, trusted, blocked, first_seen_at, note)
       VALUES (?, ?, ?, 0, ?, '')

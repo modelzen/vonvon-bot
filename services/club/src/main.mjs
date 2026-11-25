@@ -11,8 +11,9 @@ const autoTrustKeys = (process.env.CLUB_AUTO_TRUST_KEYS ?? '')
   .split(',')
   .map(k => k.trim())
   .filter(Boolean);
+const requireAuthorTrust = process.env.CLUB_REQUIRE_AUTHOR_TRUST === '1' || process.env.CLUB_REQUIRE_AUTHOR_TRUST === 'true';
 
-const store = new ClubStore(join(dataDir, 'club.sqlite'), { autoTrustKeys });
+const store = new ClubStore(join(dataDir, 'club.sqlite'), { autoTrustKeys, requireAuthorTrust });
 const coversDir = join(dataDir, 'covers');
 const server = createClubServer({ store, coversDir, adminToken, publicBaseUrl });
 

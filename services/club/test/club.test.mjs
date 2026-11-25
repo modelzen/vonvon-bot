@@ -101,7 +101,7 @@ describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
     assert.equal(favicon.headers.get('content-type'), 'image/png');
   });
 
-  it('runs real CLI pack --publish -> pending -> admin trust -> multi-user stage dedup -> like -> cover', async () => {
+  it('runs real CLI pack --publish -> instant public listing -> multi-user stage dedup -> like -> cover -> delete', async () => {
     const creatorHome = join(workDir, 'creator-home');
     const userAHome = join(workDir, 'user-a-home');
     const userBHome = join(workDir, 'user-b-home');
@@ -128,7 +128,7 @@ describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
     await writeFile(join(draftDir, 'skills/daily-setup/SKILL.md'), '---\nname: daily-setup\ndescription: 初始化\n---\nPRIVATE_SKILL_SECRET');
     await writeFile(join(draftDir, 'workspace/AGENTS.md'), '# Rules');
 
-    // 1. Real CLI pack --publish sends signed promo to Club server.
+    // 1. Real CLI pack --publish sends signed promo -> auto-published immediately (zero pre-moderation).
     const packRun = await execFileAsync(process.execPath, [
       VONVON_BIN, 'template', 'pack', draftDir, '--out', outZip, '--publish', '--json',
     ], {
@@ -137,35 +137,18 @@ describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
     const packed = JSON.parse(packRun.stdout);
     assert.equal(packed.ok, true);
     assert.equal(packed.publish.ok, true);
-    assert.equal(packed.publish.status, 'pending_author_trust');
+    assert.equal(packed.publish.status, 'published');
 
-    // Untrusted author does not appear on public list OR public template detail endpoint yet.
-    const listBefore = await (await fetch(`${baseUrl}/api/list`)).json();
-    assert.equal(listBefore.items.length, 0);
-    const detailBefore = await fetch(`${baseUrl}/api/templates/${encodeURIComponent('modelzen/daily-brief')}`);
-    assert.equal(detailBefore.status, 404);
-
+    // Admin endpoint still enforces Bearer auth.
     const unauth = await fetch(`${baseUrl}/api/admin/pending`);
     assert.equal(unauth.status, 401);
 
-    const pending = await (await fetch(`${baseUrl}/api/admin/pending`, {
-      headers: { authorization: `Bearer ${adminToken}` },
-    })).json();
-    assert.equal(pending.items.length, 1);
-    assert.equal(pending.items[0].id, 'modelzen/daily-brief');
-    assert.equal(pending.items[0].authorPublicKey, packed.authorPublicKey);
-
-    // 2. Admin trusts the author once -> immediately visible with 0 installs.
-    const trustRes = await fetch(`${baseUrl}/api/admin/authors/trust`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
-      body: JSON.stringify({ publicKey: packed.authorPublicKey, trusted: true, note: 'verified' }),
-    });
-    assert.equal(trustRes.status, 200);
-
-    const listAfterTrust = await (await fetch(`${baseUrl}/api/list`)).json();
-    assert.equal(listAfterTrust.items.length, 1);
-    assert.equal(listAfterTrust.items[0].installCount, 0);
+    // 2. Immediately visible on public list and detail endpoint with 0 installs.
+    const listAfterPublish = await (await fetch(`${baseUrl}/api/list`)).json();
+    assert.equal(listAfterPublish.items.length, 1);
+    assert.equal(listAfterPublish.items[0].installCount, 0);
+    const detailAfterPublish = await fetch(`${baseUrl}/api/templates/${encodeURIComponent('modelzen/daily-brief')}`);
+    assert.equal(detailAfterPublish.status, 200);
 
     // 3. User A installs via real CLI `vonvon template stage` -> installCount becomes 1.
     const stageA1 = await execFileAsync(process.execPath, [
@@ -285,8 +268,7 @@ describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
       }),
     })).status, 400);
 
-    // Publish v1.0.0 with signed cover BEFORE trusting -> cover is stored inside bounded pending quota,
-    // stays 404 publicly while pending, and immediately returns 200 upon admin trust (zero re-publish needed!).
+    // Publish v1.0.0 with signed cover -> immediately published & cover immediately 200 under default auto-approve mode.
     const firstPub = await (await fetch(`${baseUrl}/api/publish`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -298,16 +280,9 @@ describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
       }),
     })).json();
     assert.equal(firstPub.ok, true);
-    assert.equal(firstPub.status, 'pending_author_trust');
+    assert.equal(firstPub.status, 'published');
     assert.match(firstPub.coverUrl, /^\/covers\/[a-f0-9]+\.png$/);
-    assert.equal((await fetch(`${baseUrl}${firstPub.coverUrl}`)).status, 404, 'pending cover must stay 404 before trust');
-
-    await fetch(`${baseUrl}/api/admin/authors/trust`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
-      body: JSON.stringify({ publicKey: legKey.publicKey, trusted: true }),
-    });
-    assert.equal((await fetch(`${baseUrl}${firstPub.coverUrl}`)).status, 200, 'first card cover should be immediately public after trust');
+    assert.equal((await fetch(`${baseUrl}${firstPub.coverUrl}`)).status, 200, 'first card cover should be immediately public');
     const v2Promo = { ...basePromo, version: '2.0.0', name: '原版爆款 v2' };
     // Forged cover signature on publish is silently ignored; valid author-signed cover (bound to version & docUrl) is stored.
     const forgedCoverRes = await (await fetch(`${baseUrl}/api/publish`, {
@@ -374,7 +349,7 @@ describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
       body: JSON.stringify({ promo: jsUrl, signature: legKey.sign(jsUrl) }),
     })).status, 400);
 
-    // Attacker keeps identical id `star/top-recipe` but signs with evilKey -> isolated & untrusted, never overwrites original!
+    // Attacker keeps identical id `star/top-recipe` but signs with evilKey -> isolated by authorPublicKey, never overwrites original!
     const hijackPromo = {
       ...basePromo,
       docUrl: 'https://evil.example/steal',
@@ -388,17 +363,24 @@ describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
     })).status, 200);
 
     const list = await (await fetch(`${baseUrl}/api/list?q=star/top-recipe`)).json();
-    assert.equal(list.items.length, 1);
-    assert.equal(list.items[0].docUrl, 'https://my.feishu.cn/docx/original');
-    assert.equal(list.items[0].version, '2.0.0');
+    assert.equal(list.items.length, 2);
+    const original = list.items.find(item => item.authorPublicKey === legKey.publicKey);
+    assert.ok(original);
+    assert.equal(original.docUrl, 'https://my.feishu.cn/docx/original');
+    assert.equal(original.version, '2.0.0');
 
-    // Blocking original author removes it immediately, hides its cover (404), and rejects subsequent publishes.
+    // Blocking an author removes their cards immediately, hides their cover (404), and rejects subsequent publishes.
     assert.equal((await fetch(`${baseUrl}/api/admin/authors/block`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
       body: JSON.stringify({ publicKey: legKey.publicKey, blocked: true }),
     })).status, 200);
     assert.equal((await fetch(`${baseUrl}${validCoverRes.coverUrl}`)).status, 404);
+    assert.equal((await fetch(`${baseUrl}/api/admin/authors/block`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ publicKey: evilKey.publicKey, blocked: true }),
+    })).status, 200);
     const listAfterBlock = await (await fetch(`${baseUrl}/api/list?q=star/top-recipe`)).json();
     assert.equal(listAfterBlock.items.length, 0);
     assert.equal((await fetch(`${baseUrl}/api/publish`, {
@@ -406,5 +388,50 @@ describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ promo: basePromo, signature: legSig }),
     })).status, 403);
+  });
+
+  it('supports optional strict requireAuthorTrust mode when enabled via config', async () => {
+    const strictDir = await mkdtemp(join(tmpdir(), 'vonvon-club-strict-'));
+    const strictStore = new ClubStore(join(strictDir, 'club.sqlite'), { requireAuthorTrust: true });
+    const strictServer = createClubServer({
+      store: strictStore,
+      coversDir: join(strictDir, 'covers'),
+      adminToken,
+      publicBaseUrl: 'https://club.vonvon.cc',
+    });
+    await new Promise(resolveListen => strictServer.listen(0, '127.0.0.1', resolveListen));
+    const strictUrl = `http://127.0.0.1:${strictServer.address().port}`;
+    try {
+      const k = makeKeypair();
+      const promo = {
+        schemaVersion: 1, public: true, id: 'strict/demo', version: '0.1.0', name: '严格模式', summary: '需首次信任',
+        tags: [], skillNames: ['s1'], docUrl: 'https://my.feishu.cn/docx/strict',
+        author: { name: '新作者', publicKey: k.publicKey }, pricing: { kind: 'free' }, acquisition: ['local'],
+      };
+      const pub = await (await fetch(`${strictUrl}/api/publish`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          promo, signature: k.sign(promo),
+          coverBase64: TINY_PNG.toString('base64'),
+          coverSignature: k.signCover(promo.id, promo.version, promo.docUrl, TINY_PNG),
+        }),
+      })).json();
+      assert.equal(pub.status, 'pending_author_trust');
+      assert.equal((await fetch(`${strictUrl}${pub.coverUrl}`)).status, 404);
+      assert.equal((await (await fetch(`${strictUrl}/api/list`)).json()).items.length, 0);
+
+      await fetch(`${strictUrl}/api/admin/authors/trust`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify({ publicKey: k.publicKey, trusted: true }),
+      });
+      assert.equal((await fetch(`${strictUrl}${pub.coverUrl}`)).status, 200);
+      assert.equal((await (await fetch(`${strictUrl}/api/list`)).json()).items.length, 1);
+    } finally {
+      await new Promise(resolveClose => strictServer.close(resolveClose));
+      strictStore.close();
+      await rm(strictDir, { recursive: true, force: true });
+    }
   });
 });
