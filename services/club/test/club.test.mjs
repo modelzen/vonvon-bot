@@ -110,11 +110,11 @@ describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
     const favicon = await fetch(`${baseUrl}/favicon-32.png`);
     assert.equal(favicon.status, 200);
     assert.equal(favicon.headers.get('content-type'), 'image/png');
-    const skillDoc = await fetch(`${baseUrl}/skills/vonvon-recipe-creator/SKILL.md`);
+    const skillDoc = await fetch(`${baseUrl}/skills/vonvon-template-creator/SKILL.md`);
     assert.equal(skillDoc.status, 200);
     assert.match(skillDoc.headers.get('content-type') ?? '', /text\/markdown/);
-    assert.match(await skillDoc.text(), /name: vonvon-recipe-creator/);
-    const schemaDoc = await fetch(`${baseUrl}/skills/vonvon-recipe-creator/references/manifest-schema.md`);
+    assert.match(await skillDoc.text(), /name: vonvon-template-creator/);
+    const schemaDoc = await fetch(`${baseUrl}/skills/vonvon-template-creator/references/manifest-schema.md`);
     assert.equal(schemaDoc.status, 200);
     assert.match(schemaDoc.headers.get('content-type') ?? '', /text\/markdown/);
   });
@@ -305,7 +305,7 @@ describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
     const basePromo = {
       schemaVersion: 1,
       public: true,
-      id: 'star/top-recipe',
+      id: 'star/top-template',
       version: '1.0.0',
       name: '原版爆款',
       summary: '正版简介',
@@ -396,7 +396,7 @@ describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
         anonInstallKey: 'b'.repeat(64),
       }),
     })).status, 200);
-    const afterStaleInstall = await (await fetch(`${baseUrl}/api/list?q=star/top-recipe`)).json();
+    const afterStaleInstall = await (await fetch(`${baseUrl}/api/list?q=star/top-template`)).json();
     assert.equal(afterStaleInstall.items[0].version, '2.0.0');
     assert.equal(afterStaleInstall.items[0].name, '原版爆款 v2');
     assert.equal(afterStaleInstall.items[0].installCount, 1);
@@ -417,7 +417,7 @@ describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
       body: JSON.stringify({ promo: jsUrl, signature: legKey.sign(jsUrl) }),
     })).status, 400);
 
-    // Attacker keeps identical id `star/top-recipe` but signs with evilKey -> isolated by authorPublicKey, never overwrites original!
+    // Attacker keeps identical id `star/top-template` but signs with evilKey -> isolated by authorPublicKey, never overwrites original!
     const hijackPromo = {
       ...basePromo,
       docUrl: 'https://evil.example/steal',
@@ -430,7 +430,7 @@ describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
       body: JSON.stringify({ promo: hijackPromo, signature: evilKey.sign(hijackPromo) }),
     })).status, 200);
 
-    const list = await (await fetch(`${baseUrl}/api/list?q=star/top-recipe`)).json();
+    const list = await (await fetch(`${baseUrl}/api/list?q=star/top-template`)).json();
     assert.equal(list.items.length, 2);
     const original = list.items.find(item => item.authorPublicKey === legKey.publicKey);
     assert.ok(original);
@@ -449,7 +449,7 @@ describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
       headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
       body: JSON.stringify({ publicKey: evilKey.publicKey, blocked: true }),
     })).status, 200);
-    const listAfterBlock = await (await fetch(`${baseUrl}/api/list?q=star/top-recipe`)).json();
+    const listAfterBlock = await (await fetch(`${baseUrl}/api/list?q=star/top-template`)).json();
     assert.equal(listAfterBlock.items.length, 0);
     assert.equal((await fetch(`${baseUrl}/api/publish`, {
       method: 'POST',

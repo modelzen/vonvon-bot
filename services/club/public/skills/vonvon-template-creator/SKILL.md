@@ -1,5 +1,5 @@
 ---
-name: vonvon-recipe-creator
+name: vonvon-template-creator
 description: 在任意 Agent（Codex CLI、Codex Cloud、Claude Code、Cursor 等）中创作、整理、校验、打包或发布 Vonvon Bot 配方（.vonvon.zip 或含 vonvon-bot.json 的 GitHub 仓库）。用户提到创作 Vonvon 配方、把项目/Skills/工作流整理成 Vonvon 模板、打包 .vonvon.zip、准备飞书宣传页或发布到 Vonvon 灵感 Club 时，先读本 skill。
 ---
 
@@ -7,7 +7,7 @@ description: 在任意 Agent（Codex CLI、Codex Cloud、Claude Code、Cursor �
 
 本 Skill 帮助你在任意编程 Agent 环境（本地终端 Agent 或云端沙箱 Agent 如 Codex Cloud）中，把一个项目、一组 Skills、一份教程或一个场景点子，整理成符合 Vonvon Bot 标准的**配方**（`vonvon-bot.json` + `skills/` + 可选 `workspace/` + 飞书宣传页），并在环境支持时完成脱敏打包与上架 [Vonvon 灵感 Club](https://club.vonvon.cc/)。
 
-> 完整清单字段与校验规范见同目录 [references/manifest-schema.md](./references/manifest-schema.md)（若通过网址读取，见 `https://club.vonvon.cc/skills/vonvon-recipe-creator/references/manifest-schema.md`）。
+> 完整清单字段与校验规范见同目录 [references/manifest-schema.md](./references/manifest-schema.md)（若通过网址读取，见 `https://club.vonvon.cc/skills/vonvon-template-creator/references/manifest-schema.md`）。
 
 ## 交互原则
 - **主动分步引导，绝不代替用户做决定**：每一阶段交代清楚进度与选项，停下来等用户确认后再推进。
@@ -45,7 +45,7 @@ description: 在任意 Agent（Codex CLI、Codex Cloud、Claude Code、Cursor �
 ## 第 2/3 步：整理草稿、展示完整概览并敲定发布选项
 
 ### 2.1 按标准结构组装草稿
-将草稿整理到清晰的输出目录（GitHub 仓库配方可直接整理在仓库根目录；压缩包草稿放在工作目录 `recipes/<id>/draft/` 等干净目录）：
+将草稿整理到清晰的输出目录（GitHub 仓库配方可直接整理在仓库根目录；压缩包草稿放在工作目录 `templates/<id>/draft/` 等干净目录）：
 - **已有飞书群且有 `vonvon` CLI**：必须直接运行 `vonvon template draft-group <群> --dest <空草稿目录> --json`，绝不手动编造 Skill。
 - **其他来源**：按 [references/manifest-schema.md](./references/manifest-schema.md) 生成：
   - `vonvon-bot.json`（`schemaVersion: 1`，缺省 `public: false`）

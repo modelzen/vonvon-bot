@@ -213,7 +213,7 @@ describe('the template builtin skill', () => {
       '升级发布新版本',
       '新建一个独立配方',
       '`"$VONVON_LARK_CLI"`',
-      'artifacts/recipes/',
+      'artifacts/templates/',
       '飞书宣传文档链接（`docUrl`）会写入配方包的 `vonvon-bot.json` 中',
       '互联网上获得链接的人可阅读',
       '封面图',

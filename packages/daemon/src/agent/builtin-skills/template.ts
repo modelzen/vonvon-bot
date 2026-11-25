@@ -39,7 +39,7 @@ export const templateSkill: BuiltinSkill = {
 - 若用户选了「已有飞书群」且尚未点名群，用 \`vonvon group list --json\` 列出已绑定的群，发 1 张选群卡片让用户挑；选完立刻进入 \`第 2/3 步\`。
 
 ### 第 2/3 步：提取草稿、展示手机端可读的完整概览，并一张合并卡敲定发布方式
-先把草稿统一组装在当前私聊工作区的 \`artifacts/recipes/<配方id>/draft/\`（持久化目录，避免重启被清）：
+先把草稿统一组装在当前私聊工作区的 \`artifacts/templates/<配方id>/draft/\`（持久化目录，避免重启被清）：
 - **素材是「已有飞书群」时**：**必须直接运行 \`vonvon template draft-group <群> --dest <空草稿目录> --json\`**（跨 Bot 补 \`--bot <Bot>\`），一步提取真实工作区文件、群本地 Skills（自动整理到顶层 \`skills/\`，自动排除 Vonvon 内置系统技能与 \`.gitignore\` / 嵌套 \`.git\` 运行期目录）、已有 \`vonvon-bot.json\` 以及群角色（\`role.supplement\`）、权限与定时任务，**绝不读取任何记忆或密钥，也绝不跳过群目录另编 Skill**。
 - **其他素材来源时**：整理成标准目录——顶层 \`vonvon-bot.json\`、\`README.md\`、顶层单份 \`skills/<名称>/SKILL.md\`（每个 \`SKILL.md\` 开头必须带 YAML frontmatter \`name\` 和 \`description\`）、可选 \`workspace/\`（绝不放入 \`.claude/\`、\`.codex/\`、\`.git/\`、\`.mcp.json\` 或 \`.env\`）；若依赖外部 CLI/Key/MCP，整理成 \`<名称>-setup\` 技能，**不写 \`mcp.json\`**；不在清单里写会话方式、免 @ 等群交互习惯，核对引用素材协议写入 \`license\` 与 \`credits\`。
 - 运行 \`vonvon template inspect <草稿目录> --json\` 校验，并静默运行 \`vonvon template published --json\` 核对**本机是否已经发布过同 \`id\`（或同名）的历史公开配方**；然后**直接在聊天里输出手机端也能一目了然的完整配方概览**（不要只丢一个本地路径让用户自己翻文件）：
@@ -75,7 +75,7 @@ export const templateSkill: BuiltinSkill = {
 - 否则**按用户选择更新好 \`vonvon-bot.json\` 的版本号或新 ID 后，直接一口气执行 \`第 3/3 步\` 到最终交付，绝不在建完文档或加完封面后中途停下等用户追问「然后呢」**。
 
 ### 第 3/3 步：一口气完成「封面 + 飞书宣传页 + 只打包一次 + 秒上社区」
-成品 \`.vonvon.zip\` 统一输出到当前私聊工作区 \`artifacts/recipes/<配方id>/<配方id>-<version>.vonvon.zip\`。
+成品 \`.vonvon.zip\` 统一输出到当前私聊工作区 \`artifacts/templates/<配方id>/<配方id>-<version>.vonvon.zip\`。
 - **若用户选了跳过宣传页（\`public: false\`）**：写入最终 \`vonvon-bot.json\`（若只交付 \`.vonvon.zip\` 则不硬写无关的 \`docUrl\`）后直接运行 \`vonvon template pack <草稿目录> --out <绝对输出路径>.vonvon.zip --json\`，用 \`[文件名](绝对路径)\` 交付即可。
 - **若需要生成/更新飞书宣传页，严格按以下优先级，禁止开浏览器（\`ego-browser\` 等）去网页里模拟点击**：
   1. **首选本机 \`lark-cli\`（以用户本人身份建在自己的云空间，快且一步到位）**：直接调用 \`"$VONVON_LARK_CLI"\`（变量为空时用 \`lark-cli\`），先查 \`auth status\` 确认已登录：

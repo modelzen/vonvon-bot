@@ -7,7 +7,7 @@
 标准布局（`standard`）和仓库根布局（`repo-root`）均受支持，推荐使用标准布局：
 
 ```text
-<recipe-dir>/
+<template-dir>/
 ├── vonvon-bot.json          # 必填：配方清单
 ├── README.md                # 推荐：人类可读介绍与安装指引
 ├── skills/                  # 推荐：顶层统一放一套 Skill，安装时自动同步到双端
