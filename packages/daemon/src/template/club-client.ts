@@ -4,7 +4,8 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { managedToolSelection } from '../agent/codex-appserver/managed-tools';
+import { resolveLarkCliBin } from '../platform/lark-cli';
+import { binChildEnv } from '../platform/tool-path';
 import { paths } from '../config/paths';
 import { scanPromoForSecrets } from './redact';
 import type { PublicPromoPayload } from './schema';
@@ -59,8 +60,7 @@ export async function fetchLocalFeishuCover(
   dataRoot: string = paths.appDir,
 ): Promise<Buffer | undefined> {
   if (!isFeishuDocUrl(docUrl)) return undefined;
-  const managed = managedToolSelection(dataRoot, 'lark-cli');
-  const bin = managed.kind === 'active' ? managed.executable : 'lark-cli';
+  const bin = resolveLarkCliBin({ dataRoot }) ?? 'lark-cli';
   // lark-cli restricts --output to cwd, /tmp, or ~/files; use a unique stem in /tmp on POSIX.
   const baseTmp = process.platform === 'win32' ? tmpdir() : '/tmp';
   const stem = join(baseTmp, `vonvon-cover-${process.pid}-${randomUUID().slice(0, 8)}`);
@@ -68,7 +68,11 @@ export async function fetchLocalFeishuCover(
   try {
     const { stdout } = await execFileAsync(bin, [
       'docs', '+resource-download', '--as', 'user', '--doc', docUrl!, '--type', 'cover', '--output', stem, '--overwrite', '--json',
-    ], { timeout: COVER_FETCH_TIMEOUT_MS, maxBuffer: 512 * 1024 });
+    ], {
+      timeout: COVER_FETCH_TIMEOUT_MS,
+      maxBuffer: 512 * 1024,
+      ...(process.platform !== 'win32' && bin !== 'lark-cli' ? { env: binChildEnv(bin) } : {}),
+    });
     const parsed = JSON.parse(stdout) as { ok?: boolean; data?: { saved_path?: string } };
     if (!parsed?.ok || typeof parsed.data?.saved_path !== 'string') return undefined;
     savedPath = parsed.data.saved_path;

@@ -1,11 +1,15 @@
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { RpcError, type VonvonClient } from '@vonvon/client';
 import { discoverLocalGroupSkills } from '../src/agent/group-skills';
+import { TurnCardEvents } from '../src/bot/turn-card-events';
+import { buildRunCard } from '../src/card/run-card';
+import { RunRender } from '../src/card/run-render';
 import { assertTemplateSessionAllowed, verifyTemplateSessionAllowed } from '../src/cli/commands/template';
 import { SESSION_BOT_ENV, SESSION_ENV, SESSION_SCOPE_ENV } from '../src/config/session-env';
+import { appendLarkCliToPath, resolveLarkCliBin } from '../src/platform/lark-cli';
 import { DEVICES_DIR } from '../src/remote/files';
 import { authorKeyPath, loadOrCreateAuthorKey, signPromoPayload, verifyPromoPayload } from '../src/template/author-key';
 import {
@@ -640,5 +644,52 @@ describe('draftTemplateFromDirectory', () => {
     expect(inspected.author.name).toBe('Clay');
     expect(inspected.group.recommendedPermission).toBe('write');
     expect(inspected.group.schedules).toHaveLength(1);
+  });
+});
+
+describe('lark-cli resolution & post-ask run card rotation primitives', () => {
+  it('resolves lark-cli from NVM highest version and appends its directory to PATH without shadowing', async () => {
+    if (process.platform === 'win32') return;
+    const fakeHome = await makeTempDir('vonvon-lark-home-');
+    const fakeData = await makeTempDir('vonvon-lark-data-');
+    const oldBin = join(fakeHome, '.nvm', 'versions', 'node', 'v20.10.0', 'bin', 'lark-cli');
+    const newBin = join(fakeHome, '.nvm', 'versions', 'node', 'v24.14.1', 'bin', 'lark-cli');
+    await mkdir(join(oldBin, '..'), { recursive: true });
+    await mkdir(join(newBin, '..'), { recursive: true });
+    await writeFile(oldBin, '#!/bin/sh\necho old\n');
+    await writeFile(newBin, '#!/bin/sh\necho new\n');
+    await chmod(oldBin, 0o755);
+    await chmod(newBin, 0o755);
+
+    const resolved = resolveLarkCliBin({ dataRoot: fakeData, home: fakeHome, env: { PATH: '/usr/bin:/bin' }, platform: 'darwin' });
+    expect(resolved).toBe(newBin);
+
+    const env: NodeJS.ProcessEnv = { PATH: '/usr/bin:/bin' };
+    appendLarkCliToPath(newBin, env, 'darwin');
+    expect(env.PATH).toBe(`/usr/bin:/bin:${join(fakeHome, '.nvm', 'versions', 'node', 'v24.14.1', 'bin')}`);
+    // Idempotent second call does not duplicate the entry.
+    appendLarkCliToPath(newBin, env, 'darwin');
+    expect(env.PATH).toBe(`/usr/bin:/bin:${join(fakeHome, '.nvm', 'versions', 'node', 'v24.14.1', 'bin')}`);
+  });
+
+  it('queues ask_answered on TurnCardEvents and renders frozen card with choice-continuation label', async () => {
+    const events = new TurnCardEvents();
+    const collected: string[] = [];
+    async function* source() {
+      yield { type: 'turn_started' as const, turnId: 't1' };
+      events.askAnswered('om_ask_123');
+      yield { type: 'done' as const, turnId: 't1' };
+    }
+    for await (const ev of events.consume(source())) {
+      collected.push(ev.type === 'ask_answered' ? `${ev.type}:${ev.messageId}` : ev.type);
+    }
+    expect(collected).toEqual(['turn_started', 'ask_answered:om_ask_123', 'done']);
+
+    const render = new RunRender();
+    const frozen = buildRunCard({
+      rs: { ...render.snapshot(), terminal: 'done', footer: null, completedAt: Date.now() },
+      continued: 'ask',
+    });
+    expect(JSON.stringify(frozen)).toContain('已收到选择，后续输出见下一张卡片');
   });
 });

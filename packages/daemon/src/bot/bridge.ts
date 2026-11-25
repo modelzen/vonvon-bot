@@ -23,6 +23,7 @@ import { createAgentEntries, type AgentEntries } from '../agent/entry/registry';
 import { log } from '../core/logger';
 import { createOrchestrator } from './handle-message';
 import { putSessionCliOnPath, writeSessionCli } from '../agent/session-cli';
+import { appendLarkCliToPath, resolveLarkCliBin } from '../platform/lark-cli';
 import { createTopicRegistry } from './topic-registry';
 import type { BotIdentity } from '../config/bots';
 import { adoptAdminSessions } from './session-store';
@@ -125,6 +126,8 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   }) });
   const sessionCli = await writeSessionCli();
   if (sessionCli) putSessionCliOnPath(sessionCli);
+  const larkCli = resolveLarkCliBin();
+  if (larkCli) appendLarkCliToPath(larkCli);
   const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }),
     { entries, memory, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity, ...(host ? { host } : {}), ...(sessionCli ? { sessionCli } : {}) });
   const firstHello = createFirstHello({ cfg: opts.cfg, appSecret: opts.appSecret, channel, write: orchestrator.writePreferences });

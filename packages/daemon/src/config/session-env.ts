@@ -16,6 +16,8 @@ export const SESSION_SCOPE_ENV = 'VONVON_SCOPE';
 export const SESSION_BOT_ENV = 'VONVON_BOT';
 /** The full path of the launcher `<data>/bin/vonvon` (agent/session-cli.ts), for a shell whose PATH lost it. */
 export const SESSION_CLI_ENV = 'VONVON_CLI';
+/** Resolved local `lark-cli` executable path (if installed), handed to DM sessions so NVM/managed installs work out of the box. */
+export const SESSION_LARK_CLI_ENV = 'VONVON_LARK_CLI';
 /** `bot=<appId>` in a comment, `bot=<appId>,group=<chatId>` in a group: the most a session reaches. A private chat gets none (dm-agent 6.1). */
 export function sessionScope(appId: string, chatId?: string): string {
   return chatId ? `bot=${appId},group=${chatId}` : `bot=${appId}`;
