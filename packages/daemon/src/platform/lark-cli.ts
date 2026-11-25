@@ -41,13 +41,13 @@ export function resolveLarkCliBin(opts: ResolveLarkCliOptions = {}): string | un
   const platform = opts.platform ?? process.platform;
   const env = opts.env ?? process.env;
   const home = opts.home ?? homedir();
-  const root = opts.dataRoot ?? paths.appDir;
+  const root = opts.dataRoot ?? paths?.appDir;
   const p = pathFor(platform);
 
   const explicit = env.VONVON_LARK_CLI?.trim();
   if (explicit && isRunnableFile(explicit, platform)) return explicit;
 
-  const managed = managedToolSelection(root, 'lark-cli', platform);
+  const managed = root ? managedToolSelection(root, 'lark-cli', platform) : { kind: 'absent' as const };
   if (managed.kind === 'active' && isRunnableFile(managed.executable, platform)) {
     return managed.executable;
   }
