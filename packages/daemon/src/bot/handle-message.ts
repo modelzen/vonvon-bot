@@ -776,8 +776,9 @@ interface ActiveState {
   requesterOpenId?: string;
   /** A bot-started turn sends no completion reminder and shows no reminder button. */
   requesterKind?: 'user' | 'bot' | 'unknown';
-  /** Group mode captured for this run, including its global-slot wait. */
+  /** Conversation mode captured for this run, including its global-slot wait. */
   smart?: boolean;
+  directMessage?: boolean;
   /** Manual mode, current turn only. May be set while the initial run is still
    * waiting in the global concurrency queue; reset when a queued follow-up
    * becomes the current turn. */
@@ -3934,7 +3935,7 @@ export function createOrchestrator(
       log.info('intake', 'queued', { depth: existing.queue.length });
       return;
     }
-    const reserved: ActiveState = { queue: [], chatId: msg.chatId, requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg), smart: project && sessionModeOf(project) === 'smart', isGoal: goal, runLoop: true,
+    const reserved: ActiveState = { queue: [], chatId: msg.chatId, requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg), smart: project && sessionModeOf(project) === 'smart', directMessage: msg.chatType === 'p2p', isGoal: goal, runLoop: true,
       ...(flat && !msg.threadId && !goal ? { triggerAt: msg.createTime } : {}),
       // A shutdown keeps it from now on, however long its preparation takes past the drain (review 260).
       ...(origin ? { inFlight: origin } : {}) };
@@ -7753,7 +7754,9 @@ export function createOrchestrator(
     const state: ActiveState = active.get(activeKey) ?? { queue: [], requesterOpenId: opts.requesterOpenId, runLoop: true };
     state.chatId = opts.chatId;
     state.thread = opts.thread;
-    state.presentation = presentationConfig(cfg, await getProjectByChatId(opts.chatId));
+    const project = await getProjectByChatId(opts.chatId);
+    state.presentation = presentationConfig(cfg, project);
+    state.directMessage ??= project?.dm !== undefined;
     // Checked right after this await: no macrotask can start a shutdown between here and the free-slot acquire below.
     // A shutdown that began meanwhile found this turn neither queued nor waiting for a slot (collectLost), so a
     // person's turn is kept for redelivery here.

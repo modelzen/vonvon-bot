@@ -18,7 +18,7 @@ describe('new group configuration admission',()=>{
     expect(settings.judge).toEqual({kind:'llm',backend:'codex-appserver',model:'work-model',effort:'low'});
     expect(settings.skills).toEqual({disabledPaths:[]});
     expect(settings.smartRules).toEqual(DEFAULT_SMART_RULES);
-    expect(settings.presentation).toMatchObject({showToolCalls:true,showModel:'running',cardDisplay:null});
+    expect(settings.presentation).toMatchObject({showToolCalls:true,showModel:'running',cardDisplay:null,completionMode:'failures'});
   });
   it('non-smart groups copy the host choice without requiring its key or login',async()=>{
     const deps=helper();
@@ -42,6 +42,7 @@ describe('new group configuration admission',()=>{
     const settings=await prepareNewGroupSettings({backend:'codex-appserver',kind:'smart'},deps);
     expect(settings.judge).toEqual({kind:'llm',backend:'codex-appserver',model:'work-model',effort:'low'});
     expect(settings.modelAccess).toEqual({backend:'codex-appserver',models:['work-model'],efforts:['low','high'],defaultModel:'work-model',defaultEffort:'low'});
+    expect(settings.presentation?.completionMode).toBe('failures');
     expect(deps.backendFor).toHaveBeenCalledTimes(2);
     expect(deps.readKey).not.toHaveBeenCalled();
     expect(parseBindGroupInput({chatId:'oc_a',projectName:'a',backend:'codex-appserver',kind:'smart'})).not.toHaveProperty('judge');

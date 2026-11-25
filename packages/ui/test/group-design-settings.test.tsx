@@ -101,16 +101,18 @@ it('orders five group tabs, keeps compact model and permission settings together
   expect(groupDesignTabs.map(([, label]) => label)).toEqual(['模型与权限', '能力', '沟通方式', '记忆', '任务']);
   for (const section of ['任务', '定时任务']) expect(groupTabForSection(section)).toBe('schedule');
   expect(groupDesignTabs.map(([value]) => value)).not.toContain('workspace');
-  for (const section of ['权限', '执行模型', '执行权限', '能挡到什么', '高级设置', '工作目录权限']) expect(groupTabForSection(section)).toBe('model');
+  for (const section of ['权限', '工作区', '工作目录', '更换目录', '执行模型', '执行权限', '能挡到什么', '高级设置', '工作目录权限']) expect(groupTabForSection(section)).toBe('model');
   expect(groupTabForSection()).toBe('model');
   for (const section of ['沟通方式', '回复规则', '聊天方式']) expect(groupTabForSection(section)).toBe('response');
   for (const section of ['记忆', '项目记忆']) expect(groupTabForSection(section)).toBe('memory');
   const html = render('model');
-  expect(html).toContain('模型设置'); expect(html).toContain('执行权限');
+  expect(html).toContain('模型设置'); expect(html).toContain('执行权限'); expect(html).toContain('工作区');
   expect(html).toContain('aria-label="配置可用模型"');
   expect(html).toContain('aria-label="配置可用思考强度"');
   expect(html).not.toContain('<summary>话题模型</summary>');
   expect(html).toContain('修改权限');
+  expect(html).toContain('修改工作区');
+  expect(html).toContain('/one');
   expect(html).not.toContain('role="radiogroup" aria-label="权限"');
   expect(html).not.toContain('<h3>代码仓库</h3>');
   expect(render('permission')).toContain('执行权限');
@@ -139,7 +141,13 @@ it('keeps one primary among peer directories and no primary repository', () => {
   expect(repositories).toContain('/repo-a'); expect(repositories).toContain('/repo-b');
   expect(repositories).not.toContain('gd-primary-label');
   expect(repositories).not.toContain('设为主目录');
+  expect(repositories).not.toContain('添加仓库');
   expect(html).not.toContain('附加目录');
+  const noRepos = renderToStaticMarkup(<ClientProvider client={client}><DirectoryPickerProvider>
+    <WorkspaceFields value={{primary: '/one', directories: ['/one', '/two'], repositories: []}} onChange={() => {}} disabled={false}/>
+  </DirectoryPickerProvider></ClientProvider>);
+  expect(noRepos).not.toContain('<h3>代码仓库</h3>');
+  expect(noRepos).not.toContain('添加仓库');
 });
 it('shows matching model and Effort count triggers without inline option lists', () => {
   const html = renderToStaticMarkup(<ModelAccessChoices value={{backend: catalog.backend, models: ['actual-a', 'actual-b'], efforts: ['low']}} catalog={catalog} disabled={false} onChange={() => {}}/>);

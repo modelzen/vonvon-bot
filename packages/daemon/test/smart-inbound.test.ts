@@ -1604,7 +1604,7 @@ describe('bot wake fallbacks and queued turns (s27a)', () => {
     gate.resolve(); await answered(2);
     expect(fake.inputs[1]?.startsWith(BOT_WAKE_NOTE('小P'))).toBe(true);
     expect(fake.inputs[1]).toContain('撤回');
-    expect(JSON.stringify(fake.liveCards.filter(c => c.id === 1))).not.toContain('完成后提醒我');
+    expect(JSON.stringify(fake.liveCards.filter(c => c.id === 1))).toContain('完成后提醒我');
     expect(JSON.stringify(fake.cards[1]?.[2])).not.toContain('完成后提醒我');
     await vi.waitFor(() => expect(fake.liveCards.some(c => c.id === 2)).toBe(true));
     expect(JSON.stringify(fake.liveCards.filter(c => c.id === 2))).not.toContain('完成后提醒我');
@@ -2818,7 +2818,8 @@ describe('smart reminder runtime (s27b3)', () => {
   const landed = async () => { await vi.waitFor(() => expect(fake.log.info.mock.calls.some(c => c[1] === 'final')).toBe(true)); await settle(); };
   const posts = () => fake.reply.mock.calls.filter(([req]) => req.data.msg_type === 'post');
 
-  it('a smart human waiting for a global slot has no card or management reminder controls', async () => {
+  it('a smart human waiting for a global slot in failures mode has no manual reminder controls', async () => {
+    cfg.preferences.completionReminder = { mode: 'failures' };
     await orchestrator.shutdown();
     orchestrator = createOrchestrator(channel as never, { ...cfg, preferences: { ...cfg.preferences, maxConcurrentRuns: 1 } }, workspace);
     const gate = deferred<void>();
@@ -2913,20 +2914,17 @@ describe('smart reminder runtime (s27b3)', () => {
       await send(says('请处理', { at: true, thread: threadId })); await vi.waitFor(() => expect(fake.liveCards.length).toBeGreaterThan(0));
       fake.project = { ...base, smart: !smart };
       const context = await orchestrator.collaboration({ action: 'context', projectName: 'demo', chatId: CHAT, threadId });
-      expect(context).toMatchObject({ run: { canRemind: !smart, reminderRequested: false } });
-      if (typeof context !== 'object' || context === null || !('run' in context) || typeof context.run !== 'object' || context.run === null || !('id' in context.run) || typeof context.run.id !== 'string') throw new Error('missing running context');
-      const request = { action: 'reminder' as const, projectName: 'demo', chatId: CHAT, threadId, runId: context.run.id, requested: true };
-      if (smart) await expect(orchestrator.collaboration(request)).rejects.toThrow('仅任务发起人');
-      else {
-        await orchestrator.dispatcher.handle({ messageId: 'card_1', chatId: CHAT, operator: { openId: 'ou_owner' }, action: { value: { a: 'run.remind', m: 'card_1' } } } as never);
-        expect(await orchestrator.collaboration({ action: 'context', projectName: 'demo', chatId: CHAT, threadId })).toMatchObject({ run: { reminderRequested: true } });
-        await expect(orchestrator.collaboration(request)).resolves.toEqual({ ok: true });
-      }
-      const cards = JSON.stringify([fake.cards, fake.liveCards]);
-      if (smart) expect(cards).not.toContain('完成后提醒我'); else expect(cards).toContain('完成后提醒我');
+      expect(context).toMatchObject({ run: { canRemind: true, reminderRequested: false } });
+      expect(JSON.stringify([fake.cards, fake.liveCards])).toContain('完成后提醒我');
+      await orchestrator.dispatcher.handle({ messageId: 'card_1', chatId: CHAT, operator: { openId: 'ou_other' }, action: { value: { a: 'run.remind', m: 'card_1' } } } as never);
+      expect(await orchestrator.collaboration({ action: 'context', projectName: 'demo', chatId: CHAT, threadId })).toMatchObject({ run: { reminderRequested: false } });
+      await orchestrator.dispatcher.handle({ messageId: 'card_1', chatId: CHAT, operator: { openId: 'ou_owner' }, action: { value: { a: 'run.remind', m: 'card_1' } } } as never);
+      expect(await orchestrator.collaboration({ action: 'context', projectName: 'demo', chatId: CHAT, threadId })).toMatchObject({ run: { reminderRequested: true } });
       gate.resolve(); await landed();
-      if (smart) { expect(posts()).toHaveLength(0); expect(JSON.stringify(fake.finals)).not.toContain('完成后提醒我'); }
-      else expect(posts()).toHaveLength(1);
+      expect(JSON.stringify(fake.finals)).not.toContain('完成后提醒我');
+      expect(posts()).toHaveLength(1);
+      expect(posts()[0]?.[0].data.content).toContain('已完成');
+      expect(posts()[0]?.[0].data.content).toContain('ou_owner');
     } finally { gate.resolve(); }
   });
 
@@ -2960,7 +2958,8 @@ describe('smart reminder runtime (s27b3)', () => {
     } finally { gate.resolve(); }
   });
 
-  it('rejects an old smart-card reminder action without changing the running turn', async () => {
+  it('rejects an old smart-card reminder action for a run started in failures mode', async () => {
+    fake.project = { ...base, presentation: { completionMode: 'failures' } };
     const gate = deferred<void>(); fake.events = async function* () { await gate.promise; yield { type: 'done', turnId: 'turn-fixture' }; };
     try {
       await send(says('请处理', { at: true, thread: 'omt_stale' })); await vi.waitFor(() => expect(fake.liveCards.length).toBeGreaterThan(0));

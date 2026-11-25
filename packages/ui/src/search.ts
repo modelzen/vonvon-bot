@@ -49,6 +49,7 @@ const membershipGroups: readonly Group[] = [
   {title: '任务', aliases: ['定时任务', '周期任务', '新建任务'], fields: []},
   {title: '可用模型', aliases: ['执行模型', '模型', '模型与权限', '执行工具'], fields: [item('模型 Provider', ['执行后端'], {field: ''}), item('允许使用的模型', ['模型多选'], {field: '', guide: '点击「选择模型」查看并多选；完成后在页面保存。'}), item('可用 Effort', ['思考强度', '推理强度', 'Effort 多选'], {field: '', guide: '点击「选择强度」调整 Effort；与模型独立多选。'})]},
   {title: '权限', aliases: ['工作目录权限', '执行权限'], fields: [item('权限', [], {field: '修改权限'}), item('能挡到什么', [], {field: '修改权限', guide: '点击「修改权限」，可比较各档范围与实际约束。'}), item('自定义权限', ['高级设置', '自定义设置'], {field: '修改权限', guide: '点击「修改权限」，选择「自定义」后调整 Provider 原生字段并保存。'})]},
+  {title: '工作区', aliases: ['工作目录', '文件夹', '目录'], fields: [item('工作目录', ['更换目录', '主目录', '其他目录', '添加目录'], {field: '修改工作区'})]},
   {title: '聊天方式', aliases: ['沟通方式', '回复规则'], fields: [item('聊天方式', ['会话方式', '智能模式', '智能开话题'], {field: ''})]},
   {title: '决策模型', smartOnly: true, aliases: ['判断模型'], fields: [item('决策 Provider', ['判断模型', 'Jev', 'System One', 'TypeSafe', 'OpenRouter', 'Vercel', '自定义接口'], {field: ''}), item('决策 Effort', ['判断的推理强度'], {field: '', guide: '先选择语言模型，再设置 Effort。'}), item('自定义决策模型 ID', ['判断的手填模型 id'], {field: '', guide: '选择语言模型 Provider，再点「自定义模型 ID」。'})]},
   {title: '判断规则', smartOnly: true, fields: [item('判断规则', ['什么时候回应', '什么时候不回应', '消息在群主区时', '消息已经在话题里时', '什么时候回复', '什么时候创建新话题', '响应提示词', '新话题提示词'])]},

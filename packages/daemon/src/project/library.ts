@@ -29,7 +29,7 @@ export interface LibraryProject {
   workspace: LibraryWorkspace;
 }
 
-/** 主目录全库唯一（真实路径）。`repositories` 没有 = 每个绑定行沿用各自 bot 的默认，和绑定行的 `directories` 同一规矩 */
+/** 工作区目录声明。多个项目可以指向同一主目录。`repositories` 没有 = 每个绑定行沿用各自 bot 的默认，和绑定行的 `directories` 同一规矩 */
 export interface LibraryWorkspace { primary: string; additional: string[]; repositories?: string[] }
 
 export type LibraryLocation = Readonly<{ dir: string; file: string }>;
@@ -128,9 +128,8 @@ export async function readLibrary(location: LibraryLocation = libraryLocation())
 async function writeLibrary(location: LibraryLocation, snapshot: LibrarySnapshot, beforeRename?: () => void | Promise<void>): Promise<void> {
   const ids = new Set(snapshot.projects.map(project => project.id));
   const names = new Set(snapshot.projects.map(project => project.name));
-  const primaries = new Set(snapshot.projects.map(project => project.workspace.primary));
-  if (ids.size !== snapshot.projects.length || names.size !== snapshot.projects.length || primaries.size !== snapshot.projects.length) {
-    throw new Error('项目库里的项目 id、名字和主目录都要唯一');
+  if (ids.size !== snapshot.projects.length || names.size !== snapshot.projects.length) {
+    throw new Error('项目库里的项目 id 和名字都要唯一');
   }
   const body = { ...snapshot.rest, version: 1, projects: snapshot.projects };
   if (!FileSchema.safeParse(body).success) throw new Error('项目库格式无效');
@@ -265,8 +264,6 @@ export async function projectWithMainFolder(projects: readonly LibraryProject[],
   return undefined;
 }
 
-const takenText = (project: { name: string }): string => `这个文件夹已经是项目「${project.name}」的主目录。要共用请加入项目「${project.name}」`;
-
 /** `name` made unique among `projects` with " 2", " 3" (§2.1), cut so the whole fits the library's limit. */
 export function uniqueProjectName(projects: readonly { name: string }[], name: string): string {
   const taken = new Set(projects.map(project => project.name));
@@ -290,16 +287,17 @@ export interface NewLibraryProject {
 /**
  * Makes the project a binding is about to join, before the binding's own row is written (§2.1): the library first,
  * the rows second, so a run cut off in between leaves a project the next run finds again, never one a row names
- * without the library knowing it. A main folder that is already a project's is refused, unless that project was made
- * for this same group by an earlier run (the retry), which comes back as it is. A taken name gets " 2".
+ * without the library knowing it. Multiple projects may use the same main folder; a retry for the same `(botId, chatId)`
+ * and main folder reuses the project created by the interrupted run. A taken name gets " 2".
  */
 export function createLibraryProject(input: NewLibraryProject, location?: LibraryLocation, now: () => number = Date.now): Promise<LibraryProject> {
   const request = structuredClone(input);
   return ownLibrary(async draft => {
-    const owner = await projectWithMainFolder(draft.projects, request.workspace.primary);
-    if (owner) {
-      if (owner.createdBy?.botId === request.createdBy.botId && owner.createdBy.chatId === request.createdBy.chatId) return owner;
-      throw new LibraryError('primary-taken', takenText(owner), { id: owner.id, name: owner.name });
+    const resolved = new Map<string, Promise<ResolvedDirectory>>();
+    for (const item of draft.projects) {
+      if (item.createdBy?.botId === request.createdBy.botId && item.createdBy.chatId === request.createdBy.chatId && await sameMainFolder(item, request.workspace.primary, resolved)) {
+        return item;
+      }
     }
     const project: LibraryProject = {
       id: newProjectId(new Set(draft.projects.map(item => item.id))),
@@ -315,15 +313,13 @@ export function createLibraryProject(input: NewLibraryProject, location?: Librar
 /**
  * Sets a project's workspace inside {@link ownLibrary} (the one operation every workspace entry goes through, §2.1).
  * `revision` is the project's, refused when it moved; `workspace` is admitted already. A workspace the project has
- * already changes nothing, not even its revision. Another project's main folder is refused.
+ * already changes nothing, not even its revision. Multiple projects may share the same main folder.
  */
 export async function setLibraryWorkspace(draft: LibraryDraft, change: { projectId: string; revision: number; workspace: LibraryWorkspace }): Promise<{ project: LibraryProject; changed: boolean }> {
   const project = draft.projects.find(item => item.id === change.projectId);
   if (!project) throw new LibraryError('not-found', '项目不存在，请刷新');
   if (project.revision !== change.revision) throw new LibraryError('revision', '项目已改变，请刷新后重试');
   if (JSON.stringify(project.workspace) === JSON.stringify(change.workspace)) return { project, changed: false };
-  const owner = await projectWithMainFolder(draft.projects, change.workspace.primary, project.id);
-  if (owner) throw new LibraryError('primary-taken', takenText(owner), { id: owner.id, name: owner.name });
   project.workspace = change.workspace;
   project.revision += 1;
   await draft.commit();

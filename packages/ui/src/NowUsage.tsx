@@ -126,9 +126,9 @@ export function NowUsage({disabled = false, agents = [], onOpenUsage}: {disabled
     data-pointer-motion={pointerMotion} onPointerDownCapture={event => setPointerMotion(event.pointerType === 'mouse')} onKeyDownCapture={() => setPointerMotion(false)}>
     <header><h2>用量</h2><Tabs.List className="now-provider-tabs" aria-label="选择 Provider" activateOnFocus>
       {providers.map(item => <Tabs.Tab key={item.id} value={item.id} className="now-provider-tab">
-        {(item.id === 'codex-appserver' || item.id === 'claude-agent') && <img src={item.id === 'codex-appserver' ? './agent-icons/terminal.png' : './agent-icons/code.png'} alt=""/>}{item.name}
+        {(item.id === 'codex-appserver' || item.id === 'claude-agent') && <img src={item.id === 'codex-appserver' ? './agent-icons/codex-light.png' : './agent-icons/claude-code.svg'} alt=""/>}{item.name}
       </Tabs.Tab>)}
-      <Tabs.Tab value="jev" className="now-provider-tab"><img src="./agent-icons/decision.png" alt="" data-round/>Jev</Tabs.Tab>
+      <Tabs.Tab value="jev" className="now-provider-tab"><img src="./agent-icons/typesafe.png" alt="" data-round/>Jev</Tabs.Tab>
       <Tabs.Indicator className="now-provider-indicator"/>
     </Tabs.List><button type="button" className="now-usage-details-link" onClick={onOpenUsage}>查看详情<span aria-hidden="true">›</span></button></header>
     {!active && <p className="now-usage-empty">{disabled ? '连接恢复后更新用量。' : '正在读取 Provider…'}</p>}
