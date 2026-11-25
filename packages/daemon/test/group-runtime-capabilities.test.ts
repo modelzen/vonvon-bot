@@ -1,9 +1,10 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentBackend } from '../src/agent/types';
 import { discoverGroupSkills, discoverLocalGroupSkills, groupSkillProfile } from '../src/agent/group-skills';
+import { ClaudeAgentBackend, type ClaudeSdkFacade } from '../src/agent/claude-agent/backend';
 import { codexSessionParams } from '../src/agent/codex-appserver/backend';
 import { claudeAccess, decide, permissionOptions } from '../src/agent/claude-agent/permission';
 import { presentationConfig } from '../src/bot/group-presentation';
@@ -21,6 +22,13 @@ describe('native group capabilities', () => {
     expect((await discoverGroupSkills({ backend, cwd: '/work', disabledPaths: ['claude:a'] })).map(skill => skill.enabled)).toEqual([false, true]);
     expect((await discoverGroupSkills({ backend, cwd: '/work' })).map(skill => skill.enabled)).toEqual([true, true]);
     expect(await groupSkillProfile({ backend, cwd: '/work', disabledPaths: ['claude:a'] })).toEqual({ disabledPaths: ['claude:a'], enabledNames: ['plugin:b'] });
+    expect(await groupSkillProfile({ backend, cwd: '/work', disabledPaths: ['vonvon:vonvon-schedule'] })).toBeUndefined();
+    expect(await groupSkillProfile({ backend, cwd: '/work', disabledPaths: ['claude:a', 'vonvon:vonvon-schedule'] }))
+      .toEqual({ disabledPaths: ['claude:a'], enabledNames: ['plugin:b'], disabledBuiltinNames: ['vonvon:vonvon-schedule'] });
+    const codexBackend = { id: 'codex-appserver' } as unknown as AgentBackend;
+    expect(await groupSkillProfile({ backend: codexBackend, cwd: '/work', disabledPaths: ['vonvon:vonvon-schedule'] })).toBeUndefined();
+    expect(await groupSkillProfile({ backend: codexBackend, cwd: '/work', disabledPaths: ['/work/a/SKILL.md', 'vonvon:vonvon-schedule'] }))
+      .toEqual({ disabledPaths: ['/work/a/SKILL.md'] });
     expect(await groupSkillProfile({ backend, cwd: '/work' })).toBeUndefined();
   });
   it('passes disabled Codex paths in session config, never a global config write', () => {
@@ -86,14 +94,65 @@ it('reads a stopped Bot local skill inventory without starting a provider or cha
     await mkdir(join(workspace, '.agents', 'skills', 'report'), { recursive: true });
     await writeFile(skill, '---\nname: report\ndescription: >\n  Write reports\n---\nSkill body');
     await mkdir(join(home, '.codex'), { recursive: true });
+    await mkdir(join(home, '.codex', 'skills', '.system', 'skill-creator'), { recursive: true });
+    await writeFile(join(home, '.codex', 'skills', '.system', 'skill-creator', 'SKILL.md'), '---\nname: skill-creator\ndescription: Build skills\n---\nSystem body');
+    await mkdir(join(home, '.codex', 'skills', 'personal'), { recursive: true });
+    await writeFile(join(home, '.codex', 'skills', 'personal', 'SKILL.md'), '---\nname: personal\ndescription: Global skill\n---\nUser body');
     const config = `[[skills.config]]\npath = ${JSON.stringify(skill)}\nenabled = false\n`;
     await writeFile(join(home, '.codex', 'config.toml'), config);
     const found = await discoverLocalGroupSkills({ backendId: 'codex-appserver', cwd: workspace, home, env: {} });
-    expect(found).toMatchObject([{ name: 'report', description: 'Write reports', source: 'workspace', enabled: false }]);
+    expect(found).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'report', description: 'Write reports', source: 'workspace', enabled: false }),
+      expect.objectContaining({ name: 'personal', description: 'Global skill', source: 'user', enabled: true }),
+      expect.objectContaining({ name: 'skill-creator', description: 'Build skills', source: 'system', enabled: true }),
+    ]));
     expect(await readFile(join(home, '.codex', 'config.toml'), 'utf8')).toBe(config);
     await mkdir(join(workspace, '.claude', 'commands', 'reports'), { recursive: true });
-    await writeFile(join(workspace, '.claude', 'commands', 'reports', 'weekly.md'), '---\ndescription: Weekly report\n---\nHelp with reports');
+    const weekly = join(workspace, '.claude', 'commands', 'reports', 'weekly.md');
+    await writeFile(weekly, '---\ndescription: Weekly report\n---\nHelp with reports');
+    await mkdir(join(home, '.claude', 'skills'), { recursive: true });
+    await symlink(join(root, 'missing-target'), join(home, '.claude', 'skills', 'broken-link'));
     expect(await discoverLocalGroupSkills({ backendId: 'claude-agent', cwd: workspace, home, env: {}, disabledPaths: ['claude:reports:weekly'] }))
-      .toEqual([{ path: 'claude:reports:weekly', name: 'reports:weekly', description: 'Weekly report', source: 'workspace', enabled: false }]);
+      .toEqual([{ path: 'claude:reports:weekly', name: 'reports:weekly', description: 'Weekly report', source: 'workspace', enabled: false, location: await realpath(weekly) }]);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+it('attributes Claude online skills into workspace, user, plugin, and system regions with local paths', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'vonvon-claude-regions-'));
+  const previous = process.env.CLAUDE_CONFIG_DIR;
+  try {
+    const configDir = join(root, 'claude-home');
+    const workspace = join(root, 'work');
+    const wsSkill = join(workspace, '.claude', 'skills', 'verify', 'SKILL.md');
+    const userSkill = join(configDir, 'skills', 'agent-reach', 'SKILL.md');
+    await mkdir(join(workspace, '.claude', 'skills', 'verify'), { recursive: true });
+    await writeFile(wsSkill, '---\nname: verify\ndescription: Verify UI\n---\nBody');
+    await mkdir(join(configDir, 'skills', 'agent-reach'), { recursive: true });
+    await writeFile(userSkill, '---\nname: agent-reach\ndescription: Read web\n---\nBody');
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const sdk = {
+      query: () => ({
+        supportedCommands: async () => [
+          { name: 'compact', description: 'Compact', builtin: true },
+          { name: 'verify', description: 'Verify UI', builtin: false },
+          { name: 'agent-reach', description: 'Read web', builtin: false },
+          { name: 'ai-mac-sign:mac-sign', description: 'Sign macOS app', builtin: false },
+          { name: 'simplify', description: 'Review changed code', builtin: false },
+        ],
+        close: () => {},
+      }),
+    } as unknown as ClaudeSdkFacade;
+    const claude = new ClaudeAgentBackend(async () => sdk, () => undefined);
+    const listed = await claude.listSkills({ cwd: workspace });
+    expect(listed).toEqual([
+      { path: 'claude:verify', name: 'verify', description: 'Verify UI', source: 'workspace', enabled: true, location: await realpath(wsSkill) },
+      { path: 'claude:agent-reach', name: 'agent-reach', description: 'Read web', source: 'user', enabled: true, location: await realpath(userSkill) },
+      { path: 'claude:ai-mac-sign:mac-sign', name: 'ai-mac-sign:mac-sign', description: 'Sign macOS app', source: 'plugin', enabled: true },
+      { path: 'claude:simplify', name: 'simplify', description: 'Review changed code', source: 'system', enabled: true },
+    ]);
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previous;
+    await rm(root, { recursive: true, force: true });
+  }
 });

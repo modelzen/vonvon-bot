@@ -268,7 +268,12 @@ it('reads stopped-Bot local skills and model metadata without probing or startin
   const offlineBackend = { ...backend, peekModels: () => [], listModels: vi.fn(), doctor: vi.fn() } as unknown as AgentBackend;
   const owner = createSettingsOwner({ ...deps(), offline: true, localEditing: true, backendFor: () => offlineBackend });
   const p = await view(owner);
-  expect(p.skills).toEqual([expect.objectContaining({ name: 'local', source: 'workspace', enabled: true })]);
+  expect(p.skills).toEqual([
+    expect.objectContaining({ name: 'vonvon-schedule', path: 'vonvon:vonvon-schedule', source: 'builtin', enabled: true, location: expect.stringContaining('vonvon-schedule') }),
+    expect.objectContaining({ name: 'vonvon-feishu', path: 'vonvon:vonvon-feishu', source: 'builtin', enabled: true, location: expect.stringContaining('vonvon-feishu') }),
+    expect.objectContaining({ name: 'local', source: 'workspace', enabled: true }),
+  ]);
+  expect(await readFile(p.skills![0]!.location!, 'utf8')).toContain('vonvon-schedule');
   expect(p.skillsError).toContain('Provider 插件');
   const catalog = await owner.models({ botId, backend: 'codex-appserver', purpose: 'session' });
   expect(catalog).toMatchObject({ state: 'fallback', models: [{ id: 'cached', supportedEfforts: ['high'] }] });

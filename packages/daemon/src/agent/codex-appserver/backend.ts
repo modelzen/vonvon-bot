@@ -817,7 +817,7 @@ export class CodexAppServerBackend implements AgentBackend {
     if (!row) throw new Error('Codex 未返回技能目录');
     if (row.errors?.length) throw new Error(`Codex 技能目录读取失败：${row.errors.map(error => error.message).join('；')}`);
     return row.skills.map(skill => ({ path: skill.path, name: skill.name, description: skill.description,
-      source: skill.scope === 'repo' ? 'workspace' : skill.scope === 'user' ? 'user' : 'provider', enabled: skill.enabled }));
+      source: skill.scope === 'repo' ? 'workspace' : skill.scope === 'user' ? 'user' : skill.scope === 'system' || skill.scope === 'admin' ? 'system' : 'provider', enabled: skill.enabled }));
   }
 
   constructor(private readonly titleDeps: CodexTitleBackendDeps = DEFAULT_TITLE_DEPS) {}
