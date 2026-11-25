@@ -1,7 +1,7 @@
 export const TEMPLATE_ID_REGEX = /^[a-z0-9][a-z0-9-]{0,62}(?:\/[a-z0-9][a-z0-9-]{0,62})?$/;
 export const ANON_KEY_REGEX = /^[a-f0-9]{64}$/;
 export const MAX_JSON_BODY_BYTES = 32 * 1024;
-export const MAX_COVER_UPLOAD_BYTES = 2 * 1024 * 1024;
+export const MAX_COVER_UPLOAD_BYTES = 5 * 1024 * 1024;
 
 export function isHttpsUrl(value) {
   if (typeof value !== 'string' || value.length > 2048) return false;

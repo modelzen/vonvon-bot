@@ -17,7 +17,7 @@ const TELEMETRY_SALT_FILENAME = 'template-telemetry-id';
 const INSTALL_REPORT_TIMEOUT_MS = 2_000;
 const PUBLISH_TIMEOUT_MS = 10_000;
 const COVER_FETCH_TIMEOUT_MS = 12_000;
-const MAX_COVER_BYTES = 2 * 1024 * 1024;
+const MAX_COVER_BYTES = 5 * 1024 * 1024;
 
 export type TemplateSourceKind = 'zip' | 'github' | 'dir';
 

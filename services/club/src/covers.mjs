@@ -41,7 +41,7 @@ export async function fetchFeishuCoverViaLarkCli(docUrl, coversDir, options = {}
   if (!isFeishuDocUrl(docUrl)) return { ok: false, reason: 'not_feishu_doc' };
   const larkBin = options.larkBin ?? 'lark-cli';
   const identity = options.identity ?? 'user';
-  const maxBytes = options.maxBytes ?? 2 * 1024 * 1024;
+  const maxBytes = options.maxBytes ?? MAX_COVER_UPLOAD_BYTES;
   const tempBase = process.platform === 'win32' ? tmpdir() : '/tmp';
   const stem = join(tempBase, `vonvon-club-cover-${randomUUID().slice(0, 8)}`);
 
