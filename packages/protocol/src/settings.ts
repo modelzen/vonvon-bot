@@ -341,12 +341,25 @@ export const responseRosterSchema = z.object({
 });
 export type ResponseRoster = z.infer<typeof responseRosterSchema>;
 
+export const skillSourceSchema = z.enum(["builtin", "workspace", "user", "plugin", "system", "provider"]);
+export type SkillSource = z.infer<typeof skillSourceSchema>;
+export const projectSkillSchema = z.object({
+  path: z.string(),
+  name: z.string(),
+  description: z.string(),
+  source: skillSourceSchema,
+  enabled: z.boolean(),
+  location: z.string().optional(),
+  content: z.string().optional(),
+});
+export type ProjectSkill = z.infer<typeof projectSkillSchema>;
+
 export const projectViewSchema = z.object({
   /** Distinguishes the stored host-default marker from an older absent group override. */
   judgeInheritsHostDefault: z.boolean().optional(),
   botProfile: profile.optional(),
   skillsError: z.string().optional(),
-  skills: z.array(z.object({ path: z.string(), name: z.string(), description: z.string(), source: z.enum(["workspace", "user", "provider"]), enabled: z.boolean() })).optional(),
+  skills: z.array(projectSkillSchema).optional(),
   scope: z.object({
     kind: z.literal("project"),
     botId: agentIdSchema,

@@ -1,13 +1,32 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { botPaths } from '../../config/paths';
+import { botPaths, paths } from '../../config/paths';
 
 export interface BuiltinSkill {
   name: string;
   title: string;
   description: string;
   body: string;
+}
+
+function builtinCapabilitiesRoot(appId: string): string {
+  const bot = botPaths(appId);
+  return bot.capabilities ?? join(bot.dir ?? join(paths.appDir, 'bots', appId), 'capabilities');
+}
+
+function builtinPackageDir(appId: string, set: 'group' | 'dm', variant?: string): string {
+  const bot = botPaths(appId);
+  if (typeof bot.builtinPackage === 'function') return bot.builtinPackage(set, variant);
+  return join(builtinCapabilitiesRoot(appId), 'builtin', variant ? `${set}-${variant}` : set);
+}
+
+export function renderBuiltinSkillMarkdown(skill: BuiltinSkill): string {
+  return `---\nname: ${JSON.stringify(skill.name)}\ndescription: ${JSON.stringify(skill.description)}\n---\n\n${skill.body}\n`;
+}
+
+export function builtinSkillFilePath(appId: string, set: 'group' | 'dm', name: string, variant?: string): string {
+  return join(builtinPackageDir(appId, set, variant), 'skills', name, 'SKILL.md');
 }
 
 async function readIfPresent(path: string): Promise<string | undefined> {
@@ -59,8 +78,8 @@ const isFile = (path: string): Promise<boolean> => stat(path).then(info => info.
  * Each file is renamed into place whole, so such a package may be older than this daemon's skills but never half
  * written; a session whose rewrite failed can still be handed it (T4b).
  */
-export async function completeBuiltinPackage(appId: string, set: 'group' | 'dm'): Promise<string | undefined> {
-  const path = botPaths(appId).builtinPackage(set);
+export async function completeBuiltinPackage(appId: string, set: 'group' | 'dm', variant?: string): Promise<string | undefined> {
+  const path = builtinPackageDir(appId, set, variant);
   if (!await isFile(join(path, '.claude-plugin', 'plugin.json'))) return undefined;
   const skills = await readdir(join(path, 'skills'), { withFileTypes: true }).catch(() => []);
   for (const entry of skills) {
@@ -72,11 +91,11 @@ export async function completeBuiltinPackage(appId: string, set: 'group' | 'dm')
 const pendingPackages = new Map<string, Promise<unknown>>();
 
 export async function ensureBuiltinPackage(
-  appId: string, set: 'group' | 'dm', skills: BuiltinSkill[],
+  appId: string, set: 'group' | 'dm', skills: BuiltinSkill[], variant?: string,
 ): Promise<{ path: string; changed: boolean }> {
-  const key = botPaths(appId).builtinPackage(set);
+  const key = builtinPackageDir(appId, set, variant);
   const previous = pendingPackages.get(key) ?? Promise.resolve();
-  const pending = previous.catch(() => undefined).then(() => writeBuiltinPackage(appId, set, skills));
+  const pending = previous.catch(() => undefined).then(() => writeBuiltinPackage(appId, set, skills, variant));
   pendingPackages.set(key, pending);
   try { return await pending; }
   finally {
@@ -85,7 +104,7 @@ export async function ensureBuiltinPackage(
 }
 
 async function writeBuiltinPackage(
-  appId: string, set: 'group' | 'dm', skills: BuiltinSkill[],
+  appId: string, set: 'group' | 'dm', skills: BuiltinSkill[], variant?: string,
 ): Promise<{ path: string; changed: boolean }> {
   const names = new Set<string>();
   for (const skill of skills) {
@@ -99,14 +118,14 @@ async function writeBuiltinPackage(
     }
     names.add(skill.name);
   }
-  const bot = botPaths(appId);
-  const path = bot.builtinPackage(set);
+  const capabilities = builtinCapabilitiesRoot(appId);
+  const path = builtinPackageDir(appId, set, variant);
   const skillsPath = join(path, 'skills');
   const pluginPath = join(path, '.claude-plugin');
-  for (const directory of [bot.capabilities, join(bot.capabilities, 'builtin'), path, skillsPath, pluginPath]) await ensureDirectory(directory);
+  for (const directory of [capabilities, join(capabilities, 'builtin'), path, skillsPath, pluginPath]) await ensureDirectory(directory);
   const files = skills.map((skill) => ({
     name: skill.name,
-    content: `---\nname: ${JSON.stringify(skill.name)}\ndescription: ${JSON.stringify(skill.description)}\n---\n\n${skill.body}\n`,
+    content: renderBuiltinSkillMarkdown(skill),
   })).sort((a, b) => a.name.localeCompare(b.name));
   const version = createHash('sha256').update(JSON.stringify(files)).digest('hex').slice(0, 12);
   let changed = false;

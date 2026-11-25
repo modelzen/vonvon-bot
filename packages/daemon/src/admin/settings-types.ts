@@ -1,5 +1,5 @@
 import type { BotProfile, GroupProfile, ProjectModelAccess, ProjectWorkspace, ProjectSmartRules, ProjectSkills, ProjectPresentation } from '../project/registry';
-import type { ModelInfo, PermissionMode, ReasoningEffort } from '../agent/types';
+import type { AgentSkill, ModelInfo, PermissionMode, ReasoningEffort } from '../agent/types';
 import type { NativeField, TierInfo } from '../agent/permission';
 import type { PendingPolicy, ResolvedCompletionReminderConfig } from '../config/schema';
 import type { VoiceAction, VoiceView } from '../voice/types';
@@ -240,7 +240,7 @@ export interface ProjectSettingsView {
   sections: Sections<Omit<ProjectSections, 'profile' | 'role' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation' | 'speed' | 'conversation'>> & Partial<Sections<Pick<ProjectSections, 'profile' | 'role' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation' | 'speed' | 'conversation'>>>;
   botProfile?: BotProfile;
   skillsError?: string;
-  skills?: Array<{ path: string; name: string; description: string; source: 'workspace' | 'user' | 'provider'; enabled: boolean }>;
+  skills?: AgentSkill[];
   identity: {
     chatId: string;
     backend: string;

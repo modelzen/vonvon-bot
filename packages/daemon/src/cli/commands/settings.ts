@@ -281,7 +281,14 @@ function agentExtras(view: AgentSettingsView, target: Target): string[] {
   ];
 }
 
-const SKILL_SOURCES = { workspace: '本群工作区', user: '用户目录', provider: 'Provider' } as const;
+const SKILL_SOURCES = {
+  builtin: 'VonVon',
+  workspace: '本群工作区',
+  user: '用户目录',
+  plugin: 'Provider 插件',
+  system: 'Provider 系统',
+  provider: 'Provider',
+} as const;
 /** The group's skills sit in the group's view: they come from its folders and its backend. */
 function projectExtras(view: ProjectSettingsView, dm?: boolean): string[] {
   const human = view.members && !dm ? [`响应成员：${memberList(view.members)}`] : [];

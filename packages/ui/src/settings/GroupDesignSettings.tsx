@@ -1,7 +1,7 @@
 import {useCallback, useContext, useEffect, useRef, useState, type ReactNode} from 'react';
 import {DEFAULT_DM_SMART_RULES_TEXT, smartRulesText} from '@vonvon/protocol';
-import {Blocks, ChevronRight, Folder, GitBranch, Plus, RefreshCw, Search, X} from 'lucide-react';
-import {backendLabel, isKnownJudgeSelection, type Agent, type AgentId, type DecisionModelsView, type DesktopSnapshot, type JudgeSelectionView, type Membership, type ModelCatalog, type ProjectId, type ProjectSettingsView, type SettingsReply, type ToolState} from '@vonvon/protocol';
+import {Blocks, ChevronDown, ChevronRight, Folder, GitBranch, Plus, RefreshCw, Search, X} from 'lucide-react';
+import {backendLabel, isKnownJudgeSelection, type Agent, type AgentId, type DecisionModelsView, type DesktopSnapshot, type JudgeSelectionView, type Membership, type ModelCatalog, type ProjectId, type ProjectSettingsView, type SettingsReply, type SkillSource, type ToolState} from '@vonvon/protocol';
 import {useActiveDevice, useClient} from '../client-context';
 import {settingAnchor} from '../search';
 import {onDevice, updateServerText, whereName} from '../device-copy';
@@ -304,28 +304,77 @@ export function WorkspaceFields({value, onChange, disabled}: {value: Workspace; 
   </>;
 }
 
+const SKILL_REGION_ORDER: readonly SkillSource[] = ['builtin', 'workspace', 'user', 'plugin', 'system', 'provider'];
+const SKILL_REGION_META: Record<SkillSource, {label: string; shortLabel: string}> = {
+  builtin: {label: 'VonVon', shortLabel: 'VonVon'},
+  workspace: {label: '本项目技能', shortLabel: '项目'},
+  user: {label: 'Provider 全局技能', shortLabel: '全局'},
+  plugin: {label: 'Provider 插件技能', shortLabel: '插件'},
+  system: {label: 'Provider 系统技能', shortLabel: '系统'},
+  provider: {label: 'Provider 技能', shortLabel: 'Provider'},
+};
+
 function SkillsList({skills, disabledPaths, disabled, onToggle, refresh}: {
   skills: NonNullable<ProjectSettingsView['skills']>; disabledPaths: string[]; disabled: boolean; onToggle: (path: string, enabled: boolean) => void; refresh: () => Promise<void>;
 }) {
   const [selected, setSelected] = useState<(typeof skills)[number]>();
   const [query, setQuery] = useState('');
+  const [activeRegion, setActiveRegion] = useState<'all' | SkillSource>('all');
+  const [collapsedRegions, setCollapsedRegions] = useState<Partial<Record<SkillSource, boolean>>>({});
+  const isSkillChecked = (skill: (typeof skills)[number]) => skill.source === 'builtin'
+    ? !disabledPaths.includes(skill.path)
+    : skill.enabled && !disabledPaths.includes(skill.path);
+  const isProviderDisabled = (skill: (typeof skills)[number]) => skill.source !== 'builtin' && !skill.enabled && !disabledPaths.includes(skill.path);
   const needle = query.trim().toLocaleLowerCase();
-  const visible = skills.filter(skill => `${skill.name} ${skill.description ?? ''}`.toLocaleLowerCase().includes(needle))
-    .sort((a,b) => ({workspace:0,user:1,provider:2}[a.source] - {workspace:0,user:1,provider:2}[b.source]));
-  const enabledCount = skills.filter(skill => skill.enabled && !disabledPaths.includes(skill.path)).length;
+  const presentRegions = SKILL_REGION_ORDER.filter(region => skills.some(skill => skill.source === region));
+  const selectedRegion = activeRegion !== 'all' && presentRegions.includes(activeRegion) ? activeRegion : 'all';
+  const matched = skills.filter(skill => `${skill.name} ${skill.description ?? ''}`.toLocaleLowerCase().includes(needle));
+  const visibleRegions = (selectedRegion === 'all' ? presentRegions : [selectedRegion])
+    .map(region => ({region, items: matched.filter(skill => skill.source === region)}))
+    .filter(group => group.items.length > 0);
+  const visibleCount = visibleRegions.reduce((total, group) => total + group.items.length, 0);
+  const enabledCount = skills.filter(isSkillChecked).length;
+  const toggleRegion = (region: SkillSource) => setCollapsedRegions(current => ({...current, [region]: !current[region]}));
   return <>
-    <div className="gd-section-heading gd-skill-heading">
-      <label className="gd-skill-search"><Search size={14} aria-hidden="true"/><input type="search" aria-label="搜索技能" placeholder="搜索技能" value={query} onChange={event => setQuery(event.target.value)}/></label>
-      <div className="gd-skill-actions"><span className="gd-skill-count">{needle ? `${visible.length} / ${skills.length} 项` : `${skills.length} 项 · ${enabledCount} 已启用`}</span><IconButton size="sm" variant="ghost" label="重新读取" title="重新读取技能" onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton></div>
+    <div className="gd-skill-toolbar">
+      <div className="gd-section-heading gd-skill-heading">
+        <label className="gd-skill-search"><Search size={14} aria-hidden="true"/><input type="search" aria-label="搜索技能" placeholder="搜索技能" value={query} onChange={event => setQuery(event.target.value)}/></label>
+        <div className="gd-skill-actions"><span className="gd-skill-count">{needle || selectedRegion !== 'all' ? `${visibleCount} / ${skills.length} 项` : `${skills.length} 项 · ${enabledCount} 已启用`}</span><IconButton size="sm" variant="ghost" label="重新读取" title="重新读取技能" onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton></div>
+      </div>
+      {presentRegions.length > 1 && <div className="gd-skill-filters" role="group" aria-label="按来源筛选技能">
+        <button type="button" className={`gd-skill-filter${selectedRegion === 'all' ? ' is-active' : ''}`} aria-pressed={selectedRegion === 'all'} onClick={() => setActiveRegion('all')}>全部<span>{matched.length}</span></button>
+        {presentRegions.map(region => {
+          const count = matched.filter(skill => skill.source === region).length;
+          return <button type="button" key={region} className={`gd-skill-filter${selectedRegion === region ? ' is-active' : ''}`} aria-pressed={selectedRegion === region} onClick={() => setActiveRegion(region)}>{SKILL_REGION_META[region].shortLabel}<span>{count}</span></button>;
+        })}
+      </div>}
     </div>
     <div className="gd-skill-list">
-    {visible.length ? visible.map(skill => <div className="gd-skill-row" key={skill.path}>
-      <button type="button" className="gd-skill-detail" onClick={() => setSelected(skill)}><span><strong>{skill.name}</strong>{skill.description && <small>{skill.description}</small>}{!skill.enabled && !disabledPaths.includes(skill.path) && <small>Provider 已停用</small>}</span><ChevronRight size={14}/></button>
-      <Toggle className="settings-row-switch" label={`使用 ${skill.name}`} aria-label={`使用 ${skill.name}`} checked={skill.enabled && !disabledPaths.includes(skill.path)} disabled={disabled || !skill.enabled && !disabledPaths.includes(skill.path)} onChange={event => onToggle(skill.path, event.target.checked)}/>
-    </div>) : <div className="gd-empty" role="status">{skills.length ? <>没有匹配的技能。<button type="button" className="gd-text-action" onClick={() => setQuery('')}>清除搜索</button></> : '工作区中尚未发现技能。'}</div>}
+    {visibleRegions.length ? visibleRegions.map(({region, items}) => {
+      const collapsed = !needle && selectedRegion === 'all' && Boolean(collapsedRegions[region]);
+      const regionEnabled = items.filter(isSkillChecked).length;
+      return <section className="gd-skill-region" key={region} aria-label={SKILL_REGION_META[region].label}>
+        <button type="button" className="gd-skill-region-header" aria-expanded={!collapsed} onClick={() => toggleRegion(region)}>
+          <span className="gd-skill-region-title">
+            <ChevronDown size={14} className={collapsed ? 'is-collapsed' : undefined} aria-hidden="true"/>
+            <strong>{SKILL_REGION_META[region].label}</strong>
+          </span>
+          <span className="gd-skill-region-count">{regionEnabled} / {items.length} 已启用</span>
+        </button>
+        {!collapsed && items.map(skill => <div className="gd-skill-row" key={skill.path}>
+          <button type="button" className="gd-skill-detail" onClick={() => setSelected(skill)}><span><strong>{skill.name}</strong>{skill.description && <small>{skill.description}</small>}{isProviderDisabled(skill) && <small>Provider 已停用</small>}</span><ChevronRight size={14}/></button>
+          <Toggle className="settings-row-switch" label={`使用 ${skill.name}`} aria-label={`使用 ${skill.name}`} checked={isSkillChecked(skill)} disabled={disabled || isProviderDisabled(skill)} onChange={event => onToggle(skill.path, event.target.checked)}/>
+        </div>)}
+      </section>;
+    }) : <div className="gd-empty" role="status">{skills.length ? <>没有匹配的技能。<button type="button" className="gd-text-action" onClick={() => {setQuery(''); setActiveRegion('all');}}>清除筛选</button></> : '工作区中尚未发现技能。'}</div>}
     </div>
     <Dialog open={Boolean(selected)} title={selected?.name ?? '技能'} onClose={() => setSelected(undefined)} footer={<Button onClick={() => setSelected(undefined)}>完成</Button>}>
-      {selected && <dl className="gd-skill-facts"><div><dt>说明</dt><dd>{selected.description || '未提供说明'}</dd></div><div><dt>来源</dt><dd>{{workspace: '本群工作区', user: '用户目录', provider: 'Provider'}[selected.source]}</dd></div><div><dt>位置</dt><dd>{selected.path}</dd></div></dl>}
+      {selected && <dl className="gd-skill-facts">
+        <div><dt>说明</dt><dd>{selected.description || '未提供说明'}</dd></div>
+        <div><dt>来源</dt><dd>{SKILL_REGION_META[selected.source].label}</dd></div>
+        <div><dt>位置</dt><dd className="gd-skill-location">{selected.location ?? selected.path}</dd></div>
+        {selected.content && <div><dt>内容</dt><dd><details className="gd-skill-preview"><summary>查看 SKILL.md</summary><pre className="gd-skill-content">{selected.content}</pre></details></dd></div>}
+      </dl>}
     </Dialog>
   </>;
 }

@@ -44,7 +44,7 @@ export function botPaths(appId: string): {
   judgeUsageFile: string;
   schedulesFile: string;
   capabilities: string;
-  builtinPackage(set: 'group' | 'dm'): string;
+  builtinPackage(set: 'group' | 'dm', variant?: string): string;
 } {
   const dir = botDir(appId);
   return {
@@ -59,7 +59,7 @@ export function botPaths(appId: string): {
     judgeUsageFile: join(dir, 'judge-usage.json'),
     schedulesFile: join(dir, 'schedules.json'),
     capabilities: join(dir, 'capabilities'),
-    builtinPackage: (set) => join(dir, 'capabilities', 'builtin', set),
+    builtinPackage: (set, variant) => join(dir, 'capabilities', 'builtin', variant ? `${set}-${variant}` : set),
   };
 }
 
