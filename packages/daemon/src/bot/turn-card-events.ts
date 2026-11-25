@@ -7,10 +7,17 @@ export interface SteerCardEvent {
   voice?: VoiceReply;
 }
 
-/** Serialize accepted steering boundaries with backend events. Card creation
+export interface AskAnsweredCardEvent {
+  type: 'ask_answered';
+  messageId: string;
+}
+
+export type TurnCardEvent = SteerCardEvent | AskAnsweredCardEvent;
+
+/** Serialize accepted steering and answered-ask boundaries with backend events. Card creation
  * may await I/O, while the source keeps collecting events in arrival order. */
 export class TurnCardEvents {
-  private queue: (AgentEvent | SteerCardEvent)[] = [];
+  private queue: (AgentEvent | TurnCardEvent)[] = [];
   private wake?: () => void;
   private open = true;
   private ended = false;
@@ -22,12 +29,18 @@ export class TurnCardEvents {
     return true;
   }
 
-  private push(event: AgentEvent | SteerCardEvent): void {
+  askAnswered(messageId: string): boolean {
+    if (!this.open) return false;
+    this.push({ type: 'ask_answered', messageId });
+    return true;
+  }
+
+  private push(event: AgentEvent | TurnCardEvent): void {
     this.queue.push(event);
     this.wake?.();
   }
 
-  async *consume(source: AsyncIterable<AgentEvent>): AsyncGenerator<AgentEvent | SteerCardEvent> {
+  async *consume(source: AsyncIterable<AgentEvent>): AsyncGenerator<AgentEvent | TurnCardEvent> {
     const produce = async (): Promise<void> => {
       try {
         for await (const event of source) {

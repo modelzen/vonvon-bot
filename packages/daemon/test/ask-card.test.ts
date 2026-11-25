@@ -72,11 +72,25 @@ describe('schema 2.0 presentation', () => {
   });
 
   it('renders independent single and multiple selectors with structural names', () => {
-    const all = nodes(render(choices));
+    const card = render(choices);
+    const all = nodes(card);
     expect(all.filter(node => node.tag === 'select_static').map(node => node.name)).toEqual(['q0']);
     expect(all.filter(node => node.tag === 'multi_select_static').map(node => node.name)).toEqual(['q1']);
+    expect(all.find(node => node.tag === 'select_static')?.width).toBe('fill');
+    expect(all.find(node => node.tag === 'multi_select_static')?.width).toBe('fill');
     expect(all.filter(node => node.type === 'callback').map(node => node.value)).toEqual([value]);
     expect(all.find(node => node.tag === 'button')?.form_action_type).toBe('submit');
+    // Multi-question choices cards group each question with its own controls inside the form separated by dividers.
+    const formEl = all.find(node => node.tag === 'form');
+    const formChildren = Array.isArray(formEl?.elements) ? formEl.elements as Record<string, unknown>[] : [];
+    const q0HeadingIdx = formChildren.findIndex(el => el.tag === 'markdown' && String(el.content).includes('1. 选一个'));
+    const q0SelectIdx = formChildren.findIndex(el => el.name === 'q0');
+    const q1HeadingIdx = formChildren.findIndex(el => el.tag === 'markdown' && String(el.content).includes('2. 选多个'));
+    const q1SelectIdx = formChildren.findIndex(el => el.name === 'q1');
+    expect(q0HeadingIdx).toBeGreaterThanOrEqual(0);
+    expect(q0SelectIdx).toBeGreaterThan(q0HeadingIdx);
+    expect(q1HeadingIdx).toBeGreaterThan(q0SelectIdx);
+    expect(q1SelectIdx).toBeGreaterThan(q1HeadingIdx);
   });
 
   it.each([

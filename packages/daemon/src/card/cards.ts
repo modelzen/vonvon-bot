@@ -583,10 +583,12 @@ export function selectMenu(opts: {
   options: SelectOption[];
   /** option value to pre-select (shows the current value; still read on submit) */
   initial?: string;
+  width?: 'default' | 'fill';
 }): CardElement {
   return {
     tag: 'select_static',
     name: opts.name,
+    ...(opts.width ? { width: opts.width } : {}),
     placeholder: { tag: 'plain_text', content: opts.placeholder },
     ...(opts.initial ? { initial_option: opts.initial } : {}),
     options: opts.options.map((o) => ({ text: { tag: 'plain_text', content: o.label }, value: o.value })),
@@ -601,10 +603,12 @@ export function multiSelectMenu(opts: {
   name: string;
   placeholder: string;
   options: SelectOption[];
+  width?: 'default' | 'fill';
 }): CardElement {
   return {
     tag: 'multi_select_static',
     name: opts.name,
+    ...(opts.width ? { width: opts.width } : {}),
     placeholder: { tag: 'plain_text', content: opts.placeholder },
     options: opts.options.map((o) => ({ text: { tag: 'plain_text', content: o.label }, value: o.value })),
   };

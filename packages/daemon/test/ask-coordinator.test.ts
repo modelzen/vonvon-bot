@@ -624,3 +624,37 @@ it('adopts the question carrier topic before accepting a typed answer without a 
   expect(f.response).toHaveBeenCalled();
   turn.close('turn-ended');
 });
+
+it('notifies answered(messageId) on submit and typed answers so live run cards rotate below the choice card, but not on timeout or close', async () => {
+  vi.useFakeTimers();
+  const f = fixture();
+  const answered = vi.fn();
+  const turn = f.coordinator.openTurn({
+    run: f.run, sessionKey: 'session',
+    placement: { chatId: 'chat', replyTo: 'trigger', replyInThread: false, own: true },
+    initiator: { kind: 'user', openId: 'starter' }, idlePause: f.pause,
+    waiting: f.waiting, fault: f.fault, answered,
+  });
+
+  // 1. Card button submit fires answered('msg-1')
+  turn.enqueue(ask('first'));
+  await flush();
+  expect(f.submit('first', 'msg-1')).toBe('accepted');
+  expect(answered).toHaveBeenCalledTimes(1);
+  expect(answered).toHaveBeenLastCalledWith('msg-1');
+
+  // 2. Typed reply to a choices card fires answered('msg-2')
+  turn.enqueue(choices('second'));
+  await flush();
+  expect(f.typed('session', 'starter', '自定义回答')).toBe('answered');
+  expect(answered).toHaveBeenCalledTimes(2);
+  expect(answered).toHaveBeenLastCalledWith('msg-2');
+
+  // 3. Timeout and turn close do NOT fire answered
+  turn.enqueue(ask('third'));
+  await flush();
+  await vi.advanceTimersByTimeAsync(15 * 60_000);
+  expect(answered).toHaveBeenCalledTimes(2);
+  turn.close('turn-ended');
+  expect(answered).toHaveBeenCalledTimes(2);
+});

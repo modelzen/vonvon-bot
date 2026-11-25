@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { codexSessionParams } from '../src/agent/codex-appserver/backend';
-import { offeredTool, startDynamicTools, vonvonNamespace } from '../src/agent/codex-appserver/dynamic-tools';
-import { CodexRequestScope, dynamicToolCall } from '../src/agent/codex-appserver/server-requests';
+import { ASK_USER_TOOL, offeredTool, startDynamicTools, vonvonNamespace } from '../src/agent/codex-appserver/dynamic-tools';
+import { CodexRequestScope, dynamicToolCall, type InboundQuestion } from '../src/agent/codex-appserver/server-requests';
 import { FEISHU_API, FEISHU_DOC_EDIT, feishuDocToolNames, feishuToolNames } from '../src/agent/entry/feishu-tools';
 import { scheduleToolNames } from '../src/agent/entry/schedule-tools';
 import type { AgentEntry, AgentThread } from '../src/agent/types';
@@ -43,8 +43,14 @@ describe('dynamicTools on thread/start', () => {
     expect(names({ schedule: false, feishu: true, documentsOnly: true })).not.toContain(FEISHU_API);
     expect(names({ schedule: true, feishu: true, feishuEdit: true, feishuApi: true })).toContain(FEISHU_API);
   });
+  it('adds ask_user by the profile for interactive Feishu choice cards in normal turns', () => {
+    const names = (tools: Parameters<typeof vonvonNamespace>[0]) => vonvonNamespace(tools).tools.map(tool => tool.name);
+    expect(names({ schedule: true, feishu: true })).not.toContain(ASK_USER_TOOL);
+    expect(names({ schedule: true, feishu: true, askUser: true })).toContain(ASK_USER_TOOL);
+    expect(offeredTool('vonvon_bot', ASK_USER_TOOL)).toBe(true);
+  });
   it('answers calls to the tools it offers, and no others', () => {
-    for (const tool of [...scheduleToolNames, ...feishuToolNames, FEISHU_DOC_EDIT, FEISHU_API]) expect(offeredTool('vonvon_bot', tool)).toBe(true);
+    for (const tool of [...scheduleToolNames, ...feishuToolNames, FEISHU_DOC_EDIT, FEISHU_API, ASK_USER_TOOL]) expect(offeredTool('vonvon_bot', tool)).toBe(true);
     expect(offeredTool('vonvon_bot', 'memory_add')).toBe(false);
     expect(offeredTool('other', 'feishu_doc')).toBe(false);
   });
@@ -139,6 +145,83 @@ describe('item/tool/call', () => {
     await expect(turn).resolves.toBeUndefined();
     expect(held).toEqual([{ released: true }]);
     await expect(call.mock.results[0]!.value).resolves.toMatchObject({ ok: false, code: 'revoked' });
+  });
+  it('routes ask_user dynamic tool calls through InboundQuestion choice cards with option & free-text other answers', async () => {
+    const scope = new CodexRequestScope('th');
+    const host = { entry: { call: vi.fn() } as unknown as AgentEntry, turnAcked: async () => true };
+    const queued: InboundQuestion[] = [];
+    let serial = 0;
+    const askHost = { rpcId: 42, nextSerial: () => ++serial, enqueue: (q: InboundQuestion) => { queued.push(q); } };
+
+    // 1. User selects an option on the Feishu card
+    const pendingChoice = dynamicToolCall({
+      threadId: 'th', turnId: 'turn-1', callId: 'c-ask-1', namespace: 'vonvon_bot', tool: ASK_USER_TOOL,
+      arguments: {
+        title: '创作配方 · 素材来源',
+        questions: [{
+          id: 'source',
+          header: '素材来源',
+          question: '你想从哪里开始创作配方？',
+          options: [
+            { label: '已有飞书群', description: '从已调好的群直接提取' },
+            { label: '本地项目或 Skills', description: '整理本地目录或技能' },
+          ],
+        }],
+      },
+    }, scope, id => id === 'th' ? host : undefined, askHost);
+
+    expect(queued).toHaveLength(1);
+    const req = queued[0]!.request;
+    expect(req.kind).toBe('choices');
+    if (req.kind !== 'choices') throw new Error('expected choices');
+    expect(req.questions[0]).toMatchObject({ selection: 'single', other: true });
+    await scope.respond(req.id, { kind: 'answered', answer: { kind: 'choices', answers: [{ questionId: 'q0', selected: ['o0'] }] } });
+    const choiceReply = await pendingChoice;
+    expect(choiceReply).toEqual({
+      result: {
+        success: true,
+        contentItems: [{ type: 'inputText', text: JSON.stringify({ answered: true, answers: [{ id: 'source', header: '素材来源', selected: ['已有飞书群'] }] }) }],
+      },
+    });
+
+    // 2. User types custom text into the open-ended "其他（直接打字）" input and clicks Submit
+    const pendingOther = dynamicToolCall({
+      threadId: 'th', turnId: 'turn-1', callId: 'c-ask-2', namespace: 'vonvon_bot', tool: ASK_USER_TOOL,
+      arguments: {
+        questions: [{
+          id: 'source',
+          header: '素材来源',
+          question: '选一个或直接填写其他素材',
+          options: [{ label: '已有飞书群' }],
+        }],
+      },
+    }, scope, id => id === 'th' ? host : undefined, askHost);
+    expect(queued).toHaveLength(2);
+    await scope.respond(queued[1]!.request.id, { kind: 'answered', answer: { kind: 'choices', answers: [{ questionId: 'q0', text: '我有一篇自己的笔记和三张截图' }] } });
+    const otherReply = await pendingOther;
+    expect(otherReply).toEqual({
+      result: {
+        success: true,
+        contentItems: [{ type: 'inputText', text: JSON.stringify({ answered: true, answers: [{ id: 'source', header: '素材来源', text: '我有一篇自己的笔记和三张截图' }] }) }],
+      },
+    });
+
+    // 3. Invalid args fail immediately without enqueueing a card; scope.close settles pending asks cleanly
+    const badReply = await dynamicToolCall({
+      threadId: 'th', turnId: 'turn-1', callId: 'c-ask-3', namespace: 'vonvon_bot', tool: ASK_USER_TOOL,
+      arguments: { questions: [] },
+    }, scope, id => id === 'th' ? host : undefined, askHost);
+    expect(badReply).toMatchObject({ result: { success: false } });
+    expect(queued).toHaveLength(2);
+
+    const pendingClose = dynamicToolCall({
+      threadId: 'th', turnId: 'turn-1', callId: 'c-ask-4', namespace: 'vonvon_bot', tool: ASK_USER_TOOL,
+      arguments: { questions: [{ header: '确认', question: '继续吗？', options: [{ label: '继续' }] }] },
+    }, scope, id => id === 'th' ? host : undefined, askHost);
+    scope.close();
+    expect(await pendingClose).toEqual({
+      result: { contentItems: [{ type: 'inputText', text: '这一轮已经结束了。' }], success: false },
+    });
   });
 });
 
