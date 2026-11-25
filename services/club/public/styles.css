@@ -709,34 +709,37 @@ code {
   color: var(--ink);
 }
 
-.prereq-bar {
+.modal-step-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
-  padding: 10px 12px 10px 14px;
-  margin-bottom: 18px;
-  background: var(--bg-soft);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  font-size: 13.5px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line-2);
+  border-bottom: 1px solid var(--line-2);
+}
+
+.modal-step-section {
+  padding-top: 16px;
+}
+
+.step-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
   color: var(--ink-2);
 }
 
-.prereq-text {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-}
-
-.prereq-bar strong {
+.step-label strong {
   color: var(--ink);
+  font-weight: 600;
 }
 
 .step-num {
-  width: 20px;
-  height: 20px;
+  width: 21px;
+  height: 21px;
   border-radius: 999px;
   background: var(--ink);
   color: #ffffff;
@@ -749,24 +752,56 @@ code {
   font-variant-numeric: tabular-nums;
 }
 
-.step-heading {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin: 0 0 10px;
-  font-size: 13.5px;
-  color: var(--ink);
+.modal-step-body {
+  padding-left: 31px;
+  margin-top: 10px;
+}
+
+@media (max-width: 520px) {
+  .modal-step-body {
+    padding-left: 0;
+  }
 }
 
 .modal-mode-tabs {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 4px;
-  padding: 3px;
-  margin: 0 0 14px;
-  background: var(--bg-soft);
-  border: 1px solid var(--line-2);
-  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  margin: 0 0 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.modal-mode-tab {
+  appearance: none;
+  position: relative;
+  border: none;
+  background: transparent;
+  color: var(--ink-3);
+  font-size: 13.5px;
+  font-weight: 500;
+  padding: 6px 0 9px;
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease);
+}
+
+.modal-mode-tab:hover {
+  color: var(--ink);
+}
+
+.modal-mode-tab.active {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.modal-mode-tab.active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--ink);
+  border-radius: 2px;
 }
 
 .panel-desc-row {
@@ -816,39 +851,15 @@ code {
   }
 }
 
-.modal-mode-tab {
-  appearance: none;
-  border: none;
-  background: transparent;
-  color: var(--ink-2);
-  font-size: 13px;
-  font-weight: 500;
-  padding: 8px 10px;
-  border-radius: 9px;
-  cursor: pointer;
-  transition: background-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
-}
-
-.modal-mode-tab:hover {
-  color: var(--ink);
-}
-
-.modal-mode-tab.active {
-  background: var(--bg);
-  color: var(--ink);
-  font-weight: 600;
-  box-shadow: 0 1px 2px rgba(20, 20, 20, 0.08);
-}
-
 .copy-box {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  background: var(--bg-soft);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 8px 10px 8px 14px;
+  background: #f5f4ef;
+  border: 1px dashed #cfc9be;
+  border-radius: 10px;
+  padding: 10px 10px 10px 14px;
   margin-top: 8px;
 }
 
@@ -862,7 +873,7 @@ code {
 
 .copy-box-multi {
   align-items: flex-start;
-  padding: 10px 10px 10px 14px;
+  padding: 11px 10px 11px 14px;
 }
 
 .copy-box-multi code {

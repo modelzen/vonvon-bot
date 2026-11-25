@@ -7,7 +7,7 @@
   <meta name="description" content="发现和分享好用的 Vonvon Bot 飞书 AI 同事配方。点击卡片直达创作者公开飞书文档，在飞书私聊里一句话创建你的专属 Bot 群。">
   <meta name="theme-color" content="#ffffff">
   <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
-  <link rel="stylesheet" href="/styles.css?v=14">
+  <link rel="stylesheet" href="/styles.css?v=15">
 </head>
 <body>
   <header class="nav">
@@ -86,40 +86,44 @@
         <button class="modal-close" id="close-modal-btn" type="button" aria-label="关闭">✕</button>
       </div>
 
-      <div class="prereq-bar">
-        <div class="prereq-text">
+      <div class="modal-step-row">
+        <div class="step-label">
           <span class="step-num">1</span>
           <span><strong>先安装 Vonvon Bot</strong><span class="step-note">（已安装可跳过）</span></span>
         </div>
         <a class="btn btn-dark btn-sm" href="https://vonvon.cc/get/" target="_blank" rel="noopener noreferrer">下载客户端 →</a>
       </div>
 
-      <div class="step-heading">
-        <span class="step-num">2</span>
-        <span><strong>选择一种方式，发送一句话开始</strong></span>
-      </div>
-
-      <div class="modal-mode-tabs" role="tablist" aria-label="选择创作方式">
-        <button class="modal-mode-tab active" data-mode="feishu" role="tab" aria-selected="true" type="button">飞书 Bot 私聊（推荐）</button>
-        <button class="modal-mode-tab" data-mode="agent" role="tab" aria-selected="false" type="button">用你自己的 Agent</button>
-      </div>
-
-      <div class="modal-mode-panel" id="mode-panel-feishu" role="tabpanel">
-        <p class="panel-desc">发给你的飞书 Bot 私聊，按交互卡片一步步完成：</p>
-        <div class="copy-box">
-          <code id="create-prompt-feishu">帮我创作一个配方</code>
-          <button class="btn btn-primary btn-sm copy-prompt-btn" data-copy-target="create-prompt-feishu" data-toast="已复制，打开飞书发给你的 Vonvon Bot 私聊即可开始" type="button">一键复制</button>
+      <div class="modal-step-section">
+        <div class="step-label">
+          <span class="step-num">2</span>
+          <span><strong>选择一种方式，发送一句话开始</strong></span>
         </div>
-      </div>
 
-      <div class="modal-mode-panel hidden" id="mode-panel-agent" role="tabpanel">
-        <div class="panel-desc-row">
-          <p class="panel-desc">发给 Codex、Claude Code、Codex Cloud 或 Cursor 等任意 Agent：</p>
-          <a class="way-link" href="/skills/vonvon-template-creator/SKILL.md" target="_blank" rel="noopener noreferrer">查看 Skill 源码 →</a>
-        </div>
-        <div class="copy-box copy-box-multi">
-          <code id="create-prompt-agent">请先读取 https://club.vonvon.cc/skills/vonvon-template-creator/SKILL.md 并按里面的流程，帮我创作一个 Vonvon Bot 配方。</code>
-          <button class="btn btn-primary btn-sm copy-prompt-btn" data-copy-target="create-prompt-agent" data-toast="已复制，直接发给你的 Codex / Claude Code 等 Agent 即可开始" type="button">一键复制</button>
+        <div class="modal-step-body">
+          <div class="modal-mode-tabs" role="tablist" aria-label="选择创作方式">
+            <button class="modal-mode-tab active" data-mode="feishu" role="tab" aria-selected="true" type="button">飞书 Bot 私聊（推荐）</button>
+            <button class="modal-mode-tab" data-mode="agent" role="tab" aria-selected="false" type="button">用你自己的 Agent</button>
+          </div>
+
+          <div class="modal-mode-panel" id="mode-panel-feishu" role="tabpanel">
+            <p class="panel-desc">发给你的飞书 Bot 私聊，按交互卡片一步步完成：</p>
+            <div class="copy-box">
+              <code id="create-prompt-feishu">帮我创作一个配方</code>
+              <button class="btn btn-primary btn-sm copy-prompt-btn" data-copy-target="create-prompt-feishu" data-toast="已复制，打开飞书发给你的 Vonvon Bot 私聊即可开始" type="button">一键复制</button>
+            </div>
+          </div>
+
+          <div class="modal-mode-panel hidden" id="mode-panel-agent" role="tabpanel">
+            <div class="panel-desc-row">
+              <p class="panel-desc">发给 Codex、Claude Code、Codex Cloud 或 Cursor 等任意 Agent：</p>
+              <a class="way-link" href="/skills/vonvon-template-creator/SKILL.md" target="_blank" rel="noopener noreferrer">查看 Skill 源码 →</a>
+            </div>
+            <div class="copy-box copy-box-multi">
+              <code id="create-prompt-agent">请先读取 https://club.vonvon.cc/skills/vonvon-template-creator/SKILL.md 并按里面的流程，帮我创作一个 Vonvon Bot 配方。</code>
+              <button class="btn btn-primary btn-sm copy-prompt-btn" data-copy-target="create-prompt-agent" data-toast="已复制，直接发给你的 Codex / Claude Code 等 Agent 即可开始" type="button">一键复制</button>
+            </div>
+          </div>
         </div>
       </div>
 
