@@ -44,6 +44,16 @@ function makeKeypair() {
   };
 }
 
+it('selects Feishu cover endpoints by complete DNS labels', () => {
+  const cover = '"cover":{"token":"CovTok1234567890"}';
+  for (const domain of ['larksuite.com', 'larkoffice.com']) {
+    const lark = parsePublicFeishuHtml(cover, `https://workspace.${domain}/wiki/Abc`);
+    assert.equal(new URL(lark.coverUrls[0]).hostname, `internal-api-drive-stream.${domain}`);
+    const other = parsePublicFeishuHtml(cover, `https://example-${domain}/wiki/Abc`);
+    assert.equal(new URL(other.coverUrls[0]).hostname, 'internal-api-drive-stream.feishu.cn');
+  }
+});
+
 describe('Vonvon 灵感 Club server + vonvon CLI E2E', () => {
   const adminToken = 'test-club-admin-secret-token';
   let workDir;

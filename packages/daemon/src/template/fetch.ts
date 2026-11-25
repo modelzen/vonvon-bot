@@ -243,11 +243,8 @@ export function extractFeishuDocSourceHints(content: string): FeishuDocSourceHin
     dedupePush(embeddedZips, { name: m[2]!, token: m[1]! }, item => item.token);
   }
 
-  // 3. Normalize escaped slashes / URL encoding before scanning links
-  const normalized = content
-    .replace(/\\\//g, '/')
-    .replace(/\\u0026/g, '&')
-    .replace(/&amp;/g, '&');
+  // Match escapes in the original text so a decoded character cannot start a second escape.
+  const normalized = content.replace(/\\\/|\\u0026|&amp;/g, escape => escape === '\\/' ? '/' : '&');
 
   const githubRe = /https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)(?:\/tree\/[A-Za-z0-9._/%-]+)?/g;
   for (const m of normalized.matchAll(githubRe)) {
@@ -551,9 +548,8 @@ async function tryGuestDownloadEmbeddedZip(
   try {
     const u = new URL(finalDocUrl);
     referer = `${u.origin}/`;
-    const h = u.hostname.toLowerCase();
-    if (h.endsWith('larksuite.com')) hostSuffix = 'larksuite.com';
-    else if (h.endsWith('larkoffice.com')) hostSuffix = 'larkoffice.com';
+    const domain = u.hostname.toLowerCase().split('.').slice(-2).join('.');
+    if (domain === 'larksuite.com' || domain === 'larkoffice.com') hostSuffix = domain;
   } catch { /* default */ }
 
   const params = new URLSearchParams();
