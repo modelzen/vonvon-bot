@@ -3,6 +3,7 @@ import { log } from '../core/logger';
 import { buildWelcomeCard } from '../card/command-cards';
 import { createBackend, catalogById } from '../agent';
 import { noMentionOf, sessionModeOf, type Project } from './registry';
+import type { WelcomeCardPreference } from '../config/schema';
 
 /** 项目后端的能力位（用于欢迎卡按后端裁剪命令）。未知/手编 id 解析失败 ⇒ undefined
  * （= 全列，与 codex 一致），绝不因此让建项目/绑群失败。 */
@@ -48,7 +49,7 @@ export function sidebarPcUrl(url: string): string {
  * are the command cheat-sheet. Every step is best-effort — the group is still
  * usable if any of them fails (e.g. missing scope).
  */
-export async function onboardGroup(channel: Pick<LarkChannel, 'rawClient'>, project: Project): Promise<void> {
+export async function onboardGroup(channel: Pick<LarkChannel, 'rawClient'>, project: Project, welcomeCard?: WelcomeCardPreference): Promise<void> {
   // 智能's welcome card opens with what 选了智能 tells the group, so binding says it once (s25c).
   const kind = sessionModeOf(project);
   const chatId = project.chatId;
@@ -65,7 +66,7 @@ export async function onboardGroup(channel: Pick<LarkChannel, 'rawClient'>, proj
   try {
     const noMention = noMentionOf(project);
     const content = JSON.stringify(
-      buildWelcomeCard(kind, HELP_DOC_URL || undefined, noMention, welcomeCaps(project.backend), agentName),
+      buildWelcomeCard(kind, HELP_DOC_URL || undefined, noMention, welcomeCaps(project.backend), agentName, welcomeCard),
     );
     const sent = await channel.rawClient.im.v1.message.create({
       params: { receive_id_type: 'chat_id' },

@@ -1,5 +1,5 @@
 import { isAbsolute } from 'node:path';
-import { JUDGE_PROVIDER_IDS, cardDisplayConfigSchema, completionTemplateSchema } from '@vonvon/protocol';
+import { JUDGE_PROVIDER_IDS, WELCOME_CARD_INTRO_MAX, WELCOME_CARD_TITLE_MAX, cardDisplayConfigSchema, completionTemplateSchema } from '@vonvon/protocol';
 import { isHomeRelative } from '../platform/home-path';
 import type { SettingsAction, SettingsEdit, SettingsScope, ModelQuery } from './settings-types';
 export class SettingsInputError extends Error {
@@ -12,6 +12,8 @@ const body: Rule = value => typeof value === 'string' && value.length <= 30000;
 const roleBody: Rule = value => typeof value === 'string' && value.length <= 70000;
 const selector: Rule = value => typeof value === 'string' && value.length > 0 && value.length <= 4096 && !/[\r\n\0]/.test(value);
 const text: Rule = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 1000;
+const welcomeTitle: Rule = value => typeof value === 'string' && value.length <= WELCOME_CARD_TITLE_MAX && !/[\r\n\0]/.test(value);
+const welcomeIntro: Rule = value => typeof value === 'string' && value.length <= WELCOME_CARD_INTRO_MAX && !value.includes('\0');
 const one = (...values: readonly unknown[]): Rule => value => values.includes(value);
 const integer = (min: number, max: number): Rule => value => typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
 const identifier = (prefix: string): Rule => value => typeof value === 'string' && new RegExp(`^${prefix}_[A-Za-z0-9_-]{1,200}$`).test(value);
@@ -71,6 +73,7 @@ const schemas: Record<string, Record<string, Rule>> = {
   agent: {
     profile: shape({ persona: body, memory: body }, true),
     role: shape({ identity: roleBody, notes: roleBody }, true),
+    welcome: shape({ title: welcomeTitle, intro: welcomeIntro }, true),
     run: shape({
       maxConcurrentRuns: integer(1, 50),
       runIdleTimeoutSeconds: value => value === 0 || integer(10, 3600)(value),

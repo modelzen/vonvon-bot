@@ -256,7 +256,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     await orchestrator.scheduler.start();
     void firstHello.attempt();
 
-    const executeGroup = createGroupExecutor(channel, identity, opts.cfg.preferences?.projectsRootDir);
+    const executeGroup = createGroupExecutor(channel, identity, opts.cfg.preferences?.projectsRootDir, () => opts.cfg.preferences?.welcomeCard);
     const adminGroups: BridgeHandle['adminGroups'] = op => {
       if (closing) return Promise.reject(new Error('Bridge is shutting down'));
       const task = executeGroup(op);

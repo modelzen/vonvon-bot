@@ -358,6 +358,20 @@ function talkLine(noMention: boolean, tail: string): string {
 /** What 选了智能 tells the group (3.4): the welcome card's first line when it is bound so, and a plain message
  * when the web switches a group to it (s25c). */
 export const SMART_NOTICE = '我会读群消息，合适时接话。';
+export const DEFAULT_WELCOME_CARD_TITLE = '🤖 本群使用说明';
+export const DEFAULT_WELCOME_CARD_INTRO = '👋 **你的助手来了！~神奇田螺**';
+
+export interface WelcomeCardCopy {
+  title?: string;
+  intro?: string;
+}
+
+export function resolveWelcomeCardCopy(copy?: WelcomeCardCopy): { title: string; intro: string } {
+  return {
+    title: copy?.title?.trim() || DEFAULT_WELCOME_CARD_TITLE,
+    intro: copy?.intro?.trim() || DEFAULT_WELCOME_CARD_INTRO,
+  };
+}
 
 /** How to talk to a group. 智能 has no 免@ and a judgement decides every message, an @ too: an @ is judged at once
  * and may get no answer; only a judgement that fails or times out answers it anyway (3.4, owner 2026-10-19). So the
@@ -444,17 +458,19 @@ export function buildWelcomeCard(
   docUrl?: string,
   noMention = true,
   caps?: HelpCaps,
-  /** 本群后端的展示名（Codex / Claude …）——欢迎语按后端区分；缺省 'Codex'（向后兼容）。 */
-  agentName = 'Codex',
+  /** Kept for call-site compatibility; the welcome greeting is no longer backend-specific. */
+  _agentName = 'Codex',
+  copy?: WelcomeCardCopy,
 ): CardObject {
   const showGoal = caps?.goal ?? true;
   const showCompact = caps?.compact ?? true;
   const showResume = caps?.resume ?? true;
+  const welcome = resolveWelcomeCardCopy(copy);
   const goalLine = '· `/goal <目标>` → 自主多轮跑到完成（卡上 ⏹ 终止 / 🎯 结束目标）';
   // /context 总在；/compact 仅后端支持时合并进同一行。
   const ctxLine = showCompact ? '· `/context` · `/compact` → 看 / 压缩上下文' : '· `/context` → 看上下文占比';
   const elements: CardElement[] = [
-    md(`👋 **欢迎使用 Vonvon Bot** — 本群已绑定一个项目目录，在群里就能驱动本机 ${agentName} 干活。`),
+    md(welcome.intro),
     hr(),
   ];
   if (kind !== 'multi') {
@@ -490,5 +506,5 @@ export function buildWelcomeCard(
   if (docUrl) {
     elements.push(hr(), actions([linkButton('📖 查看完整使用手册', docUrl, 'primary')]));
   }
-  return card(elements, { header: { title: '🤖 本群使用说明', template: 'turquoise' }, summary: '本群使用说明' });
+  return card(elements, { header: { title: welcome.title, template: 'turquoise' }, summary: welcome.title });
 }

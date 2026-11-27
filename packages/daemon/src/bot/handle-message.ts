@@ -6250,6 +6250,7 @@ export function createOrchestrator(
               kind,
               noMention: parseNoMentionPick(formValue),
               backend,
+              welcomeCard: cfg.preferences?.welcomeCard,
               signal,
             }));
             log.info('console', 'new-project', { name: p.name, blank: p.blank, backend: p.backend, requestId });
@@ -6310,6 +6311,7 @@ export function createOrchestrator(
               noMention: parseNoMentionPick(formValue),
               backend,
               mode: bindModeFor(backend),
+              welcomeCard: cfg.preferences?.welcomeCard,
             });
             log.info('console', 'join-group', { name: p.name, blank: p.blank, backend: p.backend, mode: p.mode });
             result = buildNewProjectDoneCard(p, false, topic);
@@ -7132,7 +7134,7 @@ export function createOrchestrator(
       const result = serialCreate(async signal => {
         const directory = request.directory === undefined ? undefined : await realpath(request.directory);
         if (directory !== undefined && !(await stat(directory)).isDirectory()) throw new AdminWriteError('所选文件夹不是目录');
-        const project = await createProject(channel, { requestId: request.requestId, requestSignature: signature, bot, botName: channel.botIdentity?.name, name: request.name, invitee, existingPath: directory, project: request.project, projectsRootDir: cfg.preferences?.projectsRootDir, kind: request.kind, noMention: request.noMention, backend: request.backend, judge: request.judge, mode: bindModeFor(request.backend), signal });
+        const project = await createProject(channel, { requestId: request.requestId, requestSignature: signature, bot, botName: channel.botIdentity?.name, name: request.name, invitee, existingPath: directory, project: request.project, projectsRootDir: cfg.preferences?.projectsRootDir, kind: request.kind, noMention: request.noMention, backend: request.backend, judge: request.judge, mode: bindModeFor(request.backend), welcomeCard: cfg.preferences?.welcomeCard, signal });
         return { ok: true, project: projectView(project) };
       }).catch((error: unknown) => {
         // Every refusal crosses IPC as the bot's own word; a result not known stays a plain error, which the RPC

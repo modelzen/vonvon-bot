@@ -15,6 +15,7 @@ import { createLibraryProject, projectWithMainFolder, readLibrary, resolveDirect
 import { directoryContext, legacyDirectoryProblems } from './directory-audit';
 import { DirectoryError, directoryError } from '../config/directory-errors';
 import type { PermissionMode } from '../agent/types';
+import type { WelcomeCardPreference } from '../config/schema';
 import { TIER_NETWORK } from '../agent/permission';
 import { DEFAULT_BACKEND_ID, effectiveDefaultBackend, isBackendEntryInstalled } from '../agent';
 import { catalogById, isInstallable, projectCreatableBackends } from '../agent/catalog';
@@ -88,6 +89,8 @@ export interface CreateProjectInput {
   signal?: AbortSignal;
   /** One budget for every Feishu call: token, create, admin, announcement and welcome. Default {@link CREATION_BUDGET_MS}. */
   timeoutMs?: number;
+  /** This Bot's optional onboarding-card copy, read from its preferences by the caller. */
+  welcomeCard?: WelcomeCardPreference;
 }
 
 export const CREATION_BUDGET_MS = 30_000;
@@ -155,6 +158,8 @@ export interface JoinGroupInput {
   mode?: PermissionMode;
   /** agent backend chosen at bind time (fixed afterwards — no switching). */
   backend?: string;
+  /** This Bot's optional onboarding-card copy, read from its preferences by the caller. */
+  welcomeCard?: WelcomeCardPreference;
 }
 
 /**
@@ -315,7 +320,7 @@ export async function createProject(channel: Pick<LarkChannel, 'rawClient'>, req
       .addManagers({ path: { chat_id: chatId }, params: { member_id_type: input.invitee.idType }, data: { manager_ids: [input.invitee.id] } })
       .catch((err) => log.fail('project', err, { phase: 'add-manager' }));
     await setAnnouncement({ rawClient: client }, saved, limits).catch((err) => log.fail('project', err, { phase: 'announcement' }));
-    await onboardGroup({ rawClient: client }, saved).catch((err) => log.fail('project', err, { phase: 'onboard' }));
+    await onboardGroup({ rawClient: client }, saved, input.welcomeCard).catch((err) => log.fail('project', err, { phase: 'onboard' }));
     return saved;
   }, { timeoutMs: input.timeoutMs ?? CREATION_BUDGET_MS, signal, onSend: sent => {
     if (sent.method === 'POST' && /\/open-apis\/im\/v1\/chats$/.test(sent.url)) dispatched = true;
@@ -398,6 +403,6 @@ export async function joinExistingGroup(channel: LarkChannel, request: JoinGroup
 
   // Onboarding only (no announcement / Pin / tab — see onboardGroup's joined
   // branch); best-effort, the binding holds even if the welcome card fails.
-  await onboardGroup(channel, project).catch((err) => log.fail('project', err, { phase: 'onboard-join' }));
+  await onboardGroup(channel, project, input.welcomeCard).catch((err) => log.fail('project', err, { phase: 'onboard-join' }));
   return project;
 }
