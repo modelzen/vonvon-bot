@@ -4,6 +4,7 @@ import type {AgentSettingsView, GlobalTitlePolicy, ModelCatalog} from '@vonvon/p
 import {BotCommentSettings, BotTitleSettings, CommentRulesEditor, TitleFields} from '../src/settings/BotModelSettings';
 import {Editor} from '../src/settings/SettingsPanel';
 import {NativeModelPicker} from '../src/settings/NativeModelPicker';
+import {WelcomeCardSettings} from '../src/settings/WelcomeCardSettings';
 import {Toggle} from '../src/reference/components/ui';
 
 type Effect = {deps?: unknown[]; cleanup?: () => void};
@@ -34,6 +35,28 @@ function fixture(text = 'Original rule', revision = 'rules-1'): AgentSettingsVie
 }
 const catalog: ModelCatalog = {backend: codex, state: 'ready', source: 'backend-provided', observedAt: 1, titleEfforts: ['low', 'high'], models: [{id: 'default-model', displayName: 'Default model', description: '', isDefault: true, hidden: false, defaultEffort: 'low', supportedEfforts: ['low', 'high']}]};
 beforeEach(() => {h.banks = {}; h.pending = []; h.drafts.clear(); vi.clearAllMocks();});
+
+it('edits and saves the Bot onboarding welcome copy as one section', async () => {
+  const section = {
+    stored: {title: '', intro: ''},
+    effective: {title: '🤖 本群使用说明', intro: '👋 **默认欢迎语**'},
+    revision: 'welcome-1',
+    access: {kind: 'writable' as const},
+    apply: [],
+  };
+  const save = vi.fn().mockResolvedValue({kind: 'refused', message: 'fixture failure'});
+  const host = at('welcome-host', () => nodes(WelcomeCardSettings({section, save}))).find(node => node.type === Editor)!;
+  let ui = at('welcome-editor', () => nodes(Editor(host.props as any)));
+  const input = ui.find(node => node.type === 'input')!;
+  expect(input.props.placeholder).toBe('🤖 本群使用说明');
+  input.props.onChange({target: {value: '项目群指南'}});
+  ui = at('welcome-editor', () => nodes(Editor(host.props as any)));
+  const textarea = ui.find(node => node.type === 'textarea')!;
+  expect(textarea.props.placeholder).toBe('👋 **默认欢迎语**');
+  textarea.props.onChange({target: {value: '欢迎加入。'}});
+  expect(await h.drafts.get('welcome-editor').save()).toBe(false);
+  expect(save).toHaveBeenCalledWith({title: '项目群指南'}, 'welcome-1');
+});
 
 it('saves one global title policy through one automatic Editor', async () => {
   const view = fixture(); const save = vi.fn().mockResolvedValue({kind: 'refused', message: 'fixture failure'});

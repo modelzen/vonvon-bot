@@ -267,14 +267,36 @@ describe('buildWelcomeCard 按后端能力裁剪命令（与 /help 同源 caps�
     expect(single).toContain('/new');
   });
 
-  it('欢迎语按后端展示名区分：缺省 Codex，传 Claude 则文案换成 Claude', () => {
+  it('欢迎卡默认使用新招呼语，不再显示后端名或绑定说明', () => {
     const codex = JSON.stringify(buildWelcomeCard('multi'));
-    expect(codex).toContain('欢迎使用 Vonvon Bot');
-    expect(codex).toContain('驱动本机 Codex 干活');
+    expect(codex).toContain('你的助手来了！~神奇田螺');
+    expect(codex).not.toContain('欢迎使用 Vonvon Bot');
+    expect(codex).not.toContain('本群已绑定一个项目目录');
 
     const claude = JSON.stringify(buildWelcomeCard('multi', undefined, true, undefined, 'Claude'));
-    expect(claude).toContain('欢迎使用 Vonvon Bot');
-    expect(claude).toContain('驱动本机 Claude 干活');
+    expect(claude).toContain('你的助手来了！~神奇田螺');
+    expect(claude).not.toContain('欢迎使用 Vonvon Bot');
+    expect(claude).not.toContain('本群已绑定一个项目目录');
     expect(claude).not.toContain('Codex'); // Claude 群里不该再出现 Codex 字样
+  });
+
+  it('欢迎卡标题和开场文案可以使用 Bot 自己的配置', () => {
+    const welcome = JSON.stringify(buildWelcomeCard(
+      'multi',
+      undefined,
+      true,
+      undefined,
+      'Codex',
+      {title: '研发项目群指南', intro: '欢迎加入 **研发项目群**\n有问题直接 @ 我。'},
+    ));
+    expect(welcome).toContain('研发项目群指南');
+    expect(welcome).toContain('欢迎加入 **研发项目群**\\n有问题直接 @ 我。');
+    expect(welcome).toContain('/goal');
+  });
+
+  it('空的自定义文案回退到系统默认值', () => {
+    const welcome = JSON.stringify(buildWelcomeCard('multi', undefined, true, undefined, 'Codex', {title: '  ', intro: ''}));
+    expect(welcome).toContain('本群使用说明');
+    expect(welcome).toContain('你的助手来了！~神奇田螺');
   });
 });

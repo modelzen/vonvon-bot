@@ -34,7 +34,7 @@ vi.mock('../src/config/paths', async () => {
 });
 const bot = { appId: 'cli_fixture', tenant: 'feishu' as const, name: 'fixture', createdAt: 1, registrationId: 'original' };
 beforeAll(() => writeFile(paths.botsFile, JSON.stringify({ version: 1, bots: [bot] })));
-const createGroupExecutor = (channel: LarkChannel) => createOwnedGroupExecutor(channel, bot);
+const createGroupExecutor = (channel: LarkChannel, welcomeCard?: Parameters<typeof createOwnedGroupExecutor>[3]) => createOwnedGroupExecutor(channel, bot, undefined, welcomeCard);
 const joinExistingGroup = (channel: LarkChannel, request: Omit<JoinGroupInput, 'bot'>, target?: RegistryLocation) => joinOwnedGroup(channel, { ...request, bot }, target);
 afterAll(async () => { await rm(paths.appDir, { recursive: true, force: true }); });
 
@@ -88,7 +88,9 @@ describe('desktop group commands in the owning bot', () => {
   it('commits once through IPC, sends one welcome, and retries identical bindings', async () => {
     const dir = await workspace();
     const fixture = channelFixture();
-    const execute = createGroupExecutor(fixture.channel);
+    let copy = {title: '旧标题', intro: '旧欢迎语'};
+    const execute = createGroupExecutor(fixture.channel, () => copy);
+    copy = {title: '研发项目群指南', intro: '欢迎加入 **研发项目群**。'};
     let receive = (_raw: unknown): void => {};
     const respond = createAdminIpcResponder(async op => {
       if (op.kind !== 'bindGroup' && op.kind !== 'joinedGroups') throw new Error('wrong op');
@@ -99,6 +101,9 @@ describe('desktop group commands in the owning bot', () => {
     const results = await Promise.all(Array.from({ length: 8 }, () => caller.call({ kind: 'bindGroup', input: input(dir) })));
     expect(results.every(result => JSON.stringify(result) === JSON.stringify(results[0]))).toBe(true);
     expect(fixture.message).toHaveBeenCalledTimes(1);
+    const welcome = JSON.stringify(fixture.message.mock.calls[0]);
+    expect(welcome).toContain(copy.title);
+    expect(welcome).toContain(copy.intro);
     expect(await listProjects()).toHaveLength(1);
     const saved = JSON.parse(await readFile(paths.projectsFile, 'utf8'));
     expect(saved.projects[0]).toMatchObject({ cwd: await realpath(dir), chatId: 'oc_a', mode: 'qa', origin: 'joined' });

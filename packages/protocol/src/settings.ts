@@ -112,9 +112,16 @@ const workspace = z.object({ primary: z.string().min(1).max(4096), directories: 
 const smartRules = z.object({ respond: z.string().max(30000), newTopic: z.string().max(30000) });
 const skills = z.object({ disabledPaths: z.array(z.string().min(1).max(4096)).max(1000) });
 const presentation = z.object({ voiceEnabled: z.boolean(), showToolCalls: z.boolean(), showModel: z.enum(["off", "running", "always"]).optional(), completionMode: z.enum(["manual", "long", "failures", "always"]), longTaskMinutes: z.number().int().min(1).max(1440), completionTemplate: completionTemplateSchema.nullable().optional(), cardDisplay: cardDisplayConfigSchema.nullable().optional() });
+export const WELCOME_CARD_TITLE_MAX = 80;
+export const WELCOME_CARD_INTRO_MAX = 2000;
+const welcome = z.object({
+  title: z.string().max(WELCOME_CARD_TITLE_MAX),
+  intro: z.string().max(WELCOME_CARD_INTRO_MAX),
+});
 export const agentSectionSchemas = {
   profile,
   role: roleSettings,
+  welcome,
   run: z.object({
     maxConcurrentRuns: z.number(),
     runIdleTimeoutSeconds: z.number(),
@@ -283,7 +290,7 @@ export type AdminCandidate = z.infer<typeof adminCandidateSchema>;
 export const agentViewSchema = z.object({
   scope: z.object({ kind: z.literal("agent"), botId: agentIdSchema }),
   /** `judge`, `smartPrompt` and `judgeByBackend` came in s23d: a daemon from before sends none. */
-  sections: sections(agentSectionSchemas).extend({ profile: section(profile).optional(), role: section(roleSettings).optional(), judge: section(judgeViewSection).optional() }),
+  sections: sections(agentSectionSchemas).extend({ profile: section(profile).optional(), role: section(roleSettings).optional(), welcome: section(welcome).optional(), judge: section(judgeViewSection).optional() }),
   /** `role` came with the memory redesign (P3): a daemon from before sends none. */
   roleInfo: z
     .object({

@@ -106,6 +106,16 @@ describe('s36d1 createProject', () => {
     expect(fake.open()).toBe(0);
   });
 
+  it('uses this Bot welcome-card copy for a created group', async () => {
+    const fake = fakeLark();
+    await createProject({ rawClient: fake.client }, input('Custom welcome', {
+      welcomeCard: {title: '研发项目群指南', intro: '欢迎加入 **研发项目群**。'},
+    }));
+    const message = fake.requests.find(request => request.method === 'POST' && request.path === '/open-apis/im/v1/messages');
+    expect(JSON.stringify(message?.data)).toContain('研发项目群指南');
+    expect(JSON.stringify(message?.data)).toContain('欢迎加入 **研发项目群**。');
+  });
+
   it.each([['qa', false], ['write', true]] as const)('creates %s with tier-derived network %s', async (mode, network) => {
     const project = await createProject({ rawClient: fakeLark().client }, input(`Permission-${mode}`, { mode }));
     expect(project).toMatchObject({ mode, network });

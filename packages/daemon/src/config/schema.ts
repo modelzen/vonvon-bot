@@ -67,6 +67,12 @@ export interface ResolvedCompletionReminderConfig {
   template?: string | null;
 }
 
+/** Per-Bot copy for the group onboarding card. Empty fields use the built-in copy. */
+export interface WelcomeCardPreference {
+  title?: string;
+  intro?: string;
+}
+
 export const COMPLETION_REMINDER_LONG_TASK_MIN_MINUTES = 1;
 export const COMPLETION_REMINDER_LONG_TASK_MAX_MINUTES = 1440;
 export const COMPLETION_REMINDER_LONG_TASK_DEFAULT_MINUTES = 3;
@@ -100,6 +106,8 @@ export interface AppAccess {
 }
 
 export interface AppPreferences {
+  /** Text shown at the top of onboarding cards for this Bot's new or newly-bound groups. */
+  welcomeCard?: WelcomeCardPreference;
   /** Stored execution defaults; group/runtime inheritance is resolved separately. */
   defaults?: BotDefaults;
   /** Stored directory declarations; runtime inheritance is resolved separately. */

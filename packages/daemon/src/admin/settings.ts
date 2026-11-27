@@ -4,7 +4,7 @@ import { adminCandidates } from './admin-candidates';
 import { ToolRefusal } from '../agent/entry/tools';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { DEFAULT_DM_SMART_RULES, FULL_ACCESS_WARNING, JUDGE_SELECTION_KINDS, decisionEndpointProblem } from '@vonvon/protocol';
+import { DEFAULT_DM_SMART_RULES, FULL_ACCESS_WARNING, JUDGE_SELECTION_KINDS, WELCOME_CARD_INTRO_MAX, WELCOME_CARD_TITLE_MAX, decisionEndpointProblem } from '@vonvon/protocol';
 import type { AgentBackend, ModelInfo, ReasoningEffort } from '../agent/types';
 import { backendIds } from '../agent';
 import { parseModelId } from '../agent/model-id';
@@ -37,6 +37,7 @@ import { discoverBuiltinGroupSkills, discoverGroupSkills, discoverLocalGroupSkil
 import { snapshotDefaultJudge, snapshotProviderJudge, requireDecisionKey } from '../project/initial-settings';
 import { readJudgeModels } from '../judge/global-models';
 import { assertValidCardDisplay } from '../card/card-display-validation';
+import { DEFAULT_WELCOME_CARD_INTRO, DEFAULT_WELCOME_CARD_TITLE } from '../card/command-cards';
 export type * from './settings-types';
 export { parseSettingsAction, parseSettingsEdit, parseSettingsScope, parseModelQuery, SettingsInputError } from './settings-parse';
 export function settingsRevision(value: unknown): string {
@@ -119,6 +120,7 @@ const agentEffects: {
 } = {
   profile: effect(['persona', 'memory'], 'next-turn', '下一轮对话使用新的个性与记忆'),
   role: effect(['identity', 'notes'], 'next-turn', '下一轮对话使用新的角色设定'),
+  welcome: effect(['title', 'intro'], 'new-project', '只影响之后新建或绑定的群'),
   run: [...effect(['maxConcurrentRuns'], 'restart', '已保存的并发上限在 daemon 重启后生效'), ...effect(['pendingPolicy'], 'next-message', '下一条消息生效'), ...effect(['runIdleTimeoutSeconds'], 'next-turn', '下一次超时检测生效')],
   completion: effect(['mode', 'longTaskMinutes'], 'task-completion', '任务结束时读取最新策略'),
   comments: effect(['backend', 'selection'], 'new-comment', '下一条评论使用新设置'),
@@ -179,6 +181,10 @@ function agentData(cfg: AppConfig): T.AgentSections {
   return {
     profile: { persona: '', memory: '' },
     role: { identity: '', notes: '' },
+    welcome: {
+      title: p.welcomeCard?.title ?? '',
+      intro: p.welcomeCard?.intro ?? ''
+    },
     run: {
       maxConcurrentRuns: getMaxConcurrentRuns(cfg),
       pendingPolicy: getPendingPolicy(cfg),
@@ -205,6 +211,7 @@ function agentData(cfg: AppConfig): T.AgentSections {
 }
 function agentRaw(p: AppPreferences, section: keyof T.AgentSections): unknown {
   switch (section) {
+    case 'welcome': return [p.welcomeCard?.title ?? '', p.welcomeCard?.intro ?? ''];
     case 'run': return [p.maxConcurrentRuns, p.runIdleTimeoutSeconds, p.pendingPolicy];
     case 'completion': return [p.completionReminder?.mode, p.completionReminder?.longTaskMinutes];
     case 'comments': return [p.comments?.backend, p.comments?.model, p.comments?.effort];
@@ -665,6 +672,10 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       const sections = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, makeSection(value, [botId, agentRaw(cfg.preferences ?? {}, key as keyof T.AgentSections)], access, agentEffects[key as keyof T.AgentSections])])) as T.AgentSettingsView['sections'];
       sections.profile = makeSection(data.profile, [botId, data.profile], sectionAccess('agent', 'profile'), agentEffects.profile);
       sections.role = makeSection(data.role, [botId, data.role], sectionAccess('agent', 'role'), agentEffects.role);
+      sections.welcome.effective = {
+        title: cfg.preferences?.welcomeCard?.title?.trim() || DEFAULT_WELCOME_CARD_TITLE,
+        intro: cfg.preferences?.welcomeCard?.intro?.trim() || DEFAULT_WELCOME_CARD_INTRO
+      };
       sections.paths.effective = {
         projectsRootDir: resolveProjectsRootDir(cfg.preferences?.projectsRootDir)
       };
@@ -898,6 +909,17 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         } else await deps.writePreferences(async (p) => {
           check([botId, agentRaw(p, e.section as keyof T.AgentSections)], e.revision);
           switch (e.section) {
+            case 'welcome': {
+              const title = (e.patch.title ?? p.welcomeCard?.title ?? '').trim();
+              const intro = (e.patch.intro ?? p.welcomeCard?.intro ?? '').trim();
+              if (title.length > WELCOME_CARD_TITLE_MAX || intro.length > WELCOME_CARD_INTRO_MAX)
+                throw new SettingsInputError('入群欢迎卡文案过长');
+              if (title || intro)
+                p.welcomeCard = { title, intro };
+              else
+                delete p.welcomeCard;
+              break;
+            }
             case 'run':
               Object.assign(p, e.patch);
               break;

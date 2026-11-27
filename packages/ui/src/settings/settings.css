@@ -184,6 +184,37 @@
   background: var(--color-surface);
   line-height: 1.5;
 }
+
+.welcome-card-copy {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+}
+
+.welcome-card-copy .settings-field {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.welcome-card-copy__field {
+  display: grid;
+  gap: 6px;
+  color: var(--color-text);
+  font-weight: 560;
+}
+
+.welcome-card-copy__field small {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.welcome-card-copy textarea.settings-field {
+  min-height: 140px;
+  resize: vertical;
+}
+
 .desktop-job {
   width: 100%;
   box-sizing: border-box;

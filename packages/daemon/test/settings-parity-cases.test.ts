@@ -44,6 +44,8 @@ beforeEach(async () => {
 afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
 
 const agentCases = [
+  { id: 'CARD-WELCOME-1', section: 'welcome', patch: { title: '研发项目群指南' }, field: 'welcomeCard.title', expected: '研发项目群指南' },
+  { id: 'CARD-WELCOME-2', section: 'welcome', patch: { intro: '欢迎加入 **研发项目群**\n有问题直接 @ 我。' }, field: 'welcomeCard.intro', expected: '欢迎加入 **研发项目群**\n有问题直接 @ 我。' },
   { id: 'CARD-019', section: 'access', patch: { allowedChats: ['oc_demo'] }, field: 'access.allowedChats', expected: ['oc_demo'] },
   { id: 'CARD-022', section: 'run', patch: { maxConcurrentRuns: 50 }, field: 'maxConcurrentRuns', expected: 50 },
   { id: 'CARD-023', section: 'run', patch: { runIdleTimeoutSeconds: 3600 }, field: 'runIdleTimeoutSeconds', expected: 3600 },
@@ -74,6 +76,40 @@ describe('agent settings persist in config.json and preserve unrelated data', ()
     const after = await settings.read(agent) as AgentSettingsView;
     expect(getField(after.sections[section].stored, field.includes('.') ? field.slice(field.indexOf('.') + 1) : field)).toEqual(expected);
   });
+});
+
+it('CARD-WELCOME clears custom copy and exposes the built-in effective copy', async () => {
+  const settings = await owner();
+  let before = await settings.read(agent) as AgentSettingsView;
+  expect(before.sections.welcome.effective).toEqual({
+    title: '🤖 本群使用说明',
+    intro: '👋 **你的助手来了！~神奇田螺**',
+  });
+  expect((await settings.save({
+    scope: agent,
+    section: 'welcome',
+    revision: before.sections.welcome.revision,
+    patch: { title: '项目指南', intro: '欢迎加入。' },
+  })).kind).toBe('saved');
+  before = await settings.read(agent) as AgentSettingsView;
+  expect((await settings.save({
+    scope: agent,
+    section: 'welcome',
+    revision: before.sections.welcome.revision,
+    patch: { title: '', intro: '' },
+  })).kind).toBe('saved');
+  expect((await loadConfig()).preferences?.welcomeCard).toBeUndefined();
+  expect((await settings.read(agent) as AgentSettingsView).sections.welcome.effective).toEqual({
+    title: '🤖 本群使用说明',
+    intro: '👋 **你的助手来了！~神奇田螺**',
+  });
+});
+
+it('CARD-WELCOME rejects over-limit copy before writing', async () => {
+  const before = await readFile(paths.configFile, 'utf8');
+  expect(() => parseSettingsEdit({scope: agent, section: 'welcome', revision: 'revision', patch: {title: 'a'.repeat(81)}})).toThrow();
+  expect(() => parseSettingsEdit({scope: agent, section: 'welcome', revision: 'revision', patch: {intro: 'a'.repeat(2001)}})).toThrow();
+  expect(await readFile(paths.configFile, 'utf8')).toBe(before);
 });
 
 const edgeCases = [

@@ -12,6 +12,7 @@ import { isProjectId } from '../project/library';
 import { log } from '../core/logger';
 import { feishuError, scopeDenial } from '../utils/feishu-error';
 import { AdminWriteError } from './ops';
+import type { WelcomeCardPreference } from '../config/schema';
 
 export interface BindGroupInput {
   chatId: string;
@@ -115,9 +116,12 @@ function refused(phase: GroupPhase, reply: { code?: number; msg?: string }, fall
   throw error;
 }
 
-export function createGroupExecutor(channel: LarkChannel, identity: BotIdentity, projectsRootDir?: string): (op: AdminGroupOp) => Promise<JoinedGroups | GroupMembers | Project> {
-  const bot = { ...identity };
+type WelcomeCardSource = WelcomeCardPreference | (() => WelcomeCardPreference | undefined);
+
+export function createGroupExecutor(channel: LarkChannel, identity?: BotIdentity, projectsRootDir?: string, welcomeCard?: WelcomeCardSource): (op: AdminGroupOp) => Promise<JoinedGroups | GroupMembers | Project> {
+  const bot = { ...identity } as BotIdentity;
   const topicContext = createTopicContext(channel, undefined, createNameBook(channel), { stopping: () => false, track: p => p });
+  const welcomeCardNow = () => typeof welcomeCard === 'function' ? welcomeCard() : welcomeCard;
   async function bind(request: BindGroupInput): Promise<Project> {
     const input = { ...request };
     const location = { file: paths.projectsFile, dataRoot: paths.appDir };
@@ -130,7 +134,7 @@ export function createGroupExecutor(channel: LarkChannel, identity: BotIdentity,
     if (membership.code !== 0 || typeof membership.data?.is_in_chat !== 'boolean') refused('bind-group', membership, '无法确认机器人群成员身份');
     if (!membership.data.is_in_chat) throw new AdminWriteError('机器人不在此群中');
     try {
-      return await joinExistingGroup(channel, { bot, name: input.projectName, chatId: input.chatId, existingPath: directory, project: input.project, projectsRootDir, backend: input.backend, kind: input.kind, noMention: input.noMention, judge: input.judge, mode: bindModeFor(input.backend) }, location);
+      return await joinExistingGroup(channel, { bot, name: input.projectName, chatId: input.chatId, existingPath: directory, project: input.project, projectsRootDir, backend: input.backend, kind: input.kind, noMention: input.noMention, judge: input.judge, mode: bindModeFor(input.backend), welcomeCard: welcomeCardNow() }, location);
     } catch (error) {
       throw new AdminWriteError(error instanceof Error ? error.message : '群绑定失败');
     }

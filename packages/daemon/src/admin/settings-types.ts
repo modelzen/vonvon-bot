@@ -88,6 +88,11 @@ export interface AgentSections {
   profile: BotProfile;
   /** 角色设定：SOUL.md 的身份与职责、其他说明（记忆设计 2.3） */
   role: { identity: string; notes: string };
+  /** 入群欢迎卡的标题与开场文案；空字段使用内置默认值。 */
+  welcome: {
+    title: string;
+    intro: string;
+  };
   run: {
     maxConcurrentRuns: number;
     runIdleTimeoutSeconds: number;
